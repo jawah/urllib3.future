@@ -347,3 +347,15 @@ def requires_tlsv1_3(supported_tls_versions: typing.AbstractSet[str]) -> None:
         or "TLSv1.3" not in supported_tls_versions
     ):
         pytest.skip("Test requires TLSv1.3")
+
+
+@pytest.fixture(scope="function")
+def requires_traefik() -> None:
+    try:
+        sock = socket.create_connection(("httpbin.local", 8888), timeout=0.3)
+    except (ConnectionRefusedError, socket.gaierror, TimeoutError):
+        pytest.skip(
+            "Test requires Traefik server (HTTP/2 over TCP and HTTP/3 over QUIC)"
+        )
+    else:
+        sock.close()

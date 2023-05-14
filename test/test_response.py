@@ -16,6 +16,7 @@ from unittest import mock
 import pytest
 
 from urllib3 import HTTPHeaderDict
+from urllib3.backend import HttpVersion, LowLevelResponse
 from urllib3.exceptions import (
     BodyNotHttplibCompatible,
     DecodeError,
@@ -502,7 +503,7 @@ class TestResponse:
             with HTTPResponse(hlr, preload_content=False) as resp:
                 assert not resp.closed
                 assert resp._fp is not None
-                assert not resp._fp.isclosed()
+                assert not resp._fp.isclosed()  # type: ignore[union-attr]
                 assert not is_fp_closed(resp._fp)
                 assert not resp.isclosed()
                 resp.read()
@@ -1098,9 +1099,7 @@ class TestResponse:
         assert stream == list(resp.stream())
 
     def test_chunked_head_response(self) -> None:
-        r = httplib.HTTPResponse(MockSock, method="HEAD")  # type: ignore[arg-type]
-        r.chunked = True
-        r.chunk_left = None
+        r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), MockSock)  # type: ignore[arg-type]
         resp = HTTPResponse(
             "",
             preload_content=False,

@@ -9,20 +9,22 @@ import nox
 
 def tests_impl(
     session: nox.Session,
-    extras: str = "socks,secure,brotli,zstd",
-    byte_string_comparisons: bool = True,
+    extras: str = "socks,brotli,zstd",
+    byte_string_comparisons: bool = False,
 ) -> None:
     # Install deps and the package itself.
     session.install("-r", "dev-requirements.txt")
-    session.install(f".[{extras}]")
+    session.install(f".[{extras}]", silent=False)
 
     # Show the pip version.
     session.run("pip", "--version")
     # Print the Python version and bytesize.
     session.run("python", "--version")
     session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
-    # Print OpenSSL information.
-    session.run("python", "-m", "OpenSSL.debug")
+
+    if "secure" in extras:
+        # Print OpenSSL information.
+        session.run("python", "-m", "OpenSSL.debug")
 
     memray_supported = True
     if (
@@ -100,6 +102,7 @@ def downstream_botocore(session: nox.Session) -> None:
     session.chdir("botocore")
     for patch in [
         "0001-Mark-100-Continue-tests-as-failing.patch",
+        "0003-Mark-HttpConn-bypass-internals-as-xfail.patch",
     ]:
         session.run("git", "apply", f"{root}/ci/{patch}", external=True)
     session.run("git", "rev-parse", "HEAD", external=True)
@@ -121,6 +124,12 @@ def downstream_requests(session: nox.Session) -> None:
     session.cd(tmp_dir)
     git_clone(session, "https://github.com/psf/requests")
     session.chdir("requests")
+
+    for patch in [
+        "0002-Requests-Hface.patch",
+    ]:
+        session.run("git", "apply", f"{root}/ci/{patch}", external=True)
+
     session.run("git", "rev-parse", "HEAD", external=True)
     session.install(".[socks]", silent=False)
     session.install("-r", "requirements-dev.txt", silent=False)
@@ -147,7 +156,7 @@ def lint(session: nox.Session) -> None:
     mypy(session)
 
 
-@nox.session(python="3.8")
+@nox.session
 def mypy(session: nox.Session) -> None:
     """Run mypy."""
     session.install("-r", "mypy-requirements.txt")
