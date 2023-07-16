@@ -6,7 +6,6 @@ urllib3
    :maxdepth: 3
 
    v2-migration-guide
-   sponsors
    user-guide
    advanced-usage
    reference/index

@@ -39,10 +39,10 @@ extensions = [
 ]
 
 # Open Graph metadata
-ogp_title = "urllib3 documentation"
+ogp_title = "urllib3.future documentation"
 ogp_type = "website"
 ogp_social_cards = {"image": "images/logo.png", "line_color": "#F09837"}
-ogp_description = "urllib3 is a user-friendly HTTP client library for Python."
+ogp_description = "urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (and support is actively provided!)"
 
 # Test code blocks only when explicitly specified
 doctest_test_doctest_blocks = ""
@@ -57,7 +57,7 @@ source_suffix = ".rst"
 master_doc = "index"
 
 # General information about the project.
-project = "urllib3"
+project = "urllib3.future"
 copyright = f"{date.today().year}, Andrey Petrov"
 
 # The short X.Y version.
@@ -127,5 +127,6 @@ nitpick_ignore = [
     ("py:class", "connection._TYPE_SOCKET_OPTIONS"),
     ("py:class", "urllib3.backend.httplib._PatchedHTTPConnection"),
     ("py:class", "urllib3.backend._base.LowLevelResponse"),
+    ("py:class", "LowLevelResponse"),
     ("py:class", "QuicPreemptiveCacheType"),
 ]
