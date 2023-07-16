@@ -1,9 +1,7 @@
 name: Publish to PyPI
 
 on:
-  push:
-    tags:
-      - "*"
+  release:
 
 permissions:
   contents: read
@@ -12,8 +10,6 @@ jobs:
   build:
     name: "Build dists"
     runs-on: "ubuntu-latest"
-    environment:
-      name: "publish"
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
 
@@ -62,6 +58,9 @@ jobs:
   publish:
     name: "Publish"
     if: startsWith(github.ref, 'refs/tags/')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/urllib3.future
     needs: ["build", "provenance"]
     permissions:
       contents: write

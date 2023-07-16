@@ -314,7 +314,7 @@ the ``socks`` extra:
 
 .. code-block:: bash
 
-     python -m pip install urllib3[socks]
+     python -m pip install urllib3.future[socks]
 
 Once PySocks is installed, you can use
 :class:`~contrib.socks.SOCKSProxyManager`:
@@ -545,7 +545,7 @@ You may also request the package be installed via the ``urllib3[brotli]`` extra:
 
 .. code-block:: bash
 
-    $ python -m pip install urllib3[brotli]
+    $ python -m pip install urllib3.future[brotli]
 
 Here's an example using brotli encoding via the ``Accept-Encoding`` header:
 
@@ -566,11 +566,11 @@ Zstandard Encoding
 is a compression algorithm created by Facebook with better compression
 than brotli, gzip and deflate (see `benchmarks <https://facebook.github.io/zstd/#benchmarks>`_)
 and is supported by urllib3 if the `zstandard package <https://pypi.org/project/zstandard/>`_ is installed.
-You may also request the package be installed via the ``urllib3[zstd]`` extra:
+You may also request the package be installed via the ``urllib3.future[zstd]`` extra:
 
 .. code-block:: bash
 
-    $ python -m pip install urllib3[zstd]
+    $ python -m pip install urllib3.future[zstd]
 
 .. note::
 
