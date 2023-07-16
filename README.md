@@ -1,24 +1,19 @@
 <h1 align="center">
 
-![urllib3](https://github.com/urllib3/urllib3/raw/main/docs/_static/banner_github.svg)
+![urllib3](https://github.com/jawah/urllib3.future/raw/main/docs/_static/logo.png)
 
 </h1>
 
 <p align="center">
   <a href="https://pypi.org/project/urllib3"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3.svg?maxAge=86400" /></a>
   <a href="https://pypi.org/project/urllib3"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3.svg?maxAge=86400" /></a>
-  <a href="https://discord.gg/urllib3"><img alt="Join our Discord" src="https://img.shields.io/discord/756342717725933608?color=%237289da&label=discord" /></a>
   <a href="https://github.com/urllib3/urllib3/actions?query=workflow%3ACI"><img alt="Coverage Status" src="https://img.shields.io/badge/coverage-100%25-success" /></a>
-  <a href="https://github.com/urllib3/urllib3/actions?query=workflow%3ACI"><img alt="Build Status on GitHub" src="https://github.com/urllib3/urllib3/workflows/CI/badge.svg" /></a>
-  <a href="https://urllib3.readthedocs.io"><img alt="Documentation Status" src="https://readthedocs.org/projects/urllib3/badge/?version=latest" /></a><br>
-  <a href="https://deps.dev/pypi/urllib3"><img alt="OpenSSF Scorecard" src="https://api.securityscorecards.dev/projects/github.com/urllib3/urllib3/badge" /></a>
-  <a href="https://slsa.dev"><img alt="SLSA 3" src="https://slsa.dev/images/gh-badge-level3.svg" /></a>
-  <a href="https://bestpractices.coreinfrastructure.org/projects/6227"><img alt="CII Best Practices" src="https://bestpractices.coreinfrastructure.org/projects/6227/badge" /></a>
+  <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
 </p>
 
-urllib3 is a powerful, *user-friendly* HTTP client for Python. Much of the
-Python ecosystem already uses urllib3 and you should too.
-urllib3 brings many critical features that are missing from the Python
+urllib3 is a powerful, *user-friendly* HTTP client for Python. urllib3.future goes beyond supported features while remaining
+mostly compatible.
+urllib3.future brings many critical features that are missing from the Python
 standard libraries:
 
 - Thread safety.
@@ -46,71 +41,32 @@ b"User-agent: *\nDisallow: /deny\n"
 
 ## Installing
 
-urllib3 can be installed with [pip](https://pip.pypa.io):
+urllib3.future can be installed with [pip](https://pip.pypa.io):
 
 ```bash
-$ python -m pip install urllib3
+$ python -m pip install urllib3.future
 ```
 
-Alternatively, you can grab the latest source code from [GitHub](https://github.com/urllib3/urllib3):
+⚠️ Installing urllib3.future shadows the actual urllib3 package (_depending on installation order_) and you should
+carefully weight the impacts. The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node
+is always greater or equal to 900.
 
-```bash
-$ git clone https://github.com/urllib3/urllib3.git
-$ cd urllib3
-$ pip install .
-```
-
+Support for bugs or improvements is served in this repository. We regularly sync this fork
+with the main branch of urllib3/urllib3.
 
 ## Documentation
 
 urllib3 has usage and reference documentation at [urllib3.readthedocs.io](https://urllib3.readthedocs.io).
 
-
-## Community
-
-urllib3 has a [community Discord channel](https://discord.gg/urllib3) for asking questions and
-collaborating with other contributors. Drop by and say hello 👋
-
-
 ## Contributing
 
-urllib3 happily accepts contributions. Please see our
-[contributing documentation](https://urllib3.readthedocs.io/en/latest/contributing.html)
-for some tips on getting started.
-
+urllib3.future happily accepts contributions.
 
 ## Security Disclosures
 
-To report a security vulnerability, please use the
-[Tidelift security contact](https://tidelift.com/security).
-Tidelift will coordinate the fix and disclosure with maintainers.
-
-
-## Maintainers
-
-- [@sethmlarson](https://github.com/sethmlarson) (Seth M. Larson)
-- [@pquentin](https://github.com/pquentin) (Quentin Pradet)
-- [@theacodes](https://github.com/theacodes) (Thea Flowers)
-- [@haikuginger](https://github.com/haikuginger) (Jess Shapiro)
-- [@lukasa](https://github.com/lukasa) (Cory Benfield)
-- [@sigmavirus24](https://github.com/sigmavirus24) (Ian Stapleton Cordasco)
-- [@shazow](https://github.com/shazow) (Andrey Petrov)
-
-👋
-
+To report a security vulnerability, please use the GitHub advisory disclosure form.
 
 ## Sponsorship
 
-If your company benefits from this library, please consider [sponsoring its
-development](https://urllib3.readthedocs.io/en/latest/sponsors.html).
-
-
-## For Enterprise
-
-Professional support for urllib3 is available as part of the [Tidelift
-Subscription][1].  Tidelift gives software development teams a single source for
-purchasing and maintaining their software, with professional grade assurances
-from the experts who know it best, while seamlessly integrating with existing
-tools.
-
-[1]: https://tidelift.com/subscription/pkg/pypi-urllib3?utm_source=pypi-urllib3&utm_medium=referral&utm_campaign=readme
+If your company benefits from this library, please consider sponsoring its
+development.

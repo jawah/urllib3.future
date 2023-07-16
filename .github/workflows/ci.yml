@@ -60,6 +60,12 @@ jobs:
             os: ubuntu-latest
             experimental: false
             nox-session: test-pypy
+            traefik-server: true
+          - python-version: "pypy-3.9"
+            os: ubuntu-latest
+            experimental: false
+            nox-session: test-pypy
+            traefik-server: true
           - python-version: "3.x"
             os: ubuntu-latest
             experimental: false

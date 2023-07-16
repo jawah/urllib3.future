@@ -10,7 +10,7 @@ urllib3 can be installed with `pip <https://pip.pypa.io>`_
 
 .. code-block:: bash
 
-  $ python -m pip install urllib3
+  $ python -m pip install urllib3.future
 
 
 HTTP/2 and HTTP/3 support
