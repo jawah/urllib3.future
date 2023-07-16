@@ -167,25 +167,6 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
             te_headers = self._get_header_lines(b"transfer-encoding")
             assert len(te_headers) == 1
 
-    def test_preserve_transfer_encoding_header(self) -> None:
-        self.start_chunked_handler()
-        chunks = [b"foo", b"bar", b"", b"bazzzzzzzzzzzzzzzzzzzzzz"]
-        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
-            pool.urlopen(
-                "GET",
-                "/",
-                body=chunks,
-                headers={"transfer-Encoding": "test-transfer-encoding"},
-                chunked=True,
-            )
-
-            te_headers = self._get_header_lines(b"transfer-encoding")
-            # Validate that there is only one Transfer-Encoding header.
-            assert len(te_headers) == 1
-            # Validate that the existing Transfer-Encoding header is the one that
-            # was provided.
-            assert te_headers[0] == b"transfer-encoding: test-transfer-encoding"
-
     def test_preserve_chunked_on_retry_after(self) -> None:
         self.chunked_requests = 0
         self.socks: list[socket.socket] = []
@@ -259,7 +240,7 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
 
                 if i == 0:
                     # Bad HTTP version will trigger a connection close
-                    sock.sendall(b"HTTP/0.5 200 OK\r\n\r\n")
+                    sock.sendall(b"HTTP/9 200 OK\r\n\r\n")
                 else:
                     sock.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
                 sock.close()

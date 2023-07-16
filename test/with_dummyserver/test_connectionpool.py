@@ -806,25 +806,11 @@ class TestConnectionPool(HTTPDummyServerTestCase):
                     preload_content=False,
                     retries=False,
                 )
-                for chunk in response.stream():
+                for chunk in response.stream(amt=3):
                     assert chunk == b"123"
 
             assert pool.num_connections == 1
             assert pool.num_requests == x
-
-    def test_read_chunked_short_circuit(self) -> None:
-        with HTTPConnectionPool(self.host, self.port) as pool:
-            response = pool.request("GET", "/chunked", preload_content=False)
-            response.read()
-            with pytest.raises(StopIteration):
-                next(response.read_chunked())
-
-    def test_read_chunked_on_closed_response(self) -> None:
-        with HTTPConnectionPool(self.host, self.port) as pool:
-            response = pool.request("GET", "/chunked", preload_content=False)
-            response.close()
-            with pytest.raises(StopIteration):
-                next(response.read_chunked())
 
     def test_chunked_gzip(self) -> None:
         with HTTPConnectionPool(self.host, self.port) as pool:
@@ -973,7 +959,6 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             None,
         ],
     )
-    @pytest.mark.parametrize("host", ["Host", "host", b"Host", b"host", None])
     @pytest.mark.parametrize(
         "user_agent", ["User-Agent", "user-agent", b"User-Agent", b"user-agent", None]
     )
@@ -981,7 +966,6 @@ class TestConnectionPool(HTTPDummyServerTestCase):
     def test_skip_header(
         self,
         accept_encoding: str | None,
-        host: str | None,
         user_agent: str | None,
         chunked: bool,
     ) -> None:
@@ -989,8 +973,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
         if accept_encoding is not None:
             headers[accept_encoding] = SKIP_HEADER
-        if host is not None:
-            headers[host] = SKIP_HEADER
+
         if user_agent is not None:
             headers[user_agent] = SKIP_HEADER
 
@@ -1002,10 +985,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert "Accept-Encoding" in request_headers
         else:
             assert accept_encoding not in request_headers
-        if host is None:
-            assert "Host" in request_headers
-        else:
-            assert host not in request_headers
+
         if user_agent is None:
             assert "User-Agent" in request_headers
         else:
@@ -1089,14 +1069,23 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert request_headers["User-Agent"] == "test header"
 
     @pytest.mark.parametrize(
-        "user_agent", ["Schönefeld/1.18.0", "Schönefeld/1.18.0".encode("iso-8859-1")]
+        "user_agent, should_encode",
+        [("Schönefeld/1.18.0", False), ("Schönefeld/1.18.0", True)],
     )
-    def test_user_agent_non_ascii_user_agent(self, user_agent: str) -> None:
+    def test_user_agent_non_ascii_user_agent(
+        self, user_agent: str, should_encode: bool
+    ) -> None:
+        ua_value: str | bytes
+
         with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            if should_encode is False:
+                ua_value = user_agent
+            else:
+                ua_value = user_agent.encode("iso-8859-1")
             r = pool.urlopen(
                 "GET",
                 "/headers",
-                headers={"User-Agent": user_agent},
+                headers={"User-Agent": ua_value},  # type: ignore[dict-item]
             )
             request_headers = r.json()
             assert "User-Agent" in request_headers

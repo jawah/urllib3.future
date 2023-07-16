@@ -320,7 +320,7 @@ class ConnectionMarker:
                 self: HTTPConnection, *args: typing.Any, **kwargs: typing.Any
             ) -> None:
                 target(self, *args, **kwargs)
-                self.sock.sendall(cls._get_socket_mark(self.sock, False))
+                self.sock.sendall(cls._get_socket_mark(self.sock, False))  # type: ignore
 
             return part
 

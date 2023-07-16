@@ -5,16 +5,15 @@ requires = ["hatchling>=1.6.0,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "urllib3"
-description = "HTTP library with thread-safe connection pooling, file post, and more."
+name = "urllib3.future"
+description = "Fork of mainstream urllib3 but ahead of his time"
 readme = "README.md"
 keywords = ["urllib", "httplib", "threadsafe", "filepost", "http", "https", "ssl", "pooling"]
 authors = [
   {name = "Andrey Petrov", email = "andrey.petrov@shazow.net"}
 ]
 maintainers = [
-  {name = "Seth Michael Larson", email="sethmichaellarson@gmail.com"},
-  {name = "Quentin Pradet", email="quentin@pradet.me"},
+  {name = "Ahmed R. TAHRI", email="ahmed.tahri@cloudnursery.dev"},
 ]
 classifiers = [
   "Environment :: Web Environment",
@@ -37,6 +36,11 @@ classifiers = [
 ]
 requires-python = ">=3.7"
 dynamic = ["version"]
+dependencies = [
+  "qh3>=0.11.2,<1.0.0; (platform_system == 'Darwin' or platform_system == 'Windows' or platform_system == 'Linux') and (platform_python_implementation == 'CPython' or (platform_python_implementation == 'PyPy' and python_version >= '3.8'))",
+  "h11>=0.11.0,<1.0.0",
+  "h2>=4.0.0,<5.0.0",
+]
 
 [project.optional-dependencies]
 brotli = [
@@ -55,6 +59,9 @@ secure = [
 ]
 socks = [
   "PySocks>=1.5.6,<2.0,!=1.5.7",
+]
+qh3 = [
+  "qh3>=0.11.2,<1.0.0",
 ]
 
 [project.urls]
@@ -76,6 +83,11 @@ include = [
   "/CHANGES.rst",
   "/README.md",
   "/LICENSE.txt",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/urllib3",
 ]
 
 [tool.pytest.ini_options]
@@ -102,6 +114,7 @@ filterwarnings = [
     # https://github.com/pytest-dev/pytest/issues/10977
     '''default:ast\.(Num|NameConstant|Str) is deprecated and will be removed in Python 3\.14; use ast\.Constant instead:DeprecationWarning:_pytest''',
     '''default:Attribute s is deprecated and will be removed in Python 3\.14; use value instead:DeprecationWarning:_pytest''',
+    '''default:'HTTPResponse\.read_chunked\(\)' method is deprecated:DeprecationWarning''',
 ]
 
 [tool.isort]

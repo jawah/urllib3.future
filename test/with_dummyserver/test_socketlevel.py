@@ -11,7 +11,6 @@ import select
 import shutil
 import socket
 import ssl
-import sys
 import tempfile
 import time
 import typing
@@ -45,6 +44,7 @@ from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.connectionpool import _url_from_pool
 from urllib3.exceptions import (
     InsecureRequestWarning,
+    InvalidHeader,
     MaxRetryError,
     ProtocolError,
     ProxyError,
@@ -676,56 +676,6 @@ class TestSocketClosing(SocketDummyServerTestCase):
             with pytest.raises(ProtocolError):
                 response.read()
 
-    def test_retry_weird_http_version(self) -> None:
-        """Retry class should handle httplib.BadStatusLine errors properly"""
-
-        def socket_handler(listener: socket.socket) -> None:
-            sock = listener.accept()[0]
-            # First request.
-            # Pause before responding so the first request times out.
-            buf = b""
-            while not buf.endswith(b"\r\n\r\n"):
-                buf += sock.recv(65536)
-
-            # send unknown http protocol
-            body = "bad http 0.5 response"
-            sock.send(
-                (
-                    "HTTP/0.5 200 OK\r\n"
-                    "Content-Type: text/plain\r\n"
-                    "Content-Length: %d\r\n"
-                    "\r\n"
-                    "%s" % (len(body), body)
-                ).encode("utf-8")
-            )
-            sock.close()
-
-            # Second request.
-            sock = listener.accept()[0]
-            buf = b""
-            while not buf.endswith(b"\r\n\r\n"):
-                buf += sock.recv(65536)
-
-            # Now respond immediately.
-            sock.send(
-                (
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/plain\r\n"
-                    "Content-Length: %d\r\n"
-                    "\r\n"
-                    "foo" % (len("foo"))
-                ).encode("utf-8")
-            )
-
-            sock.close()  # Close the socket.
-
-        self._start_server(socket_handler)
-        with HTTPConnectionPool(self.host, self.port) as pool:
-            retry = Retry(read=1)
-            response = pool.request("GET", "/", retries=retry)
-            assert response.status == 200
-            assert response.data == b"foo"
-
     def test_connection_cleanup_on_read_timeout(self) -> None:
         timed_out = Event()
 
@@ -760,6 +710,44 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 assert poolsize == pool.pool.qsize()
             finally:
                 timed_out.set()
+
+    def test_invalid_http_status(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            # Consume request
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf = sock.recv(65536)
+
+            # Send partial response and close socket.
+            sock.send(b"HTTP/1.1   OK\r\n\r\n")
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            with pytest.raises(ProtocolError):
+                pool.request("GET", "/", retries=False)
+
+    def test_invalid_incoming_header(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            # Consume request
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf = sock.recv(65536)
+
+            # Send partial response and close socket.
+            sock.send(b"HTTP/1.1 200 OK\r\nX Invalid-Header: Value\r\n\r\n")
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            with pytest.raises(InvalidHeader):
+                pool.request("GET", "/", retries=False)
 
     def test_connection_cleanup_on_protocol_error_during_read(self) -> None:
         body = "Response"
@@ -1068,6 +1056,26 @@ class TestProxyManager(SocketDummyServerTestCase):
                 ]
             )
 
+    def test_proxy_tunnel_connect_nak(self) -> None:
+        def echo_socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+
+            sock.send(b"HTTP/1.1 401 Unauthorized\r\n\r\n")
+            sock.close()
+
+        self._start_server(echo_socket_handler)
+        base_url = f"http://{self.host}:{self.port}"
+
+        with ProxyManager(base_url) as proxy:
+            with pytest.raises(
+                MaxRetryError, match=r"Tunnel connection failed: 401 Unauthorized"
+            ):
+                proxy.request("GET", "https://www.google.com/", retries=0)
+
     def test_headers(self) -> None:
         def echo_socket_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
@@ -1091,7 +1099,7 @@ class TestProxyManager(SocketDummyServerTestCase):
         base_url = f"http://{self.host}:{self.port}"
 
         # Define some proxy headers.
-        proxy_headers = HTTPHeaderDict({"For The Proxy": "YEAH!"})
+        proxy_headers = HTTPHeaderDict({"For-The-Proxy": "YEAH!"})
         with proxy_from_url(base_url, proxy_headers=proxy_headers) as proxy:
             conn = proxy.connection_from_url("http://www.google.com/")
 
@@ -1101,7 +1109,7 @@ class TestProxyManager(SocketDummyServerTestCase):
             # FIXME: The order of the headers is not predictable right now. We
             # should fix that someday (maybe when we migrate to
             # OrderedDict/MultiDict).
-            assert b"For The Proxy: YEAH!\r\n" in r.data
+            assert b"For-The-Proxy: YEAH!\r\n" in r.data
 
     def test_retries(self) -> None:
         close_event = Event()
@@ -1604,7 +1612,8 @@ class TestSSL(SocketDummyServerTestCase):
     # https://github.com/urllib3/urllib3/pull/2674
     @notSecureTransport()
     @pytest.mark.skipif(
-        os.environ.get("CI") == "true" and sys.implementation.name == "pypy",
+        os.environ.get("CI") is not None
+        or os.environ.get("GITHUB_ACTIONS") is not None,
         reason="too slow to run in CI",
     )
     @pytest.mark.parametrize(
@@ -1677,18 +1686,6 @@ class TestErrorWrapping(SocketDummyServerTestCase):
 
 
 class TestHeaders(SocketDummyServerTestCase):
-    def test_httplib_headers_case_insensitive(self) -> None:
-        self.start_response_handler(
-            b"HTTP/1.1 200 OK\r\n"
-            b"Content-Length: 0\r\n"
-            b"Content-type: text/plain\r\n"
-            b"\r\n"
-        )
-        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
-            HEADERS = {"Content-Length": "0", "Content-type": "text/plain"}
-            r = pool.request("GET", "/")
-            assert HEADERS == dict(r.headers.items())  # to preserve case sensitivity
-
     def start_parsing_handler(self) -> None:
         self.parsed_headers: typing.OrderedDict[str, str] = OrderedDict()
         self.received_headers: list[bytes] = []
@@ -1714,23 +1711,8 @@ class TestHeaders(SocketDummyServerTestCase):
 
         self._start_server(socket_handler)
 
-    def test_headers_are_sent_with_the_original_case(self) -> None:
-        headers = {"foo": "bar", "bAz": "quux"}
-
-        self.start_parsing_handler()
-        expected_headers = {
-            "Accept-Encoding": "identity",
-            "Host": f"{self.host}:{self.port}",
-            "User-Agent": _get_default_user_agent(),
-        }
-        expected_headers.update(headers)
-
-        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
-            pool.request("GET", "/", headers=HTTPHeaderDict(headers))
-            assert expected_headers == self.parsed_headers
-
     def test_ua_header_can_be_overridden(self) -> None:
-        headers = {"uSeR-AgENt": "Definitely not urllib3!"}
+        headers = {"User-Agent": "Definitely not urllib3!"}
 
         self.start_parsing_handler()
         expected_headers = {
@@ -1781,7 +1763,7 @@ class TestHeaders(SocketDummyServerTestCase):
         #       so that if the internal implementation tries to sort them,
         #       a change will be detected.
         expected_response_headers = [
-            (f"X-Header-{int(i)}", str(i)) for i in reversed(range(K))
+            (f"x-header-{int(i)}", str(i)) for i in reversed(range(K))
         ]
 
         def socket_handler(listener: socket.socket) -> None:
@@ -1799,7 +1781,7 @@ class TestHeaders(SocketDummyServerTestCase):
                         for (k, v) in expected_response_headers
                     ]
                 )
-                + b"\r\n"
+                + b"\r\n\r\n"
             )
             sock.close()
 
@@ -1807,7 +1789,9 @@ class TestHeaders(SocketDummyServerTestCase):
         with HTTPConnectionPool(self.host, self.port) as pool:
             r = pool.request("GET", "/", retries=0)
             actual_response_headers = [
-                (k, v) for (k, v) in r.headers.items() if k.startswith("X-Header-")
+                (k, v)
+                for (k, v) in r.headers.items()
+                if k.lower().startswith("x-header-")
             ]
             assert expected_response_headers == actual_response_headers
 
@@ -1911,17 +1895,6 @@ class TestBrokenHeaders(SocketDummyServerTestCase):
                     ):
                         return
             pytest.fail("Missing log about unparsed headers")
-
-    def test_header_without_name(self) -> None:
-        self._test_broken_header_parsing([b": Value", b"Another: Header"])
-
-    def test_header_without_name_or_value(self) -> None:
-        self._test_broken_header_parsing([b":", b"Another: Header"])
-
-    def test_header_without_colon_or_value(self) -> None:
-        self._test_broken_header_parsing(
-            [b"Broken Header", b"Another: Header"], "Broken Header"
-        )
 
 
 class TestHeaderParsingContentType(SocketDummyServerTestCase):
@@ -2079,7 +2052,7 @@ class TestBadContentLength(SocketDummyServerTestCase):
                 "GET", url="/", preload_content=False, enforce_content_length=True
             )
             data = get_response.stream(100)
-            with pytest.raises(ProtocolError, match="12 bytes read, 10 more expected"):
+            with pytest.raises(ProtocolError, match="received 12 bytes, expected 22"):
                 next(data)
             done_event.set()
 

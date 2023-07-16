@@ -11,7 +11,6 @@ import warnings
 import zlib
 from contextlib import contextmanager
 from http.client import HTTPMessage as _HttplibHTTPMessage
-from http.client import HTTPResponse as _HttplibHTTPResponse
 from socket import timeout as SocketTimeout
 
 try:
@@ -41,6 +40,7 @@ except (AttributeError, ImportError, ValueError):  # Defensive:
 from . import util
 from ._base_connection import _TYPE_BODY
 from ._collections import HTTPHeaderDict
+from .backend import LowLevelResponse
 from .connection import BaseSSLError, HTTPConnection, HTTPException
 from .exceptions import (
     BodyNotHttplibCompatible,
@@ -54,7 +54,7 @@ from .exceptions import (
     ResponseNotChunked,
     SSLError,
 )
-from .util.response import is_fp_closed, is_response_to_head
+from .util.response import is_fp_closed
 from .util.retry import Retry
 
 if typing.TYPE_CHECKING:
@@ -543,7 +543,7 @@ class HTTPResponse(BaseHTTPResponse):
         reason: str | None = None,
         preload_content: bool = True,
         decode_content: bool = True,
-        original_response: _HttplibHTTPResponse | None = None,
+        original_response: LowLevelResponse | None = None,
         pool: HTTPConnectionPool | None = None,
         connection: HTTPConnection | None = None,
         msg: _HttplibHTTPMessage | None = None,
@@ -567,7 +567,7 @@ class HTTPResponse(BaseHTTPResponse):
         self.auto_close = auto_close
 
         self._body = None
-        self._fp: _HttplibHTTPResponse | None = None
+        self._fp: LowLevelResponse | typing.IO[typing.Any] | None = None
         self._original_response = original_response
         self._fp_bytes_read = 0
         self.msg = msg
@@ -788,7 +788,10 @@ class HTTPResponse(BaseHTTPResponse):
                     amt -= chunk_amt
                 else:
                     chunk_amt = max_chunk_amt
-                data = self._fp.read(chunk_amt)
+                try:
+                    data = self._fp.read(chunk_amt)
+                except ValueError:  # Defensive: overly protective
+                    break  # Defensive: can also be an indicator that read ended, should not happen.
                 if not data:
                     break
                 buffer.write(data)
@@ -986,7 +989,7 @@ class HTTPResponse(BaseHTTPResponse):
             and hasattr(self._fp, "flush")
             and not getattr(self._fp, "closed", False)
         ):
-            return self._fp.flush()
+            return self._fp.flush()  # type: ignore[return-value]
 
     def supports_chunked_reads(self) -> bool:
         """
@@ -1049,6 +1052,14 @@ class HTTPResponse(BaseHTTPResponse):
             If True, will attempt to decode the body based on the
             'content-encoding' header.
         """
+        warnings.warn(
+            "'HTTPResponse.read_chunked()' method is deprecated and will be removed "
+            "in urllib3 v2.1.0. It was meant for legacy http.client socket (via fp) direct access. "
+            "Accessing this method will likely result in BodyNotHttplibCompatible exception.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
         self._init_decoder()
         # FIXME: Rewrite this method and make it a class with a better structured logic.
         if not self.chunked:
@@ -1064,7 +1075,10 @@ class HTTPResponse(BaseHTTPResponse):
 
         with self._error_catcher():
             # Don't bother reading the body of a HEAD request.
-            if self._original_response and is_response_to_head(self._original_response):
+            if (
+                self._original_response
+                and self._original_response.method.upper() == "HEAD"
+            ):
                 self._original_response.close()
                 return None
 
@@ -1094,7 +1108,7 @@ class HTTPResponse(BaseHTTPResponse):
 
             # Chunk content ends with \r\n: discard it.
             while self._fp is not None:
-                line = self._fp.fp.readline()
+                line = self._fp.fp.readline()  # type: ignore[union-attr]
                 if not line:
                     # Some sites may not end with '\r\n'.
                     break

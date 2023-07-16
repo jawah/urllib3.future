@@ -27,7 +27,6 @@ from urllib3.util import is_fp_closed
 from urllib3.util.connection import _has_ipv6, allowed_gai_family, create_connection
 from urllib3.util.proxy import connection_requires_http_tunnel
 from urllib3.util.request import _FAILEDTELL, make_headers, rewind_body
-from urllib3.util.response import assert_header_parsing
 from urllib3.util.ssl_ import (
     _TYPE_VERSION_INFO,
     _is_has_never_check_common_name_reliable,
@@ -802,13 +801,6 @@ class TestUtil:
         with patch("urllib3.util.connection.HAS_IPV6", False):
             assert allowed_gai_family() == socket.AF_INET
 
-    @pytest.mark.parametrize("headers", [b"foo", None, object])
-    def test_assert_header_parsing_throws_typeerror_with_non_headers(
-        self, headers: bytes | object | None
-    ) -> None:
-        with pytest.raises(TypeError):
-            assert_header_parsing(headers)  # type: ignore[arg-type]
-
     def test_connection_requires_http_tunnel_no_proxy(self) -> None:
         assert not connection_requires_http_tunnel(
             proxy_url=None, proxy_config=None, destination_scheme=None
@@ -842,19 +834,6 @@ class TestUtil:
         assert not connection_requires_http_tunnel(
             proxy, proxy_config, destination_scheme
         )
-
-    def test_assert_header_parsing_no_error_on_multipart(self) -> None:
-        from http import client
-
-        header_msg = io.BytesIO()
-        header_msg.write(
-            b'Content-Type: multipart/encrypted;protocol="application/'
-            b'HTTP-SPNEGO-session-encrypted";boundary="Encrypted Boundary"'
-            b"\nServer: Microsoft-HTTPAPI/2.0\nDate: Fri, 16 Aug 2019 19:28:01 GMT"
-            b"\nContent-Length: 1895\n\n\n"
-        )
-        header_msg.seek(0)
-        assert_header_parsing(client.parse_headers(header_msg))
 
     @pytest.mark.parametrize("host", [".localhost", "...", "t" * 64])
     def test_create_connection_with_invalid_idna_labels(self, host: str) -> None:
