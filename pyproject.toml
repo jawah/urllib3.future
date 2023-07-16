@@ -5,7 +5,7 @@ requires = ["hatchling>=1.6.0,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "urllib3.future"
+name = "urllib3-future"
 description = "Fork of mainstream urllib3 but ahead of his time"
 readme = "README.md"
 keywords = ["urllib", "httplib", "threadsafe", "filepost", "http", "https", "ssl", "pooling"]
