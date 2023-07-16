@@ -11,10 +11,6 @@ Backends
     :members:
     :show-inheritance:
 
-.. autoclass:: urllib3.backend.httplib.LegacyBackend
-    :members:
-    :show-inheritance:
-
 .. autoclass:: urllib3.backend.HttpVersion
     :members:
 
