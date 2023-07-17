@@ -46,7 +46,7 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
         with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
             pool.urlopen("GET", "/", body=chunks, headers=dict(DNT="1"), chunked=True)  # type: ignore[arg-type]
 
-            assert b"Transfer-Encoding" in self.buffer
+            assert b"transfer-encoding" in self.buffer
             body = self.buffer.split(b"\r\n\r\n", 1)[1]
             lines = body.split(b"\r\n")
             # Empty chunks should have been skipped, as this could not be distinguished
@@ -63,7 +63,7 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
             pool.urlopen("GET", "/", data, chunked=True)
             header, body = self.buffer.split(b"\r\n\r\n", 1)
 
-            assert b"Transfer-Encoding: chunked" in header.split(b"\r\n")
+            assert b"transfer-encoding: chunked" in header.split(b"\r\n")
             if data:
                 bdata = data if isinstance(data, bytes) else data.encode("utf-8")
                 assert b"\r\n" + bdata + b"\r\n" in body
@@ -176,7 +176,7 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
                 sock = listener.accept()[0]
                 self.socks.append(sock)
                 request = consume_socket(sock)
-                if b"Transfer-Encoding: chunked" in request.split(b"\r\n"):
+                if b"transfer-encoding: chunked" in request.split(b"\r\n"):
                     self.chunked_requests += 1
 
                 sock.send(
@@ -205,7 +205,7 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
             for i in range(2):
                 sock = listener.accept()[0]
                 request = ConnectionMarker.consume_request(sock)
-                if b"Transfer-Encoding: chunked" in request.split(b"\r\n"):
+                if b"transfer-encoding: chunked" in request.split(b"\r\n"):
                     self.chunked_requests += 1
 
                 if i == 0:
@@ -235,7 +235,7 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
             for i in range(2):
                 sock = listener.accept()[0]
                 request = ConnectionMarker.consume_request(sock)
-                if b"Transfer-Encoding: chunked" in request.split(b"\r\n"):
+                if b"transfer-encoding: chunked" in request.split(b"\r\n"):
                     self.chunked_requests += 1
 
                 if i == 0:

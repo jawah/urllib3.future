@@ -332,7 +332,7 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
                     break
 
             assert buf.startswith(b"GET / HTTP/1.1")
-            assert b"Host: example.com" in buf
+            assert b"host: example.com" in buf
 
             sock.sendall(
                 b"HTTP/1.1 200 OK\r\n"
@@ -639,7 +639,7 @@ class TestSOCKS4Proxy(IPV4SocketDummyServerTestCase):
                     break
 
             assert buf.startswith(b"GET / HTTP/1.1")
-            assert b"Host: example.com" in buf
+            assert b"host: example.com" in buf
 
             sock.sendall(
                 b"HTTP/1.1 200 OK\r\n"

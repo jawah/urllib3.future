@@ -43,14 +43,11 @@ class QuicTLSConfig:
 
     keypassword: str | bytes | None = None
 
-    #: The DTLS session ticket which should be used for session resumption
+    #: The DTLS/QUIC session ticket which should be used for session resumption
     session_ticket: Any | None = None
 
+    #: Certificate fingerprint to be matched against fetched peer certificate.
     cert_fingerprint: str | None = None
-    cert_use_common_name: bool = False
 
-    def clone(self) -> QuicTLSConfig:
-        """
-        Clone this instance.
-        """
-        return dataclasses.replace(self)
+    #: Allow commonName (legacy/deprecated) certificate hostname verification
+    cert_use_common_name: bool = False

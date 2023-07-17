@@ -75,6 +75,9 @@ python -m pip install urllib3.future
 Want to report an incompatibility? Open an issue in that repository.
 All projects that depends on listed *compatible* package should work as-is.
 
+Beware that headers are no longer case-sensitive IN and OUT. Always sent through the socket in lowercase to be consistent across
+all three protocols (HTTP/1.1, 2, and 3).
+
 ## Documentation
 
 urllib3.future has usage and reference documentation at [urllib3future.readthedocs.io](https://urllib3future.readthedocs.io).
