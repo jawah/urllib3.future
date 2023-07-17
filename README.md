@@ -47,11 +47,33 @@ $ python -m pip install urllib3.future
 ```
 
 ⚠️ Installing urllib3.future shadows the actual urllib3 package (_depending on installation order_) and you should
-carefully weight the impacts. The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node
+carefully weigh the impacts. The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node
 is always greater or equal to 900.
 
 Support for bugs or improvements is served in this repository. We regularly sync this fork
 with the main branch of urllib3/urllib3.
+
+## Compatibility with downstream
+
+You should _always_ install the downstream project prior to this fork.
+
+e.g. I want `requests` to be use this package.
+
+```
+python -m pip install requests
+python -m pip install urllib3.future
+```
+
+| Package          | Is compatible? | Notes                                                                                                                                           |
+|------------------|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| requests         | ✅              | Invalid chunked transmission may raises ConnectionError instead of ChunkedEncodingError. Use of Session() is required to enable HTTP/3 support. |
+| HTTPie           | ✅              | Require plugin `httpie-next` to be installed or wont be able to upgrade to HTTP/3 (QUIC/Alt-Svc Cache Layer)                                    |
+| pip              | 🛑             | Cannot use the fork because of vendored urllib3 v1.x                                                                                            |
+| botocore         | ✅              | /                                                                                                                                               |
+| openapigenerator | ✅              | Simply patch generated `setup.py` requirement and replace urllib3 to urllib3.future                                                             |
+
+Want to report an incompatibility? Open an issue in that repository.
+All projects that depends on listed *compatible* package should work as-is.
 
 ## Documentation
 
