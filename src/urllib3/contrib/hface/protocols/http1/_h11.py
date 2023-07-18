@@ -21,12 +21,25 @@ import h11
 from ..._typing import HeadersType, HeaderType
 from ...events import ConnectionTerminated, DataReceived, Event, HeadersReceived
 from .._protocols import HTTP1Protocol
-from ._helpers import capitalize_field_name
 
 
-def headers_to_request(headers: HeadersType, *, has_content: bool) -> h11.Event:
+def capitalize_header_name(name: bytes) -> bytes:
+    """
+    Take a header name and capitalize it.
+    >>> capitalize_header_name(b"x-hEllo-wORLD")
+    'X-Hello-World'
+    >>> capitalize_header_name(b"server")
+    'Server'
+    >>> capitalize_header_name(b"contEnt-TYPE")
+    'Content-Type'
+    >>> capitalize_header_name(b"content_type")
+    'Content-Type'
+    """
+    return b"-".join([el.capitalize() for el in name.replace(b"_", b"-").split(b"-")])
+
+
+def headers_to_request(headers: HeadersType) -> h11.Event:
     method = scheme = authority = path = host = None
-    need_transfer_encoding = has_content
     regular_headers = []
 
     for name, value in headers:
@@ -47,9 +60,8 @@ def headers_to_request(headers: HeadersType, *, has_content: bool) -> h11.Event:
             if host is not None:
                 raise ValueError("Duplicate Host header.")
             host = value
-        elif name in {b"content-length", b"transfer-encoding"}:
-            need_transfer_encoding = False
-        regular_headers.append((capitalize_field_name(name), value))
+
+        regular_headers.append((capitalize_header_name(name), value))
 
     if method is None:
         raise ValueError("Missing request header: :method")
@@ -68,9 +80,6 @@ def headers_to_request(headers: HeadersType, *, has_content: bool) -> h11.Event:
         if path is None:
             raise ValueError("Missing request header: :path")
         target = path
-        if need_transfer_encoding:
-            # Requests with a body need Content-Length or Transfer-Encoding
-            regular_headers.append((b"Transfer-Encoding", b"chunked"))
 
     if host is None:
         regular_headers.insert(0, (b"Host", authority))
@@ -82,63 +91,6 @@ def headers_to_request(headers: HeadersType, *, has_content: bool) -> h11.Event:
         headers=regular_headers,
         target=target,
     )
-
-
-def headers_to_response(headers: HeadersType) -> h11.Event:
-    status = None
-    regular_headers = []
-    for name, value in headers:
-        name = name.lower()
-        if name.startswith(b":"):
-            if name == b":status":
-                status = value
-            else:
-                raise ValueError("Invalid request header: " + name.decode())
-            continue
-        regular_headers.append((capitalize_field_name(name), value))
-
-    if status is None:
-        raise ValueError("Missing response header: :status")
-
-    return h11.Response(
-        status_code=int(status.decode()),
-        headers=regular_headers,
-    )
-
-
-def headers_from_request(request: h11.Request, scheme: bytes) -> HeadersType:
-    """
-    Converts an HTTP/1.0 or HTTP/1.1 request to HTTP/2-like headers.
-
-    Generates from pseudo (colon) headers from a request line and a Host header.
-    """
-    host = None
-    regular_headers: list[HeaderType] = []
-
-    for name, value in request.headers:
-        name = name.lower()
-        if name.startswith(b":"):
-            raise ValueError("Pseudo header not allowed in HTTP/1: " + name.decode())
-        if name == b"host":
-            if host is not None:
-                raise ValueError("Duplicate Host header.")
-            host = value
-        else:
-            regular_headers.append((name, value))
-
-    if request.method == b"CONNECT":
-        # CONNECT requests are a special case.
-        pseudo_headers = [(b":method", request.method), (b":authority", request.target)]
-    else:
-        # Fallback for HTTP/1.0 requests without a Host header.
-        authority = b"" if host is None else host
-        pseudo_headers = [
-            (b":method", request.method),
-            (b":scheme", scheme),
-            (b":authority", authority),
-            (b":path", request.target),
-        ]
-    return pseudo_headers + regular_headers
 
 
 def headers_from_response(
@@ -176,13 +128,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def exceptions() -> tuple[type[BaseException], ...]:
         return h11.LocalProtocolError, h11.ProtocolError, h11.RemoteProtocolError
 
-    @property
-    def http_version(self) -> str:
-        their_http_version = self._connection.their_http_version
-        if their_http_version is None:
-            return super().http_version
-        return their_http_version.decode()
-
     def is_available(self) -> bool:
         return self._connection.our_state == self._connection.their_state == h11.IDLE
 
@@ -210,10 +155,9 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     ) -> None:
         if stream_id != self._current_stream_id:
             raise ValueError("Invalid stream ID.")
-        if self._connection.our_role == h11.CLIENT:
-            self._h11_submit(headers_to_request(headers, has_content=not end_stream))
-        else:
-            self._h11_submit(headers_to_response(headers))
+
+        self._h11_submit(headers_to_request(headers))
+
         if end_stream:
             self._h11_submit(h11.EndOfMessage())
 

@@ -105,7 +105,6 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             if isinstance(
                 e,
                 (
-                    h2.events.RequestReceived,
                     h2.events.ResponseReceived,
                     h2.events.TrailersReceived,
                 ),
