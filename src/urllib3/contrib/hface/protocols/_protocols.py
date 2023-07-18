@@ -128,14 +128,6 @@ class HTTPProtocol(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def http_version(self) -> str:
-        """
-        An HTTP version as a string.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
     def multiplexed(self) -> bool:
         """
         Whether this connection supports multiple parallel streams.
@@ -278,10 +270,6 @@ class HTTP1Protocol(HTTPOverTCPProtocol):
     """
 
     @property
-    def http_version(self) -> str:
-        return "1"
-
-    @property
     def multiplexed(self) -> bool:
         return False
 
@@ -301,10 +289,6 @@ class HTTP2Protocol(HTTPOverTCPProtocol):
     """
 
     @property
-    def http_version(self) -> str:
-        return "2"
-
-    @property
     def multiplexed(self) -> bool:
         return True
 
@@ -322,10 +306,6 @@ class HTTP3Protocol(HTTPOverQUICProtocol):
     An abstract base class for HTTP/3 implementations.
     Extends :class:`.HTTPOverQUICProtocol`
     """
-
-    @property
-    def http_version(self) -> str:
-        return "3"
 
     @property
     def multiplexed(self) -> bool:
