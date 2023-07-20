@@ -132,6 +132,14 @@ def notWindows() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     )
 
 
+def notMacOS() -> typing.Callable[[_TestFuncT], _TestFuncT]:
+    """Skips this test on Windows"""
+    return pytest.mark.skipif(
+        platform.system() == "Darwin",
+        reason="Test does not run on MacOS",
+    )
+
+
 def onlyBrotli() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     return pytest.mark.skipif(
         brotli is None, reason="only run if brotli library is present"

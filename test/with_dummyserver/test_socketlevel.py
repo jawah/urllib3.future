@@ -20,6 +20,7 @@ from pathlib import Path
 from test import (
     LONG_TIMEOUT,
     SHORT_TIMEOUT,
+    notMacOS,
     notSecureTransport,
     notWindows,
     requires_ssl_context_keyfile_password,
@@ -2116,6 +2117,7 @@ class TestRetryPoolSizeDrainFail(SocketDummyServerTestCase):
 
 class TestBrokenPipe(SocketDummyServerTestCase):
     @notWindows()
+    @notMacOS()
     def test_ignore_broken_pipe_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # On Windows an aborted connection raises an error on
         # attempts to read data out of a socket that's been closed.
