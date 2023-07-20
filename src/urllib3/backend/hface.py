@@ -169,6 +169,7 @@ class HfaceBackend(BaseBackend):
         key_file: str | None = None,
         key_password: str | None = None,
         cert_fingerprint: str | None = None,
+        assert_hostname: None | str | typing.Literal[False] = None,
     ) -> None:
         """Meant to support TLS over QUIC meanwhile cpython does not ship with its native implementation."""
         if self._svn != HttpVersion.h3:
@@ -194,6 +195,10 @@ class HfaceBackend(BaseBackend):
             keypassword=key_password,
             cert_fingerprint=cert_fingerprint,
             cert_use_common_name=cert_use_common_name,
+            verify_hostname=bool(assert_hostname),
+            assert_hostname=assert_hostname
+            if isinstance(assert_hostname, str)
+            else None,
         )
 
         self.is_verified = not self.__custom_tls_settings.insecure
@@ -257,7 +262,12 @@ class HfaceBackend(BaseBackend):
 
                 self._protocol = HTTPProtocolFactory.new(
                     HTTP3Protocol,  # type: ignore[type-abstract]
-                    remote_address=(self.host, int(port)),
+                    remote_address=(
+                        self.__custom_tls_settings.assert_hostname
+                        if self.__custom_tls_settings.assert_hostname
+                        else self.host,
+                        int(port),
+                    ),
                     server_name=self.host,
                     tls_config=self.__custom_tls_settings,
                 )

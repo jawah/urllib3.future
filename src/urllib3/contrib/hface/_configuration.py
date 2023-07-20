@@ -49,8 +49,5 @@ class QuicTLSConfig:
     cert_fingerprint: str | None = None
     cert_use_common_name: bool = False
 
-    def clone(self) -> QuicTLSConfig:
-        """
-        Clone this instance.
-        """
-        return dataclasses.replace(self)
+    verify_hostname: bool = True
+    assert_hostname: str | None = None
