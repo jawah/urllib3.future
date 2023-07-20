@@ -59,6 +59,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             server_name=server_name,
             hostname_checks_common_name=tls_config.cert_use_common_name,
             assert_fingerprint=tls_config.cert_fingerprint,
+            verify_hostname=tls_config.verify_hostname,
             secrets_log_file=open(keylogfile_path, "w+") if keylogfile_path else None,  # type: ignore[arg-type]
         )
 
