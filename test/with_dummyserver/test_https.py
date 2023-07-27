@@ -126,6 +126,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             os.path.join(cls.certs_dir, CLIENT_NO_INTERMEDIATE_PEM)
         )
 
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
     @classmethod
     def teardown_class(cls) -> None:
         super().teardown_class()

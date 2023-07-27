@@ -44,7 +44,7 @@ jobs:
       matrix:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12-dev"]
         os:
-          - macos-11
+          - macos-latest
           - windows-latest
           - ubuntu-20.04  # OpenSSL 1.1.1
           - ubuntu-22.04  # OpenSSL 3.0
@@ -91,10 +91,10 @@ jobs:
             os: ubuntu-22.04
           # Testing with non-final CPython on macOS is too slow for CI.
           - python-version: "3.12-dev"
-            os: macos-11
+            os: macos-latest
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-11":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-22.04":"Ubuntu 22.04 (OpenSSL 3.0)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-latest":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-22.04":"Ubuntu 22.04 (OpenSSL 3.0)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 40
     steps:
@@ -124,24 +124,25 @@ jobs:
 #          echo 127.0.0.1 httpbin.local alt.httpbin.local >> %WinDir%\system32\drivers\etc\hosts
 #          choco install -y curl
 
-#      - name: "Traefik: Prerequisites - CA, Host, Tools (MacOS)"
-#        if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-#        run: |
-#          sudo security authorizationdb write com.apple.trust-settings.admin allow
-#          mkdir ./certs
-#          pip install trustme
-#          python -m trustme -i httpbin.local alt.httpbin.local -d ./certs
-#          mv ./certs/server.pem ./certs/httpbin.local.pem
-#          mv ./certs/server.key ./certs/httpbin.local.key
-#          mv ./certs/client.pem ./rootCA.pem
-#          echo "127.0.0.1   httpbin.local alt.httpbin.local" | sudo tee -a /etc/hosts
-#          brew install curl
-#          brew install docker
-#          brew install docker-compose
-#          colima start
+      - name: "Traefik: Prerequisites - CA, Host, Tools (MacOS)"
+        if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
+        run: |
+          sudo security authorizationdb write com.apple.trust-settings.admin allow
+          mkdir ./certs
+          pip install trustme
+          python -m trustme -i httpbin.local alt.httpbin.local -d ./certs
+          mv ./certs/server.pem ./certs/httpbin.local.pem
+          mv ./certs/server.key ./certs/httpbin.local.key
+          mv ./certs/client.pem ./rootCA.pem
+          brew install curl
+          brew install docker
+          brew install docker-compose
+          colima start --network-address
+          colima list
+          echo "192.168.106.2   httpbin.local alt.httpbin.local" | sudo tee -a /etc/hosts
 
       - name: "Traefik: Produce Compose & Config"
-        if: ${{ matrix.traefik-server && contains(matrix.os, 'ubuntu') }}
+        if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
         env:
           TRAEFIK_CERTIFICATE_TOML: |
             [[tls.certificates]]
@@ -170,44 +171,6 @@ jobs:
                     published: 4443
                     protocol: udp
                     mode: host
-                volumes:
-                  - /var/run/docker.sock:/var/run/docker.sock
-                  - ./certs:/certs
-                command:
-                  # Enable Docker in Traefik, so that it reads labels from Docker services
-                  - --providers.docker
-                  # TLS providers
-                  - --providers.file.directory=/certs/
-                  # Auto discovery
-                  - --providers.file.watch=true
-                  # Do not expose all Docker services, only the ones explicitly exposed
-                  - --providers.docker.exposedbydefault=false
-                  # Create an entrypoint "http" listening on port 8080
-                  - --entrypoints.http.address=:8888
-                  # Create an entrypoint "https" listening on port 4443
-                  - --entrypoints.https.address=:4443
-                  # QUIC Related Configuration
-                  - --experimental.http3=true
-                  - --entrypoints.https.http3=true
-                  # Enable the access log, with HTTP requests
-                  - --accesslog
-                  # Enable the Traefik log, for configurations and errors
-                  - --log
-                  # Disable the Dashboard and API
-                  - --api.dashboard=false
-                  # Enable healthcheck
-                  - --ping
-                  - --log.level=DEBUG
-              
-              proxy_alt:
-                image: traefik:v2.10
-                restart: unless-stopped
-                healthcheck:
-                  test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
-                  interval: 3s
-                  timeout: 3s
-                  retries: 10
-                ports:
                   - target: 9999
                     published: 9999
                     protocol: tcp
@@ -228,10 +191,17 @@ jobs:
                   - --providers.file.watch=true
                   # Do not expose all Docker services, only the ones explicitly exposed
                   - --providers.docker.exposedbydefault=false
-                  # Create an entrypoint "http" listening on port 9999
-                  - --entrypoints.http.address=:9999
-                  # Create an entrypoint "https" listening on port 8754
-                  - --entrypoints.https.address=:8754
+                  # Create an entrypoint "http" listening on port 8080
+                  - --entrypoints.http.address=:8888
+                  # Create an entrypoint "https" listening on port 4443
+                  - --entrypoints.https.address=:4443
+                  # Create alt-no-quic entrypoints
+                  - --entrypoints.alt-http.address=:9999
+                  - --entrypoints.alt-https.address=:8754
+                  # QUIC Related Configuration
+                  - --experimental.http3=true
+                  - --entrypoints.https.http3=true
+                  - --entrypoints.alt-https.http3=false
                   # Enable the access log, with HTTP requests
                   - --accesslog
                   # Enable the Traefik log, for configurations and errors
@@ -240,9 +210,10 @@ jobs:
                   - --api.dashboard=false
                   # Enable healthcheck
                   - --ping
-              
+                  - --log.level=INFO
+            
               httpbin:
-                image: mccutchen/go-httpbin:v2.8.0
+                image: mccutchen/go-httpbin:v2.10.0
                 restart: unless-stopped
                 depends_on:
                   proxy:
@@ -250,22 +221,23 @@ jobs:
                 labels:
                   - traefik.enable=true
                   - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
-                  - traefik.http.routers.httpbin-http.entrypoints=http
+                  - traefik.http.routers.httpbin-http.entrypoints=http,alt-http
                   - traefik.http.routers.httpbin-https.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
-                  - traefik.http.routers.httpbin-https.entrypoints=https
+                  - traefik.http.routers.httpbin-https.entrypoints=https,alt-https
                   - traefik.http.routers.httpbin-https.tls=true
                   - traefik.http.services.httpbin.loadbalancer.server.port=8080
+
         run: |
           echo "$TRAEFIK_COMPOSE_SCHEMA" > ./docker-compose.yaml
           echo "$TRAEFIK_CERTIFICATE_TOML" > ./certs/certificate.toml
 
       - name: "Traefik: Start stack"
-        if: ${{ matrix.traefik-server && contains(matrix.os, 'ubuntu') }}
+        if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
         run: docker-compose up -d
 
       - name: "Traefik: Wait for service"
         uses: nick-fields/retry@v2
-        if: ${{ matrix.traefik-server && contains(matrix.os, 'ubuntu') }}
+        if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
         with:
           timeout_minutes: 3
           max_attempts: 30
