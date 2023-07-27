@@ -64,12 +64,12 @@ python -m pip install requests
 python -m pip install urllib3.future
 ```
 
-| Package          | Is compatible? | Notes                                                                                                                                           |
-|------------------|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| requests         | ✅              | Invalid chunked transmission may raises ConnectionError instead of ChunkedEncodingError. Use of Session() is required to enable HTTP/3 support. |
-| HTTPie           | ✅              | Require plugin `httpie-next` to be installed or wont be able to upgrade to HTTP/3 (QUIC/Alt-Svc Cache Layer)                                    |
-| pip              | 🛑             | Cannot use the fork because of vendored urllib3 v1.x                                                                                            |
-| openapigenerator | ✅              | Simply patch generated `setup.py` requirement and replace urllib3 to urllib3.future                                                             |
+| Package          | Is compatible? | Notes                                                                                                        |
+|------------------|----------------|--------------------------------------------------------------------------------------------------------------|
+| requests         | ✅              | Use of Session() is required to enable HTTP/3 support.                                                       |
+| HTTPie           | ✅              | Require plugin `httpie-next` to be installed or wont be able to upgrade to HTTP/3 (QUIC/Alt-Svc Cache Layer) |
+| pip              | 🛑             | Cannot use the fork because of vendored urllib3 v1.x, but technically feasible                               |
+| openapigenerator | ✅              | Simply patch generated `setup.py` requirement and replace urllib3 to urllib3.future                          |
 
 Want to report an incompatibility? Open an issue in that repository.
 All projects that depends on listed *compatible* package should work as-is.

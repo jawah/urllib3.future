@@ -1,3 +1,12 @@
+2.0.932 (2023-07-27)
+====================
+
+Bugfixes
+--------
+
+- Fixed `assert_hostname` behavior when HTTPSConnection targets HTTP/3 over QUIC (`#8 <https://github.com/jawah/urllib3.future/issues/8>`__)
+
+
 2.0.931 (2023-07-16)
 ====================
 
