@@ -26,7 +26,7 @@ jobs:
         uses: "actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744"
 
       - name: "Setup Python"
-        uses: "actions/setup-python@57ded4d7d5e986d7296eab16560982c6dd7c923b"
+        uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"
         with:
           python-version: "3.x"
           cache: "pip"
@@ -244,7 +244,7 @@ jobs:
           command: curl --fail http://httpbin.local:8888/get
 
       - name: "Setup Python ${{ matrix.python-version }}"
-        uses: "actions/setup-python@57ded4d7d5e986d7296eab16560982c6dd7c923b"
+        uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -274,7 +274,7 @@ jobs:
         uses: "actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744"
 
       - name: "Setup Python"
-        uses: "actions/setup-python@57ded4d7d5e986d7296eab16560982c6dd7c923b"
+        uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"
         with:
           python-version: "3.x"
 
