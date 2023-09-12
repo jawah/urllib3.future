@@ -187,7 +187,10 @@ class ChunksAndContentLength(typing.NamedTuple):
 
 
 def body_to_chunks(
-    body: typing.Any | None, method: str, blocksize: int
+    body: typing.Any | None,
+    method: str,
+    blocksize: int,
+    force: bool = False,
 ) -> ChunksAndContentLength:
     """Takes the HTTP request method, body, and blocksize and
     transforms them into an iterable of chunks to pass to
@@ -201,6 +204,17 @@ def body_to_chunks(
     chunks: typing.Iterable[bytes] | None
     content_length: int | None
 
+    def chunk_readable() -> typing.Iterable[bytes]:
+        nonlocal body, blocksize
+        encode = isinstance(body, io.TextIOBase)
+        while True:
+            datablock = body.read(blocksize)  # type: ignore[union-attr]
+            if not datablock:
+                break
+            if encode:
+                datablock = datablock.encode("iso-8859-1")
+            yield datablock
+
     # No body, we need to make a recommendation on 'Content-Length'
     # based on whether that request method is expected to have
     # a body or not.
@@ -213,23 +227,17 @@ def body_to_chunks(
 
     # Bytes or strings become bytes
     elif isinstance(body, (str, bytes)):
-        chunks = (to_bytes(body),)
-        content_length = len(chunks[0])
+        converted = to_bytes(body)
+        content_length = len(converted)
+
+        if force and len(converted) >= blocksize:
+            body = io.BytesIO(converted)
+            chunks = chunk_readable()
+        else:
+            chunks = (converted,)
 
     # File-like object, TODO: use seek() and tell() for length?
     elif hasattr(body, "read"):
-
-        def chunk_readable() -> typing.Iterable[bytes]:
-            nonlocal body, blocksize
-            encode = isinstance(body, io.TextIOBase)
-            while True:
-                datablock = body.read(blocksize)
-                if not datablock:
-                    break
-                if encode:
-                    datablock = datablock.encode("iso-8859-1")
-                yield datablock
-
         chunks = chunk_readable()
         content_length = None
 

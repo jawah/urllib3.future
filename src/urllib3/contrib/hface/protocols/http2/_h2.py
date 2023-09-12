@@ -157,3 +157,15 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         error_code = int(error_code)  # Convert h2 IntEnum to an actual int
         self._terminated = True
         self._events.append(ConnectionTerminated(error_code, message))
+
+    def should_wait_remote_flow_control(
+        self, stream_id: int, amt: int | None = None
+    ) -> bool | None:
+        flow_remaining_bytes: int = self._connection.local_flow_control_window(
+            stream_id
+        )
+
+        if amt is None:
+            return flow_remaining_bytes == 0
+
+        return amt > flow_remaining_bytes

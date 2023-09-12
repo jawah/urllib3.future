@@ -48,6 +48,15 @@ class BaseProtocol(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def should_wait_remote_flow_control(
+        self, stream_id: int, amt: int | None = None
+    ) -> bool | None:
+        """
+        Verify if the client should listen network incoming data for
+        the flow control update purposes.
+        """
+        raise NotImplementedError
+
 
 class OverTCPProtocol(BaseProtocol):
     """
@@ -272,6 +281,11 @@ class HTTP1Protocol(HTTPOverTCPProtocol):
     @property
     def multiplexed(self) -> bool:
         return False
+
+    def should_wait_remote_flow_control(
+        self, stream_id: int, amt: int | None = None
+    ) -> bool | None:
+        return NotImplemented
 
     error_codes = HTTPErrorCodes(
         protocol_error=400,
