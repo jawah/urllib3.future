@@ -1,0 +1,1 @@
+Fixed ``unpack_chunk`` workaround function in the ``send`` method when body is multipart/form-data

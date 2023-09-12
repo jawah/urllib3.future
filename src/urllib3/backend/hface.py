@@ -747,7 +747,7 @@ class HfaceBackend(BaseBackend):
             self.__remaining_body_length = self.__expected_body_length
 
         def unpack_chunk(possible_chunk: bytes) -> bytes:
-            """This hacky function is there because we won't alter the send() method signature.
+            """This hacky function is there because we won't alter send() method signature.
             Therefor cannot know intention prior to this. b"%x\r\n%b\r\n" % (len(chunk), chunk)
             """
             if (
@@ -756,6 +756,9 @@ class HfaceBackend(BaseBackend):
             ):
                 _: list[bytes] = possible_chunk.split(b"\r\n", maxsplit=1)
                 if len(_) != 2 or any(uc == b"" for uc in _):
+                    return possible_chunk
+                # boundary case
+                if _[-1][:-2].startswith(b"--") and _[-1][:-2].endswith(b"--"):
                     return possible_chunk
                 return _[-1][:-2]
             return possible_chunk
