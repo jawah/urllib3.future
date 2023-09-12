@@ -1,0 +1,2 @@
+Fixed protocol violation for HTTP/2 and HTTP/3 where we sent ``Connection: keep-alive`` when it is
+forbidden.

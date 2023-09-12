@@ -602,6 +602,13 @@ class HfaceBackend(BaseBackend):
             except ValueError:
                 pass
 
+            # Passing 'Connection' header is actually a protocol violation above h11.
+            # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
+            try:
+                self.__headers.remove((b"connection", b"keep-alive"))
+            except ValueError:
+                pass
+
             # some quic/h3 implementation like quic-go skip reading the body
             # if this indicator isn't present, equivalent to te: chunked but looking for stream FIN marker.
             # officially, it should not be there. kept for compatibility.
