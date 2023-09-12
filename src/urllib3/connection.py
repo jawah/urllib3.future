@@ -345,7 +345,12 @@ class HTTPConnection(HfaceBackend):
 
         # Transform the body into an iterable of sendall()-able chunks
         # and detect if an explicit Content-Length is doable.
-        chunks_and_cl = body_to_chunks(body, method=method, blocksize=self.blocksize)
+        chunks_and_cl = body_to_chunks(
+            body,
+            method=method,
+            blocksize=self.blocksize,
+            force=self._svn != HttpVersion.h11,
+        )
         chunks = chunks_and_cl.chunks
         content_length = chunks_and_cl.content_length
 

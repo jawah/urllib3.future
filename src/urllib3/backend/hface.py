@@ -190,9 +190,11 @@ class HfaceBackend(BaseBackend):
             if isinstance(ca_cert_data, str)
             else ca_cert_data,
             session_ticket=self.__session_ticket,  # going to be set after first successful quic handshake
+            # mTLS start
             certfile=cert_file,
             keyfile=key_file,
             keypassword=key_password,
+            # mTLS end
             cert_fingerprint=cert_fingerprint,
             cert_use_common_name=cert_use_common_name,
             verify_hostname=bool(assert_hostname),
@@ -406,8 +408,6 @@ class HfaceBackend(BaseBackend):
 
                     if data_out:
                         self.sock.sendall(data_out)
-                    else:  # nothing to send out...? immediately exit.
-                        return events  # Defensive: This should be unreachable in the current project state.
 
                 data_in = self.sock.recv(maximal_data_in_read or self.blocksize)
 
@@ -764,14 +764,25 @@ class HfaceBackend(BaseBackend):
                 data_ = unpack_chunk(data)
                 is_chunked = len(data_) != len(data)
 
+                if (
+                    self._protocol.should_wait_remote_flow_control(
+                        self._stream_id, len(data_)
+                    )
+                    is True
+                ):
+                    self._protocol.bytes_received(self.sock.recv(self.blocksize))
+
                 if self.__remaining_body_length:
                     self.__remaining_body_length -= len(data_)
+
+                end_stream = (
+                    is_chunked and data_ == b""
+                ) or self.__remaining_body_length == 0
 
                 self._protocol.submit_data(
                     self._stream_id,
                     data_,
-                    end_stream=(is_chunked and data_ == b"")
-                    or self.__remaining_body_length == 0,
+                    end_stream=end_stream,
                 )
             else:
                 # urllib3 is supposed to handle every case
@@ -783,7 +794,16 @@ class HfaceBackend(BaseBackend):
             if _HAS_SYS_AUDIT:
                 sys.audit("http.client.send", self, data)
 
-            self.sock.sendall(self._protocol.bytes_to_send())
+            # some protocols may impose regulated frame size
+            # so expect multiple frame per send()
+            while True:
+                data_out = self._protocol.bytes_to_send()
+
+                if not data_out:
+                    break
+
+                self.sock.sendall(data_out)
+
         except self._protocol.exceptions() as e:
             raise ProtocolError(  # Defensive: In the unlikely event that exception may leak from below
                 e
@@ -797,11 +817,11 @@ class HfaceBackend(BaseBackend):
                 except self._protocol.exceptions() as e:  # Defensive:
                     # overly protective, made in case of possible exception leak.
                     raise ProtocolError(e) from e  # Defensive:
+                else:
+                    goodbye_trame: bytes = self._protocol.bytes_to_send()
 
-                goodbye_trame: bytes = self._protocol.bytes_to_send()
-
-                if goodbye_trame:
-                    self.sock.sendall(goodbye_trame)
+                    if goodbye_trame:
+                        self.sock.sendall(goodbye_trame)
 
             self.sock.close()
 

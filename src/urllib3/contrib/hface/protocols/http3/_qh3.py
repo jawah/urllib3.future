@@ -203,3 +203,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
         elif isinstance(h3_event, h3_events.DataReceived):
             yield DataReceived(h3_event.stream_id, h3_event.data, h3_event.stream_ended)
+
+    def should_wait_remote_flow_control(
+        self, stream_id: int, amt: int | None = None
+    ) -> bool | None:
+        return True

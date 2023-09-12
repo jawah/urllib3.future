@@ -1,0 +1,3 @@
+Fixed the flow control when sending a body for a HTTP/2 connection.
+The body will be split into numerous chunks if the size exceed the specified blocksize when not
+using HTTP/1.1 in order to avoid ProtocolError (flow control)
