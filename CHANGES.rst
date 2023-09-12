@@ -1,3 +1,18 @@
+2.0.932 (2023-09-12)
+====================
+
+Bugfixes
+--------
+
+- Fixed `assert_hostname` behavior when HTTPSConnection targets HTTP/3 over QUIC (`#8 <https://github.com/jawah/urllib3.future/issues/8>`__)
+- Fixed protocol violation for HTTP/2 and HTTP/3 where we sent ``Connection: keep-alive`` when it is
+  forbidden. (`#16 <https://github.com/jawah/urllib3.future/issues/16>`__)
+- Fixed ``unpack_chunk`` workaround function in the ``send`` method when body is multipart/form-data (`#17 <https://github.com/jawah/urllib3.future/issues/17>`__)
+- Fixed the flow control when sending a body for a HTTP/2 connection.
+  The body will be split into numerous chunks if the size exceed the specified blocksize when not
+  using HTTP/1.1 in order to avoid ProtocolError (flow control) (`#18 <https://github.com/jawah/urllib3.future/issues/18>`__)
+
+
 2.0.931 (2023-07-16)
 ====================
 

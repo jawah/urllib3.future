@@ -1,1 +1,0 @@
-Fixed `assert_hostname` behavior when HTTPSConnection targets HTTP/3 over QUIC
