@@ -44,6 +44,7 @@ SSL_KEYWORDS = (
     "ssl_minimum_version",
     "ssl_maximum_version",
     "ca_cert_dir",
+    "ca_cert_data",
     "ssl_context",
     "key_password",
     "server_hostname",
@@ -79,6 +80,7 @@ class PoolKey(typing.NamedTuple):
     key_ssl_minimum_version: ssl.TLSVersion | None
     key_ssl_maximum_version: ssl.TLSVersion | None
     key_ca_cert_dir: str | None
+    key_ca_cert_data: str | bytes | None
     key_ssl_context: ssl.SSLContext | None
     key_maxsize: int | None
     key_headers: frozenset[tuple[str, str]] | None
