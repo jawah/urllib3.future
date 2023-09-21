@@ -1,3 +1,12 @@
+2.0.933 (2023-09-21)
+====================
+
+Bugfixes
+--------
+
+- Fixed ``HTTPSConnectionPool`` not accepting and forwarding ``ca_cert_data``. (`#20 <https://github.com/jawah/urllib3.future/issues/20>`__)
+
+
 2.0.932 (2023-09-12)
 ====================
 
