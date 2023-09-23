@@ -1,3 +1,0 @@
-Changed the socket set options for both TCP and UDP. Previously it was not possible to set socket options for UDP.
-
-Instead of a three values tuple, you can (but not enforced) specify a fourth value that should either be ``tcp`` or ``udp``.

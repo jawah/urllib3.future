@@ -1,3 +1,16 @@
+2.0.934 (2023-09-23)
+====================
+
+- Added public `ConnectionInfo` class that will be present in each `HttpConnection` instance.
+
+  Passing the kwarg ``on_post_connection`` that accept a callable with a single positional argument
+  in ``PoolManager.urlopen`` method will result in a call each time a connection is picked out
+  of the pool. The function will be passed a ``ConnectionInfo`` object.
+  The same argument (``on_post_connection``) can be passed down to the ``HTTPConnectionPool.urlopen`` method. (`#23 <https://github.com/jawah/urllib3.future/issues/23>`__)
+
+- `#22 <https://github.com/jawah/urllib3.future/issues/22>`__
+
+
 2.0.933 (2023-09-21)
 ====================
 
