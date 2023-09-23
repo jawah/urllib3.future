@@ -124,7 +124,7 @@ class BaseBackend:
     default_socket_kind: socket.SocketKind = socket.SOCK_STREAM
     #: Disable Nagle's algorithm by default.
     default_socket_options: typing.ClassVar[connection._TYPE_SOCKET_OPTIONS] = [
-        (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp")
     ]
 
     #: Whether this connection verifies the host's certificate.

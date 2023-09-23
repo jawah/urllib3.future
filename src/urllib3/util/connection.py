@@ -6,7 +6,12 @@ import typing
 from ..exceptions import LocationParseError
 from .timeout import _DEFAULT_TIMEOUT, _TYPE_TIMEOUT
 
-_TYPE_SOCKET_OPTIONS = typing.Sequence[typing.Tuple[int, int, typing.Union[int, bytes]]]
+_TYPE_SOCKET_OPTIONS = typing.Sequence[
+    typing.Union[
+        typing.Tuple[int, int, typing.Union[int, bytes]],
+        typing.Tuple[int, int, typing.Union[int, bytes], str],
+    ]
+]
 
 if typing.TYPE_CHECKING:
     from .._base_connection import BaseHTTPConnection
@@ -98,7 +103,14 @@ def _set_socket_options(
         return
 
     for opt in options:
-        sock.setsockopt(*opt)
+        if len(opt) == 3 and sock.type == socket.SOCK_STREAM:
+            sock.setsockopt(*opt)
+        elif len(opt) == 4:
+            protocol: str = opt[3].lower()  # type: ignore[misc]
+            if protocol == "tcp" and sock.type == socket.SOCK_STREAM:
+                sock.setsockopt(*opt[:3])
+            elif protocol == "udp" and sock.type == socket.SOCK_DGRAM:
+                sock.setsockopt(*opt[:3])
 
 
 def allowed_gai_family() -> socket.AddressFamily:

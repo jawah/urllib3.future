@@ -109,7 +109,18 @@ class SOCKSConnection(HTTPConnection):
             extra_kw["source_address"] = self.source_address
 
         if self.socket_options:
-            extra_kw["socket_options"] = self.socket_options
+            only_tcp_options = []
+
+            for opt in self.socket_options:
+                if len(opt) == 3:
+                    only_tcp_options.append(opt)
+                elif len(opt) == 4:
+                    protocol: str = opt[3].lower()  # type: ignore[misc]
+                    if protocol == "udp":
+                        continue
+                    only_tcp_options.append(opt[:3])
+
+            extra_kw["socket_options"] = only_tcp_options
 
         try:
             conn = socks.create_connection(
