@@ -12,6 +12,7 @@ from types import TracebackType
 
 from ._base_connection import _TYPE_BODY
 from ._request_methods import RequestMethods
+from .backend import ConnectionInfo
 from .connection import (
     BaseSSLError,
     BrokenPipeError,
@@ -341,6 +342,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         """
         Called right before a request is made, after the socket is created.
         """
+        if conn.is_closed:
+            conn.connect()
 
     def _prepare_proxy(self, conn: BaseHTTPConnection) -> None:
         # Nothing to do for HTTP connections.
@@ -391,6 +394,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = True,
         decode_content: bool = True,
         enforce_content_length: bool = True,
+        on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
     ) -> BaseHTTPResponse:
         """
         Perform a request on a given urllib connection object taken from our
@@ -489,6 +493,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
                 new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
             raise new_e
+
+        if on_post_connection is not None and conn.conn_info is not None:
+            on_post_connection(conn.conn_info)
 
         # conn.request() calls http.client.*.request, not the method in
         # urllib3.request. It also calls makefile (recv) on the socket.
@@ -608,6 +615,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         body_pos: _TYPE_BODY_POSITION | None = None,
         preload_content: bool = True,
         decode_content: bool = True,
+        on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
         **response_kw: typing.Any,
     ) -> BaseHTTPResponse:
         """
@@ -799,6 +807,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 response_conn=response_conn,
                 preload_content=preload_content,
                 decode_content=decode_content,
+                on_post_connection=on_post_connection,
                 **response_kw,
             )
 

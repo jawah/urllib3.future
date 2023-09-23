@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typing
 
-from .backend import LowLevelResponse
+from .backend import ConnectionInfo, LowLevelResponse
 from .util.connection import _TYPE_SOCKET_OPTIONS
 from .util.timeout import _DEFAULT_TIMEOUT, _TYPE_TIMEOUT
 from .util.url import Url
@@ -55,6 +55,8 @@ if typing.TYPE_CHECKING:
 
         is_verified: bool
         proxy_is_verified: bool | None
+
+        conn_info: ConnectionInfo | None = None
 
         def __init__(
             self,

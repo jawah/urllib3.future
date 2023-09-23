@@ -126,12 +126,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             os.path.join(cls.certs_dir, CLIENT_NO_INTERMEDIATE_PEM)
         )
 
-        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
-        if sys.implementation.name == "pypy":
-            warnings.filterwarnings(
-                "ignore", r"ssl.* is deprecated", DeprecationWarning
-            )
-
     @classmethod
     def teardown_class(cls) -> None:
         super().teardown_class()
@@ -227,6 +221,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert isinstance(e.value.reason, SSLError)
 
     def test_verified(self) -> None:
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
         with HTTPSConnectionPool(
             self.host,
             self.port,
@@ -274,6 +274,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
 
     @notSecureTransport()  # SecureTransport does not support cert directories
     def test_ca_dir_verified(self, tmp_path: Path) -> None:
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
         # OpenSSL looks up certificates by the hash for their name, see c_rehash
         # TODO infer the bytes using `cryptography.x509.Name.public_bytes`.
         # https://github.com/pyca/cryptography/pull/3236
@@ -311,6 +317,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             ) or "certificate verify failed" in str(e.value.reason)
 
     def test_verified_with_bad_ca_certs(self) -> None:
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
         with HTTPSConnectionPool(
             self.host,
             self.port,
@@ -399,6 +411,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 assert InsecureRequestWarning in [x[0][1] for x in calls]
 
     def test_ssl_unverified_with_ca_certs(self) -> None:
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
         with HTTPSConnectionPool(
             self.host,
             self.port,
@@ -701,6 +719,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert r.status == 200
 
     def test_ssl_correct_system_time(self) -> None:
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
         with HTTPSConnectionPool(
             self.host,
             self.port,
@@ -714,6 +738,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert [] == w
 
     def test_ssl_wrong_system_time(self) -> None:
+        # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
+        if sys.implementation.name == "pypy":
+            warnings.filterwarnings(
+                "ignore", r"ssl.* is deprecated", DeprecationWarning
+            )
+
         with HTTPSConnectionPool(
             self.host,
             self.port,
