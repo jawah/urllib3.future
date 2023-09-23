@@ -1,17 +1,11 @@
 2.0.933 (2023-09-21)
 ====================
 
-Bugfixes
---------
-
 - Fixed ``HTTPSConnectionPool`` not accepting and forwarding ``ca_cert_data``. (`#20 <https://github.com/jawah/urllib3.future/issues/20>`__)
 
 
 2.0.932 (2023-09-12)
 ====================
-
-Bugfixes
---------
 
 - Fixed `assert_hostname` behavior when HTTPSConnection targets HTTP/3 over QUIC (`#8 <https://github.com/jawah/urllib3.future/issues/8>`__)
 - Fixed protocol violation for HTTP/2 and HTTP/3 where we sent ``Connection: keep-alive`` when it is

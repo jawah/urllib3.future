@@ -207,7 +207,9 @@ class TestConnection:
 
     def test_HTTPSConnection_default_socket_options(self) -> None:
         conn = HTTPSConnection("not.a.real.host", port=443)
-        assert conn.socket_options == [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
+        assert conn.socket_options == [
+            (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp")
+        ]
 
     @pytest.mark.parametrize(
         "proxy_scheme, err_part",

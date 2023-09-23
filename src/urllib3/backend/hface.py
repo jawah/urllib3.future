@@ -81,9 +81,6 @@ class HfaceBackend(BaseBackend):
         self.__custom_tls_settings: QuicTLSConfig | None = None
         self.__alt_authority: tuple[str, int] | None = None
         self.__session_ticket: typing.Any | None = None
-        # we may switch from STREAM (TCP) to DGRAM (UDP)
-        # options may not work as intended, we keep tcp options in there
-        self.__backup_socket_options: None | (connection._TYPE_SOCKET_OPTIONS) = None
 
     def _new_conn(self) -> socket.socket | None:
         # handle if set up, quic cache capability. thus avoiding first TCP request prior to upgrade.
@@ -105,11 +102,6 @@ class HfaceBackend(BaseBackend):
                     self.port = self.__alt_authority[1]
 
         if self._svn == HttpVersion.h3:
-            if self.__backup_socket_options is None:
-                self.__backup_socket_options = self.socket_options
-
-            # ensure no opt are set for QUIC/UDP socket
-            self.socket_options = []
             self.socket_kind = SOCK_DGRAM
 
             # undo local memory on whether conn supposedly support quic/h3
@@ -118,9 +110,6 @@ class HfaceBackend(BaseBackend):
                 self._svn = None
                 self._new_conn()  # restore socket defaults
         else:
-            if self.__backup_socket_options is not None:
-                self.socket_options = self.__backup_socket_options
-                self.__backup_socket_options = None
             self.socket_kind = SOCK_STREAM
 
         return None
