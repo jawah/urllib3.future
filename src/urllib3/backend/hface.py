@@ -33,7 +33,13 @@ from ..contrib.hface.events import (
 )
 from ..exceptions import InvalidHeader, ProtocolError, SSLError
 from ..util import connection, parse_alt_svc
-from ._base import BaseBackend, HttpVersion, LowLevelResponse, QuicPreemptiveCacheType
+from ._base import (
+    BaseBackend,
+    ConnectionInfo,
+    HttpVersion,
+    LowLevelResponse,
+    QuicPreemptiveCacheType,
+)
 
 _HAS_SYS_AUDIT = hasattr(sys, "audit")
 _HAS_QH3 = HTTPProtocolFactory.has(HTTP3Protocol)  # type: ignore[type-abstract]
@@ -263,10 +269,59 @@ class HfaceBackend(BaseBackend):
                     tls_config=self.__custom_tls_settings,
                 )
 
+        self.conn_info = ConnectionInfo()
+        self.conn_info.http_version = self._svn
+
+        if self._svn != HttpVersion.h3:
+            cipher_tuple: tuple[str, str, int] | None = None
+
+            if hasattr(self.sock, "sslobj"):
+                self.conn_info.certificate_der = self.sock.sslobj.getpeercert(
+                    binary_form=True
+                )
+                try:
+                    self.conn_info.certificate_dict = self.sock.sslobj.getpeercert(
+                        binary_form=False
+                    )
+                except ValueError:
+                    # not supported on MacOS!
+                    self.conn_info.certificate_dict = None
+                self.conn_info.destination_address = None
+                cipher_tuple = self.sock.sslobj.cipher()
+            elif hasattr(self.sock, "getpeercert"):
+                self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
+                try:
+                    self.conn_info.certificate_dict = self.sock.getpeercert(
+                        binary_form=False
+                    )
+                except ValueError:
+                    # not supported on MacOS!
+                    self.conn_info.certificate_dict = None
+                cipher_tuple = (
+                    self.sock.cipher() if hasattr(self.sock, "cipher") else None
+                )
+
+            if cipher_tuple:
+                self.conn_info.cipher = cipher_tuple[0]
+                if cipher_tuple[1] == "TLSv1.1":
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1
+                elif cipher_tuple[1] == "TLSv1.2":
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_2
+                elif cipher_tuple[1] == "TLSv1.3":
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
+                else:
+                    self.conn_info.tls_version = None
+
+            if self.conn_info.destination_address is None and hasattr(
+                self.sock, "getpeername"
+            ):
+                self.conn_info.destination_address = self.sock.getpeername()[:2]
+
         # fallback to http/1.1
         if self._protocol is None or self._svn == HttpVersion.h11:
             self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
             self._svn = HttpVersion.h11
+            self.conn_info.http_version = self._svn
 
             return
 
@@ -275,6 +330,19 @@ class HfaceBackend(BaseBackend):
             HandshakeCompleted,
             receive_first=False,
         )
+
+        if isinstance(self._protocol, HTTPOverQUICProtocol):
+            self.conn_info.certificate_der = self._protocol.getpeercert(  # type: ignore[assignment]
+                binary_form=True
+            )
+            self.conn_info.certificate_dict = self._protocol.getpeercert(  # type: ignore[assignment]
+                binary_form=False
+            )
+            self.conn_info.destination_address = self.sock.getpeername()[:2]
+            self.conn_info.cipher = (
+                None  # todo: find a way to retrieve the actual cipher from qh3.
+            )
+            self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
 
     def set_tunnel(
         self,
@@ -532,7 +600,6 @@ class HfaceBackend(BaseBackend):
     def endheaders(
         self, message_body: bytes | None = None, *, encode_chunked: bool = False
     ) -> None:
-        # only the case when it is plain http
         if self.sock is None:
             self.connect()  # type: ignore[attr-defined]
 

@@ -121,6 +121,10 @@ class OverQUICProtocol(OverUDPProtocol):
     def session_ticket(self) -> Any | None:
         raise NotImplementedError
 
+    @abstractmethod
+    def getpeercert(self, *, binary_form: bool = False) -> bytes | dict[str, Any]:
+        raise NotImplementedError
+
 
 class HTTPProtocol(metaclass=ABCMeta):
     """

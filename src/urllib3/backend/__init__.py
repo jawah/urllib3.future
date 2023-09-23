@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from ._base import BaseBackend, HttpVersion, LowLevelResponse, QuicPreemptiveCacheType
+from ._base import (
+    BaseBackend,
+    ConnectionInfo,
+    HttpVersion,
+    LowLevelResponse,
+    QuicPreemptiveCacheType,
+)
 from .hface import HfaceBackend
 
 __all__ = (
@@ -9,4 +15,5 @@ __all__ = (
     "HttpVersion",
     "QuicPreemptiveCacheType",
     "LowLevelResponse",
+    "ConnectionInfo",
 )

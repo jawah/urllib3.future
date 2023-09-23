@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ssl
+import typing
 from collections import deque
 from os import environ
 from time import monotonic
@@ -208,3 +209,142 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self, stream_id: int, amt: int | None = None
     ) -> bool | None:
         return True
+
+    def getpeercert(
+        self, *, binary_form: bool = False
+    ) -> bytes | dict[str, typing.Any]:
+        x509_certificate = self._quic.tls._peer_certificate
+
+        if x509_certificate is None:
+            raise ValueError("TLS handshake has not been done yet")
+
+        try:
+            from cryptography import x509
+            from cryptography.hazmat._oid import (
+                AuthorityInformationAccessOID,
+                ExtensionOID,
+            )
+            from cryptography.hazmat.primitives._serialization import Encoding
+        except ImportError as e:
+            raise ValueError(
+                "Unable to generate a dict-form representation due to missing dependencies or sub-module"
+            ) from e
+
+        if binary_form:
+            return x509_certificate.public_bytes(Encoding.DER)
+
+        peer_info = {
+            "version": x509_certificate.version.value + 1,
+            "serialNumber": ("%x" % x509_certificate.serial_number).upper(),
+            "subject": [],
+            "issuer": [],
+            "notBefore": x509_certificate.not_valid_before.strftime("%b %d %H:%M:%S %Y")
+            + " UTC",
+            "notAfter": x509_certificate.not_valid_after.strftime("%b %d %H:%M:%S %Y")
+            + " UTC",
+            "subjectAltName": [],
+            "OCSP": [],
+            "caIssuers": [],
+            "crlDistributionPoints": [],
+        }
+
+        _short_name_assoc = {
+            "CN": "commonName",
+            "L": "localityName",
+            "ST": "stateOrProvinceName",
+            "O": "organizationName",
+            "OU": "organizationalUnitName",
+            "C": "countryName",
+            "STREET": "streetAddress",
+            "DC": "domainComponent",
+        }
+
+        for item in x509_certificate.subject:
+            name = (
+                item.rfc4514_attribute_name
+                if item.rfc4514_attribute_name not in _short_name_assoc
+                else _short_name_assoc[item.rfc4514_attribute_name]
+            )
+            peer_info["subject"].append(  # type: ignore[attr-defined]
+                (
+                    name,
+                    item.value,
+                )
+            )
+
+        for item in x509_certificate.issuer:
+            name = (
+                item.rfc4514_attribute_name
+                if item.rfc4514_attribute_name not in _short_name_assoc
+                else _short_name_assoc[item.rfc4514_attribute_name]
+            )
+            peer_info["issuer"].append(  # type: ignore[attr-defined]
+                (
+                    name,
+                    item.value,
+                )
+            )
+
+        for ext in x509_certificate.extensions:
+            if isinstance(ext.value, x509.SubjectAlternativeName):
+                for name in ext.value:
+                    if isinstance(name, x509.DNSName):
+                        peer_info["subjectAltName"].append(("DNS", name.value))  # type: ignore[attr-defined]
+                    elif isinstance(name, x509.IPAddress):
+                        peer_info["subjectAltName"].append(  # type: ignore[attr-defined]
+                            ("IP Address", str(name.value))
+                        )
+
+        try:
+            aia = x509_certificate.extensions.get_extension_for_oid(
+                ExtensionOID.AUTHORITY_INFORMATION_ACCESS
+            ).value
+            ocsp_locations = [
+                ia for ia in aia if ia.access_method == AuthorityInformationAccessOID.OCSP  # type: ignore[attr-defined]
+            ]
+
+            peer_info["OCSP"] = [e.access_location.value for e in ocsp_locations]
+        except x509.extensions.ExtensionNotFound:
+            pass
+
+        try:
+            aia = x509_certificate.extensions.get_extension_for_oid(
+                ExtensionOID.AUTHORITY_INFORMATION_ACCESS
+            ).value
+            ca_issuers_locations = [
+                ia
+                for ia in aia  # type: ignore[attr-defined]
+                if ia.access_method == AuthorityInformationAccessOID.CA_ISSUERS
+            ]
+
+            peer_info["caIssuers"] = [
+                e.access_location.value for e in ca_issuers_locations
+            ]
+        except x509.extensions.ExtensionNotFound:
+            pass
+
+        try:
+            aia = x509_certificate.extensions.get_extension_for_oid(
+                ExtensionOID.CRL_DISTRIBUTION_POINTS
+            ).value
+
+            peer_info["crlDistributionPoints"] = [
+                ia.full_name[0].value
+                for ia in aia  # type: ignore[attr-defined]
+                if hasattr(ia, "full_name")
+            ]
+        except x509.extensions.ExtensionNotFound:
+            pass
+
+        pop_keys = []
+
+        for k in peer_info:
+            if isinstance(peer_info[k], list):
+                peer_info[k] = tuple(peer_info[k])  # type: ignore[arg-type]
+                if not peer_info[k]:
+                    pop_keys.append(k)
+
+        for k in pop_keys:
+            peer_info.pop(k)
+
+        return peer_info

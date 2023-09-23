@@ -5,7 +5,7 @@ import socket
 import typing
 
 if typing.TYPE_CHECKING:
-    from ssl import SSLSocket, SSLContext
+    from ssl import SSLSocket, SSLContext, TLSVersion
 
 from .._collections import HTTPHeaderDict
 from ..util import connection
@@ -20,6 +20,32 @@ class HttpVersion(str, enum.Enum):
     # http_svn (int). 9 -> 11 -> 20 -> 30
     h2 = "HTTP/2.0"
     h3 = "HTTP/3.0"
+
+
+class ConnectionInfo:
+    def __init__(self) -> None:
+        self.http_version: HttpVersion | None = None
+        self.certificate_der: bytes | None = None
+        self.certificate_dict: dict[
+            str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
+        ] | None = None
+        self.destination_address: tuple[str, int] | None = None
+        self.cipher: str | None = None
+        self.tls_version: TLSVersion | None = None
+
+    def __repr__(self) -> str:
+        return str(
+            {
+                "certificate_der": self.certificate_der,
+                "certificate_dict": self.certificate_dict,
+                "destination_address": self.destination_address,
+                "cipher": self.cipher,
+                "tls_version": self.tls_version,
+            }
+        )
+
+    def is_encrypted(self) -> bool:
+        return self.certificate_der is not None
 
 
 class LowLevelResponse:
@@ -175,6 +201,9 @@ class BaseBackend:
                 raise RuntimeError(
                     "HTTP/1.1 cannot be disabled. It will be allowed in a future urllib3 version."
                 )
+
+        # valuable intel
+        self.conn_info: ConnectionInfo | None = None
 
     @property
     def disabled_svn(self) -> set[HttpVersion]:

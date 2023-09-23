@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from dummyserver.server import DEFAULT_CA
-from urllib3 import HttpVersion, proxy_from_url
+from urllib3 import ConnectionInfo, HttpVersion, proxy_from_url
 
 from . import TraefikWithProxyTestCase
 
@@ -88,11 +88,21 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
             svn_history = []
 
             for i in range(3):
-                resp = http.request(
-                    "GET", f"{getattr(self, destination_host)}/get", retries=False
+                conn_info: ConnectionInfo | None = None
+
+                def on_post_connection(o: ConnectionInfo) -> None:
+                    nonlocal conn_info
+                    conn_info = o
+
+                resp = http.urlopen(
+                    "GET",
+                    f"{getattr(self, destination_host)}/get",
+                    retries=False,
+                    on_post_connection=on_post_connection,
                 )
 
                 assert resp.status == 200
+                assert conn_info is not None
                 svn_history.append(resp.version)
 
             assert svn_history[-1] == int(
