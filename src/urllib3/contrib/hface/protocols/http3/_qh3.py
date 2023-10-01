@@ -77,8 +77,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._connection_ids: set[bytes] = set()
         self._remote_address = remote_address
         self._event_buffer: deque[Event] = deque()
+        self._packets: deque[bytes] = deque()
         self._http: H3Connection | None = None
         self._terminated: bool = False
+        self._data_in_flight: bool = False
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
@@ -123,6 +125,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> None:
         assert self._http is not None
         self._http.send_data(stream_id, data, end_stream)
+        if end_stream is False:
+            self._data_in_flight = True
 
     def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
         self._quic.reset_stream(stream_id, error_code)
@@ -156,6 +160,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._quic.receive_datagram(data, self._remote_address, now=monotonic())
         self._fetch_events()
 
+        if self._data_in_flight:
+            self._data_in_flight = False
+
     def bytes_to_send(self) -> bytes:
         now = monotonic()
 
@@ -163,9 +170,13 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._quic.connect(self._remote_address, now=now)
             self._http = H3Connection(self._quic)
 
-        return b"".join(
-            list(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
-        )
+        packets = list(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
+        self._packets.extend(packets)
+
+        if not self._packets:
+            return b""
+
+        return self._packets.popleft()
 
     def _fetch_events(self) -> None:
         assert self._http is not None
@@ -208,7 +219,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
     ) -> bool | None:
-        return True
+        return self._data_in_flight
 
     def getpeercert(
         self, *, binary_form: bool = False
