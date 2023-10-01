@@ -1,3 +1,9 @@
+2.0.935 (2023-10-01)
+====================
+
+- Fixed a violation in our QUIC transmission due to sending multiple datagram at once. (`#26 <https://github.com/jawah/urllib3.future/issues/26>`__)
+
+
 2.0.934 (2023-09-23)
 ====================
 
