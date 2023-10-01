@@ -1,1 +1,0 @@
-Added support for event ``StreamReset`` to raise a ``ProtocolError`` when received from either h2 or h3.

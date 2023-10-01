@@ -1,3 +1,9 @@
+2.0.936 (2023-10-01)
+====================
+
+- Added support for event ``StreamReset`` to raise a ``ProtocolError`` when received from either h2 or h3. (`#28 <https://github.com/jawah/urllib3.future/issues/28>`__)
+
+
 2.0.935 (2023-10-01)
 ====================
 
