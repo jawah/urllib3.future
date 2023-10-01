@@ -30,6 +30,7 @@ from ..contrib.hface.events import (
     Event,
     HandshakeCompleted,
     HeadersReceived,
+    StreamResetReceived,
 )
 from ..exceptions import InvalidHeader, ProtocolError, SSLError
 from ..util import connection, parse_alt_svc
@@ -519,6 +520,10 @@ class HfaceBackend(BaseBackend):
                         )
 
                     raise ProtocolError(event.message)
+                elif isinstance(event, StreamResetReceived):
+                    raise ProtocolError(
+                        f"Stream {event.stream_id} was reset by remote peer. Reason: {hex(event.error_code)}."
+                    )
 
                 if data_in_len_from:
                     data_in_len += data_in_len_from(event)
