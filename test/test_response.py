@@ -8,7 +8,6 @@ import sys
 import typing
 import zlib
 from base64 import b64decode
-from http.client import IncompleteRead as httplib_IncompleteRead
 from io import BufferedReader, BytesIO, TextIOWrapper
 from test import onlyBrotli, onlyZstd
 from unittest import mock
@@ -18,13 +17,10 @@ import pytest
 from urllib3 import HTTPHeaderDict
 from urllib3.backend import HttpVersion, LowLevelResponse
 from urllib3.exceptions import (
-    BodyNotHttplibCompatible,
     DecodeError,
     IncompleteRead,
-    InvalidChunkLength,
     InvalidHeader,
     ProtocolError,
-    ResponseNotChunked,
     SSLError,
 )
 from urllib3.response import (  # type: ignore[attr-defined]
@@ -112,26 +108,6 @@ def sock() -> typing.Generator[socket.socket, None, None]:
     s = socket.socket()
     yield s
     s.close()
-
-
-class TestLegacyResponse:
-    def test_getheaders(self) -> None:
-        headers = {"host": "example.com"}
-        r = HTTPResponse(headers=headers)
-        with pytest.warns(
-            DeprecationWarning,
-            match=r"HTTPResponse.getheaders\(\) is deprecated",
-        ):
-            assert r.getheaders() == HTTPHeaderDict(headers)
-
-    def test_getheader(self) -> None:
-        headers = {"host": "example.com"}
-        r = HTTPResponse(headers=headers)
-        with pytest.warns(
-            DeprecationWarning,
-            match=r"HTTPResponse.getheader\(\) is deprecated",
-        ):
-            assert r.getheader("host") == "example.com"
 
 
 class TestResponse:
@@ -940,83 +916,6 @@ class TestResponse:
         with pytest.raises(StopIteration):
             next(stream)
 
-    def test_mock_transfer_encoding_chunked(self) -> None:
-        stream = [b"fo", b"o", b"bar"]
-        fp = MockChunkedEncodingResponse(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-
-        for i, c in enumerate(resp.stream()):
-            assert c == stream[i]
-
-    def test_mock_gzipped_transfer_encoding_chunked_decoded(self) -> None:
-        """Show that we can decode the gzipped and chunked body."""
-
-        def stream() -> typing.Generator[bytes, None, None]:
-            # Set up a generator to chunk the gzipped body
-            compress = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
-            data = compress.compress(b"foobar")
-            data += compress.flush()
-            for i in range(0, len(data), 2):
-                yield data[i : i + 2]
-
-        fp = MockChunkedEncodingResponse(list(stream()))
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        headers = {"transfer-encoding": "chunked", "content-encoding": "gzip"}
-        resp = HTTPResponse(r, preload_content=False, headers=headers)
-
-        data = b""
-        for c in resp.stream(decode_content=True):
-            data += c
-
-        assert b"foobar" == data
-
-    def test_mock_transfer_encoding_chunked_custom_read(self) -> None:
-        stream = [b"foooo", b"bbbbaaaaar"]
-        fp = MockChunkedEncodingResponse(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        r.chunked = True
-        r.chunk_left = None
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        expected_response = [b"fo", b"oo", b"o", b"bb", b"bb", b"aa", b"aa", b"ar"]
-        response = list(resp.read_chunked(2))
-        assert expected_response == response
-
-    def test_mock_transfer_encoding_chunked_unlmtd_read(self) -> None:
-        stream = [b"foooo", b"bbbbaaaaar"]
-        fp = MockChunkedEncodingResponse(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        r.chunked = True
-        r.chunk_left = None
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        assert stream == list(resp.read_chunked())
-
-    def test_read_not_chunked_response_as_chunks(self) -> None:
-        fp = BytesIO(b"foo")
-        resp = HTTPResponse(fp, preload_content=False)
-        r = resp.read_chunked()
-        with pytest.raises(ResponseNotChunked):
-            next(r)
-
-    def test_read_chunked_not_supported(self) -> None:
-        fp = BytesIO(b"foo")
-        resp = HTTPResponse(
-            fp, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        r = resp.read_chunked()
-        with pytest.raises(BodyNotHttplibCompatible):
-            next(r)
-
     def test_buggy_incomplete_read(self) -> None:
         # Simulate buggy versions of Python (<2.7.4)
         # See http://bugs.python.org/issue16298
@@ -1036,79 +935,19 @@ class TestResponse:
         assert orig_ex.partial == 0  # type: ignore[comparison-overlap]
         assert orig_ex.expected == content_length
 
-    def test_incomplete_chunk(self) -> None:
-        stream = [b"foooo", b"bbbbaaaaar"]
-        fp = MockChunkedIncompleteRead(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        r.chunked = True
-        r.chunk_left = None
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        with pytest.raises(ProtocolError) as ctx:
-            next(resp.read_chunked())
-
-        orig_ex = ctx.value.args[1]
-        assert isinstance(orig_ex, httplib_IncompleteRead)
-
-    def test_invalid_chunk_length(self) -> None:
-        stream = [b"foooo", b"bbbbaaaaar"]
-        fp = MockChunkedInvalidChunkLength(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        r.chunked = True
-        r.chunk_left = None
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        with pytest.raises(ProtocolError) as ctx:
-            next(resp.read_chunked())
-
-        orig_ex = ctx.value.args[1]
-        msg = (
-            "(\"Connection broken: InvalidChunkLength(got length b'ZZZ\\\\r\\\\n', 0 bytes read)\", "
-            "InvalidChunkLength(got length b'ZZZ\\r\\n', 0 bytes read))"
-        )
-        assert str(ctx.value) == msg
-        assert isinstance(orig_ex, InvalidChunkLength)
-        assert orig_ex.length == fp.BAD_LENGTH_LINE.encode()
-
-    def test_chunked_response_without_crlf_on_end(self) -> None:
-        stream = [b"foo", b"bar", b"baz"]
-        fp = MockChunkedEncodingWithoutCRLFOnEnd(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        r.chunked = True
-        r.chunk_left = None
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        assert stream == list(resp.stream())
-
-    def test_chunked_response_with_extensions(self) -> None:
-        stream = [b"foo", b"bar"]
-        fp = MockChunkedEncodingWithExtensions(stream)
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
-        r.chunked = True
-        r.chunk_left = None
-        resp = HTTPResponse(
-            r, preload_content=False, headers={"transfer-encoding": "chunked"}
-        )
-        assert stream == list(resp.stream())
-
     def test_chunked_head_response(self) -> None:
-        r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), MockSock)  # type: ignore[arg-type]
+        def mock_sock(amt: int | None) -> tuple[bytes, bool]:
+            return b"", True
+
+        r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
         resp = HTTPResponse(
-            "",
+            r,
             preload_content=False,
             headers={"transfer-encoding": "chunked"},
             original_response=r,
         )
         assert resp.chunked is True
 
-        setattr(resp, "supports_chunked_reads", lambda: True)
         setattr(resp, "release_conn", mock.Mock())
         for _ in resp.stream():
             continue
@@ -1191,9 +1030,19 @@ class TestResponse:
             for i in range(0, len(data), 2):
                 yield data[i : i + 2]
 
-        fp = MockChunkedEncodingResponse(list(stream()))
-        r = httplib.HTTPResponse(MockSock)  # type: ignore[arg-type]
-        r.fp = fp  # type: ignore[assignment]
+        chunks = list(stream())
+        idx = 0
+
+        def mock_sock(amt: int | None) -> tuple[bytes, bool]:
+            nonlocal chunks, idx
+            if idx >= len(chunks):
+                return b"", True
+            d = chunks[idx]
+            idx += 1
+            return d, False
+
+        r = LowLevelResponse("GET", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
+
         headers = {"transfer-encoding": "chunked", "content-encoding": "gzip"}
         resp = HTTPResponse(r, preload_content=False, headers=headers)
 

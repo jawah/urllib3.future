@@ -5,7 +5,6 @@ import os
 import socket
 import sys
 import typing
-import warnings
 from binascii import unhexlify
 from hashlib import md5, sha1, sha256
 
@@ -15,8 +14,6 @@ from .url import _BRACELESS_IPV6_ADDRZ_RE, _IPV4_RE
 SSLContext = None
 SSLTransport = None
 HAS_NEVER_CHECK_COMMON_NAME = False
-IS_PYOPENSSL = False
-IS_SECURETRANSPORT = False
 ALPN_PROTOCOLS = ["http/1.1"]
 
 _TYPE_VERSION_INFO = typing.Tuple[int, int, int, str, int]
@@ -270,16 +267,6 @@ def create_urllib3_context(
                 ssl_version, TLSVersion.MAXIMUM_SUPPORTED
             )
 
-            # This warning message is pushing users to use 'ssl_minimum_version'
-            # instead of both min/max. Best practice is to only set the minimum version and
-            # keep the maximum version to be it's default value: 'TLSVersion.MAXIMUM_SUPPORTED'
-            warnings.warn(
-                "'ssl_version' option is deprecated and will be "
-                "removed in urllib3 v2.1.0. Instead use 'ssl_minimum_version'",
-                category=DeprecationWarning,
-                stacklevel=2,
-            )
-
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)
 
@@ -332,7 +319,7 @@ def create_urllib3_context(
     # check_hostname=True, verify_mode=NONE/OPTIONAL.
     # We always set 'check_hostname=False' for pyOpenSSL so we rely on our own
     # 'ssl.match_hostname()' implementation.
-    if cert_reqs == ssl.CERT_REQUIRED and not IS_PYOPENSSL:
+    if cert_reqs == ssl.CERT_REQUIRED:
         context.verify_mode = cert_reqs
         context.check_hostname = True
     else:

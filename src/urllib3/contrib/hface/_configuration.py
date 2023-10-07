@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any
+from typing import Any, Mapping
 
 
 @dataclasses.dataclass
@@ -51,3 +51,5 @@ class QuicTLSConfig:
 
     verify_hostname: bool = True
     assert_hostname: str | None = None
+
+    ciphers: list[Mapping[str, Any]] | None = None

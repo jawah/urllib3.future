@@ -340,10 +340,14 @@ class HfaceBackend(BaseBackend):
                 binary_form=False
             )
             self.conn_info.destination_address = self.sock.getpeername()[:2]
-            self.conn_info.cipher = (
-                None  # todo: find a way to retrieve the actual cipher from qh3.
-            )
+            self.conn_info.cipher = self._protocol.cipher()
             self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
+            self.conn_info.issuer_certificate_dict = self._protocol.getissuercert(  # type: ignore[assignment]
+                binary_form=False
+            )
+            self.conn_info.issuer_certificate_der = self._protocol.getissuercert(  # type: ignore[assignment]
+                binary_form=True
+            )
 
     def set_tunnel(
         self,
@@ -462,9 +466,12 @@ class HfaceBackend(BaseBackend):
         while True:
             if not self._protocol.has_pending_event():
                 if receive_first is False:
-                    data_out = self._protocol.bytes_to_send()
+                    while True:
+                        data_out = self._protocol.bytes_to_send()
 
-                    if data_out:
+                        if not data_out:
+                            break
+
                         self.sock.sendall(data_out)
 
                 data_in = self.sock.recv(maximal_data_in_read or self.blocksize)
@@ -498,9 +505,12 @@ class HfaceBackend(BaseBackend):
                         raise ProtocolError(e) from e  # Defensive:
 
                 if receive_first is True:
-                    data_out = self._protocol.bytes_to_send()
+                    while True:
+                        data_out = self._protocol.bytes_to_send()
 
-                    if data_out:
+                        if not data_out:
+                            break
+
                         self.sock.sendall(data_out)
 
             for event in iter(self._protocol.next_event, None):  # type: Event

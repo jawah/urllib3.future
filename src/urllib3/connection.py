@@ -416,25 +416,6 @@ class HTTPConnection(HfaceBackend):
         if chunked:
             self.send(b"0\r\n\r\n")
 
-    def request_chunked(
-        self,
-        method: str,
-        url: str,
-        body: _TYPE_BODY | None = None,
-        headers: typing.Mapping[str, str] | None = None,
-    ) -> None:
-        """
-        Alternative to the common request method, which sends the
-        body with chunked encoding and not as one block
-        """
-        warnings.warn(
-            "HTTPConnection.request_chunked() is deprecated and will be removed "
-            "in urllib3 v2.1.0. Instead use HTTPConnection.request(..., chunked=True).",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        self.request(method, url, body=body, headers=headers, chunked=True)
-
     def getresponse(  # type: ignore[override]
         self,
     ) -> HTTPResponse:
@@ -529,6 +510,39 @@ class HTTPSConnection(HTTPConnection):
         key_file: str | None = None,
         key_password: str | None = None,
     ) -> None:
+        # Some parameters may defacto exclude HTTP/3 over QUIC.
+        # Let's check all of those:
+        #   -> TLS 1.3 required
+        #   -> One of the three supported ciphers (listed bellow)
+        quic_disable: bool = False
+
+        if ssl_context is not None:
+            if (
+                isinstance(ssl_context.maximum_version, ssl.TLSVersion)
+                and ssl_context.maximum_version <= ssl.TLSVersion.TLSv1_2
+            ):
+                quic_disable = True
+            else:
+                any_capable_cipher: bool = False
+                for cipher_dict in ssl_context.get_ciphers():
+                    if cipher_dict["name"] in [
+                        "TLS_AES_128_GCM_SHA256",
+                        "TLS_AES_256_GCM_SHA384",
+                        "TLS_CHACHA20_POLY1305_SHA256",
+                    ]:
+                        any_capable_cipher = True
+                if not any_capable_cipher:
+                    quic_disable = True
+
+        if ssl_maximum_version and ssl_maximum_version <= ssl.TLSVersion.TLSv1_2:
+            quic_disable = True
+
+        if quic_disable:
+            if disabled_svn is None:
+                disabled_svn = set()
+
+            disabled_svn.add(HttpVersion.h3)
+
         super().__init__(
             host,
             port=port,
@@ -563,47 +577,6 @@ class HTTPSConnection(HTTPConnection):
             else:
                 cert_reqs = resolve_cert_reqs(None)
         self.cert_reqs = cert_reqs
-
-    def set_cert(
-        self,
-        key_file: str | None = None,
-        cert_file: str | None = None,
-        cert_reqs: int | str | None = None,
-        key_password: str | None = None,
-        ca_certs: str | None = None,
-        assert_hostname: None | str | Literal[False] = None,
-        assert_fingerprint: str | None = None,
-        ca_cert_dir: str | None = None,
-        ca_cert_data: None | str | bytes = None,
-    ) -> None:
-        """
-        This method should only be called once, before the connection is used.
-        """
-        warnings.warn(
-            "HTTPSConnection.set_cert() is deprecated and will be removed "
-            "in urllib3 v2.1.0. Instead provide the parameters to the "
-            "HTTPSConnection constructor.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-
-        # If cert_reqs is not provided we'll assume CERT_REQUIRED unless we also
-        # have an SSLContext object in which case we'll use its verify_mode.
-        if cert_reqs is None:
-            if self.ssl_context is not None:
-                cert_reqs = self.ssl_context.verify_mode
-            else:
-                cert_reqs = resolve_cert_reqs(None)
-
-        self.key_file = key_file
-        self.cert_file = cert_file
-        self.cert_reqs = cert_reqs
-        self.key_password = key_password
-        self.assert_hostname = assert_hostname
-        self.assert_fingerprint = assert_fingerprint
-        self.ca_certs = ca_certs and os.path.expanduser(ca_certs)
-        self.ca_cert_dir = ca_cert_dir and os.path.expanduser(ca_cert_dir)
-        self.ca_cert_data = ca_cert_data
 
     def connect(self) -> None:
         sock: socket.socket | ssl.SSLSocket
@@ -789,9 +762,6 @@ def _ssl_wrap_socket_and_match_hostname(
         or assert_hostname
         # assert_hostname can be set to False to disable hostname checking
         or assert_hostname is False
-        # We still support OpenSSL 1.0.2, which prevents us from verifying
-        # hostnames easily: https://github.com/pyca/pyopenssl/pull/933
-        or ssl_.IS_PYOPENSSL
         or not ssl_.HAS_NEVER_CHECK_COMMON_NAME
     ):
         context.check_hostname = False

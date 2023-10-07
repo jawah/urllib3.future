@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import datetime
 import os.path
 import shutil
@@ -13,9 +12,7 @@ from test import (
     LONG_TIMEOUT,
     SHORT_TIMEOUT,
     TARPIT_HOST,
-    notSecureTransport,
     requires_network,
-    requires_ssl_context_keyfile_password,
     resolvesLocalhostFQDN,
 )
 from test.conftest import ServerConfig
@@ -190,7 +187,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             with pytest.raises((SSLError, ProtocolError)):
                 https_pool.request("GET", "/certificate", retries=False)
 
-    @requires_ssl_context_keyfile_password()
     def test_client_key_password(self) -> None:
         with HTTPSConnectionPool(
             self.host,
@@ -205,7 +201,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             subject = r.json()
             assert subject["organizationalUnitName"].startswith("Testing cert")
 
-    @requires_ssl_context_keyfile_password()
     def test_client_encrypted_key_requires_password(self) -> None:
         with HTTPSConnectionPool(
             self.host,
@@ -272,7 +267,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 assert r.status == 200
                 assert not warn.called, warn.call_args_list
 
-    @notSecureTransport()  # SecureTransport does not support cert directories
     def test_ca_dir_verified(self, tmp_path: Path) -> None:
         # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
         if sys.implementation.name == "pypy":
@@ -578,7 +572,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         ) as https_pool:
             https_pool.request("GET", "/")
 
-    @notSecureTransport()
     def test_good_fingerprint_and_hostname_mismatch(self) -> None:
         # This test doesn't run with SecureTransport because we don't turn off
         # hostname validation without turning off all validation, which this
@@ -788,30 +781,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         with HTTPSConnectionPool(
             self.host, self.port, ca_certs=DEFAULT_CA
         ) as https_pool:
-            https_pool.ssl_version = ssl_version = self.certs["ssl_version"]
-            if ssl_version is getattr(ssl, "PROTOCOL_TLS", object()):
-                cmgr: contextlib.AbstractContextManager[
-                    object
-                ] = contextlib.nullcontext()
-            else:
-                cmgr = pytest.warns(
-                    DeprecationWarning,
-                    match=r"'ssl_version' option is deprecated and will be removed "
-                    r"in urllib3 v2\.1\.0\. Instead use 'ssl_minimum_version'",
-                )
-            with cmgr:
-                r = https_pool.request("GET", "/")
+            https_pool.ssl_version = self.certs["ssl_version"]
+            r = https_pool.request("GET", "/")
             assert r.status == 200, r.data
-
-    def test_set_cert_default_cert_required(self) -> None:
-        conn = VerifiedHTTPSConnection(self.host, self.port)
-        with pytest.warns(DeprecationWarning) as w:
-            conn.set_cert()
-        assert conn.cert_reqs == ssl.CERT_REQUIRED
-        assert len(w) == 1 and str(w[0].message) == (
-            "HTTPSConnection.set_cert() is deprecated and will be removed in urllib3 v2.1.0. "
-            "Instead provide the parameters to the HTTPSConnection constructor."
-        )
 
     @pytest.mark.parametrize("verify_mode", [ssl.CERT_NONE, ssl.CERT_REQUIRED])
     def test_set_cert_inherits_cert_reqs_from_ssl_context(
@@ -821,16 +793,10 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         assert ssl_context.verify_mode == verify_mode
 
         conn = HTTPSConnection(self.host, self.port, ssl_context=ssl_context)
-        with pytest.warns(DeprecationWarning) as w:
-            conn.set_cert()
 
         assert conn.cert_reqs == verify_mode
         assert (
             conn.ssl_context is not None and conn.ssl_context.verify_mode == verify_mode
-        )
-        assert len(w) == 1 and str(w[0].message) == (
-            "HTTPSConnection.set_cert() is deprecated and will be removed in urllib3 v2.1.0. "
-            "Instead provide the parameters to the HTTPSConnection constructor."
         )
 
     def test_tls_protocol_name_of_socket(self) -> None:
@@ -851,31 +817,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 assert conn.sock.version() == self.tls_protocol_name  # type: ignore[attr-defined]
             finally:
                 conn.close()
-
-    def test_ssl_version_is_deprecated(self) -> None:
-        if self.tls_protocol_name is None:
-            pytest.skip("Skipping base test class")
-
-        with HTTPSConnectionPool(
-            self.host, self.port, ca_certs=DEFAULT_CA, ssl_version=self.ssl_version()
-        ) as https_pool:
-            conn = https_pool._get_conn()
-            try:
-                with pytest.warns(DeprecationWarning) as w:
-                    conn.connect()
-            finally:
-                conn.close()
-
-        assert len(w) >= 1
-        assert any(x.category == DeprecationWarning for x in w)
-        assert any(
-            str(x.message)
-            == (
-                "'ssl_version' option is deprecated and will be removed in "
-                "urllib3 v2.1.0. Instead use 'ssl_minimum_version'"
-            )
-            for x in w
-        )
 
     @pytest.mark.parametrize(
         "ssl_version", [None, ssl.PROTOCOL_TLS, ssl.PROTOCOL_TLS_CLIENT]
@@ -1013,30 +954,13 @@ class TestHTTPS(HTTPSDummyServerTestCase):
     def test_default_ssl_context_ssl_min_max_versions(self) -> None:
         ctx = urllib3.util.ssl_.create_urllib3_context()
         assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
-        # urllib3 sets a default maximum version only when it is
-        # injected with PyOpenSSL- or SecureTransport-backed
-        # SSL-support.
-        # Otherwise, the default maximum version is set by Python's
-        # `ssl.SSLContext`. The value respects OpenSSL configuration and
-        # can be different from `ssl.TLSVersion.MAXIMUM_SUPPORTED`.
-        # https://github.com/urllib3/urllib3/issues/2477#issuecomment-1151452150
-        if util.IS_PYOPENSSL or util.IS_SECURETRANSPORT:
-            expected_maximum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
-        else:
-            expected_maximum_version = ssl.SSLContext(
-                ssl.PROTOCOL_TLS_CLIENT
-            ).maximum_version
+        expected_maximum_version = ssl.SSLContext(
+            ssl.PROTOCOL_TLS_CLIENT
+        ).maximum_version
         assert ctx.maximum_version == expected_maximum_version
 
     def test_ssl_context_ssl_version_uses_ssl_min_max_versions(self) -> None:
-        with pytest.warns(
-            DeprecationWarning,
-            match=r"'ssl_version' option is deprecated and will be removed in "
-            r"urllib3 v2\.1\.0\. Instead use 'ssl_minimum_version'",
-        ):
-            ctx = urllib3.util.ssl_.create_urllib3_context(
-                ssl_version=self.ssl_version()
-            )
+        ctx = urllib3.util.ssl_.create_urllib3_context(ssl_version=self.ssl_version())
         assert ctx.minimum_version == self.tls_version()
         assert ctx.maximum_version == self.tls_version()
 

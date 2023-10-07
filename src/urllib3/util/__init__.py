@@ -7,8 +7,6 @@ from .response import is_fp_closed, parse_alt_svc
 from .retry import Retry
 from .ssl_ import (
     ALPN_PROTOCOLS,
-    IS_PYOPENSSL,
-    IS_SECURETRANSPORT,
     SSLContext,
     assert_fingerprint,
     create_urllib3_context,
@@ -21,8 +19,6 @@ from .url import Url, parse_url
 from .wait import wait_for_read, wait_for_write
 
 __all__ = (
-    "IS_PYOPENSSL",
-    "IS_SECURETRANSPORT",
     "SSLContext",
     "ALPN_PROTOCOLS",
     "Retry",

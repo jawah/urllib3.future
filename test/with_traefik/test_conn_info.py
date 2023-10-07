@@ -40,6 +40,8 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info is not None
         assert conn_info.certificate_der is not None
         assert conn_info.http_version == HttpVersion.h2
+        assert conn_info.tls_version is not None
+        assert conn_info.cipher is not None
 
     def test_tls_on_udp(self) -> None:
         p = PoolManager(
@@ -62,5 +64,5 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info is not None
         assert conn_info.certificate_der is not None
         assert conn_info.tls_version is not None
-        assert conn_info.cipher is None
+        assert conn_info.cipher is not None
         assert conn_info.http_version == HttpVersion.h3

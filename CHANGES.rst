@@ -1,3 +1,32 @@
+2.1.900 (2023-10-07)
+====================
+
+- Added ``cipher`` in ``ConnectionInfo`` when using HTTP/3 over QUIC.
+- Added ``issuer_certificate_der``, ``issuer_certificate_dict`` into ``ConnectionInfo``.
+
+  By default, it is set to ``None``. This property is filled automatically on a QUIC connection.
+  It cannot be done automatically when using native Python capabilities.
+
+- Removed support for SecureTransport.
+- Removed support for PyOpenSSL.
+
+  This module is not delete but rendered ineffective. An explicit warning still appear.
+
+- Improved automated exchange between the socket and the HTTP state machines.
+- Removed all dependencies in the ``secure`` extra.
+- Fixed disabling HTTP/3 over QUIC if specified settings were incompatible with TLS over QUIC.
+
+  Previously if ``ssl_context`` was set and specifying a list of ciphers it was discarded on upgrade.
+  Also, if ``ssl_maximum_version`` was set to TLS v1.2.
+  Now those parameters are correctly forwarded to the custom QUIC/TLS layer.
+
+- Fixed ``ConnectionInfo`` repr that did not shown the ``http_version`` property.
+- Undeprecated 'ssl_version' option in create_urllib3_context.
+- Undeprecated 'format_header_param_rfc2231'.
+- Removed warning about the 'strict' parameter.
+- Removed constant ``IS_PYOPENSSL`` and ``IS_SECURETRANSPORT`` from ``urllib3.utils``.
+- Added raise warning when using environment variables ``SSLKEYLOGFILE``, and ``QUICLOGDIR``.
+
 2.0.936 (2023-10-01)
 ====================
 

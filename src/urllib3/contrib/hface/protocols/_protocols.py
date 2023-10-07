@@ -125,6 +125,16 @@ class OverQUICProtocol(OverUDPProtocol):
     def getpeercert(self, *, binary_form: bool = False) -> bytes | dict[str, Any]:
         raise NotImplementedError
 
+    @abstractmethod
+    def getissuercert(
+        self, *, binary_form: bool = False
+    ) -> bytes | dict[str, Any] | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def cipher(self) -> str | None:
+        raise NotImplementedError
+
 
 class HTTPProtocol(metaclass=ABCMeta):
     """

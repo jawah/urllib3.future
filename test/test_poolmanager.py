@@ -3,7 +3,6 @@ from __future__ import annotations
 import gc
 import socket
 from test import resolvesLocalhostFQDN
-from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -275,35 +274,6 @@ class TestPoolManager:
         assert len(records) == 1
         assert isinstance(records[0].message, DeprecationWarning)
         assert records[0].message.args[0] == msg
-
-    @patch("urllib3.poolmanager.PoolManager.connection_from_pool_key")
-    def test_connection_from_context_strict_param(
-        self, connection_from_pool_key: mock.MagicMock
-    ) -> None:
-        p = PoolManager()
-        context = {
-            "scheme": "http",
-            "host": "example.com",
-            "port": 8080,
-            "strict": True,
-        }
-        with pytest.warns(DeprecationWarning) as records:
-            p.connection_from_context(context)
-
-        msg = (
-            "The 'strict' parameter is no longer needed on Python 3+. "
-            "This will raise an error in urllib3 v2.1.0."
-        )
-        record = records[0]
-        assert isinstance(record.message, Warning)
-        assert record.message.args[0] == msg
-
-        _, kwargs = connection_from_pool_key.call_args
-        assert kwargs["request_context"] == {
-            "scheme": "http",
-            "host": "example.com",
-            "port": 8080,
-        }
 
     def test_custom_pool_key(self) -> None:
         """Assert it is possible to define a custom key function."""

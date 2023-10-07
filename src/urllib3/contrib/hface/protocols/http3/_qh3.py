@@ -27,7 +27,8 @@ from qh3.h3.connection import H3Connection, ProtocolError
 from qh3.h3.exceptions import H3Error
 from qh3.quic.configuration import QuicConfiguration
 from qh3.quic.connection import QuicConnection, QuicConnectionError
-from qh3.tls import SessionTicket
+from qh3.quic.logger import QuicFileLogger
+from qh3.tls import CipherSuite, SessionTicket
 
 from ..._configuration import QuicTLSConfig
 from ..._typing import AddressType, HeadersType
@@ -48,6 +49,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         tls_config: QuicTLSConfig,
     ) -> None:
         keylogfile_path: str | None = environ.get("SSLKEYLOGFILE", None)
+        qlogdir_path: str | None = environ.get("QUICLOGDIR", None)
 
         self._configuration: QuicConfiguration = QuicConfiguration(
             is_client=True,
@@ -62,7 +64,26 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             assert_fingerprint=tls_config.cert_fingerprint,
             verify_hostname=tls_config.verify_hostname,
             secrets_log_file=open(keylogfile_path, "w+") if keylogfile_path else None,  # type: ignore[arg-type]
+            quic_logger=QuicFileLogger(qlogdir_path) if qlogdir_path else None,
         )
+
+        if tls_config.ciphers:
+            available_ciphers = {c.name: c for c in CipherSuite}
+            chosen_ciphers: list[CipherSuite] = []
+
+            for cipher in tls_config.ciphers:
+                if "name" in cipher and isinstance(cipher["name"], str):
+                    chosen_ciphers.append(
+                        available_ciphers[cipher["name"].replace("TLS_", "")]
+                    )
+
+            if len(chosen_ciphers) == 0:
+                raise ValueError(
+                    f"Unable to find a compatible cipher in '{tls_config.ciphers}' to establish a QUIC connection. "
+                    f"QUIC support one of '{['TLS_'+e for e in available_ciphers.keys()]}' only."
+                )
+
+            self._configuration.cipher_suites = chosen_ciphers
 
         if tls_config.certfile:
             self._configuration.load_cert_chain(
@@ -84,7 +105,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
-        return ProtocolError, H3Error, QuicConnectionError
+        return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
     def is_available(self) -> bool:
         # TODO: check concurrent stream limit
@@ -220,6 +241,79 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self, stream_id: int, amt: int | None = None
     ) -> bool | None:
         return self._data_in_flight
+
+    def getissuercert(
+        self, *, binary_form: bool = False
+    ) -> bytes | dict[str, typing.Any] | None:
+        x509_certificate = self._quic.tls._peer_certificate
+
+        if x509_certificate is None:
+            raise ValueError("TLS handshake has not been done yet")
+
+        if not self._quic.tls._peer_certificate_chain:
+            return None
+
+        x509_certificate = self._quic.tls._peer_certificate_chain[0]
+
+        try:
+            from cryptography.hazmat.primitives._serialization import Encoding
+        except ImportError as e:
+            raise ValueError(
+                "Unable to generate a dict-form representation due to missing dependencies or sub-module"
+            ) from e
+
+        if binary_form:
+            return x509_certificate.public_bytes(Encoding.DER)
+
+        issuer_info = {
+            "version": x509_certificate.version.value + 1,
+            "serialNumber": ("%x" % x509_certificate.serial_number).upper(),
+            "subject": [],
+            "issuer": [],
+            "notBefore": x509_certificate.not_valid_before.strftime("%b %d %H:%M:%S %Y")
+            + " UTC",
+            "notAfter": x509_certificate.not_valid_after.strftime("%b %d %H:%M:%S %Y")
+            + " UTC",
+        }
+
+        _short_name_assoc = {
+            "CN": "commonName",
+            "L": "localityName",
+            "ST": "stateOrProvinceName",
+            "O": "organizationName",
+            "OU": "organizationalUnitName",
+            "C": "countryName",
+            "STREET": "streetAddress",
+            "DC": "domainComponent",
+        }
+
+        for item in x509_certificate.subject:
+            name = (
+                item.rfc4514_attribute_name
+                if item.rfc4514_attribute_name not in _short_name_assoc
+                else _short_name_assoc[item.rfc4514_attribute_name]
+            )
+            issuer_info["subject"].append(  # type: ignore[attr-defined]
+                (
+                    name,
+                    item.value,
+                )
+            )
+
+        for item in x509_certificate.issuer:
+            name = (
+                item.rfc4514_attribute_name
+                if item.rfc4514_attribute_name not in _short_name_assoc
+                else _short_name_assoc[item.rfc4514_attribute_name]
+            )
+            issuer_info["issuer"].append(  # type: ignore[attr-defined]
+                (
+                    name,
+                    item.value,
+                )
+            )
+
+        return issuer_info
 
     def getpeercert(
         self, *, binary_form: bool = False
@@ -359,3 +453,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             peer_info.pop(k)
 
         return peer_info
+
+    def cipher(self) -> str | None:
+        cipher_suite = (
+            self._quic.tls.key_schedule.cipher_suite
+            if self._quic.tls.key_schedule
+            else None
+        )
+
+        if cipher_suite is None:
+            raise ValueError("TLS handshake has not been done yet")
+
+        return f"TLS_{cipher_suite.name}"

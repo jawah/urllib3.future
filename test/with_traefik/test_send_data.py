@@ -39,6 +39,9 @@ class TestPostBody(TraefikTestCase):
             BytesIO(b"x" * 64),
             b"foo\r\n",  # meant to verify that function unpack_chunk() in method send() work in edge cases
             BytesIO(b"foo\r\n"),
+            BytesIO(
+                b"foo" * 1200
+            ),  # meant to verify that we respect quic max packet size (outgoing)
         ],
     )
     def test_h2n3_data(self, method: str, body: bytes | str | BytesIO) -> None:

@@ -29,6 +29,10 @@ class ConnectionInfo:
         self.certificate_dict: dict[
             str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
         ] | None = None
+        self.issuer_certificate_der: bytes | None = None
+        self.issuer_certificate_dict: dict[
+            str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
+        ] | None = None
         self.destination_address: tuple[str, int] | None = None
         self.cipher: str | None = None
         self.tls_version: TLSVersion | None = None
@@ -41,6 +45,7 @@ class ConnectionInfo:
                 "destination_address": self.destination_address,
                 "cipher": self.cipher,
                 "tls_version": self.tls_version,
+                "http_version": self.http_version,
             }
         )
 

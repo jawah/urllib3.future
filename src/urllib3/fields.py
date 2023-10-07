@@ -48,16 +48,6 @@ def format_header_param_rfc2231(name: str, value: _TYPE_FIELD_VALUE) -> str:
         Will be removed in urllib3 v2.1.0. This is not valid for
         ``multipart/form-data`` header parameters.
     """
-    import warnings
-
-    warnings.warn(
-        "'format_header_param_rfc2231' is deprecated and will be "
-        "removed in urllib3 v2.1.0. This is not valid for "
-        "multipart/form-data header parameters.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
     if isinstance(value, bytes):
         value = value.decode("utf-8")
 
@@ -114,42 +104,6 @@ def format_multipart_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
     return f'{name}="{value}"'
 
 
-def format_header_param_html5(name: str, value: _TYPE_FIELD_VALUE) -> str:
-    """
-    .. deprecated:: 2.0.0
-        Renamed to :func:`format_multipart_header_param`. Will be
-        removed in urllib3 v2.1.0.
-    """
-    import warnings
-
-    warnings.warn(
-        "'format_header_param_html5' has been renamed to "
-        "'format_multipart_header_param'. The old name will be "
-        "removed in urllib3 v2.1.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return format_multipart_header_param(name, value)
-
-
-def format_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
-    """
-    .. deprecated:: 2.0.0
-        Renamed to :func:`format_multipart_header_param`. Will be
-        removed in urllib3 v2.1.0.
-    """
-    import warnings
-
-    warnings.warn(
-        "'format_header_param' has been renamed to "
-        "'format_multipart_header_param'. The old name will be "
-        "removed in urllib3 v2.1.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return format_multipart_header_param(name, value)
-
-
 class RequestField:
     """
     A data container for request body parameters.
@@ -184,14 +138,6 @@ class RequestField:
             self.headers = dict(headers)
 
         if header_formatter is not None:
-            import warnings
-
-            warnings.warn(
-                "The 'header_formatter' parameter is deprecated and "
-                "will be removed in urllib3 v2.1.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
             self.header_formatter = header_formatter
         else:
             self.header_formatter = format_multipart_header_param
