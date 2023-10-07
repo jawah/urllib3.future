@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import socket
 import typing
-import warnings
 from email.errors import MessageDefect
 from http.client import IncompleteRead as httplib_IncompleteRead
 
@@ -142,17 +141,6 @@ class NewConnectionError(ConnectTimeoutError, HTTPError):
     def __init__(self, conn: HTTPConnection, message: str) -> None:
         self.conn = conn
         super().__init__(f"{conn}: {message}")
-
-    @property
-    def pool(self) -> HTTPConnection:
-        warnings.warn(
-            "The 'pool' property is deprecated and will be removed "
-            "in urllib3 v2.1.0. Use 'conn' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        return self.conn
 
 
 class NameResolutionError(NewConnectionError):

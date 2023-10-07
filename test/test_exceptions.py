@@ -6,7 +6,6 @@ from test import DUMMY_POOL
 
 import pytest
 
-from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import HTTPConnectionPool
 from urllib3.exceptions import (
     ClosedPoolError,
@@ -17,7 +16,6 @@ from urllib3.exceptions import (
     HTTPError,
     LocationParseError,
     MaxRetryError,
-    NewConnectionError,
     ReadTimeoutError,
 )
 
@@ -51,19 +49,3 @@ class TestFormat:
 
         assert "defects" in str(hpe)
         assert "unparsed_data" in str(hpe)
-
-
-class TestNewConnectionError:
-    def test_pool_property_deprecation_warning(self) -> None:
-        err = NewConnectionError(HTTPConnection("localhost"), "test")
-        with pytest.warns(DeprecationWarning) as records:
-            err_pool = err.pool
-
-        assert err_pool is err.conn
-        msg = (
-            "The 'pool' property is deprecated and will be removed "
-            "in urllib3 v2.1.0. Use 'conn' instead."
-        )
-        record = records[0]
-        assert isinstance(record.message, Warning)
-        assert record.message.args[0] == msg

@@ -9,7 +9,7 @@ import shutil
 import socket
 import ssl
 import tempfile
-from test import LONG_TIMEOUT, SHORT_TIMEOUT, onlySecureTransport, withPyOpenSSL
+from test import LONG_TIMEOUT, SHORT_TIMEOUT
 from test.conftest import ServerConfig
 
 import pytest
@@ -28,7 +28,6 @@ from urllib3.exceptions import (
     MaxRetryError,
     ProxyError,
     ProxySchemeUnknown,
-    ProxySchemeUnsupported,
     ReadTimeoutError,
     SSLError,
 )
@@ -91,28 +90,6 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
 
             r = https.request("GET", f"{self.http_url}/")
             assert r.status == 200
-
-    @withPyOpenSSL
-    def test_https_proxy_pyopenssl_not_supported(self) -> None:
-        with proxy_from_url(self.https_proxy_url, ca_certs=DEFAULT_CA) as https:
-            r = https.request("GET", f"{self.http_url}/")
-            assert r.status == 200
-
-            with pytest.raises(
-                ProxySchemeUnsupported, match="isn't available on non-native SSLContext"
-            ):
-                https.request("GET", f"{self.https_url}/")
-
-    @onlySecureTransport()
-    def test_https_proxy_securetransport_not_supported(self) -> None:
-        with proxy_from_url(self.https_proxy_url, ca_certs=DEFAULT_CA) as https:
-            r = https.request("GET", f"{self.http_url}/")
-            assert r.status == 200
-
-            with pytest.raises(
-                ProxySchemeUnsupported, match="isn't available on non-native SSLContext"
-            ):
-                https.request("GET", f"{self.https_url}/")
 
     def test_https_proxy_forwarding_for_https(self) -> None:
         with proxy_from_url(

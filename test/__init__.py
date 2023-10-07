@@ -29,17 +29,10 @@ try:
 except ImportError:
     zstd = None
 
-import functools
-
 from urllib3 import util
 from urllib3.connectionpool import ConnectionPool
 from urllib3.exceptions import HTTPWarning
 from urllib3.util import ssl_
-
-try:
-    import urllib3.contrib.pyopenssl as pyopenssl
-except ImportError:
-    pyopenssl = None  # type: ignore[assignment]
 
 if typing.TYPE_CHECKING:
     import ssl
@@ -174,22 +167,6 @@ def lazy_condition(condition: typing.Callable[[], bool]) -> bool:
     return typing.cast(bool, LazyCondition())
 
 
-def onlySecureTransport() -> typing.Callable[[_TestFuncT], _TestFuncT]:
-    """Runs this test when SecureTransport is in use."""
-    return pytest.mark.skipif(
-        lazy_condition(lambda: not ssl_.IS_SECURETRANSPORT),
-        reason="Test only runs with SecureTransport",
-    )
-
-
-def notSecureTransport() -> typing.Callable[[_TestFuncT], _TestFuncT]:
-    """Skips this test when SecureTransport is in use."""
-    return pytest.mark.skipif(
-        lazy_condition(lambda: ssl_.IS_SECURETRANSPORT),
-        reason="Test does not run with SecureTransport",
-    )
-
-
 _requires_network_has_route = None
 
 
@@ -226,36 +203,12 @@ def requires_network() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     )
 
 
-def requires_ssl_context_keyfile_password() -> (
-    typing.Callable[[_TestFuncT], _TestFuncT]
-):
-    return pytest.mark.skipif(
-        lazy_condition(lambda: ssl_.IS_SECURETRANSPORT),
-        reason="Test requires password parameter for SSLContext.load_cert_chain()",
-    )
-
-
 def resolvesLocalhostFQDN() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     """Test requires successful resolving of 'localhost.'"""
     return pytest.mark.skipif(
         not RESOLVES_LOCALHOST_FQDN,
         reason="Can't resolve localhost.",
     )
-
-
-def withPyOpenSSL(test: typing.Callable[..., _RT]) -> typing.Callable[..., _RT]:
-    @functools.wraps(test)
-    def wrapper(*args: typing.Any, **kwargs: typing.Any) -> _RT:
-        if not pyopenssl:
-            pytest.skip("pyopenssl not available, skipping test.")
-            return test(*args, **kwargs)
-
-        pyopenssl.inject_into_urllib3()
-        result = test(*args, **kwargs)
-        pyopenssl.extract_from_urllib3()
-        return result
-
-    return wrapper
 
 
 class _ListHandler(logging.Handler):

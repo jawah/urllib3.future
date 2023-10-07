@@ -7,7 +7,6 @@ import logging
 import re
 import sys
 import typing
-import warnings
 import zlib
 from contextlib import contextmanager
 from http.client import HTTPMessage as _HttplibHTTPMessage
@@ -37,13 +36,11 @@ try:
 except (AttributeError, ImportError, ValueError):  # Defensive:
     zstd = None
 
-from . import util
 from ._base_connection import _TYPE_BODY
 from ._collections import HTTPHeaderDict
 from .backend import LowLevelResponse
 from .connection import BaseSSLError, HTTPConnection, HTTPException
 from .exceptions import (
-    BodyNotHttplibCompatible,
     DecodeError,
     HTTPError,
     IncompleteRead,
@@ -51,7 +48,6 @@ from .exceptions import (
     InvalidHeader,
     ProtocolError,
     ReadTimeoutError,
-    ResponseNotChunked,
     SSLError,
 )
 from .util.response import is_fp_closed
@@ -474,25 +470,6 @@ class BaseHTTPResponse(io.IOBase):
             b[: len(temp)] = temp
             return len(temp)
 
-    # Compatibility methods for http.client.HTTPResponse
-    def getheaders(self) -> HTTPHeaderDict:
-        warnings.warn(
-            "HTTPResponse.getheaders() is deprecated and will be removed "
-            "in urllib3 v2.1.0. Instead access HTTPResponse.headers directly.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.headers
-
-    def getheader(self, name: str, default: str | None = None) -> str | None:
-        warnings.warn(
-            "HTTPResponse.getheader() is deprecated and will be removed "
-            "in urllib3 v2.1.0. Instead use HTTPResponse.headers.get(name, default).",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.headers.get(name, default)
-
     # Compatibility method for http.cookiejar
     def info(self) -> HTTPHeaderDict:
         return self.headers
@@ -767,13 +744,9 @@ class HTTPResponse(BaseHTTPResponse):
         assert self._fp
         c_int_max = 2**31 - 1
         if (
-            (
-                (amt and amt > c_int_max)
-                or (self.length_remaining and self.length_remaining > c_int_max)
-            )
-            and not util.IS_SECURETRANSPORT
-            and (util.IS_PYOPENSSL or sys.version_info < (3, 10))
-        ):
+            (amt and amt > c_int_max)
+            or (self.length_remaining and self.length_remaining > c_int_max)
+        ) and sys.version_info < (3, 10):
             buffer = io.BytesIO()
             # Besides `max_chunk_amt` being a maximum chunk size, it
             # affects memory overhead of reading a response by this
@@ -936,14 +909,11 @@ class HTTPResponse(BaseHTTPResponse):
             If True, will attempt to decode the body based on the
             'content-encoding' header.
         """
-        if self.chunked and self.supports_chunked_reads():
-            yield from self.read_chunked(amt, decode_content=decode_content)
-        else:
-            while not is_fp_closed(self._fp) or len(self._decoded_buffer) > 0:
-                data = self.read(amt=amt, decode_content=decode_content)
+        while not is_fp_closed(self._fp) or len(self._decoded_buffer) > 0:
+            data = self.read(amt=amt, decode_content=decode_content)
 
-                if data:
-                    yield data
+            if data:
+                yield data
 
     # Overrides from io.IOBase
     def readable(self) -> bool:
@@ -998,7 +968,7 @@ class HTTPResponse(BaseHTTPResponse):
         the fp attribute. If it is present we assume it returns raw chunks as
         processed by read_chunked().
         """
-        return hasattr(self._fp, "fp")
+        return False
 
     def _update_chunk_length(self) -> None:
         # First, we'll figure out length of a chunk and then
@@ -1035,89 +1005,6 @@ class HTTPResponse(BaseHTTPResponse):
             self._fp._safe_read(2)  # type: ignore[union-attr] # Toss the CRLF at the end of the chunk.
             self.chunk_left = None
         return returned_chunk  # type: ignore[no-any-return]
-
-    def read_chunked(
-        self, amt: int | None = None, decode_content: bool | None = None
-    ) -> typing.Generator[bytes, None, None]:
-        """
-        Similar to :meth:`HTTPResponse.read`, but with an additional
-        parameter: ``decode_content``.
-
-        :param amt:
-            How much of the content to read. If specified, caching is skipped
-            because it doesn't make sense to cache partial content as the full
-            response.
-
-        :param decode_content:
-            If True, will attempt to decode the body based on the
-            'content-encoding' header.
-        """
-        warnings.warn(
-            "'HTTPResponse.read_chunked()' method is deprecated and will be removed "
-            "in urllib3 v2.1.0. It was meant for legacy http.client socket (via fp) direct access. "
-            "Accessing this method will likely result in BodyNotHttplibCompatible exception.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-
-        self._init_decoder()
-        # FIXME: Rewrite this method and make it a class with a better structured logic.
-        if not self.chunked:
-            raise ResponseNotChunked(
-                "Response is not chunked. "
-                "Header 'transfer-encoding: chunked' is missing."
-            )
-        if not self.supports_chunked_reads():
-            raise BodyNotHttplibCompatible(
-                "Body should be http.client.HTTPResponse like. "
-                "It should have have an fp attribute which returns raw chunks."
-            )
-
-        with self._error_catcher():
-            # Don't bother reading the body of a HEAD request.
-            if (
-                self._original_response
-                and self._original_response.method.upper() == "HEAD"
-            ):
-                self._original_response.close()
-                return None
-
-            # If a response is already read and closed
-            # then return immediately.
-            if self._fp.fp is None:  # type: ignore[union-attr]
-                return None
-
-            while True:
-                self._update_chunk_length()
-                if self.chunk_left == 0:
-                    break
-                chunk = self._handle_chunk(amt)
-                decoded = self._decode(
-                    chunk, decode_content=decode_content, flush_decoder=False
-                )
-                if decoded:
-                    yield decoded
-
-            if decode_content:
-                # On CPython and PyPy, we should never need to flush the
-                # decoder. However, on Jython we *might* need to, so
-                # lets defensively do it anyway.
-                decoded = self._flush_decoder()
-                if decoded:  # Platform-specific: Jython.
-                    yield decoded
-
-            # Chunk content ends with \r\n: discard it.
-            while self._fp is not None:
-                line = self._fp.fp.readline()  # type: ignore[union-attr]
-                if not line:
-                    # Some sites may not end with '\r\n'.
-                    break
-                if line == b"\r\n":
-                    break
-
-            # We read everything; close the "file".
-            if self._original_response:
-                self._original_response.close()
 
     @property
     def url(self) -> str | None:

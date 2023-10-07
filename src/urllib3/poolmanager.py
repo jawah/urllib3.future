@@ -323,11 +323,6 @@ class PoolManager(RequestMethods):
         value must be a key in ``key_fn_by_scheme`` instance variable.
         """
         if "strict" in request_context:
-            warnings.warn(
-                "The 'strict' parameter is no longer needed on Python 3+. "
-                "This will raise an error in urllib3 v2.1.0.",
-                DeprecationWarning,
-            )
             request_context.pop("strict")
 
         scheme = request_context["scheme"].lower()

@@ -22,15 +22,12 @@ def tests_impl(
     session.run("python", "--version")
     session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
 
-    if "secure" in extras:
-        # Print OpenSSL information.
-        session.run("python", "-m", "OpenSSL.debug")
-
     memray_supported = True
     if (
         sys.implementation.name != "cpython"
         or sys.version_info < (3, 8)
         or sys.version_info.releaselevel != "final"
+        or sys.version_info >= (3, 12)
     ):
         memray_supported = False  # pytest-memray requires CPython 3.8+
     elif sys.platform == "win32":
@@ -71,7 +68,7 @@ def test_brotlipy(session: nox.Session) -> None:
     'brotlicffi' that we still don't blow up.
     """
     session.install("brotlipy")
-    tests_impl(session, extras="socks,secure", byte_string_comparisons=False)
+    tests_impl(session, extras="socks", byte_string_comparisons=False)
 
 
 def git_clone(session: nox.Session, git_url: str) -> None:
@@ -117,18 +114,13 @@ def downstream_botocore(session: nox.Session) -> None:
 
 
 @nox.session()
-def downstream_requests(session: nox.Session) -> None:
+def downstream_niquests(session: nox.Session) -> None:
     root = os.getcwd()
     tmp_dir = session.create_tmp()
 
     session.cd(tmp_dir)
-    git_clone(session, "https://github.com/psf/requests")
-    session.chdir("requests")
-
-    for patch in [
-        "0002-Requests-Hface.patch",
-    ]:
-        session.run("git", "apply", f"{root}/ci/{patch}", external=True)
+    git_clone(session, "https://github.com/jawah/niquests")
+    session.chdir("niquests")
 
     session.run("git", "rev-parse", "HEAD", external=True)
     session.install(".[socks]", silent=False)
@@ -136,7 +128,7 @@ def downstream_requests(session: nox.Session) -> None:
 
     session.cd(root)
     session.install(".", silent=False)
-    session.cd(f"{tmp_dir}/requests")
+    session.cd(f"{tmp_dir}/niquests")
 
     session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
     session.run("pytest", "tests")
@@ -173,7 +165,7 @@ def mypy(session: nox.Session) -> None:
 @nox.session
 def docs(session: nox.Session) -> None:
     session.install("-r", "docs/requirements.txt")
-    session.install(".[socks,secure,brotli,zstd]")
+    session.install(".[socks,brotli,zstd]")
 
     session.chdir("docs")
     if os.path.exists("_build"):
