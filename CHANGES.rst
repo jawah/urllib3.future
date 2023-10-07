@@ -26,6 +26,7 @@
 - Removed warning about the 'strict' parameter.
 - Removed constant ``IS_PYOPENSSL`` and ``IS_SECURETRANSPORT`` from ``urllib3.utils``.
 - Added raise warning when using environment variables ``SSLKEYLOGFILE``, and ``QUICLOGDIR``.
+- Added the ``Cookie`` header to the list of headers to strip from requests when redirecting to a different host. As before, different headers can be set via ``Retry.remove_headers_on_redirect``.
 
 2.0.936 (2023-10-01)
 ====================
