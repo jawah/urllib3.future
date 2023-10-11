@@ -51,8 +51,17 @@ class TestPostBody(TraefikTestCase):
             for i in range(3):
                 if isinstance(body, BytesIO):
                     body.seek(0, 0)
+                    # traefik bug with http3, should not happen!
+                    if i > 0:
+                        headers = {"content-length": "-1"}
+                    else:
+                        headers = {}
+                else:
+                    headers = {}
 
-                resp = p.request(method, f"/{method.lower()}", body=body)
+                resp = p.request(
+                    method, f"/{method.lower()}", body=body, headers=headers
+                )
 
                 assert resp.status == 200
                 assert resp.version == (20 if i == 0 else 30)

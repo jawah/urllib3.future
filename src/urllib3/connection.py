@@ -370,20 +370,13 @@ class HTTPConnection(HfaceBackend):
             if "transfer-encoding" not in header_keys:
                 self.putheader("Transfer-Encoding", "chunked")
         else:
-            # Detect whether a framing mechanism is already in use. If so
-            # we respect that value, otherwise we pick chunked vs content-length
-            # depending on the type of 'body'.
-            if "content-length" in header_keys:
-                chunked = False
-            elif "transfer-encoding" in header_keys:
-                chunked = True
-
             # Otherwise we go off the recommendation of 'body_to_chunks()'.
-            else:
-                chunked = False
+            if (
+                "content-length" not in header_keys
+                and "transfer-encoding" not in header_keys
+            ):
                 if content_length is None:
                     if chunks is not None:
-                        chunked = True
                         self.putheader("Transfer-Encoding", "chunked")
                 else:
                     self.putheader("Content-Length", str(content_length))
@@ -395,7 +388,7 @@ class HTTPConnection(HfaceBackend):
             if overrule_content_length and header.lower() == "content-length":
                 value = str(content_length)
             self.putheader(header, value)
-        self.endheaders()
+        self.endheaders(expect_body_afterward=chunks is not None)
 
         # If we're given a body we start sending that in chunks.
         if chunks is not None:
@@ -406,15 +399,8 @@ class HTTPConnection(HfaceBackend):
                     continue
                 if isinstance(chunk, str):
                     chunk = chunk.encode("utf-8")
-                if chunked:
-                    self.send(b"%x\r\n%b\r\n" % (len(chunk), chunk))
-                else:
-                    self.send(chunk)
-
-        # Regardless of whether we have a body or not, if we're in
-        # chunked mode we want to send an explicit empty chunk.
-        if chunked:
-            self.send(b"0\r\n\r\n")
+                self.send(chunk)
+            self.send(b"", eot=True)
 
     def getresponse(  # type: ignore[override]
         self,
@@ -892,7 +878,7 @@ def _wrap_proxy_error(err: Exception, proxy_scheme: str | None) -> ProxyError:
 
 
 def _get_default_user_agent() -> str:
-    return f"python-urllib3/{__version__}"
+    return f"urllib3.future/{__version__}"
 
 
 class DummyConnection:

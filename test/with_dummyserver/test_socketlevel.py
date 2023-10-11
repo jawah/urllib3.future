@@ -2274,7 +2274,7 @@ class TestContentFraming(SocketDummyServerTestCase):
         assert b"Host: localhost:" in sent_bytes
         assert b"Accept-Encoding: identity\r\n" in sent_bytes
         assert b"Transfer-Encoding: chunked\r\n" in sent_bytes
-        assert b"User-Agent: python-urllib3/" in sent_bytes
+        assert b"User-Agent: urllib3.future/" in sent_bytes
         assert b"content-length" not in sent_bytes.lower()
         assert b"\r\n\r\na\r\nxxxxxxxxxx\r\n0\r\n\r\n" in sent_bytes
 
@@ -2343,7 +2343,7 @@ class TestContentFraming(SocketDummyServerTestCase):
         assert sent_bytes.count(b":") == 5
         assert b"Host: localhost:" in sent_bytes
         assert b"Accept-Encoding: identity\r\n" in sent_bytes
-        assert b"User-Agent: python-urllib3/" in sent_bytes
+        assert b"User-Agent: urllib3.future/" in sent_bytes
 
         if should_be_chunked:
             assert b"content-length" not in sent_bytes.lower()
@@ -2362,7 +2362,7 @@ class TestContentFraming(SocketDummyServerTestCase):
     @pytest.mark.parametrize(
         ["header", "header_value", "expected"],
         [
-            ("content-length", "10", b": 10\r\n\r\nxxxxxxxx"),
+            ("content-length", "8", b": 8\r\n\r\nxxxxxxxx"),
             (
                 "transfer-encoding",
                 "chunked",

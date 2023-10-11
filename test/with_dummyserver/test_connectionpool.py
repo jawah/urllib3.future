@@ -917,7 +917,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             request_headers = r.json()
 
             if not headers:
-                assert request_headers["User-Agent"].startswith("python-urllib3/")
+                assert request_headers["User-Agent"].startswith("urllib3.future/")
                 assert "key" not in request_headers["User-Agent"]
             else:
                 assert request_headers["User-Agent"] == "key"
