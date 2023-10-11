@@ -288,7 +288,11 @@ class BaseBackend:
         raise NotImplementedError
 
     def endheaders(
-        self, message_body: bytes | None = None, *, encode_chunked: bool = False
+        self,
+        message_body: bytes | None = None,
+        *,
+        encode_chunked: bool = False,
+        expect_body_afterward: bool = False,
     ) -> None:
         """This method conclude the request context construction."""
         raise NotImplementedError
@@ -306,6 +310,8 @@ class BaseBackend:
     def send(
         self,
         data: (bytes | typing.IO[typing.Any] | typing.Iterable[bytes] | str),
+        *,
+        eot: bool = False,
     ) -> None:
         """The send() method SHOULD be invoked after calling endheaders() if and only if the request
         context specify explicitly that a body is going to be sent."""

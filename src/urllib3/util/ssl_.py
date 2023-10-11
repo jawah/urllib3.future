@@ -257,7 +257,6 @@ def create_urllib3_context(
                 "'ssl_minimum_version' or 'ssl_maximum_version'"
             )
 
-        # 'ssl_version' is deprecated and will be removed in the future.
         else:
             # Use 'ssl_minimum_version' and 'ssl_maximum_version' instead.
             ssl_minimum_version = _SSL_VERSION_TO_TLS_VERSION.get(
@@ -282,6 +281,11 @@ def create_urllib3_context(
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
     if ciphers:
         context.set_ciphers(ciphers)
+    else:
+        # avoid relying on cpython default cipher list
+        # and instead retrieve OpenSSL own default. This should make
+        # urllib3.future less seen by basic firewall anti-bot rules.
+        context.set_ciphers("DEFAULT")
 
     # Setting the default here, as we may have no ssl module on import
     cert_reqs = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs

@@ -1,3 +1,15 @@
+2.1.901 (2023-10-10)
+====================
+
+- Set ``DEFAULT`` (as OpenSSL default list) for ciphers in SSLContext if none is provided instead of Python default.
+- Fixed an edge case where chosen state machine would be indicated to not end stream where it should.
+- Fixed a rare case where ``ProtocolError`` was raised instead of ``SSLError`` in the underlying QUIC layer state-machine.
+- Small performance improvement in sending a body by removing an obsolete logic made for a removed constraint.
+- Changed default ``User-Agent`` to ``urllib3.future/x.y.z``.
+- Removed a compatibility operation that added a ``Content-Length`` header on request with unknown body length.
+  This was present due to a bug in Traefik server. A investigation will be conducted and a relevant issue will be
+  addressed.
+
 2.1.900 (2023-10-07)
 ====================
 

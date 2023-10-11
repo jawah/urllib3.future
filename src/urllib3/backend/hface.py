@@ -613,7 +613,11 @@ class HfaceBackend(BaseBackend):
             )
 
     def endheaders(
-        self, message_body: bytes | None = None, *, encode_chunked: bool = False
+        self,
+        message_body: bytes | None = None,
+        *,
+        encode_chunked: bool = False,
+        expect_body_afterward: bool = False,
     ) -> None:
         if self.sock is None:
             self.connect()  # type: ignore[attr-defined]
@@ -625,7 +629,7 @@ class HfaceBackend(BaseBackend):
         self._stream_id = self._protocol.get_available_stream_id()
 
         # unless anything hint the opposite, the request head frame is the end stream
-        should_end_stream: bool = True
+        should_end_stream: bool = expect_body_afterward is False
         # only h11 support chunked transfer encoding, we internally translate
         # it to the right method for h2 and h3.
         support_te_chunked: bool = self._svn == HttpVersion.h11
@@ -639,12 +643,6 @@ class HfaceBackend(BaseBackend):
             if header == "content-length":
                 if value.isdigit():
                     self.__expected_body_length = int(value)
-                should_end_stream = not (
-                    self.__expected_body_length is not None and int(value) > 0
-                )
-                break
-            if header == "transfer-encoding" and value.lower() == "chunked":
-                should_end_stream = False
                 break
 
         # handle cases where 'Host' header is set manually
@@ -666,10 +664,8 @@ class HfaceBackend(BaseBackend):
         if not support_te_chunked:
             # We MUST never use that header in h2 and h3 over quic.
             # It may(should) break the connection.
-            intent_te_chunked: bool = False
             try:
                 self.__headers.remove((b"transfer-encoding", b"chunked"))
-                intent_te_chunked = True
             except ValueError:
                 pass
 
@@ -679,16 +675,6 @@ class HfaceBackend(BaseBackend):
                 self.__headers.remove((b"connection", b"keep-alive"))
             except ValueError:
                 pass
-
-            # some quic/h3 implementation like quic-go skip reading the body
-            # if this indicator isn't present, equivalent to te: chunked but looking for stream FIN marker.
-            # officially, it should not be there. kept for compatibility.
-            if (
-                intent_te_chunked
-                and self._svn == HttpVersion.h3
-                and self.__expected_body_length is None
-            ):
-                self.__headers.append((b"content-length", b"-1"))
 
         try:
             self._protocol.submit_headers(
@@ -802,6 +788,8 @@ class HfaceBackend(BaseBackend):
     def send(
         self,
         data: (bytes | typing.IO[typing.Any] | typing.Iterable[bytes] | str),
+        *,
+        eot: bool = False,
     ) -> None:
         """We might be receiving a chunk constructed downstream"""
         if self.sock is None or self._stream_id is None or self._protocol is None:
@@ -817,23 +805,6 @@ class HfaceBackend(BaseBackend):
         ):
             self.__remaining_body_length = self.__expected_body_length
 
-        def unpack_chunk(possible_chunk: bytes) -> bytes:
-            """This hacky function is there because we won't alter send() method signature.
-            Therefor cannot know intention prior to this. b"%x\r\n%b\r\n" % (len(chunk), chunk)
-            """
-            if (
-                possible_chunk.endswith(b"\r\n")
-                and possible_chunk.startswith(b"--") is False
-            ):
-                _: list[bytes] = possible_chunk.split(b"\r\n", maxsplit=1)
-                if len(_) != 2 or any(uc == b"" for uc in _):
-                    return possible_chunk
-                # boundary case
-                if _[-1][:-2].startswith(b"--") and _[-1][:-2].endswith(b"--"):
-                    return possible_chunk
-                return _[-1][:-2]
-            return possible_chunk
-
         try:
             if isinstance(
                 data,
@@ -842,28 +813,21 @@ class HfaceBackend(BaseBackend):
                     bytearray,
                 ),
             ):
-                data_ = unpack_chunk(data)
-                is_chunked = len(data_) != len(data)
-
                 if (
                     self._protocol.should_wait_remote_flow_control(
-                        self._stream_id, len(data_)
+                        self._stream_id, len(data)
                     )
                     is True
                 ):
                     self._protocol.bytes_received(self.sock.recv(self.blocksize))
 
                 if self.__remaining_body_length:
-                    self.__remaining_body_length -= len(data_)
-
-                end_stream = (
-                    is_chunked and data_ == b""
-                ) or self.__remaining_body_length == 0
+                    self.__remaining_body_length -= len(data)
 
                 self._protocol.submit_data(
                     self._stream_id,
-                    data_,
-                    end_stream=end_stream,
+                    data,
+                    end_stream=eot,
                 )
             else:
                 # urllib3 is supposed to handle every case
