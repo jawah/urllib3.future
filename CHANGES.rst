@@ -1,3 +1,14 @@
+2.1.902 (2023-10-21)
+====================
+
+- Fixed an issue where streaming response did not yield data until the stream was closed.
+- Unified peercert/issuercert dict output in ConnectionInfo output format when HTTP/3.
+- Made body stripped from HTTP requests changing the request method to GET after HTTP 303 "See Other" redirect responses.
+  Headers ``content-encoding, content-language, content-location, content-type, content-length, digest, last-modified`` are
+  also stripped in the said case.
+  Port of the security fix GHSA-g4mx-q9vg-27p4
+- ``_TYPE_BODY`` now accept `Iterable[str]` in addition to `Iterable[bytes]`.
+
 2.1.901 (2023-10-10)
 ====================
 

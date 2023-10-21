@@ -7,7 +7,7 @@ import warnings
 from types import TracebackType
 from urllib.parse import urljoin
 
-from ._collections import RecentlyUsedContainer
+from ._collections import HTTPHeaderDict, RecentlyUsedContainer
 from ._request_methods import RequestMethods
 from .backend import HttpVersion, QuicPreemptiveCacheType
 from .connection import ProxyConfig
@@ -21,6 +21,7 @@ from .exceptions import (
 from .response import BaseHTTPResponse
 from .util.connection import _TYPE_SOCKET_OPTIONS
 from .util.proxy import connection_requires_http_tunnel
+from .util.request import NOT_FORWARDABLE_HEADERS
 from .util.retry import Retry
 from .util.timeout import Timeout
 from .util.url import Url, parse_url
@@ -461,6 +462,11 @@ class PoolManager(RequestMethods):
         # RFC 7231, Section 6.4.4
         if response.status == 303:
             method = "GET"
+            kw["body"] = None
+            kw["headers"] = HTTPHeaderDict(kw["headers"])
+
+            for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
+                kw["headers"].discard(should_be_removed_header)
 
         retries = kw.get("retries")
         if not isinstance(retries, Retry):
