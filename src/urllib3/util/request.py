@@ -17,6 +17,17 @@ if typing.TYPE_CHECKING:
 # ``Host``, and ``User-Agent``.
 SKIP_HEADER = "@@@SKIP_HEADER@@@"
 SKIPPABLE_HEADERS = frozenset(["accept-encoding", "host", "user-agent"])
+NOT_FORWARDABLE_HEADERS = frozenset(
+    [
+        "content-encoding",
+        "content-language",
+        "content-location",
+        "content-type",
+        "content-length",
+        "digest",
+        "last-modified",
+    ]
+)
 
 ACCEPT_ENCODING = "gzip,deflate"
 try:

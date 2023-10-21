@@ -146,7 +146,7 @@ jobs:
           TRAEFIK_COMPOSE_SCHEMA: |
             services:
               proxy:
-                image: traefik:v2.10
+                image: traefik:v2.10.4
                 restart: unless-stopped
                 healthcheck:
                   test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]

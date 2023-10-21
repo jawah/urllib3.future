@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Iterator, cast
+from typing import Iterator
 
 import h2.config  # type: ignore
 import h2.connection  # type: ignore
@@ -65,11 +65,13 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return h2.exceptions.ProtocolError, h2.exceptions.H2Error
 
     def is_available(self) -> bool:
-        # TODO: check that we do not run out of stream IDs.
-        return not self._terminated
+        max_streams = self._connection.remote_settings.max_concurrent_streams
+        return (
+            self._terminated is False
+            and max_streams > self._connection.highest_outbound_stream_id
+        )
 
     def has_expired(self) -> bool:
-        # TODO: check that we do not run out of stream IDs.
         return self._terminated
 
     def get_available_stream_id(self) -> int:
@@ -147,7 +149,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             self._events.extend(self._map_events(h2_events))
 
     def bytes_to_send(self) -> bytes:
-        return cast(bytes, self._connection.data_to_send())
+        return self._connection.data_to_send()  # type: ignore[no-any-return]
 
     def _connection_terminated(
         self, error_code: int = 0, message: str | None = None

@@ -11,6 +11,7 @@ from socket import timeout as SocketTimeout
 from types import TracebackType
 
 from ._base_connection import _TYPE_BODY
+from ._collections import HTTPHeaderDict
 from ._request_methods import RequestMethods
 from .backend import ConnectionInfo
 from .connection import (
@@ -42,7 +43,11 @@ from .exceptions import (
 from .response import BaseHTTPResponse
 from .util.connection import is_connection_dropped
 from .util.proxy import connection_requires_http_tunnel
-from .util.request import _TYPE_BODY_POSITION, set_file_position
+from .util.request import (
+    _TYPE_BODY_POSITION,
+    NOT_FORWARDABLE_HEADERS,
+    set_file_position,
+)
 from .util.retry import Retry
 from .util.ssl_match_hostname import CertificateError
 from .util.timeout import _DEFAULT_TIMEOUT, _TYPE_DEFAULT, Timeout
@@ -903,6 +908,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if redirect_location:
             if response.status == 303:
                 method = "GET"
+                body = None
+                headers = HTTPHeaderDict(headers)
+
+                for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
+                    headers.discard(should_be_removed_header)
 
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)

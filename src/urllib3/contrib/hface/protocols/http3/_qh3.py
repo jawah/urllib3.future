@@ -108,11 +108,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
     def is_available(self) -> bool:
-        # TODO: check concurrent stream limit
         return not self._terminated
 
     def has_expired(self) -> bool:
-        # TODO: check that we do not run out of stream IDs.
         return self._terminated
 
     @property
@@ -295,8 +293,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
             issuer_info["subject"].append(  # type: ignore[attr-defined]
                 (
-                    name,
-                    item.value,
+                    (
+                        name,
+                        item.value,
+                    ),
                 )
             )
 
@@ -308,8 +308,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
             issuer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
-                    name,
-                    item.value,
+                    (
+                        name,
+                        item.value,
+                    ),
                 )
             )
 
@@ -372,8 +374,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
             peer_info["subject"].append(  # type: ignore[attr-defined]
                 (
-                    name,
-                    item.value,
+                    (
+                        name,
+                        item.value,
+                    ),
                 )
             )
 
@@ -385,8 +389,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
             peer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
-                    name,
-                    item.value,
+                    (
+                        name,
+                        item.value,
+                    ),
                 )
             )
 

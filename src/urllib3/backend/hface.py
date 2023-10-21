@@ -544,12 +544,19 @@ class HfaceBackend(BaseBackend):
                     if isinstance(event, event_type_collectable):
                         events.append(event)
 
-                if (event_type and isinstance(event, event_type)) or (
-                    maximal_data_in_read and data_in_len >= maximal_data_in_read
-                ):
+                target_cap_reached: bool = (
+                    maximal_data_in_read is not None
+                    and data_in_len >= maximal_data_in_read
+                )
+
+                if (event_type and isinstance(event, event_type)) or target_cap_reached:
                     # if event type match, make sure it is the latest one
                     # simply put, end_stream should be True.
-                    if respect_end_stream_signal and hasattr(event, "end_stream"):
+                    if (
+                        target_cap_reached is False
+                        and respect_end_stream_signal
+                        and hasattr(event, "end_stream")
+                    ):
                         if event.end_stream is True:
                             return events
                         continue
