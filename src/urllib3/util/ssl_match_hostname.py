@@ -12,7 +12,7 @@ import typing
 from ipaddress import IPv4Address, IPv6Address
 
 if typing.TYPE_CHECKING:
-    from .ssl_ import _TYPE_PEER_CERT_RET_DICT
+    from .._typing import _TYPE_PEER_CERT_RET_DICT
 
 __version__ = "3.5.0.1"
 

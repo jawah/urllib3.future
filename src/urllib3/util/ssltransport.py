@@ -10,7 +10,7 @@ from ..exceptions import ProxySchemeUnsupported
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
-    from .ssl_ import _TYPE_PEER_CERT_RET, _TYPE_PEER_CERT_RET_DICT
+    from .._typing import _TYPE_PEER_CERT_RET, _TYPE_PEER_CERT_RET_DICT
 
 
 _SelfT = typing.TypeVar("_SelfT", bound="SSLTransport")

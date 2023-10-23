@@ -9,8 +9,8 @@ from urllib.parse import urljoin
 
 from ._collections import HTTPHeaderDict, RecentlyUsedContainer
 from ._request_methods import RequestMethods
+from ._typing import _TYPE_SOCKET_OPTIONS, ProxyConfig
 from .backend import HttpVersion, QuicPreemptiveCacheType
-from .connection import ProxyConfig
 from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, port_by_scheme
 from .exceptions import (
     LocationValueError,
@@ -19,7 +19,6 @@ from .exceptions import (
     URLSchemeUnknown,
 )
 from .response import BaseHTTPResponse
-from .util.connection import _TYPE_SOCKET_OPTIONS
 from .util.proxy import connection_requires_http_tunnel
 from .util.request import NOT_FORWARDABLE_HEADERS
 from .util.retry import Retry

@@ -14,14 +14,14 @@ from socket import timeout as SocketTimeout
 
 try:
     try:
-        import brotlicffi as brotli  # type: ignore[import]
+        import brotlicffi as brotli  # type: ignore[import-not-found]
     except ImportError:
-        import brotli  # type: ignore[import]
+        import brotli  # type: ignore[import-not-found]
 except ImportError:
     brotli = None
 
 try:
-    import zstandard as zstd  # type: ignore[import]
+    import zstandard as zstd  # type: ignore[import-not-found]
 
     # The package 'zstandard' added the 'eof' property starting
     # in v0.18.0 which we require to ensure a complete and
@@ -36,8 +36,8 @@ try:
 except (AttributeError, ImportError, ValueError):  # Defensive:
     zstd = None
 
-from ._base_connection import _TYPE_BODY
 from ._collections import HTTPHeaderDict
+from ._typing import _TYPE_BODY
 from .backend import LowLevelResponse
 from .connection import BaseSSLError, HTTPConnection, HTTPException
 from .exceptions import (
@@ -275,7 +275,39 @@ class BytesQueueBuffer:
         return ret.getvalue()
 
 
-class BaseHTTPResponse(io.IOBase):
+class HTTPResponse(io.IOBase):
+    """
+    HTTP Response container.
+
+    Backwards-compatible with :class:`http.client.HTTPResponse` but the response ``body`` is
+    loaded and decoded on-demand when the ``data`` property is accessed.  This
+    class is also compatible with the Python standard library's :mod:`io`
+    module, and can hence be treated as a readable object in the context of that
+    framework.
+
+    Extra parameters for behaviour not present in :class:`http.client.HTTPResponse`:
+
+    :param preload_content:
+        If True, the response's body will be preloaded during construction.
+
+    :param decode_content:
+        If True, will attempt to decode the body based on the
+        'content-encoding' header.
+
+    :param original_response:
+        When this HTTPResponse wrapper is generated from an :class:`http.client.HTTPResponse`
+        object, it's convenient to include the original for debug purposes. It's
+        otherwise unused.
+
+    :param retries:
+        The retries contains the last :class:`~urllib3.util.retry.Retry` that
+        was used during the request.
+
+    :param enforce_content_length:
+        Enforce content length checking. Body returned by server must match
+        value of Content-Length header, if present. Otherwise, raise error.
+    """
+
     CONTENT_DECODERS = ["gzip", "deflate"]
     if brotli is not None:
         CONTENT_DECODERS += ["br"]
@@ -292,14 +324,22 @@ class BaseHTTPResponse(io.IOBase):
 
     def __init__(
         self,
-        *,
+        body: _TYPE_BODY = "",
         headers: typing.Mapping[str, str] | typing.Mapping[bytes, bytes] | None = None,
-        status: int,
-        version: int,
-        reason: str | None,
-        decode_content: bool,
-        request_url: str | None,
+        status: int = 0,
+        version: int = 0,
+        reason: str | None = None,
+        preload_content: bool = True,
+        decode_content: bool = True,
+        original_response: LowLevelResponse | None = None,
+        pool: HTTPConnectionPool | None = None,
+        connection: HTTPConnection | None = None,
+        msg: _HttplibHTTPMessage | None = None,
         retries: Retry | None = None,
+        enforce_content_length: bool = True,
+        request_method: str | None = None,
+        request_url: str | None = None,
+        auto_close: bool = True,
     ) -> None:
         if isinstance(headers, HTTPHeaderDict):
             self.headers = headers
@@ -311,16 +351,50 @@ class BaseHTTPResponse(io.IOBase):
         self.decode_content = decode_content
         self._has_decoded_content = False
         self._request_url: str | None = request_url
+        self._retries: Retry | None = None
+
         self.retries = retries
 
         self.chunked = False
         tr_enc = self.headers.get("transfer-encoding", "").lower()
         # Don't incur the penalty of creating a list and then discarding it
         encodings = (enc.strip() for enc in tr_enc.split(","))
+
         if "chunked" in encodings:
             self.chunked = True
 
         self._decoder: ContentDecoder | None = None
+
+        self.enforce_content_length = enforce_content_length
+        self.auto_close = auto_close
+
+        self._body = None
+        self._fp: LowLevelResponse | typing.IO[typing.Any] | None = None
+        self._original_response = original_response
+        self._fp_bytes_read = 0
+        self.msg = msg
+
+        if body and isinstance(body, (str, bytes)):
+            self._body = body
+
+        self._pool = pool
+        self._connection = connection
+
+        if hasattr(body, "read"):
+            self._fp = body  # type: ignore[assignment]
+
+        # Are we using the chunked-style of transfer encoding?
+        self.chunk_left: int | None = None
+
+        # Determine length of response
+        self.length_remaining: int | None = self._init_length(request_method)
+
+        # Used to return the correct amount of bytes for partial read()s
+        self._decoded_buffer = BytesQueueBuffer()
+
+        # If requested, preload the body.
+        if preload_content and not self._body:
+            self._body = self.read(decode_content=decode_content)
 
     def get_redirect_location(self) -> str | None | Literal[False]:
         """
@@ -333,10 +407,6 @@ class BaseHTTPResponse(io.IOBase):
         if self.status in self.REDIRECT_STATUSES:
             return self.headers.get("location")
         return False
-
-    @property
-    def data(self) -> bytes:
-        raise NotImplementedError()
 
     def json(self) -> typing.Any:
         """
@@ -352,18 +422,6 @@ class BaseHTTPResponse(io.IOBase):
         return _json.loads(data)
 
     @property
-    def url(self) -> str | None:
-        raise NotImplementedError()
-
-    @url.setter
-    def url(self, url: str | None) -> None:
-        raise NotImplementedError()
-
-    @property
-    def connection(self) -> HTTPConnection | None:
-        raise NotImplementedError()
-
-    @property
     def retries(self) -> Retry | None:
         return self._retries
 
@@ -373,35 +431,6 @@ class BaseHTTPResponse(io.IOBase):
         if retries is not None and retries.history:
             self.url = retries.history[-1].redirect_location
         self._retries = retries
-
-    def stream(
-        self, amt: int | None = 2**16, decode_content: bool | None = None
-    ) -> typing.Iterator[bytes]:
-        raise NotImplementedError()
-
-    def read(
-        self,
-        amt: int | None = None,
-        decode_content: bool | None = None,
-        cache_content: bool = False,
-    ) -> bytes:
-        raise NotImplementedError()
-
-    def read_chunked(
-        self,
-        amt: int | None = None,
-        decode_content: bool | None = None,
-    ) -> typing.Iterator[bytes]:
-        raise NotImplementedError()
-
-    def release_conn(self) -> None:
-        raise NotImplementedError()
-
-    def drain_conn(self) -> None:
-        raise NotImplementedError()
-
-    def close(self) -> None:
-        raise NotImplementedError()
 
     def _init_decoder(self) -> None:
         """
@@ -476,100 +505,6 @@ class BaseHTTPResponse(io.IOBase):
 
     def geturl(self) -> str | None:
         return self.url
-
-
-class HTTPResponse(BaseHTTPResponse):
-    """
-    HTTP Response container.
-
-    Backwards-compatible with :class:`http.client.HTTPResponse` but the response ``body`` is
-    loaded and decoded on-demand when the ``data`` property is accessed.  This
-    class is also compatible with the Python standard library's :mod:`io`
-    module, and can hence be treated as a readable object in the context of that
-    framework.
-
-    Extra parameters for behaviour not present in :class:`http.client.HTTPResponse`:
-
-    :param preload_content:
-        If True, the response's body will be preloaded during construction.
-
-    :param decode_content:
-        If True, will attempt to decode the body based on the
-        'content-encoding' header.
-
-    :param original_response:
-        When this HTTPResponse wrapper is generated from an :class:`http.client.HTTPResponse`
-        object, it's convenient to include the original for debug purposes. It's
-        otherwise unused.
-
-    :param retries:
-        The retries contains the last :class:`~urllib3.util.retry.Retry` that
-        was used during the request.
-
-    :param enforce_content_length:
-        Enforce content length checking. Body returned by server must match
-        value of Content-Length header, if present. Otherwise, raise error.
-    """
-
-    def __init__(
-        self,
-        body: _TYPE_BODY = "",
-        headers: typing.Mapping[str, str] | typing.Mapping[bytes, bytes] | None = None,
-        status: int = 0,
-        version: int = 0,
-        reason: str | None = None,
-        preload_content: bool = True,
-        decode_content: bool = True,
-        original_response: LowLevelResponse | None = None,
-        pool: HTTPConnectionPool | None = None,
-        connection: HTTPConnection | None = None,
-        msg: _HttplibHTTPMessage | None = None,
-        retries: Retry | None = None,
-        enforce_content_length: bool = True,
-        request_method: str | None = None,
-        request_url: str | None = None,
-        auto_close: bool = True,
-    ) -> None:
-        super().__init__(
-            headers=headers,
-            status=status,
-            version=version,
-            reason=reason,
-            decode_content=decode_content,
-            request_url=request_url,
-            retries=retries,
-        )
-
-        self.enforce_content_length = enforce_content_length
-        self.auto_close = auto_close
-
-        self._body = None
-        self._fp: LowLevelResponse | typing.IO[typing.Any] | None = None
-        self._original_response = original_response
-        self._fp_bytes_read = 0
-        self.msg = msg
-
-        if body and isinstance(body, (str, bytes)):
-            self._body = body
-
-        self._pool = pool
-        self._connection = connection
-
-        if hasattr(body, "read"):
-            self._fp = body  # type: ignore[assignment]
-
-        # Are we using the chunked-style of transfer encoding?
-        self.chunk_left: int | None = None
-
-        # Determine length of response
-        self.length_remaining = self._init_length(request_method)
-
-        # Used to return the correct amount of bytes for partial read()s
-        self._decoded_buffer = BytesQueueBuffer()
-
-        # If requested, preload the body.
-        if preload_content and not self._body:
-            self._body = self.read(decode_content=decode_content)
 
     def release_conn(self) -> None:
         if not self._pool or not self._connection:
@@ -1035,3 +970,7 @@ class HTTPResponse(BaseHTTPResponse):
                 buffer.append(chunk)
         if buffer:
             yield b"".join(buffer)
+
+
+# Kept for BC-purposes.
+BaseHTTPResponse = HTTPResponse

@@ -6,6 +6,7 @@ from email.errors import MessageDefect
 from http.client import IncompleteRead as httplib_IncompleteRead
 
 if typing.TYPE_CHECKING:
+    from ._typing import _TYPE_REDUCE_RESULT
     from .connection import HTTPConnection
     from .connectionpool import ConnectionPool
     from .response import HTTPResponse
@@ -20,11 +21,6 @@ class HTTPError(Exception):
 
 class HTTPWarning(Warning):
     """Base warning used by this module."""
-
-
-_TYPE_REDUCE_RESULT = typing.Tuple[
-    typing.Callable[..., object], typing.Tuple[object, ...]
-]
 
 
 class PoolError(HTTPError):
@@ -304,3 +300,7 @@ class HeaderParsingError(HTTPError):
 
 class UnrewindableBodyError(HTTPError):
     """urllib3 encountered an error when trying to rewind a body"""
+
+
+class EarlyResponse(HTTPError):
+    """urllib3 received a response prior to sending the whole body"""

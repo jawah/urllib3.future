@@ -16,6 +16,7 @@ from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
 from dummyserver.testcase import HTTPDummyServerTestCase, SocketDummyServerTestCase
 from urllib3 import HTTPConnectionPool, encode_multipart_formdata
 from urllib3._collections import HTTPHeaderDict
+from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
 from urllib3.connection import _get_default_user_agent
 from urllib3.exceptions import (
     ConnectTimeoutError,
@@ -27,10 +28,9 @@ from urllib3.exceptions import (
     ReadTimeoutError,
     UnrewindableBodyError,
 )
-from urllib3.fields import _TYPE_FIELD_VALUE_TUPLE
 from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS
 from urllib3.util.retry import RequestHistory, Retry
-from urllib3.util.timeout import _TYPE_TIMEOUT, Timeout
+from urllib3.util.timeout import Timeout
 
 from .. import INVALID_SOURCE_ADDRESSES, TARPIT_HOST, VALID_SOURCE_ADDRESSES
 from ..port_helpers import find_unused_port
@@ -71,7 +71,7 @@ class TestConnectionPoolTimeouts(SocketDummyServerTestCase):
                     pool.urlopen("GET", "/")
                 if not conn.is_closed:
                     with pytest.raises(socket.error):
-                        conn.sock.recv(1024)  # type: ignore[attr-defined]
+                        conn.sock.recv(1024)  # type: ignore[union-attr]
             finally:
                 pool._put_conn(conn)
 
@@ -283,7 +283,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             conn = pool._get_conn()
             try:
                 pool._make_request(conn, "GET", "/")
-                tcp_nodelay_setting = conn.sock.getsockopt(  # type: ignore[attr-defined]
+                tcp_nodelay_setting = conn.sock.getsockopt(  # type: ignore[union-attr]
                     socket.IPPROTO_TCP, socket.TCP_NODELAY
                 )
                 assert tcp_nodelay_setting
@@ -307,7 +307,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             socket_options=socket_options,
         ) as pool:
             # Get the socket of a new connection.
-            s = pool._new_conn()._new_conn()  # type: ignore[attr-defined]
+            s = pool._new_conn()._new_conn()
             try:
                 using_keepalive = (
                     s.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) > 0
@@ -326,7 +326,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         with HTTPConnectionPool(
             self.host, self.port, socket_options=socket_options
         ) as pool:
-            s = pool._new_conn()._new_conn()  # type: ignore[attr-defined]
+            s = pool._new_conn()._new_conn()
             try:
                 using_nagle = s.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 0
                 assert using_nagle
@@ -344,7 +344,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
                 # Update the default socket options
                 assert conn.socket_options is not None
                 conn.socket_options += [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]  # type: ignore[operator]
-                s = conn._new_conn()  # type: ignore[attr-defined]
+                s = conn._new_conn()
                 nagle_disabled = (
                     s.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) > 0
                 )

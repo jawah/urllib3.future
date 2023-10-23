@@ -4,12 +4,8 @@ import email.utils
 import mimetypes
 import typing
 
-_TYPE_FIELD_VALUE = typing.Union[str, bytes]
-_TYPE_FIELD_VALUE_TUPLE = typing.Union[
-    _TYPE_FIELD_VALUE,
-    typing.Tuple[str, _TYPE_FIELD_VALUE],
-    typing.Tuple[str, _TYPE_FIELD_VALUE, str],
-]
+if typing.TYPE_CHECKING:
+    from ._typing import _TYPE_FIELD_VALUE, _TYPE_FIELD_VALUE_TUPLE
 
 
 def guess_content_type(
@@ -171,13 +167,9 @@ class RequestField:
 
         if isinstance(value, tuple):
             if len(value) == 3:
-                filename, data, content_type = typing.cast(
-                    typing.Tuple[str, _TYPE_FIELD_VALUE, str], value
-                )
+                filename, data, content_type = value  # type: ignore[misc]
             else:
-                filename, data = typing.cast(
-                    typing.Tuple[str, _TYPE_FIELD_VALUE], value
-                )
+                filename, data = value  # type: ignore[misc]
                 content_type = guess_content_type(filename)
         else:
             filename = None

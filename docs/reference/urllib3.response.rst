@@ -4,11 +4,6 @@ Response and Decoders
 Response
 --------
 
-.. autoclass:: urllib3.response.BaseHTTPResponse
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 .. autoclass:: urllib3.response.HTTPResponse
     :members:
     :undoc-members:
