@@ -6,9 +6,9 @@ import typing
 
 if typing.TYPE_CHECKING:
     from ssl import SSLSocket, SSLContext, TLSVersion
+    from .._typing import _TYPE_SOCKET_OPTIONS
 
 from .._collections import HTTPHeaderDict
-from ..util import connection
 
 
 class HttpVersion(str, enum.Enum):
@@ -154,7 +154,7 @@ class BaseBackend:
 
     default_socket_kind: socket.SocketKind = socket.SOCK_STREAM
     #: Disable Nagle's algorithm by default.
-    default_socket_options: typing.ClassVar[connection._TYPE_SOCKET_OPTIONS] = [
+    default_socket_options: typing.ClassVar[_TYPE_SOCKET_OPTIONS] = [
         (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp")
     ]
 
@@ -175,8 +175,7 @@ class BaseBackend:
         source_address: tuple[str, int] | None = None,
         blocksize: int = 8192,
         *,
-        socket_options: None
-        | (connection._TYPE_SOCKET_OPTIONS) = default_socket_options,
+        socket_options: None | _TYPE_SOCKET_OPTIONS = default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):

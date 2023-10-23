@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from urllib3._typing import _TYPE_FIELDS
 from urllib3.fields import RequestField
-from urllib3.filepost import _TYPE_FIELDS, encode_multipart_formdata
+from urllib3.filepost import encode_multipart_formdata
 
 BOUNDARY = "!! test boundary !!"
 BOUNDARY_BYTES = BOUNDARY.encode()

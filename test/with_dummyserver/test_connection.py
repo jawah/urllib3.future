@@ -60,8 +60,8 @@ def test_releases_conn(pool: HTTPConnectionPool) -> None:
     # If these variables are set by the pool
     # then the response can release the connection
     # back into the pool.
-    response._pool = pool  # type: ignore[attr-defined]
-    response._connection = conn  # type: ignore[attr-defined]
+    response._pool = pool
+    response._connection = conn
 
     response.release_conn()
     assert pool.pool.qsize() == 1  # type: ignore[union-attr]
@@ -123,15 +123,15 @@ def test_set_tunnel_is_reset(pool: HTTPConnectionPool) -> None:
 
     conn.set_tunnel(host="host", port=8080, scheme="http")
 
-    assert conn._tunnel_host == "host"  # type: ignore[attr-defined]
-    assert conn._tunnel_port == 8080  # type: ignore[attr-defined]
-    assert conn._tunnel_scheme == "http"  # type: ignore[attr-defined]
+    assert conn._tunnel_host == "host"
+    assert conn._tunnel_port == 8080
+    assert conn._tunnel_scheme == "http"
 
     conn.close()
 
-    assert conn._tunnel_host is None  # type: ignore[attr-defined]
-    assert conn._tunnel_port is None  # type: ignore[attr-defined]
-    assert conn._tunnel_scheme is None  # type: ignore[attr-defined]
+    assert conn._tunnel_host is None
+    assert conn._tunnel_port is None
+    assert conn._tunnel_scheme is None
 
 
 def test_invalid_tunnel_scheme(pool: HTTPConnectionPool) -> None:

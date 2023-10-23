@@ -1,3 +1,24 @@
+2.1.903 (2023-10-23)
+====================
+
+- Removed ``BaseHTTPConnection``, and ``BaseHTTPSConnection``.
+  Rationale: The initial idea, as far as I understand it, was to create a ``HTTPSConnection`` per protocols, e.g.
+  HTTP/2, and HTTP/3. From the point of view of ``urllib3.future`` it was taken care of in ``contrib.hface``
+  where the protocols state-machines are handled. We plan to always have a unified ``Connection`` class that
+  regroup all protocols for convenience. The private module ``urllib3._base_connection`` is renamed to ``urllib3._typing``.
+  It brings a lot of simplification, which is welcomed.
+- Reduced ``BaseHTTPResponse`` to a mere alias of ``HTTPResponse`` for the same reasoning as before. There is absolutely
+  no need whatsoever in the foreseeable future to ship urllib3.future with an alternative implementation of ``HTTPResponse``.
+  It will be removed in a future major.
+- Removed ``RECENT_DATE`` and linked logic as it does not make sense to (i) maintain it (ii) the certificate verification
+  failure won't be avoided anyway, so it is a warning prior to an unavoidable error. The warning class ``SystemTimeWarning``
+  will be removed in a future major.
+- Added support for stopping sending body if the server responded early in HTTP/2, or HTTP/3.
+  This can happen when a server says that you exhausted the size limit or if previously sent
+  headers were rejected for example. This should save a lot of time to users in given cases.
+- Refactored scattered typing aliases across the sources. ``urllib3._typing`` now contain all of our definitions.
+- Avoid installation of ``qh3`` in PyPy 3.11+ while pre-built wheels are unavailable.
+
 2.1.902 (2023-10-21)
 ====================
 

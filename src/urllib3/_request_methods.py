@@ -4,17 +4,12 @@ import json as _json
 import typing
 from urllib.parse import urlencode
 
-from ._base_connection import _TYPE_BODY
 from ._collections import HTTPHeaderDict
-from .filepost import _TYPE_FIELDS, encode_multipart_formdata
+from ._typing import _TYPE_BODY, _TYPE_ENCODE_URL_FIELDS, _TYPE_FIELDS
+from .filepost import encode_multipart_formdata
 from .response import BaseHTTPResponse
 
 __all__ = ["RequestMethods"]
-
-_TYPE_ENCODE_URL_FIELDS = typing.Union[
-    typing.Sequence[typing.Tuple[str, typing.Union[str, bytes]]],
-    typing.Mapping[str, typing.Union[str, bytes]],
-]
 
 
 class RequestMethods:

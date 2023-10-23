@@ -41,7 +41,7 @@ with the proxy:
 from __future__ import annotations
 
 try:
-    import socks  # type: ignore[import]
+    import socks  # type: ignore[import-not-found]
 except ImportError:
     import warnings
 
@@ -60,6 +60,7 @@ except ImportError:
 import typing
 from socket import timeout as SocketTimeout
 
+from .._typing import _TYPE_SOCKS_OPTIONS
 from ..connection import HTTPConnection, HTTPSConnection
 from ..connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from ..exceptions import ConnectTimeoutError, NewConnectionError
@@ -70,20 +71,6 @@ try:
     import ssl
 except ImportError:
     ssl = None  # type: ignore[assignment]
-
-try:
-    from typing import TypedDict
-
-    class _TYPE_SOCKS_OPTIONS(TypedDict):
-        socks_version: int
-        proxy_host: str | None
-        proxy_port: str | None
-        username: str | None
-        password: str | None
-        rdns: bool
-
-except ImportError:  # Python 3.7
-    _TYPE_SOCKS_OPTIONS = typing.Dict[str, typing.Any]  # type: ignore[misc, assignment]
 
 
 class SOCKSConnection(HTTPConnection):

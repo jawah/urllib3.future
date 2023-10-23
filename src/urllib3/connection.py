@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import datetime
 import logging
 import os
 import re
 import socket
 import typing
-import warnings
 from http.client import HTTPException as HTTPException  # noqa: F401
 from http.client import ResponseNotReady
 from socket import timeout as SocketTimeout
@@ -15,11 +13,17 @@ if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
     from .response import HTTPResponse
-    from .util.ssl_ import _TYPE_PEER_CERT_RET_DICT
     from .util.ssltransport import SSLTransport
+    from ._typing import (
+        _TYPE_BODY,
+        _TYPE_PEER_CERT_RET_DICT,
+        _TYPE_SOCKET_OPTIONS,
+        _TYPE_TIMEOUT_INTERNAL,
+        ProxyConfig,
+    )
 
 from ._collections import HTTPHeaderDict
-from .util.timeout import _DEFAULT_TIMEOUT, _TYPE_TIMEOUT, Timeout
+from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
 from .util.wait import wait_for_read
 
@@ -34,17 +38,14 @@ except (ImportError, AttributeError):
         pass
 
 
-from ._base_connection import _TYPE_BODY
-from ._base_connection import ProxyConfig as ProxyConfig
-from ._base_connection import _ResponseOptions as _ResponseOptions
 from ._version import __version__
 from .backend import HfaceBackend, HttpVersion, QuicPreemptiveCacheType
 from .exceptions import (
     ConnectTimeoutError,
+    EarlyResponse,
     NameResolutionError,
     NewConnectionError,
     ProxyError,
-    SystemTimeWarning,
 )
 from .util import SKIP_HEADER, SKIPPABLE_HEADERS, connection, ssl_
 from .util.request import body_to_chunks
@@ -68,11 +69,17 @@ log = logging.getLogger(__name__)
 
 port_by_scheme = {"http": 80, "https": 443}
 
-# When it comes time to update this value as a part of regular maintenance
-# (ie test_recent_date is failing) update it to ~6 months before the current date.
-RECENT_DATE = datetime.date(2022, 1, 1)
-
 _CONTAINS_CONTROL_CHAR_RE = re.compile(r"[^-!#$%&'*+.^_`|~0-9a-zA-Z]")
+
+
+class _ResponseOptions(typing.NamedTuple):
+    # TODO: Remove this in favor of a better
+    # HTTP request/response lifecycle tracking.
+    request_method: str
+    request_url: str
+    preload_content: bool
+    decode_content: bool
+    enforce_content_length: bool
 
 
 class HTTPConnection(HfaceBackend):
@@ -105,7 +112,7 @@ class HTTPConnection(HfaceBackend):
 
     blocksize: int
     source_address: tuple[str, int] | None
-    socket_options: connection._TYPE_SOCKET_OPTIONS | None
+    socket_options: _TYPE_SOCKET_OPTIONS | None
 
     _has_connected_to_proxy: bool
     _response_options: _ResponseOptions | None
@@ -118,11 +125,11 @@ class HTTPConnection(HfaceBackend):
         host: str,
         port: int | None = None,
         *,
-        timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
+        timeout: _TYPE_TIMEOUT_INTERNAL = _DEFAULT_TIMEOUT,
         source_address: tuple[str, int] | None = None,
         blocksize: int = 8192,
         socket_options: None
-        | (connection._TYPE_SOCKET_OPTIONS) = HfaceBackend.default_socket_options,
+        | _TYPE_SOCKET_OPTIONS = HfaceBackend.default_socket_options,
         proxy: Url | None = None,
         proxy_config: ProxyConfig | None = None,
         disabled_svn: set[HttpVersion] | None = None,
@@ -144,11 +151,6 @@ class HTTPConnection(HfaceBackend):
         self._has_connected_to_proxy = False
         self._response_options = None
 
-    # https://github.com/python/mypy/issues/4125
-    # Mypy treats this as LSP violation, which is considered a bug.
-    # If `host` is made a property it violates LSP, because a writeable attribute is overridden with a read-only one.
-    # However, there is also a `host` setter so LSP is not violated.
-    # Potentially, a `@host.deleter` might be needed depending on how this issue will be fixed.
     @property
     def host(self) -> str:
         """
@@ -390,17 +392,20 @@ class HTTPConnection(HfaceBackend):
             self.putheader(header, value)
         self.endheaders(expect_body_afterward=chunks is not None)
 
-        # If we're given a body we start sending that in chunks.
-        if chunks is not None:
-            for chunk in chunks:
-                # Sending empty chunks isn't allowed for TE: chunked
-                # as it indicates the end of the body.
-                if not chunk:
-                    continue
-                if isinstance(chunk, str):
-                    chunk = chunk.encode("utf-8")
-                self.send(chunk)
-            self.send(b"", eot=True)
+        try:
+            # If we're given a body we start sending that in chunks.
+            if chunks is not None:
+                for chunk in chunks:
+                    # Sending empty chunks isn't allowed for TE: chunked
+                    # as it indicates the end of the body.
+                    if not chunk:
+                        continue
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode("utf-8")
+                    self.send(chunk)
+                self.send(b"", eot=True)
+        except EarlyResponse:
+            pass
 
     def getresponse(  # type: ignore[override]
         self,
@@ -472,11 +477,11 @@ class HTTPSConnection(HTTPConnection):
         host: str,
         port: int | None = None,
         *,
-        timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
+        timeout: _TYPE_TIMEOUT_INTERNAL = _DEFAULT_TIMEOUT,
         source_address: tuple[str, int] | None = None,
         blocksize: int = 8192,
         socket_options: None
-        | (connection._TYPE_SOCKET_OPTIONS) = HTTPConnection.default_socket_options,
+        | _TYPE_SOCKET_OPTIONS = HTTPConnection.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         proxy: Url | None = None,
@@ -617,16 +622,6 @@ class HTTPSConnection(HTTPConnection):
             if self.server_hostname is not None:
                 server_hostname = self.server_hostname
 
-            is_time_off = datetime.date.today() < RECENT_DATE
-            if is_time_off:
-                warnings.warn(
-                    (
-                        f"System time is way off (before {RECENT_DATE}). This will probably "
-                        "lead to SSL verification errors"
-                    ),
-                    SystemTimeWarning,
-                )
-
             sock_and_verified = _ssl_wrap_socket_and_match_hostname(
                 sock=sock,
                 cert_reqs=self.cert_reqs,
@@ -666,7 +661,8 @@ class HTTPSConnection(HTTPConnection):
         Establish a TLS connection to the proxy using the provided SSL context.
         """
         # `_connect_tls_proxy` is called when self._tunnel_host is truthy.
-        proxy_config = typing.cast(ProxyConfig, self.proxy_config)
+        assert self.proxy_config is not None
+        proxy_config = self.proxy_config
         ssl_context = proxy_config.ssl_context
         sock_and_verified = _ssl_wrap_socket_and_match_hostname(
             sock,

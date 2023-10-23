@@ -110,7 +110,7 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
             conn = hc2._get_conn()
             try:
                 hc2._make_request(conn, "GET", "/")
-                tcp_nodelay_setting = conn.sock.getsockopt(  # type: ignore[attr-defined]
+                tcp_nodelay_setting = conn.sock.getsockopt(  # type: ignore[union-attr]
                     socket.IPPROTO_TCP, socket.TCP_NODELAY
                 )
                 assert tcp_nodelay_setting == 0, (

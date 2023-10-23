@@ -32,8 +32,8 @@ from ..contrib.hface.events import (
     HeadersReceived,
     StreamResetReceived,
 )
-from ..exceptions import InvalidHeader, ProtocolError, SSLError
-from ..util import connection, parse_alt_svc
+from ..exceptions import EarlyResponse, InvalidHeader, ProtocolError, SSLError
+from ..util import parse_alt_svc
 from ._base import (
     BaseBackend,
     ConnectionInfo,
@@ -41,6 +41,9 @@ from ._base import (
     LowLevelResponse,
     QuicPreemptiveCacheType,
 )
+
+if typing.TYPE_CHECKING:
+    from .._typing import _TYPE_SOCKET_OPTIONS
 
 _HAS_SYS_AUDIT = hasattr(sys, "audit")
 _HAS_QH3 = HTTPProtocolFactory.has(HTTP3Protocol)  # type: ignore[type-abstract]
@@ -58,7 +61,7 @@ class HfaceBackend(BaseBackend):
         blocksize: int = 8192,
         *,
         socket_options: None
-        | (connection._TYPE_SOCKET_OPTIONS) = BaseBackend.default_socket_options,
+        | _TYPE_SOCKET_OPTIONS = BaseBackend.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):
@@ -74,7 +77,7 @@ class HfaceBackend(BaseBackend):
         )
 
         self._protocol: HTTPOverQUICProtocol | HTTPOverTCPProtocol | None = None
-        self._svn = None
+        self._svn: HttpVersion | None = None
 
         self._stream_id: int | None = None
 
@@ -106,7 +109,7 @@ class HfaceBackend(BaseBackend):
                 if self.__alt_authority:
                     self._svn = HttpVersion.h3
                     # we ignore alt-host as we do not trust cache security
-                    self.port = self.__alt_authority[1]
+                    self.port: int = self.__alt_authority[1]
 
         if self._svn == HttpVersion.h3:
             self.socket_kind = SOCK_DGRAM
@@ -366,8 +369,8 @@ class HfaceBackend(BaseBackend):
         if HttpVersion.h3 not in self._disabled_svn:
             self._disabled_svn.add(HttpVersion.h3)
 
-        self._tunnel_host = host
-        self._tunnel_port = port
+        self._tunnel_host: str | None = host
+        self._tunnel_port: int | None = port
 
         if headers:
             self._tunnel_headers = headers
@@ -777,7 +780,7 @@ class HfaceBackend(BaseBackend):
         )
 
         # keep last response
-        self._response = response
+        self._response: LowLevelResponse = response
 
         # save the quic ticket for session resumption
         if self._svn == HttpVersion.h3 and hasattr(self._protocol, "session_ticket"):
@@ -827,6 +830,10 @@ class HfaceBackend(BaseBackend):
                     is True
                 ):
                     self._protocol.bytes_received(self.sock.recv(self.blocksize))
+
+                    # this is a bad sign. we should stop sending and instead retrieve the response.
+                    if self._protocol.has_pending_event():
+                        raise EarlyResponse()
 
                 if self.__remaining_body_length:
                     self.__remaining_body_length -= len(data)

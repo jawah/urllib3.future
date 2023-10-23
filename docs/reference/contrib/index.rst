@@ -6,6 +6,4 @@ prime time or that require optional third-party dependencies.
 
 .. toctree::
 
-   pyopenssl
-   securetransport
    socks

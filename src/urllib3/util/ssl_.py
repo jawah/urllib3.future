@@ -75,14 +75,9 @@ def _is_has_never_check_common_name_reliable(
 if typing.TYPE_CHECKING:
     from ssl import VerifyMode
 
-    from typing_extensions import Literal, TypedDict
+    from typing_extensions import Literal
 
     from .ssltransport import SSLTransport as SSLTransportType
-
-    class _TYPE_PEER_CERT_RET_DICT(TypedDict, total=False):
-        subjectAltName: tuple[tuple[str, str], ...]
-        subject: tuple[tuple[tuple[str, str], ...], ...]
-        serialNumber: str
 
 
 # Mapping from 'ssl.PROTOCOL_TLSX' to 'TLSVersion.X'
@@ -135,9 +130,6 @@ except ImportError:
     OP_NO_SSLv3 = 0x2000000  # type: ignore[assignment]
     PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
     PROTOCOL_TLS_CLIENT = 16  # type: ignore[assignment]
-
-
-_TYPE_PEER_CERT_RET = typing.Union["_TYPE_PEER_CERT_RET_DICT", bytes, None]
 
 
 def assert_fingerprint(cert: bytes | None, fingerprint: str) -> None:

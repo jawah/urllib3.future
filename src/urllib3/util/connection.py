@@ -4,20 +4,14 @@ import socket
 import typing
 
 from ..exceptions import LocationParseError
-from .timeout import _DEFAULT_TIMEOUT, _TYPE_TIMEOUT
-
-_TYPE_SOCKET_OPTIONS = typing.Sequence[
-    typing.Union[
-        typing.Tuple[int, int, typing.Union[int, bytes]],
-        typing.Tuple[int, int, typing.Union[int, bytes], str],
-    ]
-]
+from .timeout import _DEFAULT_TIMEOUT
 
 if typing.TYPE_CHECKING:
-    from .._base_connection import BaseHTTPConnection
+    from .._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
+    from ..connection import HTTPConnection
 
 
-def is_connection_dropped(conn: BaseHTTPConnection) -> bool:  # Platform-specific
+def is_connection_dropped(conn: HTTPConnection) -> bool:  # Platform-specific
     """
     Returns True if the connection is dropped and should be closed.
     :param conn: :class:`urllib3.connection.HTTPConnection` object.
@@ -31,7 +25,7 @@ def is_connection_dropped(conn: BaseHTTPConnection) -> bool:  # Platform-specifi
 # discovered in DNS if the system doesn't have IPv6 functionality.
 def create_connection(
     address: tuple[str, int],
-    timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
+    timeout: _TYPE_TIMEOUT_INTERNAL = _DEFAULT_TIMEOUT,
     source_address: tuple[str, int] | None = None,
     socket_options: _TYPE_SOCKET_OPTIONS | None = None,
     socket_kind: socket.SocketKind = socket.SOCK_STREAM,
@@ -124,7 +118,7 @@ def allowed_gai_family() -> socket.AddressFamily:
     return family
 
 
-def _has_ipv6(host: str) -> bool:
+def _has_ipv6() -> bool:
     """Returns True if the system can bind an IPv6 address."""
     sock = None
     has_ipv6 = False
@@ -137,7 +131,7 @@ def _has_ipv6(host: str) -> bool:
         # https://bugs.python.org/issue658327
         try:
             sock = socket.socket(socket.AF_INET6)
-            sock.bind((host, 0))
+            sock.bind(("::1", 0))
             has_ipv6 = True
         except Exception:
             pass
@@ -147,4 +141,4 @@ def _has_ipv6(host: str) -> bool:
     return has_ipv6
 
 
-HAS_IPV6 = _has_ipv6("::1")
+HAS_IPV6 = _has_ipv6()

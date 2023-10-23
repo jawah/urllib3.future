@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import socket
 import typing
 from http.client import ResponseNotReady
@@ -9,7 +8,6 @@ from unittest import mock
 import pytest
 
 from urllib3.connection import (  # type: ignore[attr-defined]
-    RECENT_DATE,
     CertificateError,
     HTTPConnection,
     HTTPSConnection,
@@ -25,7 +23,7 @@ from urllib3.util.ssl_match_hostname import (
 from urllib3.util.ssl_match_hostname import _dnsname_match, match_hostname
 
 if typing.TYPE_CHECKING:
-    from urllib3.util.ssl_ import _TYPE_PEER_CERT_RET_DICT
+    from urllib3._typing import _TYPE_PEER_CERT_RET_DICT
 
 
 class TestConnection:
@@ -196,14 +194,6 @@ class TestConnection:
         asserted_hostname = "[1:2::2:1]"
         # Assert no error is raised
         _match_hostname(cert, asserted_hostname)
-
-    def test_recent_date(self) -> None:
-        # This test is to make sure that the RECENT_DATE value
-        # doesn't get too far behind what the current date is.
-        # When this test fails update urllib3.connection.RECENT_DATE
-        # according to the rules defined in that file.
-        two_years = datetime.timedelta(days=365 * 2)
-        assert RECENT_DATE > (datetime.datetime.today() - two_years).date()
 
     def test_HTTPSConnection_default_socket_options(self) -> None:
         conn = HTTPSConnection("not.a.real.host", port=443)

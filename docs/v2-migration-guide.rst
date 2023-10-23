@@ -43,7 +43,6 @@ What are the important changes?
 Here's a short summary of which changes in urllib3 v2.0 are most important:
 
 - Python version must be **3.7 or later** (previously supported Python 2.7, 3.5, and 3.6).
-- Removed support for non-OpenSSL TLS libraries (like LibreSSL and wolfSSL).
 - Removed support for OpenSSL versions older than 1.1.1.
 - Removed support for Python implementations that aren't CPython or PyPy3 (previously supported Google App Engine, Jython).
 - Removed the ``urllib3.contrib.ntlmpool`` module.
@@ -166,19 +165,6 @@ which you can do to test your application.
 It's important to know that even if you don't upgrade all of your services to 2.x
 immediately you will `receive security fixes on the 1.26.x release stream <#security-fixes-for-urllib3-v1-26-x>` for some time.
 
-
-Security fixes for urllib3 v1.26.x
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Thanks to support from `Tidelift <https://tidelift.com/subscription/pkg/pypi-urllib3>`_
-we're able to continue supporting the v1.26.x release stream with
-security fixes for the foreseeable future 💖
-
-However, upgrading is still recommended as **no new feature developments or non-critical
-bug fixes will be shipped to the 1.26.x release stream**.
-
-If your organization relies on urllib3 and is interested in continuing support you can learn
-more about the `Tidelift Subscription for Enterprise <https://tidelift.com/subscription/pkg/pypi-urllib3?utm_source=pypi-urllib3&utm_medium=referral&utm_campaign=docs>`_.
 
 **🤔 Common upgrading issues**
 -------------------------------
@@ -340,11 +326,6 @@ You're finally able to run Mypy or other type-checkers
 on code using urllib3. This also means that for IDEs
 that support type hints you'll receive better suggestions
 from auto-complete. No more confusion with ``**kwargs``!
-
-We've also added API interfaces like ``BaseHTTPResponse``
-and ``BaseHTTPConnection`` to ensure that when you're sub-classing
-an interface you're only using supported public APIs to ensure
-compatibility and minimize breakages down the road.
 
 .. note::
 

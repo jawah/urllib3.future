@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import pytest
 
 from urllib3 import add_stderr_logger, disable_warnings
-from urllib3.connection import ProxyConfig
+from urllib3._typing import ProxyConfig
 from urllib3.exceptions import (
     InsecureRequestWarning,
     LocationParseError,
@@ -777,21 +777,21 @@ class TestUtil:
 
     def test_has_ipv6_disabled_on_compile(self) -> None:
         with patch("socket.has_ipv6", False):
-            assert not _has_ipv6("::1")
+            assert not _has_ipv6()
 
     def test_has_ipv6_enabled_but_fails(self) -> None:
         with patch("socket.has_ipv6", True):
             with patch("socket.socket") as mock:
                 instance = mock.return_value
                 instance.bind = Mock(side_effect=Exception("No IPv6 here!"))
-                assert not _has_ipv6("::1")
+                assert not _has_ipv6()
 
     def test_has_ipv6_enabled_and_working(self) -> None:
         with patch("socket.has_ipv6", True):
             with patch("socket.socket") as mock:
                 instance = mock.return_value
                 instance.bind.return_value = True
-                assert _has_ipv6("::1")
+                assert _has_ipv6()
 
     def test_ip_family_ipv6_enabled(self) -> None:
         with patch("urllib3.util.connection.HAS_IPV6", True):

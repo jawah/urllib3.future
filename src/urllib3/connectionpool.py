@@ -10,9 +10,9 @@ import weakref
 from socket import timeout as SocketTimeout
 from types import TracebackType
 
-from ._base_connection import _TYPE_BODY
 from ._collections import HTTPHeaderDict
 from ._request_methods import RequestMethods
+from ._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
 from .backend import ConnectionInfo
 from .connection import (
     BaseSSLError,
@@ -21,7 +21,6 @@ from .connection import (
     HTTPConnection,
     HTTPException,
     HTTPSConnection,
-    ProxyConfig,
     _wrap_proxy_error,
 )
 from .connection import port_by_scheme as port_by_scheme
@@ -43,14 +42,10 @@ from .exceptions import (
 from .response import BaseHTTPResponse
 from .util.connection import is_connection_dropped
 from .util.proxy import connection_requires_http_tunnel
-from .util.request import (
-    _TYPE_BODY_POSITION,
-    NOT_FORWARDABLE_HEADERS,
-    set_file_position,
-)
+from .util.request import NOT_FORWARDABLE_HEADERS, set_file_position
 from .util.retry import Retry
 from .util.ssl_match_hostname import CertificateError
-from .util.timeout import _DEFAULT_TIMEOUT, _TYPE_DEFAULT, Timeout
+from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.url import Url, _encode_target
 from .util.url import _normalize_host as normalize_host
 from .util.url import parse_url
@@ -61,11 +56,7 @@ if typing.TYPE_CHECKING:
 
     from typing_extensions import Literal
 
-    from ._base_connection import BaseHTTPConnection, BaseHTTPSConnection
-
 log = logging.getLogger(__name__)
-
-_TYPE_TIMEOUT = typing.Union[Timeout, float, _TYPE_DEFAULT, None]
 
 _SelfT = typing.TypeVar("_SelfT")
 
@@ -177,9 +168,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
     """
 
     scheme = "http"
-    ConnectionCls: (
-        type[BaseHTTPConnection] | type[BaseHTTPSConnection]
-    ) = HTTPConnection
+    ConnectionCls: (type[HTTPConnection] | type[HTTPSConnection]) = HTTPConnection
 
     def __init__(
         self,
@@ -242,7 +231,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # HTTPConnectionPool object is garbage collected.
         weakref.finalize(self, _close_pool_connections, pool)
 
-    def _new_conn(self) -> BaseHTTPConnection:
+    def _new_conn(self) -> HTTPConnection:
         """
         Return a fresh :class:`HTTPConnection`.
         """
@@ -262,7 +251,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         )
         return conn
 
-    def _get_conn(self, timeout: float | None = None) -> BaseHTTPConnection:
+    def _get_conn(self, timeout: float | None = None) -> HTTPConnection:
         """
         Get a connection. Will return a pooled connection if one is available.
 
@@ -300,7 +289,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         return conn or self._new_conn()
 
-    def _put_conn(self, conn: BaseHTTPConnection | None) -> None:
+    def _put_conn(self, conn: HTTPConnection | None) -> None:
         """
         Put a connection back into the pool.
 
@@ -343,14 +332,14 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if conn:
             conn.close()
 
-    def _validate_conn(self, conn: BaseHTTPConnection) -> None:
+    def _validate_conn(self, conn: HTTPConnection) -> None:
         """
         Called right before a request is made, after the socket is created.
         """
         if conn.is_closed:
             conn.connect()
 
-    def _prepare_proxy(self, conn: BaseHTTPConnection) -> None:
+    def _prepare_proxy(self, conn: HTTPConnection) -> None:
         # Nothing to do for HTTP connections.
         pass
 
@@ -387,7 +376,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
     def _make_request(
         self,
-        conn: BaseHTTPConnection,
+        conn: HTTPConnection,
         method: str,
         url: str,
         body: _TYPE_BODY | None = None,
@@ -395,7 +384,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         retries: Retry | None = None,
         timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
         chunked: bool = False,
-        response_conn: BaseHTTPConnection | None = None,
+        response_conn: HTTPConnection | None = None,
         preload_content: bool = True,
         decode_content: bool = True,
         enforce_content_length: bool = True,
@@ -552,8 +541,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         # Set properties that are used by the pooling layer.
         response.retries = retries
-        response._connection = response_conn  # type: ignore[attr-defined]
-        response._pool = self  # type: ignore[attr-defined]
+        response._connection = response_conn
+        response._pool = self
 
         log.debug(
             '%s://%s:%s "%s %s %s" %s %s',
@@ -563,9 +552,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             method,
             url,
             # HTTP version
-            conn._http_vsn_str,  # type: ignore[attr-defined]
+            conn._http_vsn_str,
             response.status,
-            response.length_remaining,  # type: ignore[attr-defined]
+            response.length_remaining,
         )
 
         return response
@@ -993,7 +982,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
     """
 
     scheme = "https"
-    ConnectionCls: type[BaseHTTPSConnection] = HTTPSConnection
+    ConnectionCls: type[HTTPSConnection] = HTTPSConnection
 
     def __init__(
         self,
@@ -1061,7 +1050,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         )
         conn.connect()
 
-    def _new_conn(self) -> BaseHTTPSConnection:
+    def _new_conn(self) -> HTTPSConnection:
         """
         Return a fresh :class:`urllib3.connection.HTTPConnection`.
         """
@@ -1103,7 +1092,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             **self.conn_kw,
         )
 
-    def _validate_conn(self, conn: BaseHTTPConnection) -> None:
+    def _validate_conn(self, conn: HTTPConnection) -> None:
         """
         Called right before a request is made, after the socket is created.
         """

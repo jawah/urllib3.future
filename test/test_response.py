@@ -24,7 +24,6 @@ from urllib3.exceptions import (
     SSLError,
 )
 from urllib3.response import (  # type: ignore[attr-defined]
-    BaseHTTPResponse,
     BytesQueueBuffer,
     HTTPResponse,
     brotli,
@@ -415,24 +414,6 @@ class TestResponse:
         resp = HTTPResponse(b"foo")
         assert resp.data == b"foo"
         assert resp.closed
-
-    def test_base_io(self) -> None:
-        resp = BaseHTTPResponse(
-            status=200,
-            version=11,
-            reason=None,
-            decode_content=False,
-            request_url=None,
-        )
-
-        assert not resp.closed
-        assert not resp.readable()
-        assert not resp.writable()
-
-        with pytest.raises(NotImplementedError):
-            resp.read()
-        with pytest.raises(NotImplementedError):
-            resp.close()
 
     def test_io(self, sock: socket.socket) -> None:
         fp = BytesIO(b"foo")
