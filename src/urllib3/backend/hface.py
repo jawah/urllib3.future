@@ -3,7 +3,6 @@ from __future__ import annotations
 import socket
 import sys
 import typing
-from http.client import ResponseNotReady, responses
 from socket import SOCK_DGRAM, SOCK_STREAM
 
 try:  # Compiled with SSL?
@@ -15,6 +14,7 @@ except (ImportError, AttributeError):
     SSLTransport = None  # type: ignore
 
 from .._collections import HTTPHeaderDict
+from .._constant import DEFAULT_BLOCKSIZE, responses
 from ..contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -32,7 +32,13 @@ from ..contrib.hface.events import (
     HeadersReceived,
     StreamResetReceived,
 )
-from ..exceptions import EarlyResponse, InvalidHeader, ProtocolError, SSLError
+from ..exceptions import (
+    EarlyResponse,
+    InvalidHeader,
+    ProtocolError,
+    ResponseNotReady,
+    SSLError,
+)
 from ..util import parse_alt_svc
 from ._base import (
     BaseBackend,
@@ -40,6 +46,7 @@ from ._base import (
     HttpVersion,
     LowLevelResponse,
     QuicPreemptiveCacheType,
+    ResponsePromise,
 )
 
 if typing.TYPE_CHECKING:
@@ -58,10 +65,10 @@ class HfaceBackend(BaseBackend):
         port: int | None = None,
         timeout: int | float | None = -1,
         source_address: tuple[str, int] | None = None,
-        blocksize: int = 8192,
+        blocksize: int = DEFAULT_BLOCKSIZE,
         *,
-        socket_options: None
-        | _TYPE_SOCKET_OPTIONS = BaseBackend.default_socket_options,
+        socket_options: _TYPE_SOCKET_OPTIONS
+        | None = BaseBackend.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):
@@ -91,6 +98,16 @@ class HfaceBackend(BaseBackend):
         self.__custom_tls_settings: QuicTLSConfig | None = None
         self.__alt_authority: tuple[str, int] | None = None
         self.__session_ticket: typing.Any | None = None
+
+    @property
+    def is_saturated(self) -> bool:
+        if self._protocol is None:
+            return True
+        return self._protocol.is_available() is False
+
+    @property
+    def is_multiplexed(self) -> bool:
+        return self._protocol is not None and self._protocol.multiplexed
 
     def _new_conn(self) -> socket.socket | None:
         # handle if set up, quic cache capability. thus avoiding first TCP request prior to upgrade.
@@ -164,9 +181,9 @@ class HfaceBackend(BaseBackend):
         ca_cert_data: None | str | bytes = None,
         ssl_minimum_version: int | None = None,
         ssl_maximum_version: int | None = None,
-        cert_file: str | None = None,
-        key_file: str | None = None,
-        key_password: str | None = None,
+        cert_file: str | bytes | None = None,
+        key_file: str | bytes | None = None,
+        key_password: str | bytes | None = None,
         cert_fingerprint: str | None = None,
         assert_hostname: None | str | typing.Literal[False] = None,
     ) -> None:
@@ -336,19 +353,19 @@ class HfaceBackend(BaseBackend):
         )
 
         if isinstance(self._protocol, HTTPOverQUICProtocol):
-            self.conn_info.certificate_der = self._protocol.getpeercert(  # type: ignore[assignment]
+            self.conn_info.certificate_der = self._protocol.getpeercert(
                 binary_form=True
             )
-            self.conn_info.certificate_dict = self._protocol.getpeercert(  # type: ignore[assignment]
+            self.conn_info.certificate_dict = self._protocol.getpeercert(
                 binary_form=False
             )
             self.conn_info.destination_address = self.sock.getpeername()[:2]
             self.conn_info.cipher = self._protocol.cipher()
             self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
-            self.conn_info.issuer_certificate_dict = self._protocol.getissuercert(  # type: ignore[assignment]
+            self.conn_info.issuer_certificate_dict = self._protocol.getissuercert(
                 binary_form=False
             )
-            self.conn_info.issuer_certificate_der = self._protocol.getissuercert(  # type: ignore[assignment]
+            self.conn_info.issuer_certificate_der = self._protocol.getissuercert(
                 binary_form=True
             )
 
@@ -361,7 +378,7 @@ class HfaceBackend(BaseBackend):
     ) -> None:
         if self.sock:
             # overly protective, checks are made higher, this is unreachable.
-            raise RuntimeError(  # Defensive: mimic HttpConnection from http.client
+            raise RuntimeError(  # Defensive: highly controlled, should be unreachable.
                 "Can't set up tunnel for established connection"
             )
 
@@ -428,7 +445,9 @@ class HfaceBackend(BaseBackend):
 
         if not tunnel_accepted:
             self.close()
-            message: str = responses[status] if status in responses else "UNKNOWN"
+            message: str = (
+                responses[status] if status and status in responses else "Unknown"
+            )
             raise OSError(f"Tunnel connection failed: {status} {message}")
 
         # We will re-initialize those afterward
@@ -446,6 +465,7 @@ class HfaceBackend(BaseBackend):
         respect_end_stream_signal: bool = True,
         maximal_data_in_read: int | None = None,
         data_in_len_from: typing.Callable[[Event], int] | None = None,
+        stream_id: int | None = None,
     ) -> list[Event]:
         """This method simplify socket exchange in/out based on what the protocol state machine orders.
         Can be used for the initial handshake for instance."""
@@ -461,6 +481,7 @@ class HfaceBackend(BaseBackend):
         data_in_len: int = 0
 
         events: list[Event] = []
+        reshelve_events: list[Event] = []
 
         if maximal_data_in_read == 0:
             # The '0' case amt is handled higher in the stack.
@@ -517,6 +538,11 @@ class HfaceBackend(BaseBackend):
                         self.sock.sendall(data_out)
 
             for event in iter(self._protocol.next_event, None):  # type: Event
+                if stream_id is not None and hasattr(event, "stream_id"):
+                    if event.stream_id != stream_id:
+                        reshelve_events.append(event)
+                        continue
+
                 if isinstance(event, ConnectionTerminated):
                     if (
                         event.error_code == 400
@@ -561,9 +587,13 @@ class HfaceBackend(BaseBackend):
                         and hasattr(event, "end_stream")
                     ):
                         if event.end_stream is True:
+                            if reshelve_events:
+                                self._protocol.reshelve(*reshelve_events)
                             return events
                         continue
 
+                    if reshelve_events:
+                        self._protocol.reshelve(*reshelve_events)
                     return events
 
     def putrequest(
@@ -628,7 +658,7 @@ class HfaceBackend(BaseBackend):
         *,
         encode_chunked: bool = False,
         expect_body_afterward: bool = False,
-    ) -> None:
+    ) -> ResponsePromise | None:
         if self.sock is None:
             self.connect()  # type: ignore[attr-defined]
 
@@ -666,7 +696,7 @@ class HfaceBackend(BaseBackend):
         if any(k == b":authority" for k, v in self.__headers) is False:
             raise ProtocolError(
                 (
-                    "HfaceBackend do not support emitting HTTP requests without the `Host` header",
+                    "urllib3.future do not support emitting HTTP requests without the `Host` header",
                     "It was only permitted in HTTP/1.0 and prior. This implementation ship with HTTP/1.1+.",
                 )
             )
@@ -698,7 +728,16 @@ class HfaceBackend(BaseBackend):
 
         self.sock.sendall(self._protocol.bytes_to_send())
 
-    def __read_st(self, __amt: int | None = None) -> tuple[bytes, bool]:
+        if should_end_stream:
+            rp = ResponsePromise(self, self._stream_id, self.__headers)
+            self._promises.append(rp)
+            return rp
+
+        return None
+
+    def __read_st(
+        self, __amt: int | None = None, __stream_id: int | None = None
+    ) -> tuple[bytes, bool]:
         """Allows us to defer the body loading after constructing the response object."""
         eot = False
 
@@ -711,24 +750,33 @@ class HfaceBackend(BaseBackend):
             data_in_len_from=lambda x: len(x.data)
             if isinstance(x, DataReceived)
             else 0,
+            stream_id=__stream_id,
         )
 
         if events and events[-1].end_stream:
             eot = True
-            # probe for h3/quic if available, and remember it.
-            self._upgrade()
+            if not self._promises:
+                # probe for h3/quic if available, and remember it.
+                self._upgrade()
 
             # remote can refuse future inquiries, so no need to go further with this conn.
             if self._protocol and self._protocol.has_expired():
                 self.close()
 
         return (
-            b"".join(e.data if isinstance(e, DataReceived) else b"" for e in events),
+            b"".join(e.data for e in events if isinstance(e, DataReceived)),
             eot,
         )
 
-    def getresponse(self) -> LowLevelResponse:
-        if self.sock is None or self._protocol is None or self._svn is None:
+    def getresponse(
+        self, *, promise: ResponsePromise | None = None
+    ) -> LowLevelResponse:
+        if (
+            self.sock is None
+            or self._protocol is None
+            or self._svn is None
+            or not self._promises
+        ):
             raise ResponseNotReady()  # Defensive: Comply with http.client, actually tested but not reported?
 
         headers = HTTPHeaderDict()
@@ -739,26 +787,36 @@ class HfaceBackend(BaseBackend):
             receive_first=True,
             event_type_collectable=(HeadersReceived,),
             respect_end_stream_signal=False,
+            stream_id=promise.stream_id if promise else None,
         )
 
         for event in events:
-            if isinstance(event, HeadersReceived):
-                for raw_header, raw_value in event.headers:
-                    header: str = raw_header.decode("ascii")
-                    value: str = raw_value.decode("iso-8859-1")
+            for raw_header, raw_value in event.headers:
+                header: str = raw_header.decode("ascii")
+                value: str = raw_value.decode("iso-8859-1")
 
-                    # special headers that represent (usually) the HTTP response status, version and reason.
-                    if header.startswith(":"):
-                        if header == ":status" and value.isdigit():
-                            status = int(value)
-                            continue
-                        # this should be unreachable.
-                        # it is designed to detect eventual changes lower in the stack.
-                        raise ProtocolError(
-                            f"Unhandled special header '{header}'"
-                        )  # Defensive:
+                # special headers that represent (usually) the HTTP response status, version and reason.
+                if header.startswith(":"):
+                    if header == ":status" and value.isdigit():
+                        status = int(value)
+                        continue
+                    # this should be unreachable.
+                    # it is designed to detect eventual changes lower in the stack.
+                    raise ProtocolError(  # Defensive:
+                        f"Unhandled special header '{header}'"
+                    )
 
-                    headers.add(header, value)
+                headers.add(header, value)
+
+        if promise is None:
+            for p in self._promises:
+                if p.stream_id == events[-1].stream_id:
+                    promise = p
+                    break
+            if promise is None:
+                raise ProtocolError(
+                    f"Response received (stream: {events[-1].stream_id}) but no promise in-flight"
+                )
 
         # this should be unreachable
         if status is None:
@@ -769,15 +827,22 @@ class HfaceBackend(BaseBackend):
         eot = events[-1].end_stream is True
 
         response = LowLevelResponse(
-            dict(self.__headers)[b":method"].decode("ascii"),
+            dict(promise.request_headers)[b":method"].decode("ascii"),
             status,
             self._http_vsn,
-            responses[status] if status in responses else "UNKNOWN",
+            responses[status] if status in responses else "Unknown",
             headers,
             self.__read_st if not eot else None,
             authority=self.host,
             port=self.port,
+            stream_id=promise.stream_id,
         )
+
+        promise.response = response
+        response.from_promise = promise
+
+        # we delivered a response, we can safely remove the promise from queue.
+        self._promises.remove(promise)
 
         # keep last response
         self._response: LowLevelResponse = response
@@ -787,7 +852,8 @@ class HfaceBackend(BaseBackend):
             self.__session_ticket = self._protocol.session_ticket
 
         if eot:
-            self._upgrade()
+            if not self._promises:
+                self._upgrade()
 
             # remote can refuse future inquiries, so no need to go further with this conn.
             if self._protocol and self._protocol.has_expired():
@@ -800,7 +866,7 @@ class HfaceBackend(BaseBackend):
         data: (bytes | typing.IO[typing.Any] | typing.Iterable[bytes] | str),
         *,
         eot: bool = False,
-    ) -> None:
+    ) -> ResponsePromise | None:
         """We might be receiving a chunk constructed downstream"""
         if self.sock is None or self._stream_id is None or self._protocol is None:
             # this is unreachable in normal condition as urllib3
@@ -832,8 +898,11 @@ class HfaceBackend(BaseBackend):
                     self._protocol.bytes_received(self.sock.recv(self.blocksize))
 
                     # this is a bad sign. we should stop sending and instead retrieve the response.
-                    if self._protocol.has_pending_event():
-                        raise EarlyResponse()
+                    if self._protocol.has_pending_event(stream_id=self._stream_id):
+                        rp = ResponsePromise(self, self._stream_id, self.__headers)
+                        self._promises.append(rp)
+
+                        raise EarlyResponse(promise=rp)
 
                 if self.__remaining_body_length:
                     self.__remaining_body_length -= len(data)
@@ -853,6 +922,8 @@ class HfaceBackend(BaseBackend):
             if _HAS_SYS_AUDIT:
                 sys.audit("http.client.send", self, data)
 
+            remote_pipe_shutdown: BrokenPipeError | None = None
+
             # some protocols may impose regulated frame size
             # so expect multiple frame per send()
             while True:
@@ -861,12 +932,25 @@ class HfaceBackend(BaseBackend):
                 if not data_out:
                     break
 
-                self.sock.sendall(data_out)
+                try:
+                    self.sock.sendall(data_out)
+                except BrokenPipeError as e:
+                    remote_pipe_shutdown = e
+
+            if eot or remote_pipe_shutdown:
+                rp = ResponsePromise(self, self._stream_id, self.__headers)
+                self._promises.append(rp)
+                if remote_pipe_shutdown:
+                    remote_pipe_shutdown.promise = rp  # type: ignore[attr-defined]
+                    raise remote_pipe_shutdown
+                return rp
 
         except self._protocol.exceptions() as e:
             raise ProtocolError(  # Defensive: In the unlikely event that exception may leak from below
                 e
             ) from e
+
+        return None
 
     def close(self) -> None:
         if self.sock:

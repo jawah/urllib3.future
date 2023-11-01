@@ -14,27 +14,7 @@ So unless you're in a specific situation you should notice no changes! 🎉
 .. note::
 
   If you have difficulty migrating to v2.0 or following this guide
-  you can `open an issue on GitHub <https://github.com/urllib3/urllib3/issues>`_
-  or reach out in `our community Discord channel <https://discord.gg/urllib3>`_.
-
-
-Timeline for deprecations and breaking changes
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The 2.x initial release schedule will look like this:
-
-* urllib3 ``v2.0.0-alpha1`` will be released in November 2022. This release
-  contains **minor breaking changes and deprecation warnings for other breaking changes**.
-  There may be other pre-releases to address fixes before v2.0.0 is released.
-* urllib3 ``v2.0.0`` will be released in early 2023 after some initial integration testing
-  against dependent packages and fixing of bug reports.
-* urllib3 ``v2.1.0`` will be released in the summer of 2023 with **all breaking changes
-  being warned about in v2.0.0**.
-
-.. warning::
-
-  Please take the ``DeprecationWarnings`` you receive when migrating from v1.x to v2.0 seriously
-  as they will become errors after 2.1.0 is released.
+  you can `open an issue on GitHub <https://github.com/jawah/urllib3.future/issues>`_.
 
 
 What are the important changes?
@@ -46,16 +26,17 @@ Here's a short summary of which changes in urllib3 v2.0 are most important:
 - Removed support for OpenSSL versions older than 1.1.1.
 - Removed support for Python implementations that aren't CPython or PyPy3 (previously supported Google App Engine, Jython).
 - Removed the ``urllib3.contrib.ntlmpool`` module.
-- Deprecated the ``urllib3.contrib.pyopenssl``, ``urllib3.contrib.securetransport`` modules, will be removed in v2.1.0.
-- Deprecated the ``urllib3[secure]`` extra, will be removed in v2.1.0.
+- Deprecated the ``urllib3.contrib.pyopenssl`` module, made inoperant in v2.1.0.
+- Deprecated the ``urllib3.contrib.securetransport`` module, will be removed in v2.1.0.
+- Deprecated the ``urllib3[secure]`` extra, made inoperant in v2.1.0.
 - Deprecated the ``HTTPResponse.getheaders()`` method in favor of ``HTTPResponse.headers``, will be removed in v2.1.0.
 - Deprecated the ``HTTPResponse.getheader(name, default)`` method in favor of ``HTTPResponse.headers.get(name, default)``, will be removed in v2.1.0.
 - Deprecated URLs without a scheme (ie 'https://') and will be raising an error in a future version of urllib3.
 - Changed the default minimum TLS version to TLS 1.2 (previously was TLS 1.0).
 - Removed support for verifying certificate hostnames via ``commonName``, now only ``subjectAltName`` is used.
-- Removed the default set of TLS ciphers, instead now urllib3 uses the list of ciphers configured by the system.
+- Removed the default set of TLS ciphers, instead now urllib3 uses the list of ciphers recommended by Mozilla.
 
-For a full list of changes you can look at `the changelog <https://github.com/urllib3/urllib3/blob/main/CHANGES.rst>`_.
+For a full list of changes you can look at `the changelog <https://github.com/jawah/urllib3.future/blob/main/CHANGES.rst>`_.
 
 
 Migrating as a package maintainer?
@@ -76,20 +57,20 @@ ensure your package allows for both urllib3 1.26.x and 2.0 to be used:
   # setup.py (setuptools)
   setup(
     ...
-    install_requires=["urllib3>=1.26,<3"]
+    install_requires=["urllib3.future>=2,<3"]
   )
 
   # pyproject.toml (hatch)
   [project]
   dependencies = [
-    "urllib3>=1.26,<3"
+    "urllib3.future>=2,<3"
   ]
 
-Next you should try installing urllib3 v2.0 locally and run your test suite.
+Next you should try installing urllib3.future locally and run your test suite.
 
 .. code-block:: bash
 
-  $ python -m pip install -U --pre 'urllib3>=2.0.0a1'
+  $ python -m pip install -U urllib3.future
 
 
 Because there are many ``DeprecationWarnings`` you should ensure that you're
@@ -130,9 +111,8 @@ that supports both urllib3 v1.26.x and v2.x.
 
 .. note::
 
-  If you're not able to support both 1.26.x and v2.0 of urllib3 at the same time with your package please
-  `open an issue on GitHub <https://github.com/urllib3/urllib3/issues>`_ or reach out in
-  `our community Discord channel <https://discord.gg/urllib3>`_.
+  If you're not able to support urllib3.future with your package please
+  `open an issue on GitHub <https://github.com/jawah/urllib3.future/issues>`_.
 
 
 Migrating as an application developer?
@@ -331,7 +311,7 @@ from auto-complete. No more confusion with ``**kwargs``!
 
   If you're one of the rare few who is subclassing connections
   or responses you should take a closer look at detailed changes
-  in `the changelog <https://github.com/urllib3/urllib3/blob/main/CHANGES.rst>`_.
+  in `the changelog <https://github.com/jawah/urllib3.future/blob/main/CHANGES.rst>`_.
 
 
 **🔐 Modern security by default**

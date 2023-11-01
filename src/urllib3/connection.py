@@ -5,8 +5,6 @@ import os
 import re
 import socket
 import typing
-from http.client import HTTPException as HTTPException  # noqa: F401
-from http.client import ResponseNotReady
 from socket import timeout as SocketTimeout
 
 if typing.TYPE_CHECKING:
@@ -22,7 +20,7 @@ if typing.TYPE_CHECKING:
         ProxyConfig,
     )
 
-from ._collections import HTTPHeaderDict
+from ._constant import DEFAULT_BLOCKSIZE
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
 from .util.wait import wait_for_read
@@ -39,19 +37,21 @@ except (ImportError, AttributeError):
 
 
 from ._version import __version__
-from .backend import HfaceBackend, HttpVersion, QuicPreemptiveCacheType
+from .backend import HfaceBackend, HttpVersion, QuicPreemptiveCacheType, ResponsePromise
+from .exceptions import ConnectTimeoutError, EarlyResponse
+from .exceptions import HTTPError as HTTPException  # noqa
 from .exceptions import (
-    ConnectTimeoutError,
-    EarlyResponse,
     NameResolutionError,
     NewConnectionError,
     ProxyError,
+    ResponseNotReady,
 )
 from .util import SKIP_HEADER, SKIPPABLE_HEADERS, connection, ssl_
 from .util.request import body_to_chunks
 from .util.ssl_ import assert_fingerprint as _assert_fingerprint
 from .util.ssl_ import (
     create_urllib3_context,
+    is_capable_for_quic,
     is_ipaddress,
     resolve_cert_reqs,
     resolve_ssl_version,
@@ -127,9 +127,9 @@ class HTTPConnection(HfaceBackend):
         *,
         timeout: _TYPE_TIMEOUT_INTERNAL = _DEFAULT_TIMEOUT,
         source_address: tuple[str, int] | None = None,
-        blocksize: int = 8192,
-        socket_options: None
-        | _TYPE_SOCKET_OPTIONS = HfaceBackend.default_socket_options,
+        blocksize: int = DEFAULT_BLOCKSIZE,
+        socket_options: _TYPE_SOCKET_OPTIONS
+        | None = HfaceBackend.default_socket_options,
         proxy: Url | None = None,
         proxy_config: ProxyConfig | None = None,
         disabled_svn: set[HttpVersion] | None = None,
@@ -149,7 +149,6 @@ class HTTPConnection(HfaceBackend):
         self.proxy_config = proxy_config
 
         self._has_connected_to_proxy = False
-        self._response_options = None
 
     @property
     def host(self) -> str:
@@ -248,6 +247,9 @@ class HTTPConnection(HfaceBackend):
     def is_connected(self) -> bool:
         if self.sock is None:
             return False
+        # wait_for_read become flaky with concurrent streams!
+        if self._promises:
+            return True
         return not wait_for_read(self.sock, timeout=0.0)
 
     @property
@@ -301,8 +303,6 @@ class HTTPConnection(HfaceBackend):
                 f"urllib3.util.SKIP_HEADER only supports '{skippable_headers}'"
             )
 
-    # `request` method's signature intentionally violates LSP.
-    # urllib3's API is different from `http.client.HTTPConnection` and the subclassing is only incidental.
     def request(
         self,
         method: str,
@@ -314,7 +314,7 @@ class HTTPConnection(HfaceBackend):
         preload_content: bool = True,
         decode_content: bool = True,
         enforce_content_length: bool = True,
-    ) -> None:
+    ) -> ResponsePromise:
         # Update the inner socket's timeout value to send the request.
         # This only triggers if the connection is re-used.
         if self.sock is not None:
@@ -328,7 +328,7 @@ class HTTPConnection(HfaceBackend):
         # because sometimes we can still salvage a response
         # off the wire even if we aren't able to completely
         # send the request body.
-        self._response_options = _ResponseOptions(
+        response_options = _ResponseOptions(
             request_method=method,
             request_url=url,
             preload_content=preload_content,
@@ -390,7 +390,12 @@ class HTTPConnection(HfaceBackend):
             if overrule_content_length and header.lower() == "content-length":
                 value = str(content_length)
             self.putheader(header, value)
-        self.endheaders(expect_body_afterward=chunks is not None)
+
+        rp = self.endheaders(expect_body_afterward=chunks is not None)
+
+        if rp:
+            rp.set_parameter("response_options", response_options)
+            return rp
 
         try:
             # If we're given a body we start sending that in chunks.
@@ -403,12 +408,21 @@ class HTTPConnection(HfaceBackend):
                     if isinstance(chunk, str):
                         chunk = chunk.encode("utf-8")
                     self.send(chunk)
-                self.send(b"", eot=True)
-        except EarlyResponse:
-            pass
+                rp = self.send(b"", eot=True)
+        except EarlyResponse as e:
+            rp = e.promise
+        except BrokenPipeError as e:
+            rp = e.promise  # type: ignore[attr-defined]
+            assert rp is not None
+            rp.set_parameter("response_options", response_options)
+            raise e
+
+        assert rp is not None
+        rp.set_parameter("response_options", response_options)
+        return rp
 
     def getresponse(  # type: ignore[override]
-        self,
+        self, *, promise: ResponsePromise | None = None
     ) -> HTTPResponse:
         """
         Get the response from the server.
@@ -418,12 +432,8 @@ class HTTPConnection(HfaceBackend):
         If a request has not been sent or if a previous response has not be handled, ResponseNotReady is raised. If the HTTP response indicates that the connection should be closed, then it will be closed before the response is returned. When the connection is closed, the underlying socket is closed.
         """
         # Raise the same error as http.client.HTTPConnection
-        if self._response_options is None or self.sock is None:
+        if self.sock is None:
             raise ResponseNotReady()
-
-        # Reset this attribute for being used again.
-        resp_options = self._response_options
-        self._response_options = None
 
         # Since the connection's timeout value may have been updated
         # we need to set the timeout on the socket.
@@ -433,9 +443,15 @@ class HTTPConnection(HfaceBackend):
         from .response import HTTPResponse
 
         # Get the response from backend._base.BaseBackend
-        low_response = super().getresponse()
+        low_response = super().getresponse(promise=promise)
 
-        assert isinstance(low_response.msg, HTTPHeaderDict)
+        if promise is None:
+            promise = low_response.from_promise
+
+        if promise is None:
+            raise OSError
+
+        resp_options: _ResponseOptions = promise.get_parameter("response_options")  # type: ignore[assignment]
         headers = low_response.msg
 
         response = HTTPResponse(
@@ -471,6 +487,11 @@ class HTTPSConnection(HTTPConnection):
     ssl_minimum_version: int | None = None
     ssl_maximum_version: int | None = None
     assert_fingerprint: str | None = None
+    cert_file: str | None = None
+    key_file: str | None = None
+    key_password: str | None = None
+    cert_data: str | bytes | None = None
+    key_data: str | bytes | None = None
 
     def __init__(
         self,
@@ -479,9 +500,9 @@ class HTTPSConnection(HTTPConnection):
         *,
         timeout: _TYPE_TIMEOUT_INTERNAL = _DEFAULT_TIMEOUT,
         source_address: tuple[str, int] | None = None,
-        blocksize: int = 8192,
-        socket_options: None
-        | _TYPE_SOCKET_OPTIONS = HTTPConnection.default_socket_options,
+        blocksize: int = DEFAULT_BLOCKSIZE,
+        socket_options: _TYPE_SOCKET_OPTIONS
+        | None = HTTPConnection.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         proxy: Url | None = None,
@@ -500,35 +521,10 @@ class HTTPSConnection(HTTPConnection):
         cert_file: str | None = None,
         key_file: str | None = None,
         key_password: str | None = None,
+        cert_data: str | bytes | None = None,
+        key_data: str | bytes | None = None,
     ) -> None:
-        # Some parameters may defacto exclude HTTP/3 over QUIC.
-        # Let's check all of those:
-        #   -> TLS 1.3 required
-        #   -> One of the three supported ciphers (listed bellow)
-        quic_disable: bool = False
-
-        if ssl_context is not None:
-            if (
-                isinstance(ssl_context.maximum_version, ssl.TLSVersion)
-                and ssl_context.maximum_version <= ssl.TLSVersion.TLSv1_2
-            ):
-                quic_disable = True
-            else:
-                any_capable_cipher: bool = False
-                for cipher_dict in ssl_context.get_ciphers():
-                    if cipher_dict["name"] in [
-                        "TLS_AES_128_GCM_SHA256",
-                        "TLS_AES_256_GCM_SHA384",
-                        "TLS_CHACHA20_POLY1305_SHA256",
-                    ]:
-                        any_capable_cipher = True
-                if not any_capable_cipher:
-                    quic_disable = True
-
-        if ssl_maximum_version and ssl_maximum_version <= ssl.TLSVersion.TLSv1_2:
-            quic_disable = True
-
-        if quic_disable:
+        if not is_capable_for_quic(ssl_context, ssl_maximum_version):
             if disabled_svn is None:
                 disabled_svn = set()
 
@@ -549,6 +545,8 @@ class HTTPSConnection(HTTPConnection):
 
         self.key_file = key_file
         self.cert_file = cert_file
+        self.cert_data = cert_data
+        self.key_data = key_data
         self.key_password = key_password
         self.ssl_context = ssl_context
         self.server_hostname = server_hostname
@@ -574,6 +572,7 @@ class HTTPSConnection(HTTPConnection):
         self.sock = sock = self._new_conn()
 
         try:
+            # the protocol/state-machine may also ship with an external TLS Engine.
             self._custom_tls(
                 self.ssl_context,
                 self.ca_certs,
@@ -581,8 +580,8 @@ class HTTPSConnection(HTTPConnection):
                 self.ca_cert_data,
                 self.ssl_minimum_version,
                 self.ssl_maximum_version,
-                self.cert_file,
-                self.key_file,
+                self.cert_file or self.cert_data,
+                self.key_file or self.key_data,
                 self.key_password,
                 self.assert_fingerprint,
             )
@@ -640,6 +639,8 @@ class HTTPSConnection(HTTPConnection):
                 assert_hostname=self.assert_hostname,
                 assert_fingerprint=self.assert_fingerprint,
                 alpn_protocols=alpn_protocols,
+                cert_data=self.cert_data,
+                key_data=self.key_data,
             )
             self.sock = sock_and_verified.socket  # type: ignore[assignment]
             self.is_verified = sock_and_verified.is_verified
@@ -683,6 +684,8 @@ class HTTPSConnection(HTTPConnection):
             key_password=None,
             tls_in_tls=False,
             alpn_protocols=alpn_protocols,
+            cert_data=None,
+            key_data=None,
         )
         self.proxy_is_verified = sock_and_verified.is_verified
         return sock_and_verified.socket  # type: ignore[return-value]
@@ -717,6 +720,8 @@ def _ssl_wrap_socket_and_match_hostname(
     ssl_context: ssl.SSLContext | None,
     tls_in_tls: bool = False,
     alpn_protocols: list[str] | None = None,
+    cert_data: str | bytes | None = None,
+    key_data: str | bytes | None = None,
 ) -> _WrappedAndVerifiedSocket:
     """Logic for constructing an SSLContext from all TLS parameters, passing
     that down into ssl_wrap_socket, and then doing certificate verification
@@ -783,6 +788,8 @@ def _ssl_wrap_socket_and_match_hostname(
         ssl_context=context,
         tls_in_tls=tls_in_tls,
         alpn_protocols=alpn_protocols,
+        certdata=cert_data,
+        keydata=key_data,
     )
 
     try:

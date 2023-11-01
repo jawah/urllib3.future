@@ -66,23 +66,21 @@ class TestPostBody(TraefikTestCase):
                 assert resp.status == 200
                 assert resp.version == (20 if i == 0 else 30)
 
-                print(resp.json()["data"])
-
                 payload_seen_by_server: bytes = b64decode(resp.json()["data"][37:])
 
                 if isinstance(body, str):
                     assert payload_seen_by_server == body.encode(
                         "utf-8"
-                    ), f"HTTP/{resp.version/10} POST body failure: str"
+                    ), f"HTTP/{resp.version / 10} POST body failure: str"
                 elif isinstance(body, bytes):
                     assert (
                         payload_seen_by_server == body
-                    ), f"HTTP/{resp.version/10} POST body failure: bytes"
+                    ), f"HTTP/{resp.version / 10} POST body failure: bytes"
                 else:
                     body.seek(0, 0)
                     assert (
                         payload_seen_by_server == body.read()
-                    ), f"HTTP/{resp.version/10} POST body failure: BytesIO"
+                    ), f"HTTP/{resp.version / 10} POST body failure: BytesIO"
 
     @pytest.mark.parametrize(
         "method",

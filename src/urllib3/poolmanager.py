@@ -8,9 +8,16 @@ from types import TracebackType
 from urllib.parse import urljoin
 
 from ._collections import HTTPHeaderDict, RecentlyUsedContainer
+from ._constant import DEFAULT_BLOCKSIZE
 from ._request_methods import RequestMethods
-from ._typing import _TYPE_SOCKET_OPTIONS, ProxyConfig
-from .backend import HttpVersion, QuicPreemptiveCacheType
+from ._typing import (
+    _TYPE_BODY,
+    _TYPE_BODY_POSITION,
+    _TYPE_SOCKET_OPTIONS,
+    _TYPE_TIMEOUT,
+    ProxyConfig,
+)
+from .backend import HttpVersion, QuicPreemptiveCacheType, ResponsePromise
 from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, port_by_scheme
 from .exceptions import (
     LocationValueError,
@@ -18,7 +25,7 @@ from .exceptions import (
     ProxySchemeUnknown,
     URLSchemeUnknown,
 )
-from .response import BaseHTTPResponse
+from .response import HTTPResponse
 from .util.proxy import connection_requires_http_tunnel
 from .util.request import NOT_FORWARDABLE_HEADERS
 from .util.retry import Retry
@@ -48,10 +55,9 @@ SSL_KEYWORDS = (
     "ssl_context",
     "key_password",
     "server_hostname",
+    "cert_data",
+    "key_data",
 )
-# Default value for `blocksize` - a new parameter introduced to
-# http.client.HTTPConnection & http.client.HTTPSConnection in Python 3.7
-_DEFAULT_BLOCKSIZE = 16384
 
 _SelfT = typing.TypeVar("_SelfT")
 
@@ -94,6 +100,9 @@ class PoolKey(typing.NamedTuple):
     key_server_hostname: str | None
     key_blocksize: int | None
     key_disabled_svn: set[HttpVersion] | None
+    key_cert_data: str | bytes | None
+    key_key_data: str | bytes | None
+    key_multiplexed: bool
 
 
 def _default_key_normalizer(
@@ -146,9 +155,9 @@ def _default_key_normalizer(
         if field not in context:
             context[field] = None
 
-    # Default key_blocksize to _DEFAULT_BLOCKSIZE if missing from the context
+    # Default key_blocksize to DEFAULT_BLOCKSIZE if missing from the context
     if context.get("key_blocksize") is None:
-        context["key_blocksize"] = _DEFAULT_BLOCKSIZE
+        context["key_blocksize"] = DEFAULT_BLOCKSIZE
 
     return key_class(**context)
 
@@ -255,10 +264,10 @@ class PoolManager(RequestMethods):
         if request_context is None:
             request_context = self.connection_pool_kw.copy()
 
-        # Default blocksize to _DEFAULT_BLOCKSIZE if missing or explicitly
+        # Default blocksize to DEFAULT_BLOCKSIZE if missing or explicitly
         # set to 'None' in the request_context.
         if request_context.get("blocksize") is None:
-            request_context["blocksize"] = _DEFAULT_BLOCKSIZE
+            request_context["blocksize"] = DEFAULT_BLOCKSIZE
 
         # Although the context has everything necessary to create the pool,
         # this function has historically only used the scheme, host, and port
@@ -415,9 +424,198 @@ class PoolManager(RequestMethods):
             self.proxy, self.proxy_config, parsed_url.scheme
         )
 
-    def urlopen(  # type: ignore[override]
+    def get_response(
+        self, *, promise: ResponsePromise | None = None
+    ) -> HTTPResponse | None:
+        """
+        Retrieve the first response available in the pools.
+        This method should be called after issuing at least one request with ``multiplexed=True``.
+        If none available, return None.
+        """
+        put_back_pool = []
+        response = None
+
+        for pool_key in self.pools.keys():
+            pool: HTTPConnectionPool | None = self.pools.get(pool_key)
+
+            if not pool:
+                continue
+
+            response = pool.get_response(promise=promise)
+            put_back_pool.append((pool_key, pool))
+
+            if response:
+                break
+
+        for pool_key, pool in put_back_pool:
+            self.pools[pool_key] = pool
+
+        if response is None:
+            return None
+
+        from_promise = None
+
+        if promise:
+            from_promise = promise
+        else:
+            if (
+                response._fp
+                and hasattr(response._fp, "from_promise")
+                and response._fp.from_promise
+            ):
+                from_promise = response._fp.from_promise
+
+        if from_promise is None:
+            raise ValueError
+
+        # Retrieve request ctx
+        method = typing.cast(str, from_promise.get_parameter("method"))
+        url = typing.cast(str, from_promise.get_parameter("pm_url"))
+        body = typing.cast(
+            typing.Union[_TYPE_BODY, None], from_promise.get_parameter("body")
+        )
+        headers = typing.cast(
+            typing.Union[HTTPHeaderDict, None], from_promise.get_parameter("headers")
+        )
+        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+        preload_content = typing.cast(
+            bool, from_promise.get_parameter("preload_content")
+        )
+        decode_content = typing.cast(bool, from_promise.get_parameter("decode_content"))
+        timeout = typing.cast(
+            typing.Union[_TYPE_TIMEOUT, None], from_promise.get_parameter("timeout")
+        )
+        redirect = typing.cast(bool, from_promise.get_parameter("pm_redirect"))
+        assert_same_host = typing.cast(
+            bool, from_promise.get_parameter("assert_same_host")
+        )
+        pool_timeout = from_promise.get_parameter("pool_timeout")
+        response_kw = typing.cast(
+            typing.MutableMapping[str, typing.Any],
+            from_promise.get_parameter("response_kw"),
+        )
+        chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+        body_pos = typing.cast(
+            _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+        )
+
+        # Handle redirect?
+        if redirect and response.get_redirect_location():
+            redirect_location = response.get_redirect_location()
+            assert isinstance(redirect_location, str)
+
+            if response.status == 303:
+                method = "GET"
+                body = None
+                headers = HTTPHeaderDict(headers)
+
+                for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
+                    headers.discard(should_be_removed_header)
+
+            try:
+                retries = retries.increment(
+                    method, url, response=response, _pool=response._pool
+                )
+            except MaxRetryError:
+                if retries.raise_on_redirect:
+                    response.drain_conn()
+                    raise
+                return response
+
+            response.drain_conn()
+            retries.sleep_for_retry(response)
+            log.debug("Redirecting %s -> %s", url, redirect_location)
+
+            new_promise = self.urlopen(
+                method,
+                urljoin(url, redirect_location),
+                True,
+                body=body,
+                headers=headers,
+                retries=retries,
+                assert_same_host=assert_same_host,
+                timeout=timeout,
+                pool_timeout=pool_timeout,
+                release_conn=True,
+                chunked=chunked,
+                body_pos=body_pos,
+                preload_content=preload_content,
+                decode_content=decode_content,
+                multiplexed=True,
+                **response_kw,
+            )
+
+            return self.get_response(promise=new_promise if promise else None)
+
+        # Check if we should retry the HTTP response.
+        has_retry_after = bool(response.headers.get("Retry-After"))
+        if retries.is_retry(method, response.status, has_retry_after):
+            redirect_location = response.get_redirect_location()
+            assert isinstance(redirect_location, str)
+
+            try:
+                retries = retries.increment(
+                    method, url, response=response, _pool=response._pool
+                )
+            except MaxRetryError:
+                if retries.raise_on_status:
+                    response.drain_conn()
+                    raise
+                return response
+
+            response.drain_conn()
+            retries.sleep(response)
+            log.debug("Retry: %s", url)
+            new_promise = self.urlopen(
+                method,
+                urljoin(url, redirect_location),
+                True,
+                body=body,
+                headers=headers,
+                retries=retries,
+                assert_same_host=assert_same_host,
+                timeout=timeout,
+                pool_timeout=pool_timeout,
+                release_conn=False,
+                chunked=chunked,
+                body_pos=body_pos,
+                preload_content=preload_content,
+                decode_content=decode_content,
+                multiplexed=True,
+                **response_kw,
+            )
+
+            return self.get_response(promise=new_promise if promise else None)
+
+        return response
+
+    @typing.overload  # type: ignore[override]
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        redirect: bool = True,
+        *,
+        multiplexed: Literal[False] = ...,
+        **kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        redirect: bool = True,
+        *,
+        multiplexed: Literal[True],
+        **kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
+
+    def urlopen(
         self, method: str, url: str, redirect: bool = True, **kw: typing.Any
-    ) -> BaseHTTPResponse:
+    ) -> HTTPResponse | ResponsePromise:
         """
         Same as :meth:`urllib3.HTTPConnectionPool.urlopen`
         with custom cross-host redirect logic and only sends the request-uri
@@ -451,6 +649,18 @@ class PoolManager(RequestMethods):
         else:
             response = conn.urlopen(method, u.request_uri, **kw)
 
+        if "multiplexed" in kw and kw["multiplexed"]:
+            if isinstance(response, ResponsePromise):
+                response.set_parameter("pm_redirect", redirect)
+                response.set_parameter("pm_url", url)
+                assert isinstance(response, ResponsePromise)
+
+                return response
+
+            # the established connection is not capable of doing multiplexed request
+            kw["multiplexed"] = False
+
+        assert isinstance(response, HTTPResponse)
         redirect_location = redirect and response.get_redirect_location()
         if not redirect_location:
             return response
@@ -497,7 +707,7 @@ class PoolManager(RequestMethods):
         log.info("Redirecting %s -> %s", url, redirect_location)
 
         response.drain_conn()
-        return self.urlopen(method, redirect_location, **kw)
+        return self.urlopen(method, redirect_location, **kw)  # type: ignore[no-any-return]
 
 
 class ProxyManager(PoolManager):
@@ -629,9 +839,37 @@ class ProxyManager(PoolManager):
             headers_.update(headers)
         return headers_
 
-    def urlopen(  # type: ignore[override]
-        self, method: str, url: str, redirect: bool = True, **kw: typing.Any
-    ) -> BaseHTTPResponse:
+    @typing.overload  # type: ignore[override]
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        redirect: bool = True,
+        *,
+        multiplexed: Literal[False] = ...,
+        **kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        redirect: bool = True,
+        *,
+        multiplexed: Literal[True],
+        **kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
+
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        redirect: bool = True,
+        **kw: typing.Any,
+    ) -> HTTPResponse | ResponsePromise:
         "Same as HTTP(S)ConnectionPool.urlopen, ``url`` must be absolute."
         u = parse_url(url)
         if not connection_requires_http_tunnel(self.proxy, self.proxy_config, u.scheme):
@@ -641,7 +879,7 @@ class ProxyManager(PoolManager):
             headers = kw.get("headers", self.headers)
             kw["headers"] = self._set_proxy_headers(url, headers)
 
-        return super().urlopen(method, url, redirect=redirect, **kw)
+        return super().urlopen(method, url, redirect=redirect, **kw)  # type: ignore[no-any-return]
 
 
 def proxy_from_url(url: str, **kw: typing.Any) -> ProxyManager:

@@ -13,13 +13,12 @@ from types import TracebackType
 from ._collections import HTTPHeaderDict
 from ._request_methods import RequestMethods
 from ._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
-from .backend import ConnectionInfo
+from .backend import ConnectionInfo, HttpVersion, ResponsePromise
 from .connection import (
     BaseSSLError,
     BrokenPipeError,
     DummyConnection,
     HTTPConnection,
-    HTTPException,
     HTTPSConnection,
     _wrap_proxy_error,
 )
@@ -36,10 +35,11 @@ from .exceptions import (
     ProtocolError,
     ProxyError,
     ReadTimeoutError,
+    ResponseNotReady,
     SSLError,
     TimeoutError,
 )
-from .response import BaseHTTPResponse
+from .response import HTTPResponse
 from .util.connection import is_connection_dropped
 from .util.proxy import connection_requires_http_tunnel
 from .util.request import NOT_FORWARDABLE_HEADERS, set_file_position
@@ -251,7 +251,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         )
         return conn
 
-    def _get_conn(self, timeout: float | None = None) -> HTTPConnection:
+    def _get_conn(
+        self, timeout: float | None = None, no_new: bool = False
+    ) -> HTTPConnection:
         """
         Get a connection. Will return a pooled connection if one is available.
 
@@ -270,7 +272,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         try:
             conn = self.pool.get(block=self.block, timeout=timeout)
-
         except AttributeError:  # self.pool is None
             raise ClosedPoolError(self, "Pool is closed.") from None  # Defensive:
 
@@ -281,6 +282,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     "Pool is empty and a new connection can't be opened due to blocking mode.",
                 ) from None
             pass  # Oh well, we'll create a new connection then
+
+        if no_new and conn is None:
+            raise ValueError
 
         # If this is a persistent connection, check if it got disconnected
         if conn and is_connection_dropped(conn):
@@ -374,6 +378,212 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 self, url, f"Read timed out. (read timeout={timeout_value})"
             ) from err
 
+    def get_response(
+        self, *, promise: ResponsePromise | None = None
+    ) -> HTTPResponse | None:
+        """
+        Retrieve the first response available in the pool.
+        This method should be called after issuing at least one request with ``multiplexed=True``.
+        If none available, return None.
+        """
+        connections = []
+        response = None
+
+        while True:
+            try:
+                conn = self._get_conn(no_new=True)
+            except ValueError:
+                break
+
+            connections.append(conn)
+
+            if promise:
+                if promise in conn:
+                    response = conn.getresponse(promise=promise)
+                else:
+                    continue
+            else:
+                try:
+                    response = conn.getresponse()
+                except ResponseNotReady:
+                    continue
+            break
+
+        for conn in connections:
+            self._put_conn(conn)
+
+        if promise is not None and response is None:
+            raise ValueError
+
+        if response is None:
+            return None
+
+        from_promise = None
+
+        if promise:
+            from_promise = promise
+        else:
+            if (
+                response._fp
+                and hasattr(response._fp, "from_promise")
+                and response._fp.from_promise
+            ):
+                from_promise = response._fp.from_promise
+
+        if from_promise is None:
+            raise ValueError
+
+        # Retrieve request ctx
+        method = typing.cast(str, from_promise.get_parameter("method"))
+        url = typing.cast(str, from_promise.get_parameter("url"))
+        body = typing.cast(
+            typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
+        )
+        headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
+        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+        preload_content = typing.cast(
+            bool, from_promise.get_parameter("preload_content")
+        )
+        decode_content = typing.cast(bool, from_promise.get_parameter("decode_content"))
+        timeout = typing.cast(
+            typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
+        )
+        redirect = typing.cast(bool, from_promise.get_parameter("redirect"))
+        assert_same_host = typing.cast(
+            bool, from_promise.get_parameter("assert_same_host")
+        )
+        pool_timeout = from_promise.get_parameter("pool_timeout")
+        response_kw = typing.cast(
+            typing.MutableMapping[str, typing.Any],
+            from_promise.get_parameter("response_kw"),
+        )
+        chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+        body_pos = typing.cast(
+            _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+        )
+
+        # Handle redirect?
+        redirect_location = redirect and response.get_redirect_location()
+        if redirect_location:
+            if response.status == 303:
+                method = "GET"
+                body = None
+                headers = HTTPHeaderDict(headers)
+
+                for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
+                    headers.discard(should_be_removed_header)
+
+            try:
+                retries = retries.increment(method, url, response=response, _pool=self)
+            except MaxRetryError:
+                if retries.raise_on_redirect:
+                    response.drain_conn()
+                    raise
+                return response
+
+            response.drain_conn()
+            retries.sleep_for_retry(response)
+            log.debug("Redirecting %s -> %s", url, redirect_location)
+            new_promise = self.urlopen(
+                method,
+                redirect_location,
+                body,
+                headers,
+                retries=retries,
+                redirect=redirect,
+                assert_same_host=assert_same_host,
+                timeout=timeout,
+                pool_timeout=pool_timeout,
+                release_conn=True,
+                chunked=chunked,
+                body_pos=body_pos,
+                preload_content=preload_content,
+                decode_content=decode_content,
+                multiplexed=True,
+                **response_kw,
+            )
+
+            return self.get_response(promise=new_promise if promise else None)
+
+        # Check if we should retry the HTTP response.
+        has_retry_after = bool(response.headers.get("Retry-After"))
+        if retries.is_retry(method, response.status, has_retry_after):
+            try:
+                retries = retries.increment(method, url, response=response, _pool=self)
+            except MaxRetryError:
+                if retries.raise_on_status:
+                    response.drain_conn()
+                    raise
+                return response
+
+            response.drain_conn()
+            retries.sleep(response)
+            log.debug("Retry: %s", url)
+            new_promise = self.urlopen(
+                method,
+                url,
+                body,
+                headers,
+                retries=retries,
+                redirect=redirect,
+                assert_same_host=assert_same_host,
+                timeout=timeout,
+                pool_timeout=pool_timeout,
+                release_conn=False,
+                chunked=chunked,
+                body_pos=body_pos,
+                preload_content=preload_content,
+                decode_content=decode_content,
+                multiplexed=True,
+                **response_kw,
+            )
+
+            return self.get_response(promise=new_promise if promise else None)
+
+        return response
+
+    @typing.overload
+    def _make_request(
+        self,
+        conn: HTTPConnection,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        retries: Retry | None = ...,
+        timeout: _TYPE_TIMEOUT = ...,
+        chunked: bool = ...,
+        response_conn: HTTPConnection | None = ...,
+        preload_content: bool = ...,
+        decode_content: bool = ...,
+        enforce_content_length: bool = ...,
+        on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        *,
+        multiplexed: Literal[True],
+    ) -> ResponsePromise:
+        ...
+
+    @typing.overload
+    def _make_request(
+        self,
+        conn: HTTPConnection,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        retries: Retry | None = ...,
+        timeout: _TYPE_TIMEOUT = ...,
+        chunked: bool = ...,
+        response_conn: HTTPConnection | None = ...,
+        preload_content: bool = ...,
+        decode_content: bool = ...,
+        enforce_content_length: bool = ...,
+        on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        *,
+        multiplexed: Literal[False] = ...,
+    ) -> HTTPResponse:
+        ...
+
     def _make_request(
         self,
         conn: HTTPConnection,
@@ -389,7 +599,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         decode_content: bool = True,
         enforce_content_length: bool = True,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
-    ) -> BaseHTTPResponse:
+        multiplexed: Literal[False] | Literal[True] = False,
+    ) -> HTTPResponse | ResponsePromise:
         """
         Perform a request on a given urllib connection object taken from our
         pool.
@@ -491,10 +702,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if on_post_connection is not None and conn.conn_info is not None:
             on_post_connection(conn.conn_info)
 
-        # conn.request() calls http.client.*.request, not the method in
-        # urllib3.request. It also calls makefile (recv) on the socket.
+        if conn.is_multiplexed is False and multiplexed is True:
+            # overruling
+            multiplexed = False
+
         try:
-            conn.request(
+            rp = conn.request(
                 method,
                 url,
                 body=body,
@@ -504,13 +717,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 decode_content=decode_content,
                 enforce_content_length=enforce_content_length,
             )
-
         # We are swallowing BrokenPipeError (errno.EPIPE) since the server is
         # legitimately able to close the connection after sending a valid response.
         # With this behaviour, the received response is still readable.
-        except BrokenPipeError:
-            pass
+        except BrokenPipeError as e:
+            rp = e.promise  # type: ignore
         except OSError as e:
+            rp = None
             # MacOS/Linux
             # EPROTOTYPE is needed on macOS
             # https://erickt.github.io/blog/2014/11/19/adventures-in-debugging-a-potential-osx-kernel-bug/
@@ -519,6 +732,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         # Reset the timeout for the recv() on the socket
         read_timeout = timeout_obj.read_timeout
+
+        if multiplexed:
+            if rp is None:
+                raise OSError
+            rp.set_parameter("read_timeout", read_timeout)
+            return rp
 
         if not conn.is_closed:
             # In Python 3 socket.py will catch EAGAIN and return None when you
@@ -593,7 +812,55 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         return (scheme, host, port) == (self.scheme, self.host, self.port)
 
-    def urlopen(  # type: ignore[override]
+    @typing.overload  # type: ignore[override]
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        retries: Retry | bool | int | None = ...,
+        redirect: bool = ...,
+        assert_same_host: bool = ...,
+        timeout: _TYPE_TIMEOUT = ...,
+        pool_timeout: int | None = ...,
+        release_conn: bool | None = ...,
+        chunked: bool = ...,
+        body_pos: _TYPE_BODY_POSITION | None = ...,
+        preload_content: bool = ...,
+        decode_content: bool = ...,
+        on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        *,
+        multiplexed: Literal[False] = ...,
+        **response_kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        retries: Retry | bool | int | None = ...,
+        redirect: bool = ...,
+        assert_same_host: bool = ...,
+        timeout: _TYPE_TIMEOUT = ...,
+        pool_timeout: int | None = ...,
+        release_conn: bool | None = ...,
+        chunked: bool = ...,
+        body_pos: _TYPE_BODY_POSITION | None = ...,
+        preload_content: bool = ...,
+        decode_content: bool = ...,
+        on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        *,
+        multiplexed: Literal[True],
+        **response_kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
+
+    def urlopen(
         self,
         method: str,
         url: str,
@@ -610,8 +877,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = True,
         decode_content: bool = True,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
+        multiplexed: bool = False,
         **response_kw: typing.Any,
-    ) -> BaseHTTPResponse:
+    ) -> HTTPResponse | ResponsePromise:
         """
         Get a connection from the pool and perform an HTTP request. This is the
         lowest level call for making a request, so you'll need to specify all
@@ -706,6 +974,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             Position to seek to in file-like body in the event of a retry or
             redirect. Typically this won't need to be set because urllib3 will
             auto-populate the value when needed.
+
+        :param multiplexed:
+            Dispatch the request in a non-blocking way, this means that the
+            response will be retrieved in the future with the get_response()
+            method.
         """
         parsed_url = parse_url(url)
         destination_scheme = parsed_url.scheme
@@ -789,21 +1062,43 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             response_conn = conn if not release_conn else None
 
             # Make the request on the HTTPConnection object
-            response = self._make_request(
+            response = self._make_request(  # type: ignore[call-overload,misc]
                 conn,
                 method,
                 url,
-                timeout=timeout_obj,
                 body=body,
                 headers=headers,
-                chunked=chunked,
                 retries=retries,
+                timeout=timeout_obj,
+                chunked=chunked,
                 response_conn=response_conn,
                 preload_content=preload_content,
                 decode_content=decode_content,
+                enforce_content_length=True,
                 on_post_connection=on_post_connection,
-                **response_kw,
+                multiplexed=multiplexed,
             )
+
+            # it was established a non-multiplexed connection. fallback to original behavior.
+            if not isinstance(response, ResponsePromise):
+                multiplexed = False
+
+            if multiplexed:
+                response.set_parameter("method", method)
+                response.set_parameter("url", url)
+                response.set_parameter("body", body)
+                response.set_parameter("headers", headers)
+                response.set_parameter("retries", retries)
+                response.set_parameter("preload_content", preload_content)
+                response.set_parameter("decode_content", decode_content)
+                response.set_parameter("timeout", timeout_obj)
+                response.set_parameter("redirect", redirect)
+                response.set_parameter("response_kw", response_kw)
+                response.set_parameter("pool_timeout", pool_timeout)
+                response.set_parameter("assert_same_host", assert_same_host)
+                response.set_parameter("chunked", chunked)
+                response.set_parameter("body_pos", body_pos)
+                release_this_conn = True if not conn.is_saturated else False
 
             # Everything went great!
             clean_exit = True
@@ -816,7 +1111,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         except (
             TimeoutError,
-            HTTPException,
             OSError,
             ProtocolError,
             BaseSSLError,
@@ -837,11 +1131,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     NewConnectionError,
                     TimeoutError,
                     SSLError,
-                    HTTPException,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
                 new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
-            elif isinstance(new_e, (OSError, HTTPException)):
+            elif isinstance(new_e, OSError):
                 new_e = ProtocolError("Connection aborted.", new_e)
 
             retries = retries.increment(
@@ -862,8 +1155,16 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     conn.close()
                     conn = None
                 release_this_conn = True
+            elif (
+                conn
+                and conn.is_saturated is False
+                and conn.conn_info is not None
+                and conn.conn_info.http_version != HttpVersion.h11
+            ):
+                # multiplexing allows us to issue more requests.
+                release_this_conn = True
 
-            if release_this_conn:
+            if release_this_conn is True:
                 # Put the connection back to be reused. If the connection is
                 # expired then it will be None, which will get replaced with a
                 # fresh connection during _get_conn.
@@ -874,7 +1175,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             log.warning(
                 "Retrying (%r) after connection broken by '%r': %s", retries, err, url
             )
-            return self.urlopen(
+            return self.urlopen(  # type: ignore[no-any-return,call-overload,misc]
                 method,
                 url,
                 body,
@@ -889,12 +1190,20 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 body_pos=body_pos,
                 preload_content=preload_content,
                 decode_content=decode_content,
+                multiplexed=multiplexed,
                 **response_kw,
             )
 
-        # Handle redirect?
-        redirect_location = redirect and response.get_redirect_location()
-        if redirect_location:
+        if multiplexed:
+            assert isinstance(response, ResponsePromise)
+            return response  # actually a response promise!
+
+        assert isinstance(response, HTTPResponse)
+
+        if redirect and response.get_redirect_location():
+            # Handle redirect?
+            redirect_location = response.get_redirect_location()
+
             if response.status == 303:
                 method = "GET"
                 body = None
@@ -914,11 +1223,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             response.drain_conn()
             retries.sleep_for_retry(response)
             log.debug("Redirecting %s -> %s", url, redirect_location)
-            return self.urlopen(
+            return self.urlopen(  # type: ignore[call-overload,no-any-return,misc]
                 method,
                 redirect_location,
-                body,
-                headers,
+                body=body,
+                headers=headers,
                 retries=retries,
                 redirect=redirect,
                 assert_same_host=assert_same_host,
@@ -929,6 +1238,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 body_pos=body_pos,
                 preload_content=preload_content,
                 decode_content=decode_content,
+                multiplexed=False,
                 **response_kw,
             )
 
@@ -961,6 +1271,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 body_pos=body_pos,
                 preload_content=preload_content,
                 decode_content=decode_content,
+                multiplexed=False,
                 **response_kw,
             )
 
@@ -1007,6 +1318,8 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         assert_fingerprint: str | None = None,
         ca_cert_dir: str | None = None,
         ca_cert_data: None | str | bytes = None,
+        cert_data: str | bytes | None = None,
+        key_data: str | bytes | None = None,
         **conn_kw: typing.Any,
     ) -> None:
         super().__init__(
@@ -1029,6 +1342,8 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         self.ca_certs = ca_certs
         self.ca_cert_dir = ca_cert_dir
         self.ca_cert_data = ca_cert_data
+        self.cert_data = cert_data
+        self.key_data = key_data
         self.ssl_version = ssl_version
         self.ssl_minimum_version = ssl_minimum_version
         self.ssl_maximum_version = ssl_maximum_version
@@ -1089,6 +1404,8 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             ssl_version=self.ssl_version,
             ssl_minimum_version=self.ssl_minimum_version,
             ssl_maximum_version=self.ssl_maximum_version,
+            cert_data=self.cert_data,
+            key_data=self.key_data,
             **self.conn_kw,
         )
 

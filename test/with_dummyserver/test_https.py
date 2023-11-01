@@ -11,6 +11,8 @@ from test import (
     LONG_TIMEOUT,
     SHORT_TIMEOUT,
     TARPIT_HOST,
+    notMacOS,
+    notWindows,
     requires_network,
     resolvesLocalhostFQDN,
 )
@@ -168,6 +170,23 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             subject = r.json()
             assert subject["organizationalUnitName"].startswith("Testing cert")
 
+    @notWindows()
+    @notMacOS()
+    def test_in_memory_client_intermediate(self) -> None:
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            key_data=open(os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_KEY)).read(),
+            cert_data=open(
+                os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_PEM)
+            ).read(),
+            ca_certs=DEFAULT_CA,
+            ssl_minimum_version=self.tls_version(),
+        ) as https_pool:
+            r = https_pool.request("GET", "/certificate")
+            subject = r.json()
+            assert subject["organizationalUnitName"].startswith("Testing cert")
+
     def test_client_no_intermediate(self) -> None:
         """Check that missing links in certificate chains indeed break
 
@@ -192,6 +211,22 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             ca_certs=DEFAULT_CA,
             key_file=os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE),
             cert_file=os.path.join(self.certs_dir, CLIENT_CERT),
+            key_password="letmein",
+            ssl_minimum_version=self.tls_version(),
+        ) as https_pool:
+            r = https_pool.request("GET", "/certificate")
+            subject = r.json()
+            assert subject["organizationalUnitName"].startswith("Testing cert")
+
+    @notWindows()
+    @notMacOS()
+    def test_in_memory_client_key_password(self) -> None:
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            key_data=open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)).read(),
+            cert_data=open(os.path.join(self.certs_dir, CLIENT_CERT)).read(),
             key_password="letmein",
             ssl_minimum_version=self.tls_version(),
         ) as https_pool:

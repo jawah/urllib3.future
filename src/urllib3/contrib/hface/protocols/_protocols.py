@@ -14,8 +14,12 @@
 
 from __future__ import annotations
 
+import typing
 from abc import ABCMeta, abstractmethod
 from typing import Any, Sequence
+
+if typing.TYPE_CHECKING:
+    from typing_extensions import Literal
 
 from .._error_codes import HTTPErrorCodes
 from .._typing import HeadersType
@@ -121,9 +125,27 @@ class OverQUICProtocol(OverUDPProtocol):
     def session_ticket(self) -> Any | None:
         raise NotImplementedError
 
+    @typing.overload
+    def getpeercert(self, *, binary_form: Literal[True]) -> bytes:
+        ...
+
+    @typing.overload
+    def getpeercert(self, *, binary_form: Literal[False] = ...) -> dict[str, Any]:
+        ...
+
     @abstractmethod
     def getpeercert(self, *, binary_form: bool = False) -> bytes | dict[str, Any]:
         raise NotImplementedError
+
+    @typing.overload
+    def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None:
+        ...
+
+    @typing.overload
+    def getissuercert(
+        self, *, binary_form: Literal[False] = ...
+    ) -> dict[str, Any] | None:
+        ...
 
     @abstractmethod
     def getissuercert(
@@ -261,8 +283,13 @@ class HTTPProtocol(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def has_pending_event(self) -> bool:
+    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         """Verify if there is queued event waiting to be consumed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reshelve(self, *events: Event) -> None:
+        """Put back events into the deque."""
         raise NotImplementedError
 
 

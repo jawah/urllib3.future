@@ -7,9 +7,9 @@ import logging
 import re
 import sys
 import typing
+import warnings
 import zlib
 from contextlib import contextmanager
-from http.client import HTTPMessage as _HttplibHTTPMessage
 from socket import timeout as SocketTimeout
 
 try:
@@ -38,8 +38,8 @@ except (AttributeError, ImportError, ValueError):  # Defensive:
 
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
-from .backend import LowLevelResponse
-from .connection import BaseSSLError, HTTPConnection, HTTPException
+from .backend import HttpVersion, LowLevelResponse, ResponsePromise
+from .connection import BaseSSLError, HTTPConnection
 from .exceptions import (
     DecodeError,
     HTTPError,
@@ -54,6 +54,8 @@ from .util.response import is_fp_closed
 from .util.retry import Retry
 
 if typing.TYPE_CHECKING:
+    from email.message import Message
+
     from typing_extensions import Literal
 
     from .connectionpool import HTTPConnectionPool
@@ -334,7 +336,7 @@ class HTTPResponse(io.IOBase):
         original_response: LowLevelResponse | None = None,
         pool: HTTPConnectionPool | None = None,
         connection: HTTPConnection | None = None,
-        msg: _HttplibHTTPMessage | None = None,
+        msg: Message | None = None,
         retries: Retry | None = None,
         enforce_content_length: bool = True,
         request_method: str | None = None,
@@ -372,6 +374,14 @@ class HTTPResponse(io.IOBase):
         self._fp: LowLevelResponse | typing.IO[typing.Any] | None = None
         self._original_response = original_response
         self._fp_bytes_read = 0
+
+        if msg is not None:
+            warnings.warn(
+                "Passing msg=.. is deprecated and no-op in urllib3.future and is scheduled to be removed in a future major.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         self.msg = msg
 
         if body and isinstance(body, (str, bytes)):
@@ -395,6 +405,16 @@ class HTTPResponse(io.IOBase):
         # If requested, preload the body.
         if preload_content and not self._body:
             self._body = self.read(decode_content=decode_content)
+
+    def is_from_promise(self, promise: ResponsePromise) -> bool:
+        """
+        Determine if this response came from given promise.
+        """
+        return (
+            self._fp is not None
+            and hasattr(self._fp, "from_promise")
+            and self._fp.from_promise == promise
+        )
 
     def get_redirect_location(self) -> str | None | Literal[False]:
         """
@@ -510,7 +530,10 @@ class HTTPResponse(io.IOBase):
         if not self._pool or not self._connection:
             return None
 
-        self._pool._put_conn(self._connection)
+        # todo: propose a better way to handle this case graciously
+        if self._connection._svn is None or self._connection._svn == HttpVersion.h11:
+            self._pool._put_conn(self._connection)
+
         self._connection = None
 
     def drain_conn(self) -> None:
@@ -521,7 +544,7 @@ class HTTPResponse(io.IOBase):
         """
         try:
             self.read()
-        except (HTTPError, OSError, BaseSSLError, HTTPException):
+        except (HTTPError, OSError, BaseSSLError):
             pass
 
     @property
@@ -634,7 +657,7 @@ class HTTPResponse(io.IOBase):
 
                 raise ReadTimeoutError(self._pool, None, "Read timed out.") from e  # type: ignore[arg-type]
 
-            except (HTTPException, OSError) as e:
+            except OSError as e:
                 # This includes IncompleteRead.
                 raise ProtocolError(f"Connection broken: {e!r}", e) from e
 

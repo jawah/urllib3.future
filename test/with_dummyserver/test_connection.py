@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import typing
-from http.client import ResponseNotReady
 
 import pytest
 
 from dummyserver.testcase import HTTPDummyServerTestCase as server
 from urllib3 import HTTPConnectionPool
+from urllib3.exceptions import ResponseNotReady
 from urllib3.response import HTTPResponse
 
 

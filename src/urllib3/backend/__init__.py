@@ -6,6 +6,7 @@ from ._base import (
     HttpVersion,
     LowLevelResponse,
     QuicPreemptiveCacheType,
+    ResponsePromise,
 )
 from .hface import HfaceBackend
 
@@ -16,4 +17,5 @@ __all__ = (
     "QuicPreemptiveCacheType",
     "LowLevelResponse",
     "ConnectionInfo",
+    "ResponsePromise",
 )

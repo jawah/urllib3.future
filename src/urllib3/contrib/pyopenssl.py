@@ -3,9 +3,9 @@ from __future__ import annotations
 import warnings
 
 warnings.warn(
-    "'urllib3.contrib.pyopenssl' module has been removed "
-    "in urllib3 v2.1.0 due to incompatibilities with our QUIC integration."
-    "While the import still work, it is rendered completely ineffective.",
+    """'urllib3.contrib.pyopenssl' module has been removed in urllib3.future due to incompatibilities with our QUIC integration.
+While the import still work, it is rendered completely ineffective. Were you looking for in-memory client certificate?
+It is natively supported since v2.2, check the documentation.""",
     category=DeprecationWarning,
     stacklevel=2,
 )

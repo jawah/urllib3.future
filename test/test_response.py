@@ -911,13 +911,12 @@ class TestResponse:
         with pytest.raises(ProtocolError) as ctx:
             resp.read(3)
 
-        orig_ex = ctx.value.args[1]
-        assert isinstance(orig_ex, IncompleteRead)
-        assert orig_ex.partial == 0  # type: ignore[comparison-overlap]
-        assert orig_ex.expected == content_length
+        assert isinstance(ctx.value, IncompleteRead)
+        assert ctx.value.partial == 0
+        assert ctx.value.expected == content_length
 
     def test_chunked_head_response(self) -> None:
-        def mock_sock(amt: int | None) -> tuple[bytes, bool]:
+        def mock_sock(amt: int | None, stream_id: int | None) -> tuple[bytes, bool]:
             return b"", True
 
         r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
@@ -1014,7 +1013,7 @@ class TestResponse:
         chunks = list(stream())
         idx = 0
 
-        def mock_sock(amt: int | None) -> tuple[bytes, bool]:
+        def mock_sock(amt: int | None, stream_id: int | None) -> tuple[bytes, bool]:
             nonlocal chunks, idx
             if idx >= len(chunks):
                 return b"", True

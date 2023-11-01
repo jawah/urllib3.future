@@ -99,7 +99,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             return None
         return self._events.popleft()
 
-    def has_pending_event(self) -> bool:
+    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         return len(self._events) > 0
 
     def _map_events(self, h2_events: list[h2.events.Event]) -> Iterator[Event]:
@@ -171,3 +171,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             return flow_remaining_bytes == 0
 
         return amt > flow_remaining_bytes
+
+    def reshelve(self, *events: Event) -> None:
+        for ev in reversed(events):
+            self._events.appendleft(ev)
