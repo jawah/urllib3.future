@@ -3,10 +3,10 @@ from __future__ import annotations
 import socket
 import typing
 from email.errors import MessageDefect
-from http.client import IncompleteRead as httplib_IncompleteRead
 
 if typing.TYPE_CHECKING:
     from ._typing import _TYPE_REDUCE_RESULT
+    from .backend import ResponsePromise
     from .connection import HTTPConnection
     from .connectionpool import ConnectionPool
     from .response import HTTPResponse
@@ -228,7 +228,7 @@ class BodyNotHttplibCompatible(HTTPError):
     """
 
 
-class IncompleteRead(HTTPError, httplib_IncompleteRead):
+class IncompleteRead(ProtocolError):
     """
     Response length doesn't match expected Content-Length
 
@@ -237,21 +237,21 @@ class IncompleteRead(HTTPError, httplib_IncompleteRead):
     """
 
     def __init__(self, partial: int, expected: int) -> None:
-        self.partial = partial  # type: ignore[assignment]
+        self.partial = partial
         self.expected = expected
 
     def __repr__(self) -> str:
         return "IncompleteRead(%i bytes read, %i more expected)" % (
-            self.partial,  # type: ignore[str-format]
+            self.partial,
             self.expected,
         )
 
 
-class InvalidChunkLength(HTTPError, httplib_IncompleteRead):
+class InvalidChunkLength(ProtocolError):
     """Invalid chunk length in a chunked response."""
 
     def __init__(self, response: HTTPResponse, length: bytes) -> None:
-        self.partial: int = response.tell()  # type: ignore[assignment]
+        self.partial: int = response.tell()
         self.expected: int | None = response.length_remaining
         self.response = response
         self.length = length
@@ -304,3 +304,10 @@ class UnrewindableBodyError(HTTPError):
 
 class EarlyResponse(HTTPError):
     """urllib3 received a response prior to sending the whole body"""
+
+    def __init__(self, promise: ResponsePromise) -> None:
+        self.promise = promise
+
+
+class ResponseNotReady(HTTPError):
+    """Kept for BC"""

@@ -325,7 +325,7 @@ class ConnectionMarker:
             return part
 
         with monkeypatch.context() as m:
-            m.setattr(HTTPConnection, "request", call_and_mark(orig_request))
+            m.setattr(HTTPConnection, "request", call_and_mark(orig_request))  # type: ignore[arg-type]
             yield
 
     @classmethod

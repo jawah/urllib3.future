@@ -12,6 +12,6 @@ Connections
     :members:
     :show-inheritance:
 
-.. autoclass:: urllib3.connection.ProxyConfig
+.. autoclass:: urllib3._typing.ProxyConfig
     :members:
     :show-inheritance:

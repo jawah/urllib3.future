@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import socket
 import typing
-from http.client import ResponseNotReady
 from unittest import mock
 
 import pytest
@@ -15,7 +14,7 @@ from urllib3.connection import (  # type: ignore[attr-defined]
     _url_from_connection,
     _wrap_proxy_error,
 )
-from urllib3.exceptions import HTTPError, ProxyError, SSLError
+from urllib3.exceptions import HTTPError, ProxyError, ResponseNotReady, SSLError
 from urllib3.util import ssl_
 from urllib3.util.ssl_match_hostname import (
     CertificateError as ImplementationCertificateError,

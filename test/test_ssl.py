@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 
+from urllib3._constant import MOZ_INTERMEDIATE_CIPHERS
 from urllib3.exceptions import ProxySchemeUnsupported, SSLError
 from urllib3.util import ssl_
 
@@ -136,7 +137,7 @@ class TestSSL:
 
         ssl_.create_urllib3_context()
 
-        context.set_ciphers.assert_called_once_with("DEFAULT")
+        context.set_ciphers.assert_called_once_with(MOZ_INTERMEDIATE_CIPHERS)
 
     @pytest.mark.parametrize(
         "kwargs",

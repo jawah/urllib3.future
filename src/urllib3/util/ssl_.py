@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import hmac
+import io
 import os
 import socket
 import sys
 import typing
+import warnings
 from binascii import unhexlify
 from hashlib import md5, sha1, sha256
 
+from .._constant import MOZ_INTERMEDIATE_CIPHERS
+from ..contrib.imcc import load_cert_chain as _ctx_load_cert_chain
 from ..exceptions import ProxySchemeUnsupported, SSLError
 from .url import _BRACELESS_IPV6_ADDRZ_RE, _IPV4_RE
 
@@ -276,8 +280,8 @@ def create_urllib3_context(
     else:
         # avoid relying on cpython default cipher list
         # and instead retrieve OpenSSL own default. This should make
-        # urllib3.future less seen by basic firewall anti-bot rules.
-        context.set_ciphers("DEFAULT")
+        # urllib3.future less flagged by basic firewall anti-bot rules.
+        context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
 
     # Setting the default here, as we may have no ssl module on import
     cert_reqs = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
@@ -353,6 +357,8 @@ def ssl_wrap_socket(
     ca_cert_data: None | str | bytes = ...,
     tls_in_tls: Literal[False] = ...,
     alpn_protocols: list[str] | None = ...,
+    certdata: str | bytes | None = ...,
+    keydata: str | bytes | None = ...,
 ) -> ssl.SSLSocket:
     ...
 
@@ -373,6 +379,8 @@ def ssl_wrap_socket(
     ca_cert_data: None | str | bytes = ...,
     tls_in_tls: bool = ...,
     alpn_protocols: list[str] | None = ...,
+    certdata: str | bytes | None = ...,
+    keydata: str | bytes | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType:
     ...
 
@@ -392,6 +400,8 @@ def ssl_wrap_socket(
     ca_cert_data: None | str | bytes = None,
     tls_in_tls: bool = False,
     alpn_protocols: list[str] | None = None,
+    certdata: str | bytes | None = None,
+    keydata: str | bytes | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -417,6 +427,10 @@ def ssl_wrap_socket(
         Use SSLTransport to wrap the existing socket.
     :param alpn_protocols:
         Manually specify other protocols to be announced during tls handshake.
+    :param certdata:
+        Specify an in-memory client intermediary certificate for mTLS.
+    :param keydata:
+        Specify an in-memory client intermediary key for mTLS.
     """
     context = ssl_context
     if context is None:
@@ -445,6 +459,15 @@ def ssl_wrap_socket(
             context.load_cert_chain(certfile, keyfile)
         else:
             context.load_cert_chain(certfile, keyfile, key_password)
+    elif certdata:
+        try:
+            _ctx_load_cert_chain(context, certdata, keydata, key_password)
+        except io.UnsupportedOperation as e:
+            warnings.warn(
+                f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
+                Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
+                UserWarning,
+            )
 
     try:
         context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
@@ -496,3 +519,43 @@ def _ssl_wrap_socket_impl(
         return SSLTransport(sock, ssl_context, server_hostname)
 
     return ssl_context.wrap_socket(sock, server_hostname=server_hostname)
+
+
+def is_capable_for_quic(
+    ctx: ssl.SSLContext | None, ssl_maximum_version: ssl.TLSVersion | int | None
+) -> bool:
+    """
+    Quickly uncover if passed parameters for HTTPSConnection does not exclude QUIC.
+    Some parameters may defacto exclude HTTP/3 over QUIC.
+    -> TLS 1.3 required
+    -> One of the three supported ciphers (listed bellow)
+    """
+    quic_disable: bool = False
+
+    if ctx is not None:
+        if (
+            isinstance(ctx.maximum_version, ssl.TLSVersion)
+            and ctx.maximum_version <= ssl.TLSVersion.TLSv1_2
+        ):
+            quic_disable = True
+        else:
+            any_capable_cipher: bool = False
+            for cipher_dict in ctx.get_ciphers():
+                if cipher_dict["name"] in [
+                    "TLS_AES_128_GCM_SHA256",
+                    "TLS_AES_256_GCM_SHA384",
+                    "TLS_CHACHA20_POLY1305_SHA256",
+                    # Alias-cipher
+                    "CHACHA20-POLY1305-SHA256",
+                    "AES-256-GCM-SHA384",
+                    "AES-128-GCM-SHA256",
+                ]:
+                    any_capable_cipher = True
+                    break
+            if not any_capable_cipher:
+                quic_disable = True
+
+    if ssl_maximum_version and ssl_maximum_version <= ssl.TLSVersion.TLSv1_2:
+        quic_disable = True
+
+    return not quic_disable

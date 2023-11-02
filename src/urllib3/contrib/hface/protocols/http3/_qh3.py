@@ -19,7 +19,10 @@ import typing
 from collections import deque
 from os import environ
 from time import monotonic
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
+
+if typing.TYPE_CHECKING:
+    from typing_extensions import Literal
 
 import qh3.h3.events as h3_events
 import qh3.quic.events as quic_events
@@ -80,15 +83,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             if len(chosen_ciphers) == 0:
                 raise ValueError(
                     f"Unable to find a compatible cipher in '{tls_config.ciphers}' to establish a QUIC connection. "
-                    f"QUIC support one of '{['TLS_'+e for e in available_ciphers.keys()]}' only."
+                    f"QUIC support one of '{['TLS_' + e for e in available_ciphers.keys()]}' only."
                 )
 
             self._configuration.cipher_suites = chosen_ciphers
 
         if tls_config.certfile:
             self._configuration.load_cert_chain(
-                tls_config.certfile,  # type: ignore[arg-type]
-                tls_config.keyfile,  # type: ignore[arg-type]
+                tls_config.certfile,
+                tls_config.keyfile,
                 tls_config.keypassword,
             )
 
@@ -108,6 +111,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
     def is_available(self) -> bool:
+        # todo: decide a limit. 250?
         return not self._terminated
 
     def has_expired(self) -> bool:
@@ -155,7 +159,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             return None
         return self._event_buffer.popleft()
 
-    def has_pending_event(self) -> bool:
+    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         return len(self._event_buffer) > 0
 
     @property
@@ -240,6 +244,16 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> bool | None:
         return self._data_in_flight
 
+    @typing.overload
+    def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None:
+        ...
+
+    @typing.overload
+    def getissuercert(
+        self, *, binary_form: Literal[False] = ...
+    ) -> dict[str, Any] | None:
+        ...
+
     def getissuercert(
         self, *, binary_form: bool = False
     ) -> bytes | dict[str, typing.Any] | None:
@@ -316,6 +330,14 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
 
         return issuer_info
+
+    @typing.overload
+    def getpeercert(self, *, binary_form: Literal[True]) -> bytes:
+        ...
+
+    @typing.overload
+    def getpeercert(self, *, binary_form: Literal[False] = ...) -> dict[str, Any]:
+        ...
 
     def getpeercert(
         self, *, binary_form: bool = False
@@ -471,3 +493,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             raise ValueError("TLS handshake has not been done yet")
 
         return f"TLS_{cipher_suite.name}"
+
+    def reshelve(self, *events: Event) -> None:
+        for ev in reversed(events):
+            self._event_buffer.appendleft(ev)

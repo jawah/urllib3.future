@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import platform
 import select
 import socket
 import ssl
@@ -158,20 +157,6 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
             sock, self.client_context, server_hostname="localhost"
         ) as ssock:
             assert ssock.version() is not None
-            ssock.send(sample_request())
-            response = consume_socket(ssock)
-            validate_response(response)
-
-    @pytest.mark.timeout(PER_TEST_TIMEOUT)
-    def test_unbuffered_text_makefile(self) -> None:
-        self.start_dummy_server()
-
-        sock = socket.create_connection((self.host, self.port))
-        with SSLTransport(
-            sock, self.client_context, server_hostname="localhost"
-        ) as ssock:
-            with pytest.raises(ValueError):
-                ssock.makefile("r", buffering=0)
             ssock.send(sample_request())
             response = consume_socket(ssock)
             validate_response(response)
@@ -425,74 +410,6 @@ class TlsInTlsTestCase(SocketDummyServerTestCase):
                 )
 
     @pytest.mark.timeout(PER_TEST_TIMEOUT)
-    @pytest.mark.parametrize("buffering", [None, 0])
-    def test_tls_in_tls_makefile_raw_rw_binary(self, buffering: int | None) -> None:
-        """
-        Uses makefile with read, write and binary modes without buffering.
-        """
-        self.start_destination_server()
-        self.start_proxy_server()
-
-        sock = socket.create_connection(
-            (self.proxy_server.host, self.proxy_server.port)
-        )
-        with self.client_context.wrap_socket(
-            sock, server_hostname="localhost"
-        ) as proxy_sock:
-            with SSLTransport(
-                proxy_sock, self.client_context, server_hostname="localhost"
-            ) as destination_sock:
-                file = destination_sock.makefile("rwb", buffering)
-                file.write(sample_request())  # type: ignore[call-overload]
-                file.flush()
-
-                response = bytearray(65536)
-                wrote = file.readinto(response)  # type: ignore[union-attr]
-                assert wrote is not None
-                # Allocated response is bigger than the actual response, we
-                # rtrim remaining x00 bytes.
-                str_response = response.decode("utf-8").rstrip("\x00")
-                validate_response(str_response, binary=False)
-                file.close()
-
-    @pytest.mark.skipif(
-        platform.system() == "Windows",
-        reason="Skipping windows due to text makefile support",
-    )
-    @pytest.mark.timeout(PER_TEST_TIMEOUT)
-    def test_tls_in_tls_makefile_rw_text(self) -> None:
-        """
-        Creates a separate buffer for reading and writing using text mode and
-        utf-8 encoding.
-        """
-        self.start_destination_server()
-        self.start_proxy_server()
-
-        sock = socket.create_connection(
-            (self.proxy_server.host, self.proxy_server.port)
-        )
-        with self.client_context.wrap_socket(
-            sock, server_hostname="localhost"
-        ) as proxy_sock:
-            with SSLTransport(
-                proxy_sock, self.client_context, server_hostname="localhost"
-            ) as destination_sock:
-                read = destination_sock.makefile("r", encoding="utf-8")
-                write = destination_sock.makefile("w", encoding="utf-8")
-
-                write.write(sample_request(binary=False))  # type: ignore[arg-type, call-overload]
-                write.flush()
-
-                response = read.read()
-                assert isinstance(response, str)
-                if "\r" not in response:
-                    # Carriage return will be removed when reading as a file on
-                    # some platforms.  We add it before the comparison.
-                    assert isinstance(response, str)
-                    response = response.replace("\n", "\r\n")
-                validate_response(response, binary=False)
-
-    @pytest.mark.timeout(PER_TEST_TIMEOUT)
     def test_tls_in_tls_recv_into_sendall(self) -> None:
         """
         Valides recv_into and sendall also work as expected. Other tests are
@@ -548,16 +465,6 @@ class TestSSLTransportWithMock:
 
         with pytest.raises(ValueError):
             ssl_transport.send(None, flags=1)  # type: ignore[arg-type]
-
-    def test_makefile_wrong_mode_error(self) -> None:
-        server_hostname = "example-domain.com"
-        sock = mock.Mock()
-        context = mock.create_autospec(ssl_.SSLContext)
-        ssl_transport = SSLTransport(
-            sock, context, server_hostname=server_hostname, suppress_ragged_eofs=False
-        )
-        with pytest.raises(ValueError):
-            ssl_transport.makefile(mode="x")
 
     def test_wrap_ssl_read_error(self) -> None:
         server_hostname = "example-domain.com"

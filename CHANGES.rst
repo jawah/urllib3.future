@@ -1,3 +1,67 @@
+2.2.900 (2023-11-01)
+====================
+
+- Added support for in-memory client (intermediary) certificate to be used with mTLS.
+  This feature compensate for the complete removal of ``pyOpenSSL``. Unfortunately it is only
+  available on Linux, OpenBSD, and FreeBSD. Using newly added ``cert_data`` and ``key_data`` arguments
+  in ``HTTPSConnection`` and ``HTTPSPoolConnection`` you will be capable of passing the certificate along with
+  its key without getting nowhere near your filesystem.
+  MacOS and Windows are not concerned by this feature when using HTTP/1.1, and HTTP/2 with TLS over TCP.
+- Removed remnant ``SSLTransport.makefile`` as it was built to circumvent a legacy constraint when urllib3 depended upon
+  ``http.client``.
+- Bumped minimum requirement for ``qh3`` to version 0.13.0 in order to support in-memory client certificate (mTLS).
+- Symbolic complete detachment from ``http.client``. Removed all references and imports to ``http.client``. Farewell!
+- Changed the default ciphers in default SSLContext for an **increased** security level.
+  *Rational:* Earlier in v2.1.901 we initialized the SSLContext ciphers with the value ``DEFAULT`` but after much
+  consideration, after we saw that the associated ciphers (e.g. ``DEFAULT`` from OpenSSL) includes some weak suites
+  we decided to inject a rather safer and limited cipher suite. It is based on https://ssl-config.mozilla.org
+  Starting now, urllib3.future will match Mozilla cipher recommendations (intermediary) and will regularly update the suite.
+- Added support for multiplexed connection. HTTP/2 and HTTP/3 can benefit from this.
+  urllib3.future no longer blocks when ``urlopen(...)`` is invoked using ``multiplexed=True``, and return
+  a ``ResponsePromise`` instead of a ``HTTPResponse``. You may dispatch as much requests as the protocol
+  permits you (concurrent stream) and then retrieve the response(s) using the ``get_response(...)``.
+  ``get_response(...)`` can take up to one kwarg to specify the target promise, if none specified, will retrieve
+  the first available response. ``multiplexed`` is set to False by default and will likely be the default for a long
+  time.
+  Here is an example::
+
+    from urllib3 import PoolManager
+
+    with PoolManager() as pm:
+        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
+        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
+        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
+        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
+        response0 = pm.get_response()
+        # the second request arrived first
+        response0.json()["url"]  # https://pie.dev/delay/1
+        # the first arrived last
+        response1 = pm.get_response()
+        response1.json()["url"]  # https://pie.dev/delay/3
+
+  or you may do::
+
+    from urllib3 import PoolManager
+
+    with PoolManager() as pm:
+        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
+        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
+        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
+        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
+        response0 = pm.get_response(promise=promise0)
+        # forcing retrieving promise0
+        response0.json()["url"]  # https://pie.dev/delay/3
+        # then pick first available
+        response1 = pm.get_response()
+        response1.json()["url"]  # https://pie.dev/delay/1
+
+  You may do multiplexing using ``PoolManager``, and ``HTTPSPoolConnection``. Connection upgrade
+  to HTTP/3 cannot be done until all in-flight requests are completed.
+  Be aware that a non-capable connection (e.g. HTTP/1.1) will just ignore the ``multiplexed=True`` setting
+  and act traditionally.
+- Connection are now released into their respective pool when the connection support multiplexing (HTTP/2, HTTP/3)
+  before the response has been consumed. This allows to have multiple response half-consumed from a single connection.
+
 2.1.903 (2023-10-23)
 ====================
 

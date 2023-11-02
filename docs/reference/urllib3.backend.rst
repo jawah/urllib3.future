@@ -14,4 +14,10 @@ Backends
 .. autoclass:: urllib3.backend.HttpVersion
     :members:
 
+.. autoclass:: urllib3.backend.ResponsePromise
+    :members:
+
 .. autoclass:: urllib3.backend.QuicPreemptiveCacheType
+
+.. autoclass:: urllib3.backend.ConnectionInfo
+    :members:

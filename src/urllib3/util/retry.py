@@ -22,7 +22,7 @@ from .util import reraise
 
 if typing.TYPE_CHECKING:
     from ..connectionpool import ConnectionPool
-    from ..response import BaseHTTPResponse
+    from ..response import HTTPResponse
 
 log = logging.getLogger(__name__)
 
@@ -318,7 +318,7 @@ class Retry:
 
         return seconds
 
-    def get_retry_after(self, response: BaseHTTPResponse) -> float | None:
+    def get_retry_after(self, response: HTTPResponse) -> float | None:
         """Get the value of Retry-After in seconds."""
 
         retry_after = response.headers.get("Retry-After")
@@ -328,7 +328,7 @@ class Retry:
 
         return self.parse_retry_after(retry_after)
 
-    def sleep_for_retry(self, response: BaseHTTPResponse) -> bool:
+    def sleep_for_retry(self, response: HTTPResponse) -> bool:
         retry_after = self.get_retry_after(response)
         if retry_after:
             time.sleep(retry_after)
@@ -342,7 +342,7 @@ class Retry:
             return
         time.sleep(backoff)
 
-    def sleep(self, response: BaseHTTPResponse | None = None) -> None:
+    def sleep(self, response: HTTPResponse | None = None) -> None:
         """Sleep between retry attempts.
 
         This method will respect a server's ``Retry-After`` response header
@@ -425,7 +425,7 @@ class Retry:
         self,
         method: str | None = None,
         url: str | None = None,
-        response: BaseHTTPResponse | None = None,
+        response: HTTPResponse | None = None,
         error: Exception | None = None,
         _pool: ConnectionPool | None = None,
         _stacktrace: TracebackType | None = None,
@@ -434,7 +434,7 @@ class Retry:
 
         :param response: A response object, or None, if the server did not
             return a response.
-        :type response: :class:`~urllib3.response.BaseHTTPResponse`
+        :type response: :class:`~urllib3.response.HTTPResponse`
         :param Exception error: An error encountered during the request, or
             None if the response was received successfully.
 

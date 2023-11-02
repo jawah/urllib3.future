@@ -7,7 +7,12 @@ from urllib.parse import urlencode
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY, _TYPE_ENCODE_URL_FIELDS, _TYPE_FIELDS
 from .filepost import encode_multipart_formdata
-from .response import BaseHTTPResponse
+from .response import HTTPResponse
+
+if typing.TYPE_CHECKING:
+    from typing_extensions import Literal
+
+    from .backend import ResponsePromise
 
 __all__ = ["RequestMethods"]
 
@@ -46,6 +51,36 @@ class RequestMethods:
     def __init__(self, headers: typing.Mapping[str, str] | None = None) -> None:
         self.headers = headers or {}
 
+    @typing.overload
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = None,
+        headers: typing.Mapping[str, str] | None = None,
+        encode_multipart: bool = True,
+        multipart_boundary: str | None = None,
+        *,
+        multiplexed: Literal[False] = ...,
+        **kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def urlopen(
+        self,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = None,
+        headers: typing.Mapping[str, str] | None = None,
+        encode_multipart: bool = True,
+        multipart_boundary: str | None = None,
+        *,
+        multiplexed: Literal[True],
+        **kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
+
     def urlopen(
         self,
         method: str,
@@ -55,11 +90,41 @@ class RequestMethods:
         encode_multipart: bool = True,
         multipart_boundary: str | None = None,
         **kw: typing.Any,
-    ) -> BaseHTTPResponse:  # Abstract
+    ) -> HTTPResponse | ResponsePromise:
         raise NotImplementedError(
             "Classes extending RequestMethods must implement "
             "their own ``urlopen`` method."
         )
+
+    @typing.overload
+    def request(
+        self,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = ...,
+        fields: _TYPE_FIELDS | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        json: typing.Any | None = ...,
+        *,
+        multiplexed: Literal[False] = ...,
+        **urlopen_kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def request(
+        self,
+        method: str,
+        url: str,
+        body: _TYPE_BODY | None = ...,
+        fields: _TYPE_FIELDS | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        json: typing.Any | None = ...,
+        *,
+        multiplexed: Literal[True],
+        **urlopen_kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
 
     def request(
         self,
@@ -70,7 +135,7 @@ class RequestMethods:
         headers: typing.Mapping[str, str] | None = None,
         json: typing.Any | None = None,
         **urlopen_kw: typing.Any,
-    ) -> BaseHTTPResponse:
+    ) -> HTTPResponse | ResponsePromise:
         """
         Make a request using :meth:`urlopen` with the appropriate encoding of
         ``fields`` based on the ``method`` used.
@@ -110,9 +175,39 @@ class RequestMethods:
                 **urlopen_kw,
             )
         else:
-            return self.request_encode_body(
-                method, url, fields=fields, headers=headers, **urlopen_kw
+            return self.request_encode_body(  # type: ignore[no-any-return]
+                method,
+                url,
+                fields=fields,
+                headers=headers,
+                **urlopen_kw,
             )
+
+    @typing.overload
+    def request_encode_url(
+        self,
+        method: str,
+        url: str,
+        fields: _TYPE_ENCODE_URL_FIELDS | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        *,
+        multiplexed: Literal[False] = ...,
+        **urlopen_kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def request_encode_url(
+        self,
+        method: str,
+        url: str,
+        fields: _TYPE_ENCODE_URL_FIELDS | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        *,
+        multiplexed: Literal[True],
+        **urlopen_kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
 
     def request_encode_url(
         self,
@@ -120,8 +215,8 @@ class RequestMethods:
         url: str,
         fields: _TYPE_ENCODE_URL_FIELDS | None = None,
         headers: typing.Mapping[str, str] | None = None,
-        **urlopen_kw: str,
-    ) -> BaseHTTPResponse:
+        **urlopen_kw: typing.Any,
+    ) -> HTTPResponse | ResponsePromise:
         """
         Make a request using :meth:`urlopen` with the ``fields`` encoded in
         the url. This is useful for request methods like GET, HEAD, DELETE, etc.
@@ -135,7 +230,37 @@ class RequestMethods:
         if fields:
             url += "?" + urlencode(fields)
 
-        return self.urlopen(method, url, **extra_kw)
+        return self.urlopen(method, url, **extra_kw)  # type: ignore[no-any-return]
+
+    @typing.overload
+    def request_encode_body(
+        self,
+        method: str,
+        url: str,
+        fields: _TYPE_FIELDS | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        encode_multipart: bool = ...,
+        multipart_boundary: str | None = ...,
+        *,
+        multiplexed: Literal[False] = ...,
+        **urlopen_kw: typing.Any,
+    ) -> HTTPResponse:
+        ...
+
+    @typing.overload
+    def request_encode_body(
+        self,
+        method: str,
+        url: str,
+        fields: _TYPE_FIELDS | None = ...,
+        headers: typing.Mapping[str, str] | None = ...,
+        encode_multipart: bool = ...,
+        multipart_boundary: str | None = ...,
+        *,
+        multiplexed: Literal[True],
+        **urlopen_kw: typing.Any,
+    ) -> ResponsePromise:
+        ...
 
     def request_encode_body(
         self,
@@ -145,8 +270,8 @@ class RequestMethods:
         headers: typing.Mapping[str, str] | None = None,
         encode_multipart: bool = True,
         multipart_boundary: str | None = None,
-        **urlopen_kw: str,
-    ) -> BaseHTTPResponse:
+        **urlopen_kw: typing.Any,
+    ) -> HTTPResponse | ResponsePromise:
         """
         Make a request using :meth:`urlopen` with the ``fields`` encoded in
         the body. This is useful for request methods like POST, PUT, PATCH, etc.
@@ -209,4 +334,4 @@ class RequestMethods:
 
         extra_kw.update(urlopen_kw)
 
-        return self.urlopen(method, url, **extra_kw)
+        return self.urlopen(method, url, **extra_kw)  # type: ignore[no-any-return]

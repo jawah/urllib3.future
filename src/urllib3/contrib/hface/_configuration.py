@@ -37,9 +37,9 @@ class QuicTLSConfig:
     cadata: bytes | None = None
 
     #: If provided, will trigger an additional load_cert_chain() upon the QUIC Configuration
-    certfile: str | None = None
+    certfile: str | bytes | None = None
 
-    keyfile: str | None = None
+    keyfile: str | bytes | None = None
 
     keypassword: str | bytes | None = None
 

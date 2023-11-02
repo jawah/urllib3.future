@@ -15,7 +15,7 @@ from . import exceptions
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY, _TYPE_FIELDS
 from ._version import __version__
-from .backend import ConnectionInfo, HttpVersion
+from .backend import ConnectionInfo, HttpVersion, ResponsePromise
 from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, connection_from_url
 from .filepost import encode_multipart_formdata
 from .poolmanager import PoolManager, ProxyManager, proxy_from_url
@@ -67,6 +67,7 @@ __all__ = (
     "BaseHTTPResponse",
     "HttpVersion",
     "ConnectionInfo",
+    "ResponsePromise",
 )
 
 logging.getLogger(__name__).addHandler(NullHandler())
@@ -135,13 +136,22 @@ def request(
     retries: Retry | bool | int | None = None,
     timeout: Timeout | float | int | None = 3,
     json: typing.Any | None = None,
-) -> BaseHTTPResponse:
+    multiplexed: bool = False,
+) -> HTTPResponse:
     """
     A convenience, top-level request method. It uses a module-global ``PoolManager`` instance.
     Therefore, its side effects could be shared across dependencies relying on it.
     To avoid side effects create a new ``PoolManager`` instance and use it instead.
-    The method does not accept low-level ``**urlopen_kw`` keyword arguments.
+    The method does not accept low-level ``**urlopen_kw`` keyword arguments neither does
+    it issue multiplexed/concurrent request.
     """
+
+    if multiplexed:
+        warnings.warn(
+            "Setting multiplexed=True in urllib3.request top-level function is a no-op. "
+            "Use a local PoolManager or HTTPPoolConnection instead.",
+            UserWarning,
+        )
 
     return _DEFAULT_POOL.request(
         method,

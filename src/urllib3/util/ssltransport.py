@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import io
 import socket
 import ssl
 import typing
 
+from .._constant import DEFAULT_BLOCKSIZE
 from ..exceptions import ProxySchemeUnsupported
 
 if typing.TYPE_CHECKING:
@@ -16,8 +16,6 @@ if typing.TYPE_CHECKING:
 _SelfT = typing.TypeVar("_SelfT", bound="SSLTransport")
 _WriteBuffer = typing.Union[bytearray, memoryview]
 _ReturnValue = typing.TypeVar("_ReturnValue")
-
-SSL_BLOCKSIZE = 16384
 
 
 class SSLTransport:
@@ -113,58 +111,6 @@ class SSLTransport:
         if flags != 0:
             raise ValueError("non-zero flags not allowed in calls to send")
         return self._ssl_io_loop(self.sslobj.write, data)
-
-    def makefile(
-        self,
-        mode: str,
-        buffering: int | None = None,
-        *,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> typing.BinaryIO | typing.TextIO | socket.SocketIO:
-        """
-        Python's httpclient uses makefile and buffered io when reading HTTP
-        messages and we need to support it.
-
-        This is unfortunately a copy and paste of socket.py makefile with small
-        changes to point to the socket directly.
-        """
-        if not set(mode) <= {"r", "w", "b"}:
-            raise ValueError(f"invalid mode {mode!r} (only r, w, b allowed)")
-
-        writing = "w" in mode
-        reading = "r" in mode or not writing
-        assert reading or writing
-        binary = "b" in mode
-        rawmode = ""
-        if reading:
-            rawmode += "r"
-        if writing:
-            rawmode += "w"
-        raw = socket.SocketIO(self, rawmode)  # type: ignore[arg-type]
-        self.socket._io_refs += 1  # type: ignore[attr-defined]
-        if buffering is None:
-            buffering = -1
-        if buffering < 0:
-            buffering = io.DEFAULT_BUFFER_SIZE
-        if buffering == 0:
-            if not binary:
-                raise ValueError("unbuffered streams must be binary")
-            return raw
-        buffer: typing.BinaryIO
-        if reading and writing:
-            buffer = io.BufferedRWPair(raw, raw, buffering)  # type: ignore[assignment]
-        elif reading:
-            buffer = io.BufferedReader(raw, buffering)
-        else:
-            assert writing
-            buffer = io.BufferedWriter(raw, buffering)
-        if binary:
-            return buffer
-        text = io.TextIOWrapper(buffer, encoding, errors, newline)
-        text.mode = mode  # type: ignore[misc]
-        return text
 
     def unwrap(self) -> None:
         self._ssl_io_loop(self.sslobj.unwrap)
@@ -272,7 +218,7 @@ class SSLTransport:
             if errno is None:
                 should_loop = False
             elif errno == ssl.SSL_ERROR_WANT_READ:
-                buf = self.socket.recv(SSL_BLOCKSIZE)
+                buf = self.socket.recv(DEFAULT_BLOCKSIZE)
                 if buf:
                     self.incoming.write(buf)
                 else:

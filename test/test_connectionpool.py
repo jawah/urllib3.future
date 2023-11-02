@@ -3,7 +3,6 @@ from __future__ import annotations
 import http.client as httplib
 import ssl
 import typing
-from http.client import HTTPException
 from queue import Empty
 from socket import error as SocketError
 from ssl import SSLError as BaseSSLError
@@ -343,7 +342,7 @@ class TestConnectionPool:
             # being raised, a retry will be triggered, but that retry will
             # fail, eventually raising MaxRetryError, not EmptyPoolError
             # See: https://github.com/urllib3/urllib3/issues/76
-            with patch.object(pool, "_make_request", side_effect=HTTPException()):
+            with patch.object(pool, "_make_request", side_effect=OSError()):
                 with pytest.raises(MaxRetryError):
                     pool.request("GET", "/", retries=1, pool_timeout=SHORT_TIMEOUT)
             assert pool.pool is not None
@@ -579,7 +578,7 @@ class TestConnectionPool:
 
         # Run the test case for all the retriable exceptions.
         _test(TimeoutError)
-        _test(HTTPException)
+        _test(OSError)
         _test(SocketError)
         _test(ProtocolError)
 

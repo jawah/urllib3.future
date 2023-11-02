@@ -223,7 +223,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             return None
         return self._event_buffer.popleft()
 
-    def has_pending_event(self) -> bool:
+    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         return len(self._event_buffer) > 0
 
     def _h11_submit(self, h11_event: h11.Event) -> None:
@@ -293,3 +293,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             if data:
                 self._event_buffer.append(DataReceived(self._current_stream_id, data))
             self._switched = True
+
+    def reshelve(self, *events: Event) -> None:
+        raise NotImplementedError("HTTP/1.1 is not multiplexed")

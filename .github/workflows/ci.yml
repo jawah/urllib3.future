@@ -47,7 +47,7 @@ jobs:
           - macos-latest
           - windows-latest
           - ubuntu-20.04  # OpenSSL 1.1.1
-          - ubuntu-22.04  # OpenSSL 3.0
+          - ubuntu-latest  # OpenSSL 3.0
         nox-session: ['']
         include:
           - experimental: false
@@ -89,7 +89,7 @@ jobs:
             os: ubuntu-22.04
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-latest":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-22.04":"Ubuntu 22.04 (OpenSSL 3.0)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-latest":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-latest":"Ubuntu Latest (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 40
     steps:
@@ -208,7 +208,7 @@ jobs:
                   - --log.level=INFO
             
               httpbin:
-                image: mccutchen/go-httpbin:v2.10.0
+                image: mccutchen/go-httpbin:v2.11.1
                 restart: unless-stopped
                 depends_on:
                   proxy:

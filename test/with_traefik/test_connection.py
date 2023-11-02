@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from http.client import ResponseNotReady
-
 import pytest
 
 from urllib3 import HttpVersion
 from urllib3.connection import HTTPSConnection
+from urllib3.exceptions import ResponseNotReady
 
 from . import TraefikTestCase
 

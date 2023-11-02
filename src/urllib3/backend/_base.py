@@ -3,12 +3,15 @@ from __future__ import annotations
 import enum
 import socket
 import typing
+from base64 import b64encode
+from secrets import token_bytes
 
 if typing.TYPE_CHECKING:
     from ssl import SSLSocket, SSLContext, TLSVersion
     from .._typing import _TYPE_SOCKET_OPTIONS
 
 from .._collections import HTTPHeaderDict
+from .._constant import DEFAULT_BLOCKSIZE
 
 
 class HttpVersion(str, enum.Enum):
@@ -64,10 +67,11 @@ class LowLevelResponse:
         version: int,
         reason: str,
         headers: HTTPHeaderDict,
-        body: typing.Callable[[int | None], tuple[bytes, bool]] | None,
+        body: typing.Callable[[int | None, int | None], tuple[bytes, bool]] | None,
         *,
         authority: str | None = None,
         port: int | None = None,
+        stream_id: int | None = None,
     ):
         self.status = status
         self.version = version
@@ -83,7 +87,20 @@ class LowLevelResponse:
         self.authority = authority
         self.port = port
 
+        self._stream_id = stream_id
+
         self.__buffer_excess: bytes = b""
+        self.__promise: ResponsePromise | None = None
+
+    @property
+    def from_promise(self) -> ResponsePromise | None:
+        return self.__promise
+
+    @from_promise.setter
+    def from_promise(self, value: ResponsePromise) -> None:
+        if value.stream_id != self._stream_id:
+            raise ValueError
+        self.__promise = value
 
     @property
     def method(self) -> str:
@@ -105,7 +122,7 @@ class LowLevelResponse:
             return b""  # Defensive: This is unreachable, this case is already covered higher in the stack.
 
         if self._eot is False:
-            data, self._eot = self.__internal_read_st(__size)
+            data, self._eot = self.__internal_read_st(__size, self._stream_id)
 
             # that's awkward, but rather no choice. the state machine
             # consume and render event regardless of your amt !
@@ -135,8 +152,64 @@ class LowLevelResponse:
         self.closed = True
 
 
-_HostPortType = typing.Tuple[str, int]
-QuicPreemptiveCacheType = typing.MutableMapping[
+class ResponsePromise:
+    def __init__(
+        self,
+        conn: BaseBackend,
+        stream_id: int,
+        request_headers: list[tuple[bytes, bytes]],
+        **parameters: typing.Any,
+    ) -> None:
+        self._uid: str = b64encode(token_bytes(16)).decode("ascii")
+        self._conn: BaseBackend = conn
+        self._stream_id: int = stream_id
+        self._response: LowLevelResponse | None = None
+        self._request_headers = request_headers
+        self._parameters: typing.MutableMapping[str, typing.Any] = parameters
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ResponsePromise):
+            return False
+        return self.uid == other.uid
+
+    def __repr__(self) -> str:
+        return f"<ResponsePromise '{self.uid}' {self._conn._http_vsn_str} Stream[{self.stream_id}]>"
+
+    @property
+    def uid(self) -> str:
+        return self._uid
+
+    @property
+    def request_headers(self) -> list[tuple[bytes, bytes]]:
+        return self._request_headers
+
+    @property
+    def stream_id(self) -> int:
+        return self._stream_id
+
+    @property
+    def is_ready(self) -> bool:
+        return self._response is not None
+
+    @property
+    def response(self) -> LowLevelResponse:
+        if not self._response:
+            raise OSError
+        return self._response
+
+    @response.setter
+    def response(self, value: LowLevelResponse) -> None:
+        self._response = value
+
+    def set_parameter(self, key: str, value: typing.Any) -> None:
+        self._parameters[key] = value
+
+    def get_parameter(self, key: str) -> typing.Any | None:
+        return self._parameters[key] if key in self._parameters else None
+
+
+_HostPortType: typing.TypeAlias = typing.Tuple[str, int]
+QuicPreemptiveCacheType: typing.TypeAlias = typing.MutableMapping[
     _HostPortType, typing.Optional[_HostPortType]
 ]
 
@@ -173,9 +246,9 @@ class BaseBackend:
         port: int | None = None,
         timeout: int | float | None = -1,
         source_address: tuple[str, int] | None = None,
-        blocksize: int = 8192,
+        blocksize: int = DEFAULT_BLOCKSIZE,
         *,
-        socket_options: None | _TYPE_SOCKET_OPTIONS = default_socket_options,
+        socket_options: _TYPE_SOCKET_OPTIONS | None = default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):
@@ -197,17 +270,22 @@ class BaseBackend:
         self._tunnel_scheme: str | None = None
         self._tunnel_headers: typing.Mapping[str, str] = dict()
 
-        self._disabled_svn = disabled_svn or set()
+        self._disabled_svn = disabled_svn if disabled_svn is not None else set()
         self._preemptive_quic_cache = preemptive_quic_cache
 
         if self._disabled_svn:
             if HttpVersion.h11 in self._disabled_svn:
                 raise RuntimeError(
-                    "HTTP/1.1 cannot be disabled. It will be allowed in a future urllib3 version."
+                    "HTTP/1.1 cannot be disabled. It will be allowed in a future major version."
                 )
 
         # valuable intel
         self.conn_info: ConnectionInfo | None = None
+
+        self._promises: list[ResponsePromise] = []
+
+    def __contains__(self, item: ResponsePromise) -> bool:
+        return item in self._promises
 
     @property
     def disabled_svn(self) -> set[HttpVersion]:
@@ -224,6 +302,14 @@ class BaseBackend:
         """Reimplemented for backward compatibility purposes."""
         assert self._svn is not None
         return int(self._svn.value.split("/")[-1].replace(".", ""))
+
+    @property
+    def is_saturated(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def is_multiplexed(self) -> bool:
+        raise NotImplementedError
 
     def _upgrade(self) -> None:
         """Upgrade conn from svn ver to max supported."""
@@ -292,11 +378,13 @@ class BaseBackend:
         *,
         encode_chunked: bool = False,
         expect_body_afterward: bool = False,
-    ) -> None:
+    ) -> ResponsePromise | None:
         """This method conclude the request context construction."""
         raise NotImplementedError
 
-    def getresponse(self) -> LowLevelResponse:
+    def getresponse(
+        self, *, promise: ResponsePromise | None = None
+    ) -> LowLevelResponse:
         """Fetch the HTTP response. You SHOULD not retrieve the body in that method, it SHOULD be done
         in the LowLevelResponse, so it enable stream capabilities and remain efficient.
         """
@@ -311,7 +399,7 @@ class BaseBackend:
         data: (bytes | typing.IO[typing.Any] | typing.Iterable[bytes] | str),
         *,
         eot: bool = False,
-    ) -> None:
+    ) -> ResponsePromise | None:
         """The send() method SHOULD be invoked after calling endheaders() if and only if the request
         context specify explicitly that a body is going to be sent."""
         raise NotImplementedError

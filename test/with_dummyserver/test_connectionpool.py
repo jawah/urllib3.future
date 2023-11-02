@@ -14,7 +14,7 @@ import pytest
 
 from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
 from dummyserver.testcase import HTTPDummyServerTestCase, SocketDummyServerTestCase
-from urllib3 import HTTPConnectionPool, encode_multipart_formdata
+from urllib3 import HTTPConnectionPool, ResponsePromise, encode_multipart_formdata
 from urllib3._collections import HTTPHeaderDict
 from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
 from urllib3.connection import _get_default_user_agent
@@ -1084,6 +1084,15 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             request_headers = r.json()
             assert "User-Agent" in request_headers
             assert request_headers["User-Agent"] == "Schönefeld/1.18.0"
+
+    def test_fake_multiplexed_connection(self) -> None:
+        with HTTPConnectionPool(self.host, self.port, maxsize=3) as pool:
+            promise_a = pool.request("GET", "/headers", multiplexed=True)
+            assert not isinstance(promise_a, ResponsePromise)
+            assert pool.num_connections == 1
+            promise_b = pool.request("GET", "/headers", multiplexed=True)
+            assert not isinstance(promise_b, ResponsePromise)
+            assert pool.num_connections == 1
 
 
 class TestRetry(HTTPDummyServerTestCase):

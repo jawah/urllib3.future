@@ -688,3 +688,99 @@ It takes a ``set`` of ``HttpVersion`` like so:
 
     HTTP/3 require installing ``qh3`` package if not automatically available. Setting disabled_svn has no effect otherwise.
     Also, you cannot disable HTTP/1.1 at the current state of affairs.
+
+Multiplexed connection
+----------------------
+
+Since the version 2.2 you can emit multiple concurrent requests and retrieve the responses later.
+A new keyword argument is available in ``PoolManager``, ``HTTPPoolConnection`` through the following methods:
+
+- :meth:`~urllib3.PoolManager.request`
+- :meth:`~urllib3.PoolManager.urlopen`
+- :meth:`~urllib3.PoolManager.request_encode_url`
+- :meth:`~urllib3.PoolManager.request_encode_body`
+
+When you omit ``multiplexed=...`` it default to the old behavior of waiting upon the response and return a :class:`~urllib3.response.HTTPResponse`
+otherwise if you specify ``multiplexed=True`` it will return a :class:`~urllib3.backend.ResponsePromise` instead.
+
+Here is an example::
+
+    from urllib3 import PoolManager
+
+    with PoolManager() as pm:
+        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
+        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
+        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
+        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
+        response0 = pm.get_response()
+        # the second request arrived first
+        response0.json()["url"]  # https://pie.dev/delay/1
+        # the first arrived last
+        response1 = pm.get_response()
+        response1.json()["url"]  # https://pie.dev/delay/3
+
+  or you may do::
+
+    from urllib3 import PoolManager
+
+    with PoolManager() as pm:
+        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
+        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
+        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
+        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
+        response0 = pm.get_response(promise=promise0)
+        # forcing retrieving promise0
+        response0.json()["url"]  # https://pie.dev/delay/3
+        # then pick first available
+        response1 = pm.get_response()
+        response1.json()["url"]  # https://pie.dev/delay/1
+
+.. note:: You cannot expect the connection upgrade to HTTP/3 if all in-flight request aren't consumed.
+
+.. warning:: Using ``multiplexed=True`` if the target connection does not support it is ignored and assume you meant ``multiplexed=False``. It will raise a warning in a future version.
+
+Associate a promise to its response
+-----------------------------------
+
+When issuing concurrent request using ``multiplexed=True`` and want to retrieve
+the responses in whatever order they may come, you may want to clearly identify the originating promise.
+
+To identify with certainty::
+
+    from urllib3 import PoolManager
+
+    with PoolManager() as pm:
+        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
+        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
+        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
+        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
+        response = pm.get_response()
+        # verify that response is linked to second promise
+        response.is_from_promise(promise0)
+        # True!
+        response.is_from_promise(promise1)
+        # False.
+
+In-memory client (mTLS) certificate
+-----------------------------------
+
+.. note:: Available since version 2.2
+
+Using newly added ``cert_data`` and ``key_data`` arguments in ``HTTPSConnection``, ``HTTPSPoolConnection`` and ``PoolManager``.
+you will be capable of passing the certificate along with its key without getting nowhere near your filesystem.
+
+.. warning:: When connected to a TLS over TCP, this is only supported with Linux, FreeBSD, and OpenBSD. When connected over QUIC (e.g. HTTP/3) it is broadly supported.
+
+This feature compensate for the complete removal of ``pyOpenSSL``.
+
+You may give your certificate to urllib3.future this way::
+
+    with HTTPSConnectionPool(
+        self.host,
+        self.port,
+        key_data=CLIENT_INTERMEDIATE_KEY,
+        cert_data=CLIENT_INTERMEDIATE_PEM,
+    ) as https_pool:
+        r = https_pool.request("GET", "/")
+
+.. note:: If your platform isn't served by this feature it will raise a warning and ignore the certificate.
