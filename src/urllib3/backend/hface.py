@@ -572,6 +572,8 @@ class HfaceBackend(BaseBackend):
                 else:
                     if isinstance(event, event_type_collectable):
                         events.append(event)
+                    else:
+                        reshelve_events.append(event)
 
                 target_cap_reached: bool = (
                     maximal_data_in_read is not None
@@ -755,7 +757,16 @@ class HfaceBackend(BaseBackend):
 
         if events and events[-1].end_stream:
             eot = True
-            if not self._promises:
+            _r = None
+
+            for _r in self._pending_responses:
+                if _r._stream_id == __stream_id:
+                    break
+
+            if _r:
+                self._pending_responses.remove(_r)
+
+            if self.is_idle:
                 # probe for h3/quic if available, and remember it.
                 self._upgrade()
 
@@ -852,12 +863,14 @@ class HfaceBackend(BaseBackend):
             self.__session_ticket = self._protocol.session_ticket
 
         if eot:
-            if not self._promises:
+            if self.is_idle:
                 self._upgrade()
 
             # remote can refuse future inquiries, so no need to go further with this conn.
             if self._protocol and self._protocol.has_expired():
                 self.close()
+        else:
+            self._pending_responses.append(response)
 
         return response
 

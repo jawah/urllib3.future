@@ -441,7 +441,11 @@ class PoolManager(RequestMethods):
             if not pool:
                 continue
 
-            response = pool.get_response(promise=promise)
+            try:
+                response = pool.get_response(promise=promise)
+            except ValueError:
+                response = None
+
             put_back_pool.append((pool_key, pool))
 
             if response:
@@ -449,6 +453,11 @@ class PoolManager(RequestMethods):
 
         for pool_key, pool in put_back_pool:
             self.pools[pool_key] = pool
+
+        if promise is not None and response is None:
+            raise ValueError(
+                "Invoked get_response with promise=... that no connections across pools recognize"
+            )
 
         if response is None:
             return None

@@ -247,8 +247,8 @@ class HTTPConnection(HfaceBackend):
     def is_connected(self) -> bool:
         if self.sock is None:
             return False
-        # wait_for_read become flaky with concurrent streams!
-        if self._promises:
+        # wait_for_read: not functional with multiplexed connection!
+        if self._promises or self._pending_responses:
             return True
         return not wait_for_read(self.sock, timeout=0.0)
 

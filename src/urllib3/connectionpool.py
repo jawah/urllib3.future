@@ -13,7 +13,7 @@ from types import TracebackType
 from ._collections import HTTPHeaderDict
 from ._request_methods import RequestMethods
 from ._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
-from .backend import ConnectionInfo, HttpVersion, ResponsePromise
+from .backend import ConnectionInfo, ResponsePromise
 from .connection import (
     BaseSSLError,
     BrokenPipeError,
@@ -290,6 +290,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if conn and is_connection_dropped(conn):
             log.debug("Resetting dropped connection: %s", self.host)
             conn.close()
+        elif conn and conn.is_saturated is True and no_new is False:
+            try:
+                return self._get_conn(timeout=timeout, no_new=no_new)
+            finally:
+                self._put_conn(conn)
 
         return conn or self._new_conn()
 
@@ -413,7 +418,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             self._put_conn(conn)
 
         if promise is not None and response is None:
-            raise ValueError
+            raise ValueError(
+                "Invoked get_response with promise=... that no connection in pool recognize"
+            )
 
         if response is None:
             return None
@@ -1155,12 +1162,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     conn.close()
                     conn = None
                 release_this_conn = True
-            elif (
-                conn
-                and conn.is_saturated is False
-                and conn.conn_info is not None
-                and conn.conn_info.http_version != HttpVersion.h11
-            ):
+            elif conn and conn.is_multiplexed is True:
                 # multiplexing allows us to issue more requests.
                 release_this_conn = True
 

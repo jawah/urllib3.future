@@ -283,6 +283,7 @@ class BaseBackend:
         self.conn_info: ConnectionInfo | None = None
 
         self._promises: list[ResponsePromise] = []
+        self._pending_responses: list[LowLevelResponse] = []
 
     def __contains__(self, item: ResponsePromise) -> bool:
         return item in self._promises
@@ -306,6 +307,10 @@ class BaseBackend:
     @property
     def is_saturated(self) -> bool:
         raise NotImplementedError
+
+    @property
+    def is_idle(self) -> bool:
+        return not self._promises and not self._pending_responses
 
     @property
     def is_multiplexed(self) -> bool:
