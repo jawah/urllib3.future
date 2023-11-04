@@ -1,3 +1,12 @@
+2.2.901 (2023-11-04)
+====================
+
+- Fixed several issues with multiplexing.
+  (i) Fixed max concurrent streams in HTTP/2, and HTTP/3.
+  (ii) Fixed tracking of unconsumed response prior to try upgrade the connection (to HTTP/3).
+  (iii) Fixed (always) releasing multiplexed connections into pool.
+  (iv) Fixed request having body being interrupted by the ``EarlyResponse`` exception 'signal'.
+
 2.2.900 (2023-11-01)
 ====================
 

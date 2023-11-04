@@ -58,6 +58,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
         self._connection.initiate_connection()
         self._events: deque[Event] = deque()
+        self._events_streams: list[int] = []
         self._terminated: bool = False
 
     @staticmethod
@@ -66,10 +67,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     def is_available(self) -> bool:
         max_streams = self._connection.remote_settings.max_concurrent_streams
-        return (
-            self._terminated is False
-            and max_streams > self._connection.highest_outbound_stream_id
-        )
+        return self._terminated is False and max_streams > len(self._connection.streams)
 
     def has_expired(self) -> bool:
         return self._terminated
@@ -97,13 +95,28 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def next_event(self) -> Event | None:
         if not self._events:
             return None
-        return self._events.popleft()
+        ev = self._events.popleft()
+
+        if hasattr(ev, "stream_id"):
+            self._events_streams.remove(ev.stream_id)
+
+        return ev
 
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        return len(self._events) > 0
+        if stream_id is None:
+            return len(self._events) > 0
+
+        try:
+            self._events_streams.index(stream_id)
+        except ValueError:
+            return False
+
+        return True
 
     def _map_events(self, h2_events: list[h2.events.Event]) -> Iterator[Event]:
         for e in h2_events:
+            if hasattr(e, "stream_id"):
+                self._events_streams.append(e.stream_id)
             if isinstance(
                 e,
                 (
@@ -175,3 +188,5 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
             self._events.appendleft(ev)
+            if hasattr(ev, "stream_id"):
+                self._events_streams.append(ev.stream_id)
