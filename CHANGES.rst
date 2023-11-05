@@ -1,3 +1,8 @@
+2.2.902 (2023-11-05)
+====================
+
+- Fixed QUIC connection not taking ``cert_data`` due to an accidental variable override.
+
 2.2.901 (2023-11-04)
 ====================
 

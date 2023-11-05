@@ -59,10 +59,10 @@ qh3 = [
 ]
 
 [project.urls]
-"Changelog" = "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst"
-"Documentation" = "https://urllib3.readthedocs.io"
-"Code" = "https://github.com/urllib3/urllib3"
-"Issue tracker" = "https://github.com/urllib3/urllib3/issues"
+"Changelog" = "https://github.com/jawah/urllib3.future/blob/main/CHANGES.rst"
+"Documentation" = "https://urllib3future.readthedocs.io"
+"Code" = "https://github.com/jawah/urllib3.future"
+"Issue tracker" = "https://github.com/jawah/urllib3.future/issues"
 
 [tool.hatch.version]
 path = "src/urllib3/_version.py"

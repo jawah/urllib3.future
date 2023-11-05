@@ -95,8 +95,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 tls_config.keypassword,
             )
 
-        self._configuration.load_verify_locations(tls_config.cafile)
-
         self._quic: QuicConnection = QuicConnection(configuration=self._configuration)
         self._connection_ids: set[bytes] = set()
         self._remote_address = remote_address
