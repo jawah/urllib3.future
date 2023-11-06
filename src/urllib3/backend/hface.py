@@ -732,7 +732,7 @@ class HfaceBackend(BaseBackend):
 
         if should_end_stream:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
-            self._promises.append(rp)
+            self._promises[rp.uid] = rp
             return rp
 
         return None
@@ -757,14 +757,9 @@ class HfaceBackend(BaseBackend):
 
         if events and events[-1].end_stream:
             eot = True
-            _r = None
 
-            for _r in self._pending_responses:
-                if _r._stream_id == __stream_id:
-                    break
-
-            if _r:
-                self._pending_responses.remove(_r)
+            if __stream_id in self._pending_responses:
+                del self._pending_responses[__stream_id]
 
             if self.is_idle:
                 # probe for h3/quic if available, and remember it.
@@ -820,7 +815,7 @@ class HfaceBackend(BaseBackend):
                 headers.add(header, value)
 
         if promise is None:
-            for p in self._promises:
+            for p in self._promises.values():
                 if p.stream_id == events[-1].stream_id:
                     promise = p
                     break
@@ -853,7 +848,7 @@ class HfaceBackend(BaseBackend):
         response.from_promise = promise
 
         # we delivered a response, we can safely remove the promise from queue.
-        self._promises.remove(promise)
+        del self._promises[promise.uid]
 
         # keep last response
         self._response: LowLevelResponse = response
@@ -870,7 +865,7 @@ class HfaceBackend(BaseBackend):
             if self._protocol and self._protocol.has_expired():
                 self.close()
         else:
-            self._pending_responses.append(response)
+            self._pending_responses[promise.stream_id] = response
 
         return response
 
@@ -913,7 +908,7 @@ class HfaceBackend(BaseBackend):
                     # this is a bad sign. we should stop sending and instead retrieve the response.
                     if self._protocol.has_pending_event(stream_id=self._stream_id):
                         rp = ResponsePromise(self, self._stream_id, self.__headers)
-                        self._promises.append(rp)
+                        self._promises[rp.uid] = rp
 
                         raise EarlyResponse(promise=rp)
 
@@ -952,7 +947,7 @@ class HfaceBackend(BaseBackend):
 
             if eot or remote_pipe_shutdown:
                 rp = ResponsePromise(self, self._stream_id, self.__headers)
-                self._promises.append(rp)
+                self._promises[rp.uid] = rp
                 if remote_pipe_shutdown:
                     remote_pipe_shutdown.promise = rp  # type: ignore[attr-defined]
                     raise remote_pipe_shutdown

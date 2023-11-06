@@ -282,11 +282,11 @@ class BaseBackend:
         # valuable intel
         self.conn_info: ConnectionInfo | None = None
 
-        self._promises: list[ResponsePromise] = []
-        self._pending_responses: list[LowLevelResponse] = []
+        self._promises: dict[str, ResponsePromise] = {}
+        self._pending_responses: dict[int, LowLevelResponse] = {}
 
     def __contains__(self, item: ResponsePromise) -> bool:
-        return item in self._promises
+        return item.uid in self._promises
 
     @property
     def disabled_svn(self) -> set[HttpVersion]:
