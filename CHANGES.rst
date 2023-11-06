@@ -1,3 +1,8 @@
+2.2.903 (2023-11-06)
+====================
+
+- Improved overall performances in HTTP/2, and HTTP/3, with or without multiplexed.
+
 2.2.902 (2023-11-05)
 ====================
 

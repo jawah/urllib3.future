@@ -99,7 +99,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._connection_ids: set[bytes] = set()
         self._remote_address = remote_address
         self._event_buffer: deque[Event] = deque()
-        self._events_streams: list[int] = []
         self._packets: deque[bytes] = deque()
         self._http: H3Connection | None = None
         self._terminated: bool = False
@@ -110,8 +109,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
     def is_available(self) -> bool:
-        # todo: qh3 hardcode 128 streams as max, change this!
-        return self._terminated is False and 128 > len(self._quic._streams)
+        max_stream_bidi = self._quic._local_max_streams_bidi.value
+        return self._terminated is False and max_stream_bidi > len(self._quic._streams)
 
     def has_expired(self) -> bool:
         return self._terminated
@@ -156,19 +155,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def next_event(self) -> Event | None:
         if not self._event_buffer:
             return None
-        ev = self._event_buffer.popleft()
-        if hasattr(ev, "stream_id"):
-            self._events_streams.remove(ev.stream_id)
-        return ev
+        return self._event_buffer.popleft()
 
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         if stream_id is None:
             return len(self._event_buffer) > 0
-        try:
-            self._events_streams.index(stream_id)
-        except ValueError:
-            return False
-        return True
+        for ev in self._event_buffer:
+            if hasattr(ev, "stream_id") and ev.stream_id == stream_id:
+                return True
+        return False
 
     @property
     def connection_ids(self) -> Sequence[bytes]:
@@ -240,8 +235,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)
 
     def _map_h3_event(self, h3_event: h3_events.H3Event) -> Iterable[Event]:
-        if hasattr(h3_event, "stream_id"):
-            self._events_streams.append(h3_event.stream_id)
         if isinstance(h3_event, h3_events.HeadersReceived):
             yield HeadersReceived(
                 h3_event.stream_id, h3_event.headers, h3_event.stream_ended
@@ -506,6 +499,4 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
-            if hasattr(ev, "stream_id"):
-                self._events_streams.append(ev.stream_id)
             self._event_buffer.appendleft(ev)
