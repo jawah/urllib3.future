@@ -978,3 +978,9 @@ class HfaceBackend(BaseBackend):
 
         self._protocol = None
         self._stream_id = None
+        self._promises = {}
+        self._pending_responses = {}
+        self.__custom_tls_settings = None
+        self.conn_info = None
+        self.__expected_body_length = None
+        self.__remaining_body_length = None
