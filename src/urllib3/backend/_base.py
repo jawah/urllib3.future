@@ -99,7 +99,9 @@ class LowLevelResponse:
     @from_promise.setter
     def from_promise(self, value: ResponsePromise) -> None:
         if value.stream_id != self._stream_id:
-            raise ValueError
+            raise ValueError(
+                "Trying to assign a ResponsePromise to an unrelated LowLevelResponse"
+            )
         self.__promise = value
 
     @property

@@ -475,7 +475,9 @@ class PoolManager(RequestMethods):
                 from_promise = response._fp.from_promise
 
         if from_promise is None:
-            raise ValueError
+            raise ValueError(
+                "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
+            )
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))

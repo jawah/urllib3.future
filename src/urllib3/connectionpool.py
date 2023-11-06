@@ -196,6 +196,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         self.timeout = timeout
         self.retries = retries
 
+        self._maxsize = maxsize
         self.pool: queue.LifoQueue[typing.Any] | None = self.QueueCls(maxsize)
         self.block = block
 
@@ -284,7 +285,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             pass  # Oh well, we'll create a new connection then
 
         if no_new and conn is None:
-            raise ValueError
+            raise ValueError("Explicitly asked to stop get_conn early with no_new=True")
 
         # If this is a persistent connection, check if it got disconnected
         if conn and is_connection_dropped(conn):
@@ -322,7 +323,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             except queue.Full:
                 # Connection never got put back into the pool, close it.
                 if conn:
-                    conn.close()
+                    if conn.is_idle:
+                        conn.close()
 
                 if self.block:
                     # This should never happen if you got the conn from self._get_conn
@@ -330,6 +332,20 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                         self,
                         "Pool reached maximum size and no more connections are allowed.",
                     ) from None
+                else:
+                    # multiplexed connection may still have in-flight request not converted into response
+                    # we shall not discard it until responses are consumed.
+                    if conn and conn.is_idle is False:
+                        log.warning(
+                            "Connection pool is full, temporary increase, keeping connection, "
+                            "multiplexed and not idle: %s. Connection pool size: %s",
+                            self.host,
+                            self.pool.qsize(),
+                        )
+
+                        self.pool.maxsize += 1
+
+                        return self._put_conn(conn)
 
                 log.warning(
                     "Connection pool is full, discarding connection: %s. Connection pool size: %s",
@@ -414,8 +430,24 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     continue
             break
 
+        forget_about_connections = []
+
+        # we exceptionally increased the size (block=False + multiplexed enabled)
+        if len(connections) > self._maxsize:
+            expect_drop_count = len(connections) - self._maxsize
+
+            for conn in connections:
+                if conn.is_idle:
+                    forget_about_connections.append(conn)
+                if len(forget_about_connections) >= expect_drop_count:
+                    break
+
         for conn in connections:
-            self._put_conn(conn)
+            if conn not in forget_about_connections:
+                self._put_conn(conn)
+
+        for conn in forget_about_connections:
+            conn.close()
 
         if promise is not None and response is None:
             raise ValueError(
@@ -438,7 +470,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 from_promise = response._fp.from_promise
 
         if from_promise is None:
-            raise ValueError
+            raise ValueError(
+                "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
+            )
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))

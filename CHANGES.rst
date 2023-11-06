@@ -1,3 +1,9 @@
+2.2.904 (2023-11-06)
+====================
+
+- Fixed concurrent/multiplexed request overflow in a full connection pool.
+- Fixed connection close that had in-flight request (in multiplexed mode), the connection appeared as not idle on clean reuse.
+
 2.2.903 (2023-11-06)
 ====================
 
