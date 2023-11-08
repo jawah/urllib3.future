@@ -1,3 +1,9 @@
+2.2.905 (2023-11-08)
+====================
+
+- Fixed loss of a QUIC connection due to an inappropriate check in ``conn.is_connected``.
+- Separate saturated (multiplexed) connections from the main pool to a distinct one.
+
 2.2.904 (2023-11-06)
 ====================
 

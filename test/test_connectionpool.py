@@ -252,7 +252,7 @@ class TestConnectionPool:
             assert conn1 == pool._get_conn()
             assert conn2 != pool._get_conn()
 
-            assert pool.num_connections == 3
+            assert pool.num_connections == 2
             assert "Connection pool is full, discarding connection" in caplog.text
             assert "Connection pool size: 1" in caplog.text
 

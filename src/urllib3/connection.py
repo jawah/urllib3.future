@@ -250,6 +250,9 @@ class HTTPConnection(HfaceBackend):
         # wait_for_read: not functional with multiplexed connection!
         if self._promises or self._pending_responses:
             return True
+        # wait_for_read: not functional w/ UDP!
+        if self._svn == HttpVersion.h3:
+            return self._protocol is not None and self._protocol.has_expired() is False
         return not wait_for_read(self.sock, timeout=0.0)
 
     @property

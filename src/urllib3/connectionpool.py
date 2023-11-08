@@ -198,6 +198,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         self._maxsize = maxsize
         self.pool: queue.LifoQueue[typing.Any] | None = self.QueueCls(maxsize)
+        self.saturated_pool: queue.LifoQueue[typing.Any] = self.QueueCls(maxsize)
         self.block = block
 
         self.proxy = _proxy
@@ -291,11 +292,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if conn and is_connection_dropped(conn):
             log.debug("Resetting dropped connection: %s", self.host)
             conn.close()
-        elif conn and conn.is_saturated is True and no_new is False:
-            try:
-                return self._get_conn(timeout=timeout, no_new=no_new)
-            finally:
-                self._put_conn(conn)
 
         return conn or self._new_conn()
 
@@ -313,7 +309,26 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         If the pool is closed, then the connection will be closed and discarded.
         """
+
         if self.pool is not None:
+            if conn:
+                if conn.is_multiplexed and conn.is_saturated:
+                    try:
+                        self.saturated_pool.put(conn, block=False)
+                    except queue.Full:
+                        self.num_connections -= 1
+                        conn.close()
+                    return
+                elif (
+                    conn.is_multiplexed
+                    and conn.is_idle
+                    and self.pool.maxsize > self._maxsize
+                ):
+                    self.num_connections -= 1
+                    self.pool.maxsize -= 1
+                    conn.close()
+                    return
+
             try:
                 self.pool.put(conn, block=False)
                 return  # Everything is dandy, done.
@@ -344,7 +359,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                         )
 
                         self.pool.maxsize += 1
-
                         return self._put_conn(conn)
 
                 log.warning(
@@ -352,10 +366,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     self.host,
                     self.pool.qsize(),
                 )
+                self.num_connections -= 1
+                return
 
         # Connection never got put back into the pool, close it.
         if conn:
             conn.close()
+            self.num_connections -= 1
 
     def _validate_conn(self, conn: HTTPConnection) -> None:
         """
@@ -408,16 +425,28 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         If none available, return None.
         """
         connections = []
-        response = None
+        response: HTTPResponse | None = None
 
         while True:
             try:
-                conn = self._get_conn(no_new=True)
-            except ValueError:
+                conn = self.saturated_pool.get(self.block)
+                connections.append(conn)
+            except queue.Empty:
                 break
 
-            connections.append(conn)
+        if not connections:
+            while True:
+                try:
+                    conn = self._get_conn(no_new=True)
+                except ValueError:
+                    break
 
+                connections.append(conn)
+
+        if not connections:
+            return None
+
+        for conn in connections:
             if promise:
                 if promise in conn:
                     response = conn.getresponse(promise=promise)
@@ -430,24 +459,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     continue
             break
 
-        forget_about_connections = []
-
-        # we exceptionally increased the size (block=False + multiplexed enabled)
-        if len(connections) > self._maxsize:
-            expect_drop_count = len(connections) - self._maxsize
-
-            for conn in connections:
-                if conn.is_idle:
-                    forget_about_connections.append(conn)
-                if len(forget_about_connections) >= expect_drop_count:
-                    break
-
         for conn in connections:
-            if conn not in forget_about_connections:
-                self._put_conn(conn)
-
-        for conn in forget_about_connections:
-            conn.close()
+            self._put_conn(conn)
 
         if promise is not None and response is None:
             raise ValueError(
