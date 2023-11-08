@@ -95,6 +95,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 promises.append(promise)
 
             assert len(promises) == 300
+            assert pool.num_connections == 2
 
             for i in range(300):
                 response = pool.get_response()
@@ -103,4 +104,4 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 assert "/delay/1" in response.json()["url"]
 
             assert pool.get_response() is None
-            assert pool.pool is not None and pool.pool.qsize() == 2
+            assert pool.pool is not None and pool.num_connections == 2
