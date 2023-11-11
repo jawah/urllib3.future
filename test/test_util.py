@@ -525,7 +525,7 @@ class TestUtil:
 
     def test_parse_url_bytes_type_error(self) -> None:
         with pytest.raises(TypeError):
-            parse_url(b"https://www.google.com/")  # type: ignore[arg-type]
+            parse_url(b"https://www.google.com/")
 
     @pytest.mark.parametrize(
         "kwargs, expected",

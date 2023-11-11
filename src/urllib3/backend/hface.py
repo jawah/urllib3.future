@@ -498,7 +498,7 @@ class HfaceBackend(BaseBackend):
 
                         self.sock.sendall(data_out)
 
-                data_in = self.sock.recv(maximal_data_in_read or self.blocksize)
+                data_in = self.sock.recv(self.blocksize)
 
                 if not data_in:
                     # in some cases (merely http/1 legacy)
@@ -728,7 +728,14 @@ class HfaceBackend(BaseBackend):
             # overly protective, designed to avoid exception leak bellow urllib3.
             raise ProtocolError(e) from e  # Defensive:
 
-        self.sock.sendall(self._protocol.bytes_to_send())
+        try:
+            self.sock.sendall(self._protocol.bytes_to_send())
+        except BrokenPipeError as e:
+            rp = ResponsePromise(self, self._stream_id, self.__headers)
+            self._promises[rp.uid] = rp
+            e.promise = rp  # type: ignore[attr-defined]
+
+            raise e
 
         if should_end_stream:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
@@ -897,7 +904,7 @@ class HfaceBackend(BaseBackend):
                     bytearray,
                 ),
             ):
-                if (
+                while (
                     self._protocol.should_wait_remote_flow_control(
                         self._stream_id, len(data)
                     )

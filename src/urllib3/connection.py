@@ -394,7 +394,13 @@ class HTTPConnection(HfaceBackend):
                 value = str(content_length)
             self.putheader(header, value)
 
-        rp = self.endheaders(expect_body_afterward=chunks is not None)
+        try:
+            rp = self.endheaders(expect_body_afterward=chunks is not None)
+        except BrokenPipeError as e:
+            rp = e.promise  # type: ignore[attr-defined]
+            assert rp is not None
+            rp.set_parameter("response_options", response_options)
+            raise e
 
         if rp:
             rp.set_parameter("response_options", response_options)

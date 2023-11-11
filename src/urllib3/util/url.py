@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import typing
+from functools import lru_cache
 
 from ..exceptions import LocationParseError
 from .util import to_str
@@ -366,6 +367,7 @@ def _encode_target(target: str) -> str:
     return encoded_target
 
 
+@lru_cache(maxsize=1024)
 def parse_url(url: str) -> Url:
     """
     Given a url, return a parsed :class:`.Url` namedtuple. Best-effort is

@@ -1,3 +1,12 @@
+2.2.906 (2023-11-11)
+====================
+
+- Bumped minimum requirement for ``qh3`` to version 0.14.0 in order to drop private calls in ``contrib.hface.protocols._qh3``.
+- Cache last 1024 ``parse_url`` function call as it is costly.
+- Fixed incomplete flow control window checks while sending data in HTTP/2.
+- Fixed unexpected BrokenPipeError exception in a rare edge case.
+- Changed behavior for efficiency around ``socket.recv`` to pull ``conn.blocksize`` bytes regardless of ``Response.read(amt=...)``.
+
 2.2.905 (2023-11-08)
 ====================
 
