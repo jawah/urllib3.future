@@ -1,3 +1,8 @@
+2.2.907 (2023-11-11)
+====================
+
+- Reverted relying on ``qh3`` to dynamically retrieve the max concurrent streams allowed before connection saturation.
+
 2.2.906 (2023-11-11)
 ====================
 
