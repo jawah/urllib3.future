@@ -109,8 +109,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
     def is_available(self) -> bool:
-        max_stream_bidi = self._quic._local_max_streams_bidi.value
-        return self._terminated is False and max_stream_bidi > len(self._quic._streams)
+        max_stream_bidi = self._quic.max_concurrent_bidi_streams
+        return (
+            self._terminated is False
+            and max_stream_bidi > self._quic.open_outbound_streams
+        )
 
     def has_expired(self) -> bool:
         return self._terminated
@@ -260,15 +263,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def getissuercert(
         self, *, binary_form: bool = False
     ) -> bytes | dict[str, typing.Any] | None:
-        x509_certificate = self._quic.tls._peer_certificate
+        x509_certificate = self._quic.get_peercert()
 
         if x509_certificate is None:
             raise ValueError("TLS handshake has not been done yet")
 
-        if not self._quic.tls._peer_certificate_chain:
+        if not self._quic.get_issuercerts():
             return None
 
-        x509_certificate = self._quic.tls._peer_certificate_chain[0]
+        x509_certificate = self._quic.get_issuercerts()[0]
 
         try:
             from cryptography.hazmat.primitives._serialization import Encoding
@@ -345,7 +348,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def getpeercert(
         self, *, binary_form: bool = False
     ) -> bytes | dict[str, typing.Any]:
-        x509_certificate = self._quic.tls._peer_certificate
+        x509_certificate = self._quic.get_peercert()
 
         if x509_certificate is None:
             raise ValueError("TLS handshake has not been done yet")
@@ -486,11 +489,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return peer_info
 
     def cipher(self) -> str | None:
-        cipher_suite = (
-            self._quic.tls.key_schedule.cipher_suite
-            if self._quic.tls.key_schedule
-            else None
-        )
+        cipher_suite = self._quic.get_cipher()
 
         if cipher_suite is None:
             raise ValueError("TLS handshake has not been done yet")

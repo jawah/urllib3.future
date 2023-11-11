@@ -56,6 +56,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 normalize_inbound_headers=normalize_inbound_headers,
             )
         )
+        self._open_stream_count: int = 0
         self._connection.initiate_connection()
         self._events: deque[Event] = deque()
         self._terminated: bool = False
@@ -66,10 +67,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     def is_available(self) -> bool:
         max_streams = self._connection.remote_settings.max_concurrent_streams
-        return (
-            self._terminated is False
-            and max_streams > self._connection.open_outbound_streams
-        )
+        return self._terminated is False and max_streams > self._open_stream_count
 
     def has_expired(self) -> bool:
         return self._terminated
@@ -83,6 +81,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def submit_headers(
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
+        self._open_stream_count += 1
         self._connection.send_headers(stream_id, headers, end_stream)
 
     def submit_data(
@@ -120,14 +119,19 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 ),
             ):
                 end_stream = e.stream_ended is not None
+                if end_stream:
+                    self._open_stream_count -= 1
                 yield HeadersReceived(e.stream_id, e.headers, end_stream=end_stream)
             elif isinstance(e, h2.events.DataReceived):
                 end_stream = e.stream_ended is not None
+                if end_stream:
+                    self._open_stream_count -= 1
                 self._connection.acknowledge_received_data(
                     e.flow_controlled_length, e.stream_id
                 )
                 yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
             elif isinstance(e, h2.events.StreamReset):
+                self._open_stream_count -= 1
                 yield StreamResetReceived(e.stream_id, e.error_code)
             elif isinstance(e, h2.events.ConnectionTerminated):
                 # ConnectionTerminated from h2 means that GOAWAY was received.
