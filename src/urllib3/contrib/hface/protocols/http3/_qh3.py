@@ -109,7 +109,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
     def is_available(self) -> bool:
-        max_stream_bidi = self._quic.max_concurrent_bidi_streams
+        max_stream_bidi = 128  # todo: find a way to adapt dynamically to self._quic.max_concurrent_bidi_streams
         return (
             self._terminated is False
             and max_stream_bidi > self._quic.open_outbound_streams
