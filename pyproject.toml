@@ -82,7 +82,10 @@ include = [
 [tool.hatch.build.targets.wheel]
 packages = [
     "src/urllib3",
+    "src/urllib3_future",
 ]
+
+[tool.hatch.build.hooks.custom]
 
 [tool.pytest.ini_options]
 xfail_strict = true

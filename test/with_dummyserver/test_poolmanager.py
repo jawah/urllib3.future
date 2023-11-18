@@ -42,6 +42,28 @@ class TestPoolManager(HTTPDummyServerTestCase):
             assert r.status == 200
             assert r.data == b"Dummy server!"
 
+    def test_redirect_with_alt_top_level(self) -> None:
+        from urllib3_future import PoolManager as APM  # type: ignore[import-not-found]
+
+        with APM() as http:
+            r = http.request(
+                "GET",
+                f"{self.base_url}/redirect",
+                fields={"target": f"{self.base_url}/"},
+                redirect=False,
+            )
+
+            assert r.status == 303
+
+            r = http.request(
+                "GET",
+                f"{self.base_url}/redirect",
+                fields={"target": f"{self.base_url}/"},
+            )
+
+            assert r.status == 200
+            assert r.data == b"Dummy server!"
+
     def test_redirect_twice(self) -> None:
         with PoolManager() as http:
             r = http.request(
