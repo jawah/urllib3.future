@@ -10,8 +10,8 @@
   <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
 </p>
 
-⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python. 
-⚡ urllib3.future goes beyond supported features while remaining compatible.
+⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.<br>
+⚡ urllib3.future goes beyond supported features while remaining compatible.<br>
 ⚡ urllib3.future brings many critical features that are missing from the Python standard libraries:
 
 - Thread safety.
@@ -21,9 +21,9 @@
 - Helpers for retrying requests and dealing with HTTP redirects.
 - Support for gzip, deflate, brotli, and zstd encoding.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
-- Multiplexed connection.
 - Proxy support for HTTP and SOCKS.
-- 100% test coverage.
+- Multiplexed connection.
+- 93% test coverage.
 
 urllib3.future is powerful and easy to use:
 
@@ -46,11 +46,39 @@ urllib3.future can be installed with [pip](https://pip.pypa.io):
 $ python -m pip install urllib3.future
 ```
 
+You either do 
+
+```python
+import urllib3
+```
+
+Or...
+
+```python
+import urllib3_future
+```
+
+Doing `import urllib3_future` is the safest option for you as there is a significant number of projects that
+require `urllib3`.
+
+## Notes
+
+- **It's a fork**
+
 ⚠️ Installing urllib3.future shadows the actual urllib3 package (_depending on installation order_). 
 The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node  is always greater or equal to 900.
 
 Support for bugs or improvements is served in this repository. We regularly sync this fork
 with the main branch of urllib3/urllib3 against bugfixes and security patches if applicable.
+
+- **OS Package Managers**
+
+Fellow OS package maintainers, you cannot _just_ build and ship this package to your package registry.
+As it override `urllib3` and due to its current criticality, you'll have to set:
+
+`URLLIB3_NO_OVERRIDE=true python -m build`. Set `URLLIB3_NO_OVERRIDE` variable with "**true**" in it.
+
+It will prevent the override.
 
 ## Compatibility with downstream
 
@@ -63,7 +91,8 @@ python -m pip install requests
 python -m pip install urllib3.future
 ```
 
-We suggest using the package **Niquests** as replacement for **Requests**. It leverage urllib3.future capabilities.
+We suggest using the package [**Niquests**](https://github.com/jawah/niquests) as a drop-in replacement for **Requests**. 
+It leverages urllib3.future capabilities.
 
 ## Documentation
 

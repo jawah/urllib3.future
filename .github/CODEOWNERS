@@ -1,8 +1,8 @@
 # Restrict all files related to deploying to
 # require lead maintainer approval.
 
-.github/workflows/          @sethmlarson @pquentin @shazow
-.github/CODEOWNERS          @sethmlarson @pquentin @shazow
-src/urllib3/_version.py     @sethmlarson @pquentin @shazow
-pyproject.toml              @sethmlarson @pquentin @shazow
-ci/                         @sethmlarson @pquentin @shazow
+.github/workflows/          @Ousret
+.github/CODEOWNERS          @Ousret
+src/urllib3/_version.py     @Ousret
+pyproject.toml              @Ousret
+ci/                         @Ousret

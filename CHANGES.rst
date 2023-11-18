@@ -1,3 +1,11 @@
+2.3.900 (2023-11-18)
+====================
+
+- Disabled unsafe renegotiation option with TLS by default where applicable.
+- Added fallback package ``urllib3_future`` in addition to ``urllib3``.
+  This became increasingly needed as a significant number of projects requires ``urllib3`` and
+  accidentally override this fork.
+
 2.2.907 (2023-11-11)
 ====================
 

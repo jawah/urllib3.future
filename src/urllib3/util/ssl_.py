@@ -104,6 +104,11 @@ try:  # Do we have ssl at all?
         TLSVersion,
     )
 
+    try:
+        from ssl import OP_NO_RENEGOTIATION
+    except ImportError:
+        OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
+
     PROTOCOL_SSLv23 = PROTOCOL_TLS
 
     # Setting SSLContext.hostname_checks_common_name = False didn't work before CPython
@@ -134,6 +139,7 @@ except ImportError:
     OP_NO_SSLv3 = 0x2000000  # type: ignore[assignment]
     PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
     PROTOCOL_TLS_CLIENT = 16  # type: ignore[assignment]
+    OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
 
 
 def assert_fingerprint(cert: bytes | None, fingerprint: str) -> None:
@@ -300,6 +306,12 @@ def create_urllib3_context(
         # there is a risk associated with it being on wire,
         # if the server is not rotating its ticketing keys properly.
         options |= OP_NO_TICKET
+
+        # Disable renegotiation as it was proven to be weak and dangerous.
+        if (
+            OP_NO_RENEGOTIATION is not None
+        ):  # Not always available depending on your interpreter.
+            options |= OP_NO_RENEGOTIATION
 
     context.options |= options
 

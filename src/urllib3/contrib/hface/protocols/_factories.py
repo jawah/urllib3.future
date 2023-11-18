@@ -44,8 +44,10 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
             type_protocol != HTTPProtocol
         ), "HTTPProtocol is ambiguous and cannot be requested in the factory."
 
+        package_name: str = __name__.split(".")[0]
+
         version_target: str = "".join(
-            c for c in str(type_protocol).replace("urllib3", "") if c.isdigit()
+            c for c in str(type_protocol).replace(package_name, "") if c.isdigit()
         )
         module_expr: str = f".protocols.http{version_target}"
 
@@ -53,7 +55,9 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
             module_expr += f"._{implementation.lower()}"
 
         try:
-            http_module = importlib.import_module(module_expr, "urllib3.contrib.hface")
+            http_module = importlib.import_module(
+                module_expr, f"{package_name}.contrib.hface"
+            )
         except ImportError:
             return False
 
@@ -81,8 +85,10 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
             type_protocol != HTTPProtocol
         ), "HTTPProtocol is ambiguous and cannot be requested in the factory."
 
+        package_name: str = __name__.split(".")[0]
+
         version_target: str = "".join(
-            c for c in str(type_protocol).replace("urllib3", "") if c.isdigit()
+            c for c in str(type_protocol).replace(package_name, "") if c.isdigit()
         )
         module_expr: str = f".protocols.http{version_target}"
 
@@ -90,7 +96,9 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
             module_expr += f"._{implementation.lower()}"
 
         try:
-            http_module = importlib.import_module(module_expr, "urllib3.contrib.hface")
+            http_module = importlib.import_module(
+                module_expr, f"{package_name}.contrib.hface"
+            )
         except ImportError as e:
             raise NotImplementedError(
                 f"{type_protocol} cannot be loaded. Tried to import '{module_expr}'."
