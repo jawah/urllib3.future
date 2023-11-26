@@ -784,3 +784,29 @@ You may give your certificate to urllib3.future this way::
         r = https_pool.request("GET", "/")
 
 .. note:: If your platform isn't served by this feature it will raise a warning and ignore the certificate.
+
+Monitor upload progress
+-----------------------
+
+You can, since version 2.3.901, monitor upload progress.
+To do so, pass on to the argument ``on_upload_body`` a callable that accept 4 positional arguments.
+
+The arguments are as follow: ``total_sent: int, content_length: int | None, is_completed: bool, any_error: bool``.
+
+- total_sent: Amount of bytes already sent
+- content_length: Expected total bytes to be sent
+- is_completed: Flag that indicate end of transmission (body)
+- any_error: If anything goes wrong during upload, will be set to True
+
+.. warning:: content_length might be set to ``None`` in case that we couldn't infer the actual body length. Can happen if body is an iterator or generator. In that case you still can manually provide a valid ``Content-Length`` header.
+
+See the following example::
+
+    from urllib3 import PoolManager
+
+    def track(total_sent: int, content_length: int | None, is_completed: bool, any_error: bool) -> None:
+        print(f"{total_sent} / {content_length} bytes", f"{is_completed=} {any_error=}")
+
+    with PoolManager() as pm:
+        resp = pm.urlopen("POST", "https://httpbin.org/post", data=b"foo"*1024*10, on_upload_body=track)
+

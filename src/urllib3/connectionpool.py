@@ -198,7 +198,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         self._maxsize = maxsize
         self.pool: queue.LifoQueue[typing.Any] | None = self.QueueCls(maxsize)
-        self.saturated_pool: queue.LifoQueue[typing.Any] = self.QueueCls(maxsize)
+        self.saturated_pool: queue.LifoQueue[typing.Any] = self.QueueCls(
+            64 if maxsize < 64 else maxsize
+        )
         self.block = block
 
         self.proxy = _proxy
@@ -316,6 +318,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     try:
                         self.saturated_pool.put(conn, block=False)
                     except queue.Full:
+                        warnings.warn(
+                            "Unable to keep aside a multiplexed connection. You will loose access to the responses. "
+                            "You need to either increase the pool maxsize or collect responses to avoid this.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
                         self.num_connections -= 1
                         conn.close()
                     return
@@ -425,14 +433,14 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         If none available, return None.
         """
         connections = []
+        irrelevant_connections = []
         response: HTTPResponse | None = None
 
-        while True:
-            try:
-                conn = self.saturated_pool.get(self.block)
-                connections.append(conn)
-            except queue.Empty:
-                break
+        try:
+            conn = self.saturated_pool.get(False)
+            connections.append(conn)
+        except queue.Empty:
+            pass
 
         if not connections:
             while True:
@@ -441,7 +449,14 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 except ValueError:
                     break
 
-                connections.append(conn)
+                if conn.is_idle is False:
+                    connections.append(conn)
+                    break
+                else:
+                    irrelevant_connections.append(conn)
+
+        for conn in irrelevant_connections:
+            self._put_conn(conn)
 
         if not connections:
             return None
@@ -612,6 +627,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         decode_content: bool = ...,
         enforce_content_length: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
         *,
         multiplexed: Literal[True],
     ) -> ResponsePromise:
@@ -633,6 +649,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         decode_content: bool = ...,
         enforce_content_length: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
         *,
         multiplexed: Literal[False] = ...,
     ) -> HTTPResponse:
@@ -653,6 +670,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         decode_content: bool = True,
         enforce_content_length: bool = True,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
+        | None = None,
         multiplexed: Literal[False] | Literal[True] = False,
     ) -> HTTPResponse | ResponsePromise:
         """
@@ -770,6 +789,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 preload_content=preload_content,
                 decode_content=decode_content,
                 enforce_content_length=enforce_content_length,
+                on_upload_body=on_upload_body,
             )
         # We are swallowing BrokenPipeError (errno.EPIPE) since the server is
         # legitimately able to close the connection after sending a valid response.
@@ -884,6 +904,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = ...,
         decode_content: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
         *,
         multiplexed: Literal[False] = ...,
         **response_kw: typing.Any,
@@ -908,6 +929,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = ...,
         decode_content: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
         *,
         multiplexed: Literal[True],
         **response_kw: typing.Any,
@@ -931,6 +953,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = True,
         decode_content: bool = True,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
+        | None = None,
         multiplexed: bool = False,
         **response_kw: typing.Any,
     ) -> HTTPResponse | ResponsePromise:
@@ -1028,6 +1052,16 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             Position to seek to in file-like body in the event of a retry or
             redirect. Typically this won't need to be set because urllib3 will
             auto-populate the value when needed.
+
+        :param on_post_connection:
+            Callable to be invoked that will inform you of the connection specifications
+            for the request to be sent. See ``urllib3.ConnectionInfo`` class for more.
+
+        :param on_upload_body:
+            Callable that will be invoked upon body upload in order to be able to track
+            the progress. The values are expressed in bytes. It is possible that the total isn't
+            available, thus set to None. In order, arguments are:
+            (total_sent, total_to_be_sent, completed, any_error)
 
         :param multiplexed:
             Dispatch the request in a non-blocking way, this means that the
@@ -1130,6 +1164,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 decode_content=decode_content,
                 enforce_content_length=True,
                 on_post_connection=on_post_connection,
+                on_upload_body=on_upload_body,
                 multiplexed=multiplexed,
             )
 

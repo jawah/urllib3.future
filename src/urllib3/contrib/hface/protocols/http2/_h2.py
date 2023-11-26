@@ -69,6 +69,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         max_streams = self._connection.remote_settings.max_concurrent_streams
         return self._terminated is False and max_streams > self._open_stream_count
 
+    def is_idle(self) -> bool:
+        return self._terminated is False and self._open_stream_count == 0
+
     def has_expired(self) -> bool:
         return self._terminated
 

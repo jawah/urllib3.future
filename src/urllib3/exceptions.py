@@ -237,6 +237,9 @@ class IncompleteRead(ProtocolError):
     """
 
     def __init__(self, partial: int, expected: int) -> None:
+        super().__init__(
+            f"peer closed connection without sending complete message body (received {partial} bytes, expected {expected})"
+        )
         self.partial = partial
         self.expected = expected
 

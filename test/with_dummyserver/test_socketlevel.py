@@ -14,6 +14,7 @@ import ssl
 import tempfile
 import time
 import typing
+import warnings
 import zlib
 from collections import OrderedDict
 from pathlib import Path
@@ -42,6 +43,7 @@ from urllib3._collections import HTTPHeaderDict
 from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.connectionpool import _url_from_pool
 from urllib3.exceptions import (
+    IncompleteRead,
     InsecureRequestWarning,
     InvalidHeader,
     MaxRetryError,
@@ -2041,7 +2043,7 @@ class TestBadContentLength(SocketDummyServerTestCase):
                 "GET", url="/", preload_content=False, enforce_content_length=True
             )
             data = get_response.stream(100)
-            with pytest.raises(ProtocolError, match="received 12 bytes, expected 22"):
+            with pytest.raises(IncompleteRead, match="received 12 bytes, expected 22"):
                 next(data)
             done_event.set()
 
@@ -2340,7 +2342,10 @@ class TestContentFraming(SocketDummyServerTestCase):
             assert resp.status == 200
 
         sent_bytes = bytes(buffer)
-        assert sent_bytes.count(b":") == 5
+        if body_type == "file_text":
+            assert sent_bytes.count(b":") == 6
+        else:
+            assert sent_bytes.count(b":") == 5
         assert b"Host: localhost:" in sent_bytes
         assert b"Accept-Encoding: identity\r\n" in sent_bytes
         assert b"User-Agent: urllib3.future/" in sent_bytes
@@ -2354,6 +2359,122 @@ class TestContentFraming(SocketDummyServerTestCase):
             assert b"Content-Length: 10\r\n" in sent_bytes
             assert b"transfer-encoding" not in sent_bytes.lower()
             assert sent_bytes.endswith(b"\r\n\r\nxxxxxxxxxx")
+
+    def test_overrule_str_content_type(self) -> None:
+        buffer = bytearray()
+
+        def socket_handler(listener: socket.socket) -> None:
+            nonlocal buffer
+            sock = listener.accept()[0]
+            sock.settimeout(0)
+
+            start = time.time()
+            while time.time() - start < (LONG_TIMEOUT / 2):
+                try:
+                    buffer += sock.recv(65536)
+                except OSError:
+                    continue
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Server: example.com\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            resp = pool.request("POST", "/", body="fooéàè" * 3)
+            assert resp.status == 200
+
+        sent_bytes = bytes(buffer)
+
+        assert b"Content-Type: text/plain; charset=utf-8\r\n" in sent_bytes
+
+    def test_partial_overrule_str_content_type(self) -> None:
+        buffer = bytearray()
+
+        def socket_handler(listener: socket.socket) -> None:
+            nonlocal buffer
+            sock = listener.accept()[0]
+            sock.settimeout(0)
+
+            start = time.time()
+            while time.time() - start < (LONG_TIMEOUT / 2):
+                try:
+                    buffer += sock.recv(65536)
+                except OSError:
+                    continue
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Server: example.com\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            resp = pool.request(
+                "POST", "/", body="{}", headers={"Content-Type": "application/json"}
+            )
+            assert resp.status == 200
+
+        sent_bytes = bytes(buffer)
+
+        assert b"Content-Type: application/json; charset=utf-8\r\n" in sent_bytes
+
+    def test_no_overrule_str_content_type(self) -> None:
+        buffer = bytearray()
+
+        def socket_handler(listener: socket.socket) -> None:
+            nonlocal buffer
+            sock = listener.accept()[0]
+            sock.settimeout(0)
+
+            start = time.time()
+            while time.time() - start < (LONG_TIMEOUT / 2):
+                try:
+                    buffer += sock.recv(65536)
+                except OSError:
+                    continue
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Server: example.com\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with warnings.catch_warnings(record=True) as w:
+            with HTTPConnectionPool(
+                self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+            ) as pool:
+                resp = pool.request(
+                    "POST",
+                    "/",
+                    body="{}",
+                    headers={"Content-Type": "application/json; charset=ascii"},
+                )
+                assert resp.status == 200
+
+        assert any(
+            isinstance(x.message, Warning)
+            and "A conflicting charset has been set in" in x.message.args[0]
+            for x in w
+        )
+
+        sent_bytes = bytes(buffer)
+
+        assert b"Content-Type: application/json; charset=ascii\r\n" in sent_bytes
 
     @pytest.mark.parametrize(
         "header_transform",

@@ -34,6 +34,7 @@ from ..contrib.hface.events import (
 )
 from ..exceptions import (
     EarlyResponse,
+    IncompleteRead,
     InvalidHeader,
     ProtocolError,
     ResponseNotReady,
@@ -471,9 +472,7 @@ class HfaceBackend(BaseBackend):
         Can be used for the initial handshake for instance."""
         assert self._protocol is not None
         assert self.sock is not None
-        assert (maximal_data_in_read is not None and maximal_data_in_read >= 0) or (
-            maximal_data_in_read is None
-        )
+        assert maximal_data_in_read is None or maximal_data_in_read >= 0
 
         data_out: bytes
         data_in: bytes
@@ -526,6 +525,14 @@ class HfaceBackend(BaseBackend):
                     try:
                         self._protocol.bytes_received(data_in)
                     except self._protocol.exceptions() as e:
+                        # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
+                        # we convert the exception to our "IncompleteRead" instead.
+                        if hasattr(e, "expected_length") and hasattr(
+                            e, "actual_length"
+                        ):
+                            raise IncompleteRead(
+                                partial=e.actual_length, expected=e.expected_length
+                            ) from e  # Defensive:
                         raise ProtocolError(e) from e  # Defensive:
 
                 if receive_first is True:
@@ -557,6 +564,31 @@ class HfaceBackend(BaseBackend):
                         raise SSLError(
                             "TLS over QUIC did not succeed (Error 298). Chain certificate verification failed."
                         )
+
+                    # we shall convert the ProtocolError to IncompleteRead
+                    # so that users aren't caught off guard.
+                    try:
+                        if (
+                            event.message
+                            and "without sending complete message body" in event.message
+                        ):
+                            msg = event.message.replace(
+                                "peer closed connection without sending complete message body ",
+                                "",
+                            ).strip("()")
+
+                            received, expected = tuple(msg.split(", "))
+
+                            raise IncompleteRead(
+                                partial=int(
+                                    "".join(c for c in received if c.isdigit()).strip()
+                                ),
+                                expected=int(
+                                    "".join(c for c in expected if c.isdigit()).strip()
+                                ),
+                            )
+                    except (ValueError, IndexError):
+                        pass
 
                     raise ProtocolError(event.message)
                 elif isinstance(event, StreamResetReceived):

@@ -181,6 +181,13 @@ class HTTPProtocol(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def is_idle(self) -> bool:
+        """
+        Return True if this connection is BOTH available and not doing anything.
+        """
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def error_codes(self) -> HTTPErrorCodes:
