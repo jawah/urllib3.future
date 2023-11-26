@@ -5,6 +5,7 @@ import os
 import re
 import socket
 import typing
+import warnings
 from socket import timeout as SocketTimeout
 
 if typing.TYPE_CHECKING:
@@ -317,6 +318,8 @@ class HTTPConnection(HfaceBackend):
         preload_content: bool = True,
         decode_content: bool = True,
         enforce_content_length: bool = True,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
+        | None = None,
     ) -> ResponsePromise:
         # Update the inner socket's timeout value to send the request.
         # This only triggers if the connection is re-used.
@@ -356,10 +359,12 @@ class HTTPConnection(HfaceBackend):
             blocksize=self.blocksize,
             force=self._svn != HttpVersion.h11,
         )
+        is_sending_string = chunks_and_cl.is_string
         chunks = chunks_and_cl.chunks
         content_length = chunks_and_cl.content_length
 
         overrule_content_length: bool = False
+        enforce_charset_transparency: bool = False
 
         # users may send plain 'str' and assign a Content-Length that will
         # disagree with the actual amount of data to send (encoded, aka. bytes)
@@ -369,6 +374,15 @@ class HTTPConnection(HfaceBackend):
             and len(body) != content_length
         ):
             overrule_content_length = True
+
+        # We shall make our intent clear as we are sending a string.
+        # Not being explicit is like doing the same mistake as the early 2k years.
+        # No more guessing game based on "Our time make X prevalent, no need to say it! It will never change!" ><'
+        if is_sending_string:
+            if "content-type" in header_keys:
+                enforce_charset_transparency = True
+            else:
+                self.putheader("Content-Type", "text/plain; charset=utf-8")
 
         # When chunked is explicit set to 'True' we respect that.
         if chunked:
@@ -392,6 +406,25 @@ class HTTPConnection(HfaceBackend):
         for header, value in headers.items():
             if overrule_content_length and header.lower() == "content-length":
                 value = str(content_length)
+            if enforce_charset_transparency and header.lower() == "content-type":
+                value_lower = value.lower()
+                if "charset" not in value_lower:
+                    value = value.strip("; ")
+                    value = f"{value}; charset=utf-8"
+                else:
+                    if (
+                        "utf-8" not in value_lower
+                        and "utf_8" not in value_lower
+                        and "utf8" not in value_lower
+                    ):
+                        warnings.warn(
+                            "A conflicting charset has been set in Content-Type while sending a 'string' as the body. "
+                            "Beware that urllib3.future always encode a string to unicode. "
+                            f"Expected 'charset=utf-8', got: {value} "
+                            "Either encode your string to bytes or open your file in bytes mode.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
             self.putheader(header, value)
 
         try:
@@ -406,6 +439,8 @@ class HTTPConnection(HfaceBackend):
             rp.set_parameter("response_options", response_options)
             return rp
 
+        total_sent = 0
+
         try:
             # If we're given a body we start sending that in chunks.
             if chunks is not None:
@@ -417,10 +452,24 @@ class HTTPConnection(HfaceBackend):
                     if isinstance(chunk, str):
                         chunk = chunk.encode("utf-8")
                     self.send(chunk)
+                    total_sent += len(chunk)
+                    if on_upload_body is not None:
+                        on_upload_body(total_sent, content_length, False, False)
                 rp = self.send(b"", eot=True)
+                if on_upload_body is not None:
+                    on_upload_body(total_sent, content_length, True, False)
         except EarlyResponse as e:
             rp = e.promise
+            if on_upload_body is not None:
+                on_upload_body(total_sent, content_length, False, True)
         except BrokenPipeError as e:
+            if on_upload_body is not None:
+                on_upload_body(
+                    total_sent,
+                    content_length,
+                    total_sent == content_length,
+                    total_sent != content_length,
+                )
             rp = e.promise  # type: ignore[attr-defined]
             assert rp is not None
             rp.set_parameter("response_options", response_options)
@@ -526,7 +575,7 @@ class HTTPSConnection(HTTPConnection):
         ca_cert_data: None | str | bytes = None,
         ssl_minimum_version: int | None = None,
         ssl_maximum_version: int | None = None,
-        ssl_version: int | str | None = None,  # Deprecated
+        ssl_version: int | str | None = None,
         cert_file: str | None = None,
         key_file: str | None = None,
         key_password: str | None = None,

@@ -101,15 +101,14 @@ def headers_from_response(
 
     Generates from pseudo (colon) headers from a response line.
     """
-    regular_headers: list[HeaderType] = []
+    headers: list[HeaderType] = []
 
-    for name, value in response.headers:
-        if name.startswith(b":"):
-            raise ValueError("Pseudo header not allowed in HTTP/1: " + name.decode())
-        regular_headers.append((name, value))
+    headers.append((b":status", str(response.status_code).encode()))
 
-    pseudo_headers = [(b":status", str(response.status_code).encode())]
-    return pseudo_headers + regular_headers
+    for header, value in response.headers:
+        headers.append((header, value))
+
+    return headers
 
 
 class HTTP1ProtocolHyperImpl(HTTP1Protocol):
@@ -130,6 +129,9 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def is_available(self) -> bool:
         return self._connection.our_state == self._connection.their_state == h11.IDLE
+
+    def is_idle(self) -> bool:
+        return self.is_available()
 
     def has_expired(self) -> bool:
         return self._terminated

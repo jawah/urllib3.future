@@ -196,6 +196,7 @@ def rewind_body(body: typing.IO[typing.AnyStr], body_pos: _TYPE_BODY_POSITION) -
 class ChunksAndContentLength(typing.NamedTuple):
     chunks: typing.Iterable[bytes] | None
     content_length: int | None
+    is_string: bool
 
 
 def body_to_chunks(
@@ -224,7 +225,7 @@ def body_to_chunks(
             if not datablock:
                 break
             if encode:
-                datablock = datablock.encode("iso-8859-1")
+                datablock = datablock.encode("utf-8")
             yield datablock
 
     # No body, we need to make a recommendation on 'Content-Length'
@@ -273,4 +274,15 @@ def body_to_chunks(
             chunks = (body,)
             content_length = mv.nbytes
 
-    return ChunksAndContentLength(chunks=chunks, content_length=content_length)
+    return ChunksAndContentLength(
+        chunks=chunks,
+        content_length=content_length,
+        is_string=isinstance(
+            body,
+            (
+                str,
+                io.StringIO,
+                io.TextIOWrapper,
+            ),
+        ),
+    )

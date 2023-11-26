@@ -18,7 +18,7 @@ import ssl
 import typing
 from collections import deque
 from os import environ
-from time import monotonic
+from time import thread_time as monotonic
 from typing import Any, Iterable, Sequence
 
 if typing.TYPE_CHECKING:
@@ -103,6 +103,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._http: H3Connection | None = None
         self._terminated: bool = False
         self._data_in_flight: bool = False
+        self._open_stream_count: int = 0
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
@@ -114,6 +115,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._terminated is False
             and max_stream_bidi > self._quic.open_outbound_streams
         )
+
+    def is_idle(self) -> bool:
+        return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
         return self._terminated
@@ -142,6 +146,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
         assert self._http is not None
+        self._open_stream_count += 1
         self._http.send_headers(stream_id, list(headers), end_stream)
 
     def submit_data(
@@ -235,14 +240,19 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._terminated = True
             yield ConnectionTerminated(quic_event.error_code, quic_event.reason_phrase)
         elif isinstance(quic_event, quic_events.StreamReset):
+            self._open_stream_count -= 1
             yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)
 
     def _map_h3_event(self, h3_event: h3_events.H3Event) -> Iterable[Event]:
         if isinstance(h3_event, h3_events.HeadersReceived):
+            if h3_event.stream_ended:
+                self._open_stream_count -= 1
             yield HeadersReceived(
                 h3_event.stream_id, h3_event.headers, h3_event.stream_ended
             )
         elif isinstance(h3_event, h3_events.DataReceived):
+            if h3_event.stream_ended:
+                self._open_stream_count -= 1
             yield DataReceived(h3_event.stream_id, h3_event.data, h3_event.stream_ended)
 
     def should_wait_remote_flow_control(

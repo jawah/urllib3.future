@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from base64 import b64decode
 from io import BytesIO
 
@@ -66,7 +67,11 @@ class TestPostBody(TraefikTestCase):
                 assert resp.status == 200
                 assert resp.version == (20 if i == 0 else 30)
 
-                payload_seen_by_server: bytes = b64decode(resp.json()["data"][37:])
+                payload_seen_by_server: bytes = (
+                    b64decode(resp.json()["data"][37:])
+                    if not isinstance(body, str)
+                    else resp.json()["data"].encode()
+                )
 
                 if isinstance(body, str):
                     assert payload_seen_by_server == body.encode(
@@ -113,3 +118,52 @@ class TestPostBody(TraefikTestCase):
                 for key in fields:
                     assert key in payload["form"]
                     assert fields[key] in payload["form"][key]
+
+    def test_upload_track_progress(self) -> None:
+        progress_track = []
+
+        def track(
+            total_sent: int,
+            content_length: int | None,
+            is_completed: bool,
+            any_error: bool,
+        ) -> None:
+            nonlocal progress_track
+            progress_track.append((total_sent, content_length, is_completed, any_error))
+            print(progress_track[-1])
+
+        with HTTPSConnectionPool(
+            self.host, self.https_port, ca_certs=self.ca_authority
+        ) as p:
+            p.urlopen("POST", "/post", body=b"foo" * 16800, on_upload_body=track)
+
+        assert len(progress_track) > 0
+        assert progress_track[-1][-2] is True
+        assert progress_track[0][1] == 16800 * 3
+        assert progress_track[-1][0] == 16800 * 3
+        assert progress_track[0][0] < 16800 * 3
+
+    def test_upload_track_progress_no_content_length(self) -> None:
+        progress_track = []
+
+        def track(
+            total_sent: int,
+            content_length: int | None,
+            is_completed: bool,
+            any_error: bool,
+        ) -> None:
+            nonlocal progress_track
+            progress_track.append((total_sent, content_length, is_completed, any_error))
+
+        with HTTPSConnectionPool(
+            self.host, self.https_port, ca_certs=self.ca_authority
+        ) as p:
+            p.urlopen(
+                "POST", "/post", body=io.BytesIO(b"foo" * 16800), on_upload_body=track
+            )
+
+        assert len(progress_track) > 0
+        assert progress_track[-1][-2] is True
+        assert progress_track[0][1] is None
+        assert progress_track[-1][0] == 16800 * 3
+        assert progress_track[0][0] < 16800 * 3

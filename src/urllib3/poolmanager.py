@@ -221,6 +221,8 @@ class PoolManager(RequestMethods):
         super().__init__(headers)
         self.connection_pool_kw = connection_pool_kw
 
+        self._num_pools = num_pools
+
         self.pools: RecentlyUsedContainer[PoolKey, HTTPConnectionPool]
         self.pools = RecentlyUsedContainer(num_pools)
 
@@ -281,6 +283,10 @@ class PoolManager(RequestMethods):
                 request_context.pop(kw, None)
 
         request_context["preemptive_quic_cache"] = self._preemptive_quic_cache
+
+        # By default, each HttpPool can have up to num_pools connections
+        if "maxsize" not in request_context:
+            request_context["maxsize"] = self._num_pools
 
         return pool_cls(host, port, **request_context)
 

@@ -1,3 +1,23 @@
+2.3.901 (2023-11-26)
+====================
+
+- Small performance improvement while in HTTP/1.1
+- Any string passed down to the body will enforce a default ``Content-Type: text/plain; charset=utf-8`` for safety, unless
+  you specified a ``Content-Type`` header yourself. The ``charset`` parameter will always be set to ``utf-8``.
+  It is recommended that you pass ``bytes`` instead of a plain string. If a conflicting charset has been set that
+  does not refer to utf-8, a warning will be raised.
+- Added callable argument in ``urlopen``, and ``request`` named ``on_upload_body`` that enable you to track
+  body upload progress for a single request. It takes 4 positional arguments, namely:
+  (total_sent: int, total_to_be_sent: int | None, is_completed: bool, any_error: bool)
+  total_to_be_sent may be set to None if we're unable to know in advance the total size (blind iterator/generator).
+- Fixed a rare case where ``ProtocolError`` was raised instead of expected ``IncompleteRead`` exception.
+- Improved HTTP/3 overall performance.
+- Changed the default max connection per host for (http, https) pools managed by ``PoolManager``.
+  If the ``PoolManager`` is instantiated with ``num_pools=10``, each (managed) subsequent pool will have ``maxsize=10``.
+- Improved performance while in a multithreading context while using many multiplexed connections.
+- Changed the default max saturated multiplexed connections to 64 as the minimum.
+  Now a warning will be fired if you reach the maximum capacity of stored saturated multiplexed connections.
+
 2.3.900 (2023-11-18)
 ====================
 
