@@ -1,3 +1,8 @@
+2.3.902 (2023-12-08)
+====================
+
+- Fixed an issue where specifying `cert_reqs=ssl.CERT_NONE` or `assert_hostname` was ignored when using HTTP/3 over QUIC.
+
 2.3.901 (2023-11-26)
 ====================
 

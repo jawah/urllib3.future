@@ -642,6 +642,8 @@ class HTTPSConnection(HTTPConnection):
                 self.key_file or self.key_data,
                 self.key_password,
                 self.assert_fingerprint,
+                self.assert_hostname,
+                self.cert_reqs,
             )
         except NotImplementedError:
             server_hostname: str = self.host

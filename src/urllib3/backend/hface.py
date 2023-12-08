@@ -40,7 +40,7 @@ from ..exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from ..util import parse_alt_svc
+from ..util import parse_alt_svc, resolve_cert_reqs
 from ._base import (
     BaseBackend,
     ConnectionInfo,
@@ -187,6 +187,7 @@ class HfaceBackend(BaseBackend):
         key_password: str | bytes | None = None,
         cert_fingerprint: str | None = None,
         assert_hostname: None | str | typing.Literal[False] = None,
+        cert_reqs: int | str | None = None,
     ) -> None:
         """Meant to support TLS over QUIC meanwhile cpython does not ship with its native implementation."""
         if self._svn != HttpVersion.h3:
@@ -194,13 +195,21 @@ class HfaceBackend(BaseBackend):
 
         cert_use_common_name = False
 
+        allow_insecure: bool = False
+
         if ssl_context:
             cert_use_common_name = (
                 getattr(ssl_context, "hostname_checks_common_name", False) or False
             )
 
+            if ssl_context.verify_mode == ssl.CERT_NONE:
+                allow_insecure = True
+
+        if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
+            allow_insecure = True
+
         self.__custom_tls_settings = QuicTLSConfig(
-            insecure=ssl_context.verify_mode == ssl.CERT_NONE if ssl_context else False,
+            insecure=allow_insecure,
             cafile=ca_certs,
             capath=ca_cert_dir,
             cadata=ca_cert_data.encode()
