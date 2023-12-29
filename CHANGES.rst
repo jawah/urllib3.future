@@ -1,3 +1,31 @@
+2.4.900 (2023-12-30)
+====================
+
+- Added issuer certificate extraction from SSLSocket with native calls with Python 3.10+ in ``ConnectionInfo``.
+- Added support for DNS over TLS, DNS over HTTPS, DNS over QUIC, DNS over UDP, and local hosts-like DNS.
+  ``PoolManager``, and ``HTTPPoolManager`` constructor now expose an additional keyword argument, ``resolver=...``.
+  You can assign to it one of the presented protocol. Also, you may chain a list of resolver, each resolver can be
+  limited to a list of host-pattern or not. Default is the system DNS. This new feature is covered by our thread-safety
+  promise.
+
+  You can now do the following: ``PoolManage(resolver="doh://dns.google")`` for example.
+  Refer to the official documentation to learn about the full capabilities.
+- Support for SOCKS proxies is now provided by `python-socks` instead of `PySocks` due to being largely
+  unmaintained within a reasonable period of time. This change is made completely transparent.
+- Added details in ``ConnectionInfo`` about detailed timings and others details.
+  ``established_latency`` is a _timedelta_ that represent the amount of time consumed to get an ESTABLISHED network link.
+  ``resolution_latency`` is a _timedelta_ that represent the amount of time consumed for the hostname resolution.
+  ``tls_handshake_latency`` is a _timedelta_ that represent the amount of time consumed for the TLS handshake.
+  ``request_sent_latency`` is a _timedelta_ that represent the amount of time consumed to encode and send the whole request through the socket.
+- Fixed a rare thread safety issue when using at least one HTTP/3 multiplexed connection.
+- Deprecated function ``util.connection.create_connection(..)`` in favor of newly added ``contrib.resolver`` that will
+  host from now on that function within ``BaseResolver`` as a method. Users are encouraged to migrate as soon as possible.
+- Support for preemptively negotiating HTTP/3 over QUIC based on RFC 9460 via a HTTPS DNS record.
+- Added support for enforcing IPv6, and/or IPv4 using the keyword parameter ``socket_family`` that can be provided in
+  ``PoolManager``, ``HTTP(S)ConnectionPool`` and ``HTTP(S)Connection``. The three accepted values are ``socket.AF_UNSPEC``
+  ``socket.AF_INET``, and ``socket.AF_INET6``. Respectively, allow all, ipv4 only, and ipv6 only. Anything else will raise
+  **ValueError**.
+
 2.3.902 (2023-12-08)
 ====================
 

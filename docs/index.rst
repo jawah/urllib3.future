@@ -1,5 +1,5 @@
-urllib3
-=======
+urllib3.future
+==============
 
 .. toctree::
    :hidden:
@@ -15,18 +15,21 @@ urllib3
 ⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.
 ⚡ urllib3.future goes beyond supported features while remaining compatible.
 
-⚡ urllib3.future brings many critical features that are missing from the Python standard libraries:
+⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries and **urllib3**:
 
 - Thread safety.
 - Connection pooling.
 - Client-side SSL/TLS verification.
+- Highly customizable DNS resolution.
 - File uploads with multipart encoding.
+- DNS over UDP, TLS, QUIC, or HTTPS. DNSSEC protected.
 - Helpers for retrying requests and dealing with HTTP redirects.
 - Support for gzip, deflate, brotli, and zstd encoding.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
-- Multiplexed connection.
 - Proxy support for HTTP and SOCKS.
-- 100% test coverage.
+- Detailed connection inspection.
+- Multiplexed connection.
+- 95% test coverage.
 
 urllib3 is powerful and easy to use:
 
@@ -59,7 +62,7 @@ The :doc:`reference/index` documentation provides API-level documentation.
 License
 -------
 
-urllib3.future is made available under the MIT License. For more details, see `LICENSE.txt <https://github.com/urllib3/urllib3/blob/master/LICENSE.txt>`_.
+urllib3.future is made available under the MIT License. For more details, see `LICENSE.txt <https://github.com/jawah/urllib3.future/blob/master/LICENSE.txt>`_.
 
 Contributing
 ------------

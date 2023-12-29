@@ -400,7 +400,7 @@ class TestPoolManager:
             "http://[a::b%25zone]",
         ],
     )
-    @patch("urllib3.util.connection.create_connection")
+    @patch("urllib3.contrib.resolver.BaseResolver.create_connection")
     def test_e2e_connect_to_ipv6_scoped(
         self, create_connection: MagicMock, url: str
     ) -> None:
@@ -418,7 +418,7 @@ class TestPoolManager:
         assert create_connection.call_args[0][0] == ("a::b%zone", 80)
 
     @patch("urllib3.connection.ssl_wrap_socket")
-    @patch("urllib3.util.connection.create_connection")
+    @patch("urllib3.contrib.resolver.BaseResolver.create_connection")
     def test_e2e_connect_to_ipv6_scoped_tls(
         self, create_connection: MagicMock, ssl_wrap_socket: MagicMock
     ) -> None:

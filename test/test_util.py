@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from urllib3 import add_stderr_logger, disable_warnings
+from urllib3 import ResolverDescription, add_stderr_logger, disable_warnings
 from urllib3._typing import ProxyConfig
 from urllib3.exceptions import (
     InsecureRequestWarning,
@@ -24,7 +24,7 @@ from urllib3.exceptions import (
     UnrewindableBodyError,
 )
 from urllib3.util import is_fp_closed
-from urllib3.util.connection import _has_ipv6, allowed_gai_family, create_connection
+from urllib3.util.connection import _has_ipv6, allowed_gai_family
 from urllib3.util.proxy import connection_requires_http_tunnel
 from urllib3.util.request import _FAILEDTELL, make_headers, rewind_body
 from urllib3.util.ssl_ import (
@@ -841,7 +841,9 @@ class TestUtil:
             LocationParseError,
             match=f"Failed to parse: '{host}', label empty or too long",
         ):
-            create_connection((host, 80))
+            ResolverDescription.from_url("system://").new().create_connection(
+                (host, 80)
+            )
 
     @pytest.mark.parametrize(
         "host",
@@ -860,27 +862,33 @@ class TestUtil:
     ) -> None:
         getaddrinfo.return_value = [(None, None, None, None, None)]
         socket.return_value = Mock()
-        create_connection((host, 80))
+        ResolverDescription.from_url("system://").new().create_connection((host, 80))
 
     @patch("socket.getaddrinfo")
     def test_create_connection_error(self, getaddrinfo: MagicMock) -> None:
         getaddrinfo.return_value = []
         with pytest.raises(OSError, match="getaddrinfo returns an empty list"):
-            create_connection(("example.com", 80))
+            ResolverDescription.from_url("system://").new().create_connection(
+                ("example.com", 80)
+            )
 
     @patch("socket.getaddrinfo")
     def test_dnsresolver_forced_error(self, getaddrinfo: MagicMock) -> None:
         getaddrinfo.side_effect = socket.gaierror()
         with pytest.raises(socket.gaierror):
             # dns is valid but we force the error just for the sake of the test
-            create_connection(("example.com", 80))
+            ResolverDescription.from_url("system://").new().create_connection(
+                ("example.com", 80)
+            )
 
     def test_dnsresolver_expected_error(self) -> None:
         with pytest.raises(socket.gaierror):
             # windows: [Errno 11001] getaddrinfo failed in windows
             # linux: [Errno -2] Name or service not known
             # macos: [Errno 8] nodename nor servname provided, or not known
-            create_connection(("badhost.invalid", 80))
+            ResolverDescription.from_url("system://").new().create_connection(
+                ("badhost.invalid", 80)
+            )
 
     @patch("socket.getaddrinfo")
     @patch("socket.socket")
@@ -891,6 +899,7 @@ class TestUtil:
         # properly propagates the scope to getaddrinfo, and that the returned
         # scoped ID makes it to the socket creation call.
         fake_scoped_sa6 = ("a::b", 80, 0, 42)
+        resolver = ResolverDescription.from_url("system://").new()
         getaddrinfo.return_value = [
             (
                 socket.AF_INET6,
@@ -901,9 +910,8 @@ class TestUtil:
             )
         ]
         socket.return_value = fake_sock = MagicMock()
-
-        create_connection(("a::b%iface", 80))
-        assert getaddrinfo.call_args[0][0] == "a::b%iface"
+        resolver.create_connection(("a::b%iface", 80))
+        assert getaddrinfo.call_args[1]["host"] == "a::b%iface"
         fake_sock.connect.assert_called_once_with(fake_scoped_sa6)
 
     @pytest.mark.parametrize(

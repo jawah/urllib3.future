@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import socket
 import typing
 import warnings
 from types import TracebackType
@@ -19,6 +20,12 @@ from ._typing import (
 )
 from .backend import HttpVersion, QuicPreemptiveCacheType, ResponsePromise
 from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, port_by_scheme
+from .contrib.resolver import (
+    BaseResolver,
+    ManyResolver,
+    ProtocolResolver,
+    ResolverDescription,
+)
 from .exceptions import (
     LocationValueError,
     MaxRetryError,
@@ -77,6 +84,7 @@ class PoolKey(typing.NamedTuple):
     key_retries: Retry | bool | int | None
     key_block: bool | None
     key_source_address: tuple[str, int] | None
+    key_socket_family: socket.AddressFamily | None
     key_key_file: str | None
     key_key_password: str | None
     key_cert_file: str | None
@@ -216,6 +224,12 @@ class PoolManager(RequestMethods):
         num_pools: int = 10,
         headers: typing.Mapping[str, str] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
+        resolver: ResolverDescription
+        | list[ResolverDescription]
+        | str
+        | list[str]
+        | BaseResolver
+        | None = None,
         **connection_pool_kw: typing.Any,
     ) -> None:
         super().__init__(headers)
@@ -232,6 +246,59 @@ class PoolManager(RequestMethods):
         self.key_fn_by_scheme = key_fn_by_scheme.copy()
 
         self._preemptive_quic_cache = preemptive_quic_cache
+
+        self._own_resolver = not isinstance(resolver, BaseResolver)
+
+        if resolver is None:
+            resolver = [ResolverDescription(ProtocolResolver.SYSTEM)]
+        elif isinstance(resolver, str):
+            resolver = [ResolverDescription.from_url(resolver)]
+        elif isinstance(resolver, ResolverDescription):
+            resolver = [resolver]
+
+        self._resolvers: list[ResolverDescription] = []
+
+        if not isinstance(resolver, BaseResolver):
+            can_resolve_localhost: bool = False
+
+            for resolver_description in resolver:
+                if isinstance(resolver_description, str):
+                    self._resolvers.append(
+                        ResolverDescription.from_url(resolver_description)
+                    )
+
+                    if self._resolvers[-1].protocol == ProtocolResolver.SYSTEM:
+                        can_resolve_localhost = True
+
+                    continue
+
+                self._resolvers.append(resolver_description)
+
+                if self._resolvers[-1].protocol == ProtocolResolver.SYSTEM:
+                    can_resolve_localhost = True
+
+            if not can_resolve_localhost:
+                self._resolvers.append(
+                    ResolverDescription.from_url("system://default?hosts=localhost")
+                )
+
+        #: We want to automatically forward ca_cert_data, ca_cert_dir, and ca_certs.
+        for rd in self._resolvers:
+            if "ca_cert_data" in connection_pool_kw:
+                if "ca_cert_data" not in rd:
+                    rd["ca_cert_data"] = connection_pool_kw["ca_cert_data"]
+            if "ca_cert_dir" in connection_pool_kw:
+                if "ca_cert_dir" not in rd:
+                    rd["ca_cert_dir"] = connection_pool_kw["ca_cert_dir"]
+            if "ca_certs" in connection_pool_kw:
+                if "ca_certs" not in rd:
+                    rd["ca_certs"] = connection_pool_kw["ca_certs"]
+
+        self._resolver: BaseResolver = (
+            ManyResolver(*[r.new() for r in self._resolvers])
+            if not isinstance(resolver, BaseResolver)
+            else resolver
+        )
 
     def __enter__(self: _SelfT) -> _SelfT:
         return self
@@ -284,6 +351,11 @@ class PoolManager(RequestMethods):
 
         request_context["preemptive_quic_cache"] = self._preemptive_quic_cache
 
+        if not self._resolver.is_available():
+            self._resolver = self._resolver.recycle()
+
+        request_context["resolver"] = self._resolver
+
         # By default, each HttpPool can have up to num_pools connections
         if "maxsize" not in request_context:
             request_context["maxsize"] = self._num_pools
@@ -298,6 +370,9 @@ class PoolManager(RequestMethods):
         re-used after completion.
         """
         self.pools.clear()
+
+        if self._own_resolver and self._resolver.is_available():
+            self._resolver.close()
 
     def connection_from_host(
         self,

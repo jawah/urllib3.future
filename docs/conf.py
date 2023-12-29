@@ -84,8 +84,8 @@ html_static_path = ["_static"]
 html_theme_options = {
     "announcement": """
         <a style=\"text-decoration: none; color: white;\" 
-           href=\"https://github.com/sponsors/urllib3\">
-           <img src=\"/en/latest/_static/favicon.png\"/> Support urllib3 on GitHub Sponsors
+           href=\"https://github.com/sponsors/Ousret\">
+           <img src=\"/en/latest/_static/favicon.png\"/> Support urllib3.future on GitHub Sponsors
         </a>
     """,
     "sidebar_hide_name": True,
@@ -138,4 +138,8 @@ nitpick_ignore = [
     ("py:class", "urllib3.backend._base.LowLevelResponse"),
     ("py:class", "LowLevelResponse"),
     ("py:class", "QuicPreemptiveCacheType"),
+    ("py:class", "socket.SocketKind"),
+    ("py:class", "socket.AddressFamily"),
+    ("py:class", "timedelta"),
+    ("py:class", "TLSVersion"),
 ]

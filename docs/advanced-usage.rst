@@ -309,14 +309,14 @@ SOCKS Proxies
 
 For SOCKS, you can use :class:`~contrib.socks.SOCKSProxyManager` to connect to
 SOCKS4 or SOCKS5 proxies. In order to use SOCKS proxies you will need to
-install `PySocks <https://pypi.org/project/PySocks/>`_ or install urllib3 with
+install `python-socks <https://pypi.org/project/python-socks/>`_ or install urllib3-future with
 the ``socks`` extra:
 
 .. code-block:: bash
 
      python -m pip install urllib3.future[socks]
 
-Once PySocks is installed, you can use
+Once python-socks is installed, you can use
 :class:`~contrib.socks.SOCKSProxyManager`:
 
 .. code-block:: python
@@ -645,6 +645,8 @@ not remember if a particular host, port HTTP server is capable of serving QUIC.
 In practice, we always have to initiate a TCP connection and then observe the first response headers
 in order to determine if the remote is capable of communicating through QUIC.
 
+.. note:: Since urllib3.future 2.4+ we are capable of asking for DNS HTTPS records to preemptively connect using HTTP/3 over QUIC.
+
 .. note::
 
     HTTP/3 require installing ``qh3`` package if not automatically grabbed.
@@ -785,6 +787,53 @@ You may give your certificate to urllib3.future this way::
 
 .. note:: If your platform isn't served by this feature it will raise a warning and ignore the certificate.
 
+Inspect connection information and timings
+------------------------------------------
+
+The library expose a keyword argument, namely ``on_post_connection=...`` that takes a single positional argument
+of type ``ConnectionInfo``.
+
+You can pass this named argument into any request methods in ``PoolManager`` or ``HTTP(S)ConnectionPool``.
+
+.. note:: The class ``ConnectionInfo`` is exposed at top-level package import.
+
+Here is a basic example on how to inspect a connection that was picked / created for your request::
+
+    from urllib3 import PoolManager, ConnectionInfo
+
+    def conn_callback(conn_info: ConnectionInfo) -> None:
+        print(conn_info)
+
+    with PoolManager(resolver="dot+google://") as pm:
+        resp = pm.urlopen("GET", "https://pie.dev/get", on_post_connection=conn_callback)
+
+``ConnectionInfo`` hold the following properties:
+
+- established_latency *timedelta*
+   - Time taken to establish the connection. Pure socket **connect**.
+- http_version *HttpVersion*
+   - HTTP protocol used with the remote peer (not the proxy).
+- certificate_der *bytes*
+- certificate_dict *dict*
+   - The SSL certificate presented by the remote peer (not the proxy).
+- issuer_certificate_der *bytes*
+- issuer_certificate_dict *dict*
+   - The SSL issuer certificate for the remote peer certificate (not the proxy).
+- destination_address *tuple[str,int]*
+   - The IP address used to reach the remote peer (not the proxy), that was yield by your resolver.
+- cipher *str*
+   - The TLS cipher used to secure the exchanges (not the proxy).
+- tls_version *ssl.TLSVersion*
+   - The TLS revision used (not the proxy).
+- tls_handshake_latency *timedelta*
+   - The time taken to reach a complete TLS liaison between the remote peer and us (not the proxy).
+- resolution_latency *timedelta*
+   - Time taken to resolve a domain name into a reachable IP address.
+- request_sent_latency *timedelta*
+   - Time taken to encode and send the whole request through the socket.
+
+.. note:: Missing something valuable to you? Do not hesitate to ping us anytime. We will carefully study your request and implement it if we can.
+
 Monitor upload progress
 -----------------------
 
@@ -810,3 +859,513 @@ See the following example::
     with PoolManager() as pm:
         resp = pm.urlopen("POST", "https://httpbin.org/post", data=b"foo"*1024*10, on_upload_body=track)
 
+Using a Custom DNS Resolver
+---------------------------
+
+We take security matters very seriously. It is time that developers stop using insecure DNS resolution methods.
+
+.. note:: Available since version 2.4, no additional dependencies are required. Everything is carefully made by urllib3.future developers.
+
+urllib3.future allows you to avoid using the default, often insecure DNS, that ship with every other HTTP clients.
+It strip you from having the deal with, often painful, extra steps to successfully integrate a custom resolver.
+
+You can use any of the following DNS protocols:
+
+- DNS over UDP (RFC 1035)
+- DNS over TLS (RFC 7858)
+- DNS over HTTPS (2 or 3) using ``application/dns-json`` or ``application/dns-message`` formats.
+- DNS over QUIC
+
+We explicitly choose not to support **DNSCrypt**. Support for this protocol must be brought by you
+using our ``BaseResolver`` abstract class.
+
+.. warning:: DNS over UDP is insecure and should only be used in a trusted networking environments. e.g. Your company isolated VLAN.
+
+In addition to those, you can find three special "protocols":
+
+- DNS using basic key-value dictionary (e.g. very much like a Hosts file)
+- Disabled DNS resolution
+- OS Resolver **(default)**
+
+Upgrading to any of **DNS over TLS**, **DNS over HTTPS** or **DNS over QUIC** will dramatically increase your security
+while consuming HTTP requests.
+
+urllib3.future recommends the usage of **DNS over QUIC** or **DNS over HTTPS** to benefit from a substantial increase in
+performance by leveraging a multiplexed connection.
+
+.. note:: urllib3.future does not change the default resolver (OS by default). You'll have to specify it yourself.
+
+You can add the optional keyword parameter ``resolver=...`` into your ``PoolManager`` and ``HTTP(S)PoolManager`` constructors.
+
+``resolver=...`` takes either a ``Resolver``, a ``list[Resolver]`` or a ``str``.
+
+The string is a URL representing how you want to configure your resolver. See bellow for how you can write said URLs
+for each protocols.
+
+.. note:: Thanks to our generic architecture, you can, at your own discretion combine multiple resolvers with or without specific conditions.
+
+.. warning:: Using a hostname instead of an IP address is accepted when specifying your resolver. The caveat, here, is that the name resolution will proceed using your system default.
+
+.. attention:: Only DNS over HTTPS support built-in support for proxies for now. We will support it in a future version.
+
+DNS over UDP (Insecure)
+~~~~~~~~~~~~~~~~~~~~~~~
+
+In order to specify your own DNS server over UDP you can specify it like so::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="dou://1.1.1.1") as pm:
+        pm.urlopen(...)
+
+You can pass the following options to the DNS url:
+
+- timeout
+   - ``dou://1.1.1.1/?timeout=1.2``
+- source_address
+   - ``dou://1.1.1.1/?source_address=10.12.0.1:1111``
+
+.. warning:: DNS over UDP is generally to be avoided unless you are in a trusted networking environment.
+
+DNS over TLS
+~~~~~~~~~~~~
+
+In order to specify your own DNS server over TLS you can specify it like so::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="dot://1.1.1.1") as pm:
+        pm.urlopen(...)
+
+You can pass the following options to the DNS url:
+
+- timeout
+- source_address
+- server_hostname
+- key_file
+- cert_file
+- cert_reqs
+- ca_certs
+- ssl_version
+- ciphers
+- ca_cert_dir
+- key_password
+- ca_cert_data
+- cert_data
+- key_data
+
+DNS over QUIC
+~~~~~~~~~~~~~
+
+In order to specify your own DNS server over QUIC you can specify it like so::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="doq://dns.nextdns.io") as pm:
+        pm.urlopen(...)
+
+You can pass the following options to the DNS url:
+
+- timeout
+- source_address
+- server_hostname
+- key_file
+- cert_file
+- cert_reqs
+- ca_certs
+- key_password
+- ca_cert_data
+- cert_data
+- key_data
+
+DNS over HTTPS
+~~~~~~~~~~~~~~
+
+In order to specify your own DNS server over HTTPS you can specify it like so::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="doh://dns.google") as pm:
+        pm.urlopen(...)
+
+You can pass the following options to the DNS url:
+
+- timeout
+- source_address
+- headers
+   - ``doh://dns.google/?headers=x-hello-world:goodbye&headers=x-client:awesome-urllib3-future``
+   - Pass two header (**x-hello-world** with value **goodbye**, and **x-client** with value **awesome-urllib3-future**).
+- server_hostname
+- key_file
+- cert_file
+- cert_reqs
+   - ``doh://dns.google/?cert_reqs=0`` -> Disable certificate verification (not recommended)
+   - ``doh://dns.google/?cert_reqs=CERT_REQUIRED`` -> Enforce certificate verification (already the default)
+- ca_certs
+- ssl_version
+   - ``doh://dns.google/?ssl_version=TLSv1.2`` -> Enforce TLS 1.2
+- ciphers
+- ca_cert_dir
+- key_password
+- ca_cert_data
+- cert_data
+- key_data
+- disabled_svn
+   - ``doh://dns.google/?disabled_svn=h3`` -> Disable HTTP/3
+- proxy _(url)_
+- proxy_headers
+
+.. warning:: DNS over HTTPS support HTTP/1.1, HTTP/2 and HTTP/3. By default it tries to negotiate HTTP/2, then if available negotiate HTTP/3. The server must provide a valid ``Alt-Svc`` in responses.
+
+Some DNS servers over HTTPS may requires you to be properly authenticated. We allow, out of the box, three types of authentication:
+
+- Basic Auth
+- Bearer Token
+- mTLS (or Client Certificate)
+
+To forward a username and password::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="doh://user:password@dns.google") as pm:
+        pm.urlopen(...)
+
+To pass a bearer token::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="doh://token@dns.google") as pm:
+        pm.urlopen(...)
+
+Finally, to authenticate with a certificate::
+
+    from urllib3 import PoolManager, ResolverDescription
+
+    my_resolver = ResolverDescription.from_url("doh://dns.google")
+
+    my_resolver["cert_data"] = ...  # also available: cert_file
+    my_resolver["key_data"] = ...  # also available: key_file
+    my_resolver["key_password"] = ... # optional keyfile decrypt password
+
+    with PoolManager(resolver="doh://token@dns.google") as pm:
+        pm.urlopen(...)
+
+That's it! You can access almost every type of resolvers.
+
+.. note:: The first two examples are exclusives to DNS over HTTPS while the third can be used with DNS over QUIC, and DNS over TLS.
+
+You can leverage DNS over HTTPS using RFC 8484 or using the JSON format (JSON is not standard).
+If you rather strictly follow standards with RFC 8484 with Google public DNS or Cloudflare public DNS, append the query parameter `?rfc8484=true` to your
+DNS over HTTPS url.
+
+Disable DNS
+~~~~~~~~~~~
+
+In order to forbid name resolution in general::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="null://default") as pm:
+        pm.urlopen(...)
+
+This will block any attempt to reach a URL that isn't an IP address.
+
+OS Resolver
+~~~~~~~~~~~
+
+To invoke your OS DNS default resolution mechanism::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="system://default") as pm:
+        pm.urlopen(...)
+
+Doing this is strictly what happen by default.
+
+Manual DNS Resolver
+~~~~~~~~~~~~~~~~~~~
+
+You can create your own tiny resolver that behave almost like the typical ``hosts`` file.
+
+For example::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="in-memory://default?hosts=example.com:1.1.1.1&hosts=example.dev:8.8.8.8") as pm:
+        pm.urlopen(...)
+
+.. note:: This is most useful in development or where you actually don't need a resolver in a highly controlled network environment.
+
+Combining DNS Resolvers
+~~~~~~~~~~~~~~~~~~~~~~~
+
+You can leverage multiple DNS servers and resolution methods by passing an array of ``Resolver`` objects.
+The given list will implicitly set order/preference.
+
+For example::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver=["doh+google://default", "doh+cloudflare://default"]) as pm:
+        pm.urlopen(...)
+
+.. note:: This is meant for mission critical programs that require redundancy. There's no imposed limit on the resolver count. urllib3.future recommend not exceeding 5 resolvers.
+
+Every proposed protocols can be mixed in.
+Let's say, for some reasons, you wanted to forbid the resolution of `www.idontwantthis.tld`.
+You would write the following::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver=["doh+google://default", "null://default?hosts=www.idontwantthis.tld"]) as pm:
+        pm.urlopen(...)
+
+This tiny code will prevent any resolution of `www.idontwantthis.tld`, therefore raising an exception if ever happening.
+
+Multi-threading considerations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In normal conditions, this::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver=["doh+google://"]) as pm:
+        pm.urlopen(...)
+
+Open a single connection to Google DNS over HTTPS server. It will be a multiplexed connection by default.
+So each time urllib3.future need to transform a hostname into a IP address, it will send up to 3 concurrent requests
+(or questions) at once.
+
+On a single threaded application, it will be more than enough to enjoy a fast experience.
+The story isn't the same when you decide to spawn multiple threads. As per our thread safety policy, we lock a resolver
+two times, once when we send the queries, and finally when we wait for the answers.
+
+You will most likely reach a bottleneck when querying a lot of different domain names.
+Fortunately, you can easily circumvent that limitation!
+
+Simply put. Pass multiple DNS urls, duplicated or not::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver=["doh+google://", "doh+cloudflare://", "doh+cloudflare://", "doq+adguard://"]) as pm:
+        pm.urlopen(...)
+
+This example will provide you with 4 distinct resolver each having its own connection. They will be able to work
+concurrently.
+
+.. note:: It is scalable at will. So long that you own the required resources.
+
+.. warning:: In a non multi-threaded environment, the first resolver is most likely to be used alone. No load-balancing is to be expected.
+
+Restrict a resolver with specific domains
+-----------------------------------------
+
+Let's imagine you have a resolver that is only capable of translating domain like ``*.company.internal``.
+How do you pass on a DNS url that is restricted with this?
+
+Here's how::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver=["doh+google://", "dou://10.10.22.22/?hosts=*.company.internal"]) as pm:
+        pm.urlopen(...)
+
+With this, all domains that match ``*.company.internal`` will be resolved using ``10.10.22.22`` server.
+Otherwise, DNS over HTTPS by Google will be tried.
+
+.. note:: More complex infrastructure may have two or more top level domains. Use the comma in the **hosts** query parameter to separate entries. Like so: ``?hosts=*.company.internal,*.company.second-site`` or even ``?hosts=*.company.internal&hosts=*.company.second-site``.
+
+Isn't nice?
+
+.. warning:: To ensure that ``localhost`` can be resolved, urllib3.future always add a ``system://default/?hosts=localhost`` to the resolvers (if necessary).
+
+Shortcut DNS for trusted providers
+----------------------------------
+
+When using the ``resolver=...``  using an URL, you can use some ready-to-use URLs.
+
+We provide shortcuts for the following providers:
+
+- Cloudflare
+   - DNS over TLS: `dot+cloudflare://`
+   - DNS over UDP: `dou+cloudflare://`
+   - DNS over HTTPS: `doh+cloudflare://`
+- Google
+   - DNS over TLS: `dot+google://`
+   - DNS over UDP: `dou+google://`
+   - DNS over HTTPS: `doh+google://`
+- AdGuard
+   - DNS over TLS: `dot+adguard://`
+   - DNS over UDP: `dou+adguard://`
+   - DNS over HTTPS: `doh+adguard://`
+   - DNS over QUIC: `doq+adguard://`
+- Quad9
+   - DNS over TLS: `dot+quad9://`
+   - DNS over UDP: `dou+quad9://`
+   - DNS over HTTPS: `doh+quad9://`
+- OpenDNS _(Nothing to do with Open Source, belong to Cisco)_
+   - DNS over TLS: `dot+opendns://`
+   - DNS over UDP: `dou+opendns://`
+   - DNS over HTTPS: `doh+opendns://`
+- NextDNS
+   - DNS over QUIC: `doq+nextdns://`
+   - DNS over HTTPS: `doh+nextdns://`
+
+.. note:: We very much welcome suggestions if you feel this list is incomplete. Probably is the case! We won't accept servers that are from your ISP.
+
+.. warning:: Beware that, as of january 2024, both Google and Cloudflare does not support DNS over QUIC. To leverage a QUIC connection with them, you will have to use DNS over HTTPS.
+
+How to choose your resolver? Simply check the latency of each. Thanks to urllib3.future, you can inspect ``ConnectionInfo``
+using ``on_post_connection`` callback. Depending on various factors, you may find one more reactive than the other.
+
+Using a custom port with a shortcut DNS url
+-------------------------------------------
+
+Some countries may be issuing restriction with specific ports, preventing you to simply put ``doh+cloudflare://`` for example.
+You can easily circumvent this limitation by choosing another port, the provider can at his own discretion provide
+alternative port or not.
+
+- ``doh+cloudflare://default:8443``
+
+Given example replace default port 443 with port 8443.
+
+.. warning:: Cloudflare does not propose 8443 as an alternative port (it's just for the example). See https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/ for more.
+
+Passing options to the Resolver
+-------------------------------
+
+You can pass almost all supported keyword arguments that come with ``urllib3.future`` like but not limited to:
+
+- timeout
+- source_address
+- ssl_version
+- cert_reqs
+- assert_fingerprint
+- assert_hostname
+- ssl_minimum_version
+- ssl_maximum_version
+
+.. note:: Beware that we automatically forward ``ca_cert_data``, `ca_cert_dir`, and ``ca_certs`` (if specified) for convenience if not specified in DNS parameters.
+
+When passing the resolver as a plain string url, you can do as follow::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="doh+google://default?timeout=2&cert_reqs=0") as pm:
+        pm.urlopen(...)
+
+.. note:: The following set the timeout to 2 and disable the certificate verification.
+
+It is also possible to pass more complex argument like **ca_cert_data** using a ``ResolverDescription`` instance::
+
+    from urllib3 import PoolManager, ResolverDescription
+    import wassima
+
+    my_resolver = ResolverDescription.from_url("doh+google://default?timeout=2&cert_reqs=0")
+    my_resolver["ca_cert_data"] = wassima.generate_ca_bundle()
+
+    with PoolManager(resolver="doh+google://default?timeout=2") as pm:
+        pm.urlopen(...)
+
+.. note:: That example showcase how to inject your OS trust store CA to be used with the DNS connection verification.
+
+Create your own Resolver
+------------------------
+
+You can create a resolver from scratch by inheriting ``BaseResolver`` that is located at ``urllib3.contrib.resolver``.
+Then, once ready, you can instantiate it and pass it directly into the keyword argument ``resolver=...``.
+
+The minimum viable resolver requires you to implement the methods ``getaddrinfo(...)``, ``close()``, and ``is_available()``.
+
+Use cases:
+
+- DNS over PostgreSQL (Using a database to translate hostnames)
+- DNS over Redis (Implementing a sharable persistent cache)
+
+.. note:: You can inherit any of ``urllib3.contrib.dot.TLSResolver``, ``urllib3.contrib.doq.QUICResolver``, ``urllib3.contrib.dou.PlainResolver``, or ``urllib3.contrib.doh.HTTPSResolver`` and add your own layer. e.g. the redis sharable cache layer.
+
+DNSSEC
+------
+
+When you leverage a DNS resolver that is not the default, meaning DNS over QUIC / TLS / HTTPS and UDP, that ships
+within urllib3.future native capabilities you should expect DNSSEC to be enforced. See https://www.cloudflare.com/learning/dns/dns-security/ for
+in-depth explanations on the matter.
+
+You can execute the following code to witness it::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(resolver="doh+cloudflare://") as pm:
+        pm.urlopen("GET", "https://brokendnssec.net")
+
+This will raise an exception with the following message::
+
+     Failed to resolve 'brokendnssec.net' (DNSSEC validation failure. Check http://dnsviz.net/d/brokendnssec.net/dnssec/ and http://dnssec-debugger.verisignlabs.com/brokendnssec.net for errors)
+
+.. note:: You cannot circumvent that security check. It may be a life saver to you or your company. If you really want this feature shutdown, use `resolver=None`. You won't be able to support (secure) alternative DNS providers.
+
+Use our Resolvers outside of urllib3-future
+-------------------------------------------
+
+It is possible to do hostname resolution without having to issue a request, in the case if you are only
+interested in that part.
+
+This simple code demonstrate it::
+
+    from urllib3 import ResolverDescription
+    import socket
+
+    resolver = ResolverDescription.from_url("doh+google://").new()
+    res = resolver.getaddrinfo("www.cloudflare.com", 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+
+.. note:: The method `getaddrinfo` behave exactly like the Python native implementation in the socket stdlib.
+
+A keyword-parameter, namely `quic_upgrade_via_dns_rr`, should be set to **False** (already the default) to avoid
+looking for the HTTPS record, thus taking you out of guard with the return list. We almost always start by looking
+for a TCP entrypoint, but thanks to HTTPS records, we can return a UDP entrypoint in the results.
+
+.. note:: Our resolvers are thread safe.
+
+Refer to the API references to know more about exposed methods.
+
+.. note:: You can use at your own discretion your instantiated resolver in a ``PoolManager``, ``HTTP(S)ConnectionPool`` or even ``HTTP(S)Connection`` using the ``resolver=...`` keyword argument.
+
+Combine resolvers
+~~~~~~~~~~~~~~~~~
+
+Using multiple DNS resolvers is nearly as easy as instantiating a single one.
+You may follow bellow example::
+
+    from urllib3 import ResolverDescription
+    from urllib3.contrib.resolver import ManyResolver
+
+    resolvers = [
+        ResolverDescription.from_url("doh+google://").new(),
+        ResolverDescription.from_url("doh+cloudflare://").new(),
+        ResolverDescription.from_url("doh+adguard://").new(),
+        ResolverDescription.from_url("dot+google://").new(),
+        ResolverDescription.from_url("doh+google://").new(),
+    ]
+
+    resolver = ManyResolver(*resolvers)
+    # ....You know the drill..!
+
+Enforce IPv4 or IPv6
+--------------------
+
+.. note:: Available since version 2.4+
+
+You can enforce **urllib3.future** to connect to IPv4 addresses or IPv6 only.
+To do so, you just have to specify the following keyword argument (``socket_family``) into
+your ``PoolManager``, ``HTTP(S)ConnectionPool`` or ``HTTP(S)Connection``.
+
+By writing exactly this::
+
+    from urllib3 import PoolManager
+    import socket
+
+    with PoolManager(socket_family=socket.AF_INET) as pm:
+        pm.urlopen("GET, "https://pie.dev/get", on_post_connection=lambda ci: print(ci))
+
+In this example, you are enforcing connecting to a IPv4 only address, and thanks to the callback ``on_post_connection``
+you will be able to inspect the ``ConnectionInfo`` and verify the destination address.
