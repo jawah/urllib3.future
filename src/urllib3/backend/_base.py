@@ -4,6 +4,7 @@ import enum
 import socket
 import typing
 from base64 import b64encode
+from datetime import datetime, timedelta
 from secrets import token_bytes
 
 if typing.TYPE_CHECKING:
@@ -27,28 +28,54 @@ class HttpVersion(str, enum.Enum):
 
 class ConnectionInfo:
     def __init__(self) -> None:
+        #: Time taken to establish the connection
+        self.established_latency: timedelta | None = None
+
+        #: HTTP protocol used with the remote peer (not the proxy)
         self.http_version: HttpVersion | None = None
+
+        #: The SSL certificate presented by the remote peer (not the proxy)
         self.certificate_der: bytes | None = None
         self.certificate_dict: dict[
             str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
         ] | None = None
+
+        #: The SSL issuer certificate for the remote peer certificate (not the proxy)
         self.issuer_certificate_der: bytes | None = None
         self.issuer_certificate_dict: dict[
             str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
         ] | None = None
+
+        #: The IP address used to reach the remote peer (not the proxy), that was yield by your resolver.
         self.destination_address: tuple[str, int] | None = None
+
+        #: The TLS cipher used to secure the exchanges (not the proxy)
         self.cipher: str | None = None
+        #: The TLS revision used (not the proxy)
         self.tls_version: TLSVersion | None = None
+        #: The time taken to reach a complete TLS liaison between the remote peer and us.  (not the proxy)
+        self.tls_handshake_latency: timedelta | None = None
+        #: Time taken to resolve a domain name into a reachable IP address.
+        self.resolution_latency: timedelta | None = None
+
+        #: Time taken to encode and send the whole request through the socket.
+        self.request_sent_latency: timedelta | None = None
 
     def __repr__(self) -> str:
         return str(
             {
+                "established_latency": self.established_latency,
                 "certificate_der": self.certificate_der,
                 "certificate_dict": self.certificate_dict,
+                "issuer_certificate_der": self.issuer_certificate_der,
+                "issuer_certificate_dict": self.issuer_certificate_dict,
                 "destination_address": self.destination_address,
                 "cipher": self.cipher,
                 "tls_version": self.tls_version,
+                "tls_handshake_latency": self.tls_handshake_latency,
                 "http_version": self.http_version,
+                "resolution_latency": self.resolution_latency,
+                "request_sent_latency": self.request_sent_latency,
             }
         )
 
@@ -286,6 +313,8 @@ class BaseBackend:
 
         self._promises: dict[str, ResponsePromise] = {}
         self._pending_responses: dict[int, LowLevelResponse] = {}
+
+        self._start_last_request: datetime | None = None
 
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises

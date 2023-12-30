@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing
+from enum import Enum
 
 from .backend import LowLevelResponse
 from .fields import RequestField
@@ -68,7 +69,7 @@ try:
     from typing import TypedDict
 
     class _TYPE_SOCKS_OPTIONS(TypedDict):
-        socks_version: int
+        socks_version: int | Enum
         proxy_host: str | None
         proxy_port: str | None
         username: str | None

@@ -167,9 +167,9 @@ class RequestField:
 
         if isinstance(value, tuple):
             if len(value) == 3:
-                filename, data, content_type = value  # type: ignore[misc]
+                filename, data, content_type = value
             else:
-                filename, data = value  # type: ignore[misc]
+                filename, data = value
                 content_type = guess_content_type(filename)
         else:
             filename = None

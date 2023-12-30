@@ -7,6 +7,7 @@ import sys
 import typing
 import warnings
 import weakref
+from datetime import timedelta
 from socket import timeout as SocketTimeout
 from types import TracebackType
 
@@ -23,6 +24,12 @@ from .connection import (
     _wrap_proxy_error,
 )
 from .connection import port_by_scheme as port_by_scheme
+from .contrib.resolver import (
+    BaseResolver,
+    ManyResolver,
+    ProtocolResolver,
+    ResolverDescription,
+)
 from .exceptions import (
     ClosedPoolError,
     EmptyPoolError,
@@ -182,6 +189,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         _proxy: Url | None = None,
         _proxy_headers: typing.Mapping[str, str] | None = None,
         _proxy_config: ProxyConfig | None = None,
+        resolver: ResolverDescription
+        | list[ResolverDescription]
+        | str
+        | list[str]
+        | BaseResolver
+        | None = None,
         **conn_kw: typing.Any,
     ):
         ConnectionPool.__init__(self, host, port)
@@ -224,6 +237,60 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
             self.conn_kw["proxy"] = self.proxy
             self.conn_kw["proxy_config"] = self.proxy_config
+
+        self._own_resolver = not isinstance(resolver, BaseResolver)
+
+        if resolver is None:
+            resolver = [ResolverDescription(ProtocolResolver.SYSTEM)]
+        elif isinstance(resolver, str):
+            resolver = [ResolverDescription.from_url(resolver)]
+        elif isinstance(resolver, ResolverDescription):
+            resolver = [resolver]
+
+        self._resolvers: list[ResolverDescription] = []
+
+        if not isinstance(resolver, BaseResolver):
+            can_resolve_localhost: bool = False
+
+            for resolver_description in resolver:
+                if isinstance(resolver_description, str):
+                    self._resolvers.append(
+                        ResolverDescription.from_url(resolver_description)
+                    )
+
+                    if self._resolvers[-1].protocol == ProtocolResolver.SYSTEM:
+                        can_resolve_localhost = True
+                    continue
+
+                self._resolvers.append(resolver_description)
+
+                if self._resolvers[-1].protocol == ProtocolResolver.SYSTEM:
+                    can_resolve_localhost = True
+
+            if not can_resolve_localhost:
+                self._resolvers.append(
+                    ResolverDescription.from_url("system://default?hosts=localhost")
+                )
+
+            #: We want to automatically forward ca_cert_data, ca_cert_dir, and ca_certs.
+            for rd in self._resolvers:
+                if "ca_cert_data" in conn_kw:
+                    if "ca_cert_data" not in rd:
+                        rd["ca_cert_data"] = conn_kw["ca_cert_data"]
+                if "ca_cert_dir" in conn_kw:
+                    if "ca_cert_dir" not in rd:
+                        rd["ca_cert_dir"] = conn_kw["ca_cert_dir"]
+                if "ca_certs" in conn_kw:
+                    if "ca_certs" not in rd:
+                        rd["ca_certs"] = conn_kw["ca_certs"]
+
+        self._resolver: BaseResolver = (
+            ManyResolver(*[r.new() for r in self._resolvers])
+            if not isinstance(resolver, BaseResolver)
+            else resolver
+        )
+
+        self.conn_kw["resolver"] = self._resolver
 
         # Do not pass 'self' as callback to 'finalize'.
         # Then the 'finalize' would keep an endless living (leak) to self.
@@ -773,6 +840,19 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             raise new_e
 
         if on_post_connection is not None and conn.conn_info is not None:
+            # A second request does not redo handshake or DNS resolution.
+            if (
+                hasattr(conn, "_start_last_request")
+                and conn._start_last_request is not None
+            ):
+                if conn.conn_info.tls_handshake_latency:
+                    conn.conn_info.tls_handshake_latency = timedelta()
+                if conn.conn_info.established_latency:
+                    conn.conn_info.established_latency = timedelta()
+                if conn.conn_info.resolution_latency:
+                    conn.conn_info.resolution_latency = timedelta()
+                if conn.conn_info.request_sent_latency:
+                    conn.conn_info.request_sent_latency = None
             on_post_connection(conn.conn_info)
 
         if conn.is_multiplexed is False and multiplexed is True:
@@ -863,6 +943,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         # Close all the HTTPConnections in the pool.
         _close_pool_connections(old_pool)
+
+        # Close allocated resolver if we own it. (aka. not shared)
+        if self._own_resolver and self._resolver.is_available():
+            self._resolver.close()
 
     def is_same_host(self, url: str) -> bool:
         """
@@ -1508,7 +1592,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                 (
                     f"Unverified HTTPS request is being made to host '{conn.host}'. "
                     "Adding certificate verification is strongly advised. See: "
-                    "https://urllib3.readthedocs.io/en/latest/advanced-usage.html"
+                    "https://urllib3future.readthedocs.io/en/latest/advanced-usage.html"
                     "#tls-warnings"
                 ),
                 InsecureRequestWarning,

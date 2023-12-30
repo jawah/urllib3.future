@@ -1,5 +1,5 @@
 """
-Python HTTP library with thread-safe connection pooling, file post support, user friendly, and more
+Python HTTP library with thread-safe connection pooling, file post support, user-friendly, and more
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from ._typing import _TYPE_BODY, _TYPE_FIELDS
 from ._version import __version__
 from .backend import ConnectionInfo, HttpVersion, ResponsePromise
 from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, connection_from_url
+from .contrib.resolver import ResolverDescription
 from .filepost import encode_multipart_formdata
 from .poolmanager import PoolManager, ProxyManager, proxy_from_url
 from .response import BaseHTTPResponse, HTTPResponse
@@ -68,6 +69,7 @@ __all__ = (
     "HttpVersion",
     "ConnectionInfo",
     "ResponsePromise",
+    "ResolverDescription",
 )
 
 logging.getLogger(__name__).addHandler(NullHandler())

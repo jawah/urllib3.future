@@ -9,7 +9,6 @@ from test import SHORT_TIMEOUT
 from unittest.mock import Mock, patch
 
 import pytest
-import socks as py_socks  # type: ignore[import-not-found]
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import IPV4SocketDummyServerTestCase
@@ -107,7 +106,7 @@ def _set_up_fake_getaddrinfo(monkeypatch: pytest.MonkeyPatch) -> None:
     # can't affect PySocks retries via its API. Instead, we monkeypatch PySocks so that
     # it only sees a single address, which effectively disables retries.
     def fake_getaddrinfo(
-        addr: str, port: int, family: int, socket_type: int
+        host: str, port: int, family: int, type: int, proto: int, flags: int
     ) -> list[
         tuple[
             socket.AddressFamily,
@@ -117,11 +116,11 @@ def _set_up_fake_getaddrinfo(monkeypatch: pytest.MonkeyPatch) -> None:
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
-        gai_list = real_getaddrinfo(addr, port, family, socket_type)
+        gai_list = real_getaddrinfo(host, port, family, type, proto, flags)
         gai_list = [gai for gai in gai_list if gai[0] == socket.AF_INET]
         return gai_list[:1]
 
-    monkeypatch.setattr(py_socks.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
 def handle_socks5_negotiation(
@@ -363,7 +362,7 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
                 )
             event.set()
 
-    @patch("socks.create_connection")
+    @patch("urllib3.contrib.resolver.BaseResolver.create_connection")
     def test_socket_timeout(self, create_connection: Mock) -> None:
         create_connection.side_effect = SocketTimeout()
         proxy_url = f"socks5h://{self.host}:{self.port}"
@@ -502,7 +501,7 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
             proxy_url, username="user", password="badpass"
         ) as pm:
             with pytest.raises(
-                NewConnectionError, match="SOCKS5 authentication failed"
+                NewConnectionError, match="Username and password authentication failure"
             ):
                 pm.request("GET", "http://example.com", retries=False)
 

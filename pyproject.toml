@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 name = "urllib3-future"
 description = "urllib3.future is a powerful HTTP 1.1, 2, and 3 client"
 readme = "README.md"
-keywords = ["urllib", "httplib", "threadsafe", "filepost", "http", "https", "ssl", "pooling", "multiplexed", "concurrent"]
+keywords = ["urllib", "httplib", "threadsafe", "filepost", "http", "https", "ssl", "pooling", "multiplexed", "concurrent", "dns", "dot", "doq", "doh", "dou", "dns-over-quic", "dns-over-https", "dns-over-tls"]
 authors = [
   {name = "Andrey Petrov", email = "andrey.petrov@shazow.net"}
 ]
@@ -52,7 +52,7 @@ zstd = [
 ]
 secure = []
 socks = [
-  "PySocks>=1.5.6,<2.0,!=1.5.7",
+  "python-socks>=2.0,<3.0",
 ]
 qh3 = [
   "qh3>=0.14.0,<1.0.0",
@@ -110,6 +110,7 @@ filterwarnings = [
     '''default:ast\.(Num|NameConstant|Str) is deprecated and will be removed in Python 3\.14; use ast\.Constant instead:DeprecationWarning:_pytest''',
     '''default:Attribute s is deprecated and will be removed in Python 3\.14; use value instead:DeprecationWarning:_pytest''',
     '''default:A conflicting charset has been set in Content-Type:UserWarning''',
+    '''default:util\.connection\.create_connection\(\) is deprecated and scheduled for removal:DeprecationWarning''',
 ]
 
 [tool.isort]

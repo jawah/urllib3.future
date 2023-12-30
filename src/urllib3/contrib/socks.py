@@ -40,8 +40,15 @@ with the proxy:
 
 from __future__ import annotations
 
+from python_socks import (  # type: ignore[import-untyped]
+    ProxyConnectionError,
+    ProxyError,
+    ProxyTimeoutError,
+    ProxyType,
+)
+
 try:
-    import socks  # type: ignore[import-not-found]
+    from python_socks.sync import Proxy  # type: ignore[import-untyped]
 except ImportError:
     import warnings
 
@@ -49,15 +56,16 @@ except ImportError:
 
     warnings.warn(
         (
-            "SOCKS support in urllib3 requires the installation of optional "
-            "dependencies: specifically, PySocks.  For more information, see "
-            "https://urllib3.readthedocs.io/en/latest/contrib.html#socks-proxies"
+            "SOCKS support in urllib3.future requires the installation of an optional "
+            "dependency: python-socks. For more information, see "
+            "https://urllib3future.readthedocs.io/en/latest/contrib.html#socks-proxies"
         ),
         DependencyWarning,
     )
     raise
 
 import typing
+from socket import socket
 from socket import timeout as SocketTimeout
 
 from .._typing import _TYPE_SOCKS_OPTIONS
@@ -87,7 +95,7 @@ class SOCKSConnection(HTTPConnection):
         self._socks_options = _socks_options
         super().__init__(*args, **kwargs)
 
-    def _new_conn(self) -> socks.socksocket:
+    def _new_conn(self) -> socket:
         """
         Establish a new connection via the SOCKS proxy.
         """
@@ -102,7 +110,7 @@ class SOCKSConnection(HTTPConnection):
                 if len(opt) == 3:
                     only_tcp_options.append(opt)
                 elif len(opt) == 4:
-                    protocol: str = opt[3].lower()  # type: ignore[misc]
+                    protocol: str = opt[3].lower()
                     if protocol == "udp":
                         continue
                     only_tcp_options.append(opt[:3])
@@ -110,51 +118,51 @@ class SOCKSConnection(HTTPConnection):
             extra_kw["socket_options"] = only_tcp_options
 
         try:
-            conn = socks.create_connection(
-                (self.host, self.port),
+            assert self._socks_options["proxy_host"] is not None
+            assert self._socks_options["proxy_port"] is not None
+
+            p = Proxy(
                 proxy_type=self._socks_options["socks_version"],
-                proxy_addr=self._socks_options["proxy_host"],
-                proxy_port=self._socks_options["proxy_port"],
-                proxy_username=self._socks_options["username"],
-                proxy_password=self._socks_options["password"],
-                proxy_rdns=self._socks_options["rdns"],
-                timeout=self.timeout,
-                **extra_kw,
+                host=self._socks_options["proxy_host"],
+                port=int(self._socks_options["proxy_port"]),
+                username=self._socks_options["username"],
+                password=self._socks_options["password"],
+                rdns=self._socks_options["rdns"],
             )
 
-        except SocketTimeout as e:
+            _socket = self._resolver.create_connection(
+                (
+                    self._socks_options["proxy_host"],
+                    int(self._socks_options["proxy_port"]),
+                ),
+                timeout=self.timeout,
+                source_address=self.source_address,
+                socket_options=extra_kw["socket_options"],
+                quic_upgrade_via_dns_rr=False,
+                timing_hook=lambda _: setattr(self, "_connect_timings", _),
+            )
+
+            return p.connect(  # type: ignore[no-any-return]
+                self.host,
+                self.port,
+                self.timeout,
+                _socket,
+            )
+        except (SocketTimeout, ProxyTimeoutError) as e:
             raise ConnectTimeoutError(
                 self,
                 f"Connection to {self.host} timed out. (connect timeout={self.timeout})",
             ) from e
 
-        except socks.ProxyError as e:
-            # This is fragile as hell, but it seems to be the only way to raise
-            # useful errors here.
-            if e.socket_err:
-                error = e.socket_err
-                if isinstance(error, SocketTimeout):
-                    raise ConnectTimeoutError(
-                        self,
-                        f"Connection to {self.host} timed out. (connect timeout={self.timeout})",
-                    ) from e
-                else:
-                    # Adding `from e` messes with coverage somehow, so it's omitted.
-                    # See #2386.
-                    raise NewConnectionError(
-                        self, f"Failed to establish a new connection: {error}"
-                    )
-            else:
-                raise NewConnectionError(
-                    self, f"Failed to establish a new connection: {e}"
-                ) from e
+        except (ProxyConnectionError, ProxyError) as e:
+            raise NewConnectionError(
+                self, f"Failed to establish a new connection: {e}"
+            ) from e
 
         except OSError as e:  # Defensive: PySocks should catch all these.
             raise NewConnectionError(
                 self, f"Failed to establish a new connection: {e}"
             ) from e
-
-        return conn
 
 
 # We don't need to duplicate the Verified/Unverified distinction from
@@ -200,16 +208,16 @@ class SOCKSProxyManager(PoolManager):
             if len(split) == 2:
                 username, password = split
         if parsed.scheme == "socks5":
-            socks_version = socks.PROXY_TYPE_SOCKS5
+            socks_version = ProxyType.SOCKS5
             rdns = False
         elif parsed.scheme == "socks5h":
-            socks_version = socks.PROXY_TYPE_SOCKS5
+            socks_version = ProxyType.SOCKS5
             rdns = True
         elif parsed.scheme == "socks4":
-            socks_version = socks.PROXY_TYPE_SOCKS4
+            socks_version = ProxyType.SOCKS4
             rdns = False
         elif parsed.scheme == "socks4a":
-            socks_version = socks.PROXY_TYPE_SOCKS4
+            socks_version = ProxyType.SOCKS4
             rdns = True
         else:
             raise ValueError(f"Unable to determine SOCKS version from {proxy_url}")

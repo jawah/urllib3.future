@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import socket
 import typing
-
-from ..exceptions import LocationParseError
-from .timeout import _DEFAULT_TIMEOUT
+import warnings
 
 if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
     from ..connection import HTTPConnection
+
+from .timeout import _DEFAULT_TIMEOUT
 
 
 def is_connection_dropped(conn: HTTPConnection) -> bool:  # Platform-specific
@@ -19,10 +19,7 @@ def is_connection_dropped(conn: HTTPConnection) -> bool:  # Platform-specific
     return not conn.is_connected
 
 
-# This function is copied from socket.py in the Python 2.7 standard
-# library test suite. Added to its signature is only `socket_options`.
-# One additional modification is that we avoid binding to IPv6 servers
-# discovered in DNS if the system doesn't have IPv6 functionality.
+# Kept for backward compatibility. Developers rely on it sometime.
 def create_connection(
     address: tuple[str, int],
     timeout: _TYPE_TIMEOUT_INTERNAL = _DEFAULT_TIMEOUT,
@@ -41,53 +38,26 @@ def create_connection(
     for the socket to bind as a source address before making the connection.
     An host of '' or port 0 tells the OS to use the default.
     """
+    warnings.warn(
+        "util.connection.create_connection() is deprecated and scheduled for removal in a next major of urllib3.future. "
+        "Use contrib.resolver from now on to manually create connection.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
-    host, port = address
-    if host.startswith("["):
-        host = host.strip("[]")
-    err = None
+    from ..contrib.resolver import ResolverDescription
 
-    # Using the value from allowed_gai_family() in the context of getaddrinfo lets
-    # us select whether to work with IPv4 DNS records, IPv6 records, or both.
-    # The original create_connection function always returns all records.
-    family = allowed_gai_family()
-
-    try:
-        host.encode("idna")
-    except UnicodeError:
-        raise LocationParseError(f"'{host}', label empty or too long") from None
-
-    for res in socket.getaddrinfo(host, port, family, socket_kind):
-        af, socktype, proto, canonname, sa = res
-        sock = None
-        try:
-            sock = socket.socket(af, socktype, proto)
-
-            # If provided, set socket level options before connecting.
-            _set_socket_options(sock, socket_options)
-
-            if timeout is not _DEFAULT_TIMEOUT:
-                sock.settimeout(timeout)
-            if source_address:
-                sock.bind(source_address)
-            sock.connect(sa)
-            # Break explicitly a reference cycle
-            err = None
-            return sock
-
-        except OSError as _:
-            err = _
-            if sock is not None:
-                sock.close()
-
-    if err is not None:
-        try:
-            raise err
-        finally:
-            # Break explicitly a reference cycle
-            err = None
-    else:
-        raise OSError("getaddrinfo returns an empty list")
+    return (
+        ResolverDescription.from_url("system://")
+        .new()
+        .create_connection(
+            address,
+            timeout=timeout,
+            source_address=source_address,
+            socket_options=socket_options,
+            socket_kind=socket_kind,
+        )
+    )
 
 
 def _set_socket_options(
@@ -100,7 +70,7 @@ def _set_socket_options(
         if len(opt) == 3 and sock.type == socket.SOCK_STREAM:
             sock.setsockopt(*opt)
         elif len(opt) == 4:
-            protocol: str = opt[3].lower()  # type: ignore[misc]
+            protocol: str = opt[3].lower()
             if protocol == "tcp" and sock.type == socket.SOCK_STREAM:
                 sock.setsockopt(*opt[:3])
             elif protocol == "udp" and sock.type == socket.SOCK_DGRAM:

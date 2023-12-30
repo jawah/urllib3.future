@@ -18,7 +18,7 @@ import ssl
 import typing
 from collections import deque
 from os import environ
-from time import thread_time as monotonic
+from time import time as monotonic
 from typing import Any, Iterable, Sequence
 
 if typing.TYPE_CHECKING:

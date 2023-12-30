@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import sys
 import typing
+from datetime import datetime, timezone
 from socket import SOCK_DGRAM, SOCK_STREAM
 
 try:  # Compiled with SSL?
@@ -12,6 +13,12 @@ try:  # Compiled with SSL?
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
     SSLTransport = None  # type: ignore
+
+
+try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
+    from _ssl import Certificate  # type: ignore[import-not-found]
+except (ImportError, AttributeError):
+    Certificate = None
 
 from .._collections import HTTPHeaderDict
 from .._constant import DEFAULT_BLOCKSIZE, responses
@@ -84,7 +91,9 @@ class HfaceBackend(BaseBackend):
             preemptive_quic_cache=preemptive_quic_cache,
         )
 
+        self._proxy_protocol: HTTPOverTCPProtocol | None = None
         self._protocol: HTTPOverQUICProtocol | HTTPOverTCPProtocol | None = None
+
         self._svn: HttpVersion | None = None
 
         self._stream_id: int | None = None
@@ -284,24 +293,31 @@ class HfaceBackend(BaseBackend):
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
             elif self._svn == HttpVersion.h3:
                 assert self.__custom_tls_settings is not None
-                assert self.__alt_authority is not None
 
-                server, port = self.__alt_authority
+                if self.__alt_authority is not None:
+                    _, port = self.__alt_authority
+                    server = self.host
+                else:
+                    server, port = self.host, self.port
 
                 self._protocol = HTTPProtocolFactory.new(
                     HTTP3Protocol,  # type: ignore[type-abstract]
                     remote_address=(
                         self.__custom_tls_settings.assert_hostname
                         if self.__custom_tls_settings.assert_hostname
-                        else self.host,
+                        else server,
                         int(port),
                     ),
-                    server_name=self.host,
+                    server_name=server,
                     tls_config=self.__custom_tls_settings,
                 )
 
         self.conn_info = ConnectionInfo()
         self.conn_info.http_version = self._svn
+
+        if hasattr(self, "_connect_timings") and self._connect_timings:
+            self.conn_info.resolution_latency = self._connect_timings[0]
+            self.conn_info.established_latency = self._connect_timings[1]
 
         if self._svn != HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
@@ -317,8 +333,25 @@ class HfaceBackend(BaseBackend):
                 except ValueError:
                     # not supported on MacOS!
                     self.conn_info.certificate_dict = None
+
                 self.conn_info.destination_address = None
                 cipher_tuple = self.sock.sslobj.cipher()
+
+                # Python 3.10+
+                if hasattr(self.sock.sslobj, "get_verified_chain"):
+                    chain = self.sock.sslobj.get_verified_chain()
+
+                    if (
+                        len(chain) > 1
+                        and Certificate is not None
+                        and isinstance(chain[1], Certificate)
+                        and hasattr(ssl, "PEM_cert_to_DER_cert")
+                    ):
+                        self.conn_info.issuer_certificate_der = (
+                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
+                        )
+                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
+
             elif hasattr(self.sock, "getpeercert"):
                 self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
                 try:
@@ -331,6 +364,23 @@ class HfaceBackend(BaseBackend):
                 cipher_tuple = (
                     self.sock.cipher() if hasattr(self.sock, "cipher") else None
                 )
+
+                # Python 3.10+
+                if hasattr(self.sock, "_sslobj") and hasattr(
+                    self.sock._sslobj, "get_verified_chain"
+                ):
+                    chain = self.sock._sslobj.get_verified_chain()
+
+                    if (
+                        len(chain) > 1
+                        and Certificate is not None
+                        and isinstance(chain[1], Certificate)
+                        and hasattr(ssl, "PEM_cert_to_DER_cert")
+                    ):
+                        self.conn_info.issuer_certificate_der = (
+                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
+                        )
+                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
 
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]
@@ -353,6 +403,15 @@ class HfaceBackend(BaseBackend):
             self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
             self._svn = HttpVersion.h11
             self.conn_info.http_version = self._svn
+
+            if (
+                self.conn_info.certificate_der
+                and hasattr(self, "_connect_timings")
+                and self._connect_timings
+            ):
+                self.conn_info.tls_handshake_latency = (
+                    datetime.now(tz=timezone.utc) - self._connect_timings[-1]
+                )
 
             return
 
@@ -377,6 +436,11 @@ class HfaceBackend(BaseBackend):
             )
             self.conn_info.issuer_certificate_der = self._protocol.getissuercert(
                 binary_form=True
+            )
+
+        if hasattr(self, "_connect_timings"):
+            self.conn_info.tls_handshake_latency = (
+                datetime.now(tz=timezone.utc) - self._connect_timings[-1]
             )
 
     def set_tunnel(
@@ -651,6 +715,8 @@ class HfaceBackend(BaseBackend):
         self.__expected_body_length = None
         self.__remaining_body_length = None
 
+        self._start_last_request = datetime.now(tz=timezone.utc)
+
         if self._tunnel_host is not None:
             host, port = self._tunnel_host, self._tunnel_port
         else:
@@ -779,6 +845,11 @@ class HfaceBackend(BaseBackend):
             raise e
 
         if should_end_stream:
+            if self._start_last_request and self.conn_info:
+                self.conn_info.request_sent_latency = (
+                    datetime.now(tz=timezone.utc) - self._start_last_request
+                )
+
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
             return rp
@@ -994,6 +1065,11 @@ class HfaceBackend(BaseBackend):
                     remote_pipe_shutdown = e
 
             if eot or remote_pipe_shutdown:
+                if self._start_last_request and self.conn_info:
+                    self.conn_info.request_sent_latency = (
+                        datetime.now(tz=timezone.utc) - self._start_last_request
+                    )
+
                 rp = ResponsePromise(self, self._stream_id, self.__headers)
                 self._promises[rp.uid] = rp
                 if remote_pipe_shutdown:
@@ -1032,3 +1108,4 @@ class HfaceBackend(BaseBackend):
         self.conn_info = None
         self.__expected_body_length = None
         self.__remaining_body_length = None
+        self._start_last_request = None

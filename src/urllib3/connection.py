@@ -6,6 +6,7 @@ import re
 import socket
 import typing
 import warnings
+from datetime import datetime, timedelta
 from socket import timeout as SocketTimeout
 
 if typing.TYPE_CHECKING:
@@ -39,6 +40,7 @@ except (ImportError, AttributeError):
 
 from ._version import __version__
 from .backend import HfaceBackend, HttpVersion, QuicPreemptiveCacheType, ResponsePromise
+from .contrib.resolver import BaseResolver, ResolverDescription
 from .exceptions import ConnectTimeoutError, EarlyResponse
 from .exceptions import HTTPError as HTTPException  # noqa
 from .exceptions import (
@@ -47,7 +49,7 @@ from .exceptions import (
     ProxyError,
     ResponseNotReady,
 )
-from .util import SKIP_HEADER, SKIPPABLE_HEADERS, connection, ssl_
+from .util import SKIP_HEADER, SKIPPABLE_HEADERS, ssl_
 from .util.request import body_to_chunks
 from .util.ssl_ import assert_fingerprint as _assert_fingerprint
 from .util.ssl_ import (
@@ -135,6 +137,8 @@ class HTTPConnection(HfaceBackend):
         proxy_config: ProxyConfig | None = None,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
+        resolver: BaseResolver | None = None,
+        socket_family: socket.AddressFamily = socket.AF_UNSPEC,
     ) -> None:
         super().__init__(
             host=host,
@@ -150,6 +154,22 @@ class HTTPConnection(HfaceBackend):
         self.proxy_config = proxy_config
 
         self._has_connected_to_proxy = False
+
+        if resolver is None:
+            resolver = ResolverDescription.from_url("system://").new()
+
+        self._resolver: BaseResolver = resolver
+
+        #: This struct hold: resolution delay, established delay, and after established datetime.
+        self._connect_timings: tuple[timedelta, timedelta, datetime] | None = None
+
+        if socket_family not in [socket.AF_UNSPEC, socket.AF_INET, socket.AF_INET6]:
+            raise ValueError(
+                "Unsupported socket_family argument value. Supported values are: socket.AF_UNSPEC, socket.AF_INET, socket.AF_INET6"
+            )
+
+        #: Restrict/Scope IP family per connection.
+        self._socket_family = socket_family
 
     @property
     def host(self) -> str:
@@ -188,12 +208,16 @@ class HTTPConnection(HfaceBackend):
         super()._new_conn()
 
         try:
-            sock = connection.create_connection(
-                (self._dns_host, self.port or HTTPConnection.default_port),
+            sock = self._resolver.create_connection(
+                (self._dns_host, self.port or self.default_port),
                 self.timeout,
                 source_address=self.source_address,
                 socket_options=self.socket_options,
                 socket_kind=self.socket_kind,
+                quic_upgrade_via_dns_rr=HttpVersion.h3 not in self._disabled_svn
+                and self.socket_kind != socket.SOCK_DGRAM,
+                timing_hook=lambda _: setattr(self, "_connect_timings", _),
+                default_socket_family=self._socket_family,
             )
         except socket.gaierror as e:
             raise NameResolutionError(self.host, self, e) from e
@@ -207,6 +231,11 @@ class HTTPConnection(HfaceBackend):
             raise NewConnectionError(
                 self, f"Failed to establish a new connection: {e}"
             ) from e
+
+        # We can, migrate to a DGRAM socket if DNS HTTPS/RR record exist and yield HTTP/3+QUIC support.
+        if sock.type == socket.SOCK_DGRAM and self.socket_kind == socket.SOCK_STREAM:
+            self.socket_kind = socket.SOCK_DGRAM
+            self._svn = HttpVersion.h3
 
         return sock
 
@@ -563,6 +592,8 @@ class HTTPSConnection(HTTPConnection):
         | None = HTTPConnection.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
+        resolver: BaseResolver | None = None,
+        socket_family: socket.AddressFamily = socket.AF_UNSPEC,
         proxy: Url | None = None,
         proxy_config: ProxyConfig | None = None,
         cert_reqs: int | str | None = None,
@@ -599,6 +630,8 @@ class HTTPSConnection(HTTPConnection):
             proxy_config=proxy_config,
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
+            resolver=resolver,
+            socket_family=socket_family,
         )
 
         self.key_file = key_file
@@ -652,7 +685,7 @@ class HTTPSConnection(HTTPConnection):
             alpn_protocols: list[str] = []
 
             # we explicitly skip h3 while still over TCP
-            for svn in HTTPSConnection.supported_svn:
+            for svn in reversed(HTTPSConnection.supported_svn):
                 if svn in self.disabled_svn:
                     continue
                 if svn == HttpVersion.h11:
@@ -928,7 +961,7 @@ def _wrap_proxy_error(err: Exception, proxy_scheme: str | None) -> ProxyError:
     http_proxy_warning = (
         ". Your proxy appears to only use HTTP and not HTTPS, "
         "try changing your proxy URL to be HTTP. See: "
-        "https://urllib3.readthedocs.io/en/latest/advanced-usage.html"
+        "https://urllib3future.readthedocs.io/en/latest/advanced-usage.html"
         "#https-proxy-error-http-proxy"
     )
     new_err = ProxyError(
