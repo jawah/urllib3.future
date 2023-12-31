@@ -767,3 +767,31 @@ def test_not_closeable_recycle(dns_url: str) -> None:
     rr = r.recycle()
 
     assert rr == r
+
+
+def test_recycle_in_memory_with_mock() -> None:
+    r = ResolverDescription.from_url(
+        "in-memory://default/?hosts=localhost:8.8.8.8&hosts=local:1.1.1.1&maxsize=8"
+    ).new()
+
+    assert r.is_available()
+    assert len(r._hosts) == 2  # type: ignore[attr-defined]
+    assert "localhost" in r._hosts  # type: ignore[attr-defined]
+    assert "local" in r._hosts  # type: ignore[attr-defined]
+    assert r._maxsize == 8  # type: ignore[attr-defined]
+
+    r.close()
+
+    assert r.is_available()
+
+    r.is_available = lambda: False  # type: ignore
+
+    assert not r.is_available()
+
+    rr = BaseResolver.recycle(r)
+
+    assert rr.is_available()
+    assert len(rr._hosts) == 2  # type: ignore[attr-defined]
+    assert "localhost" in rr._hosts  # type: ignore[attr-defined]
+    assert "local" in rr._hosts  # type: ignore[attr-defined]
+    assert rr._maxsize == 8  # type: ignore[attr-defined]
