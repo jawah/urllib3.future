@@ -88,21 +88,22 @@ class QUICResolver(PlainResolver):
         self._pending: deque[DomainNameServerQuery] = deque()
 
     def close(self) -> None:
-        with self._lock:
-            self._quic.close()
+        if not self._terminated:
+            with self._lock:
+                self._quic.close()
 
-            while True:
-                datagrams = self._quic.datagrams_to_send(monotonic())
+                while True:
+                    datagrams = self._quic.datagrams_to_send(monotonic())
 
-                if not datagrams:
-                    break
+                    if not datagrams:
+                        break
 
-                for datagram in datagrams:
-                    data, addr = datagram
-                    self._socket.sendall(data)
+                    for datagram in datagrams:
+                        data, addr = datagram
+                        self._socket.sendall(data)
 
-            self._socket.close()
-            self._terminated = True
+                self._socket.close()
+                self._terminated = True
 
     def is_available(self) -> bool:
         return not self._terminated

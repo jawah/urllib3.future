@@ -65,9 +65,10 @@ class PlainResolver(BaseResolver):
         self._terminated: bool = False
 
     def close(self) -> None:
-        with self._lock:
-            self._socket.close()
-            self._terminated = True
+        if not self._terminated:
+            with self._lock:
+                self._socket.close()
+                self._terminated = True
 
     def is_available(self) -> bool:
         return not self._terminated

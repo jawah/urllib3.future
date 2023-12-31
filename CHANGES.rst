@@ -1,3 +1,9 @@
+2.4.901 (2023-12-31)
+====================
+
+- Fixed an issue where a stateless resolver (e.g. nullresolver) could not be recycled.
+- Fixed an issue where one would attempt to close a resolver multiple times.
+
 2.4.900 (2023-12-30)
 ====================
 
