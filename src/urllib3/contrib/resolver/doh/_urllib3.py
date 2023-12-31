@@ -171,6 +171,8 @@ class HTTPSResolver(BaseResolver):
             host = host.decode("ascii")
 
         if is_ipv4(host):
+            if family == socket.AF_INET6:
+                raise socket.gaierror("Address family for hostname not supported")
             return [
                 (
                     socket.AF_INET,
@@ -184,6 +186,8 @@ class HTTPSResolver(BaseResolver):
                 )
             ]
         elif is_ipv6(host):
+            if family == socket.AF_INET:
+                raise socket.gaierror("Address family for hostname not supported")
             return [
                 (
                     socket.AF_INET6,

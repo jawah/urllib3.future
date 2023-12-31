@@ -5,6 +5,7 @@ import struct
 import threading
 import typing
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from random import randint
@@ -67,9 +68,22 @@ class BaseResolver(metaclass=ABCMeta):
         if self.is_available():
             raise RuntimeError("Attempting to recycle a Resolver that was not closed")
 
-        return self.__class__(
-            self._server, self._port, *self._host_patterns, **self._kwargs
-        )
+        args = list(self.__class__.__init__.__code__.co_varnames)
+        args.remove("self")
+
+        kwargs_cpy = deepcopy(self._kwargs)
+
+        if self._server:
+            kwargs_cpy["server"] = self._server
+        if self._port:
+            kwargs_cpy["port"] = self._port
+
+        if "patterns" in args and "kwargs" in args:
+            return self.__class__(*self._host_patterns, **kwargs_cpy)  # type: ignore[arg-type]
+        elif "kwargs" in args:
+            return self.__class__(**kwargs_cpy)
+
+        return self.__class__()  # type: ignore[call-arg]
 
     @property
     def server(self) -> str | None:

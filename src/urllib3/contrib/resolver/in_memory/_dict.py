@@ -12,13 +12,14 @@ class InMemoryResolver(BaseResolver):
     protocol = ProtocolResolver.MANUAL
     implementation = "dict"
 
-    def __init__(self, maxsize: int = 65535, **kwargs: typing.Any):
+    def __init__(self, *patterns: str, **kwargs: typing.Any):
         if "server" in kwargs:
             kwargs.pop("server")
         if "port" in kwargs:
             kwargs.pop("port")
-        super().__init__(None, None, **kwargs)
-        self._maxsize = maxsize
+        super().__init__(None, None, *patterns, **kwargs)
+
+        self._maxsize = 65535 if "maxsize" not in kwargs else int(kwargs["maxsize"])
         self._hosts: dict[str, list[tuple[socket.AddressFamily, str]]] = {}
 
         if self._host_patterns:
@@ -109,6 +110,8 @@ class InMemoryResolver(BaseResolver):
             host = host.decode("ascii")
 
         if is_ipv4(host):
+            if family == socket.AF_INET6:
+                raise socket.gaierror("Address family for hostname not supported")
             return [
                 (
                     socket.AF_INET,
@@ -122,6 +125,8 @@ class InMemoryResolver(BaseResolver):
                 )
             ]
         elif is_ipv6(host):
+            if family == socket.AF_INET:
+                raise socket.gaierror("Address family for hostname not supported")
             return [
                 (
                     socket.AF_INET6,
