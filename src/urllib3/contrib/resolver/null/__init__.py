@@ -18,6 +18,9 @@ class NullResolver(BaseResolver):
             kwargs.pop("port")
         super().__init__(None, None, *patterns, **kwargs)
 
+    def recycle(self) -> BaseResolver:
+        return self
+
     def close(self) -> None:
         pass  # no-op
 

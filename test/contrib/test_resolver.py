@@ -754,3 +754,16 @@ def test_doh_on_connection_callback() -> None:
 
     assert len(res)
     assert toggle_witness
+
+
+@pytest.mark.parametrize("dns_url", ["system://", "in-memory://", "null://"])
+def test_not_closeable_recycle(dns_url: str) -> None:
+    r = ResolverDescription.from_url(dns_url).new()
+
+    r.close()
+
+    assert r.is_available()
+
+    rr = r.recycle()
+
+    assert rr == r

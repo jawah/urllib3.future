@@ -29,6 +29,9 @@ class InMemoryResolver(BaseResolver):
                 self.register(hostname, addr)
             self._host_patterns = tuple([])
 
+    def recycle(self) -> BaseResolver:
+        return self
+
     def close(self) -> None:
         pass  # no-op
 

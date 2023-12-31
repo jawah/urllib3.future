@@ -26,6 +26,9 @@ class SystemResolver(BaseResolver):
             return True
         return super().support(hostname)
 
+    def recycle(self) -> BaseResolver:
+        return self
+
     def close(self) -> None:
         pass  # no-op!
 
