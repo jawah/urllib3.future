@@ -61,7 +61,7 @@ if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS
 
 _HAS_SYS_AUDIT = hasattr(sys, "audit")
-_HAS_QH3 = HTTPProtocolFactory.has(HTTP3Protocol)  # type: ignore[type-abstract]
+_HAS_HTTP3_SUPPORT = HTTPProtocolFactory.has(HTTP3Protocol)  # type: ignore[type-abstract]
 
 
 class HfaceBackend(BaseBackend):
@@ -80,6 +80,11 @@ class HfaceBackend(BaseBackend):
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):
+        if not _HAS_HTTP3_SUPPORT:
+            if disabled_svn is None:
+                disabled_svn = set()
+            disabled_svn.add(HttpVersion.h3)
+
         super().__init__(
             host,
             port,
@@ -158,7 +163,7 @@ class HfaceBackend(BaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        if not _HAS_QH3:
+        if not _HAS_HTTP3_SUPPORT:
             return
 
         # do not upgrade if not coming from TLS already.
