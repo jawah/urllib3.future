@@ -1,3 +1,9 @@
+2.4.902 (2024-01-01)
+====================
+
+- Fixed compatibility with older PyPy 3.7 interpreters when HTTP/3 (qh3) can be unavailable.
+- Fixed undesired DGRAM/QUIC preemptive upgrade using insecure protocol.
+
 2.4.901 (2023-12-31)
 ====================
 

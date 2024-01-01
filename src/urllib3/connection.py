@@ -214,7 +214,8 @@ class HTTPConnection(HfaceBackend):
                 source_address=self.source_address,
                 socket_options=self.socket_options,
                 socket_kind=self.socket_kind,
-                quic_upgrade_via_dns_rr=HttpVersion.h3 not in self._disabled_svn
+                quic_upgrade_via_dns_rr=self.scheme == "https"
+                and HttpVersion.h3 not in self._disabled_svn
                 and self.socket_kind != socket.SOCK_DGRAM,
                 timing_hook=lambda _: setattr(self, "_connect_timings", _),
                 default_socket_family=self._socket_family,
