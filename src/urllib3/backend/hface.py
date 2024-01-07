@@ -790,6 +790,9 @@ class HfaceBackend(BaseBackend):
 
         # determine if stream should end there (absent body case)
         for raw_header, raw_value in self.__headers:
+            # Some programs does set value to None, and that is... an issue here. We ignore those key, value.
+            if raw_value is None:
+                continue
             header: str = raw_header.decode("ascii").lower().replace("_", "-")
             value: str = raw_value.decode("iso-8859-1")
             if header.startswith(":"):

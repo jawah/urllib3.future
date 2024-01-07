@@ -1,3 +1,8 @@
+2.4.903 (2024-01-02)
+====================
+
+- Fixed an issue where setting None for a header value could cause an exception.
+
 2.4.902 (2024-01-01)
 ====================
 
