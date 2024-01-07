@@ -1,4 +1,4 @@
-2.4.903 (2024-01-02)
+2.4.903 (2024-01-07)
 ====================
 
 - Fixed an issue where setting None for a header value could cause an exception.
