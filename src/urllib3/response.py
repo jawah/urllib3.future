@@ -27,7 +27,7 @@ try:
     # in v0.18.0 which we require to ensure a complete and
     # valid zstd stream was fed into the ZstdDecoder.
     # See: https://github.com/urllib3/urllib3/pull/2624
-    _zstd_version = _zstd_version = tuple(
+    _zstd_version = tuple(
         map(int, re.search(r"^([0-9]+)\.([0-9]+)", zstd.__version__).groups())  # type: ignore[union-attr]
     )
     if _zstd_version < (0, 18):  # Defensive:
@@ -44,7 +44,6 @@ from .exceptions import (
     DecodeError,
     HTTPError,
     IncompleteRead,
-    InvalidChunkLength,
     InvalidHeader,
     ProtocolError,
     ReadTimeoutError,
@@ -807,10 +806,16 @@ class HTTPResponse(io.IOBase):
         if amt is not None:
             cache_content = False
 
-            if len(self._decoded_buffer) >= amt:
+            if amt < 0 and len(self._decoded_buffer):
+                return self._decoded_buffer.get(len(self._decoded_buffer))
+
+            if 0 < amt <= len(self._decoded_buffer):
                 return self._decoded_buffer.get(amt)
 
         data = self._raw_read(amt)
+
+        if amt and amt < 0:
+            amt = len(data)
 
         flush_decoder = False
         if amt is None:
@@ -861,7 +866,8 @@ class HTTPResponse(io.IOBase):
             How much of the content to read. The generator will return up to
             much data per iteration, but may return less. This is particularly
             likely when using compressed data. However, the empty string will
-            never be returned.
+            never be returned. Setting -1 will output chunks as soon as they
+            arrive.
 
         :param decode_content:
             If True, will attempt to decode the body based on the
@@ -928,42 +934,6 @@ class HTTPResponse(io.IOBase):
         """
         return False
 
-    def _update_chunk_length(self) -> None:
-        # First, we'll figure out length of a chunk and then
-        # we'll try to read it from socket.
-        if self.chunk_left is not None:
-            return None
-        line = self._fp.fp.readline()  # type: ignore[union-attr]
-        line = line.split(b";", 1)[0]
-        try:
-            self.chunk_left = int(line, 16)
-        except ValueError:
-            # Invalid chunked protocol response, abort.
-            self.close()
-            raise InvalidChunkLength(self, line) from None
-
-    def _handle_chunk(self, amt: int | None) -> bytes:
-        returned_chunk = None
-        if amt is None:
-            chunk = self._fp._safe_read(self.chunk_left)  # type: ignore[union-attr]
-            returned_chunk = chunk
-            self._fp._safe_read(2)  # type: ignore[union-attr] # Toss the CRLF at the end of the chunk.
-            self.chunk_left = None
-        elif self.chunk_left is not None and amt < self.chunk_left:
-            value = self._fp._safe_read(amt)  # type: ignore[union-attr]
-            self.chunk_left = self.chunk_left - amt
-            returned_chunk = value
-        elif amt == self.chunk_left:
-            value = self._fp._safe_read(amt)  # type: ignore[union-attr]
-            self._fp._safe_read(2)  # type: ignore[union-attr] # Toss the CRLF at the end of the chunk.
-            self.chunk_left = None
-            returned_chunk = value
-        else:  # amt > self.chunk_left
-            returned_chunk = self._fp._safe_read(self.chunk_left)  # type: ignore[union-attr]
-            self._fp._safe_read(2)  # type: ignore[union-attr] # Toss the CRLF at the end of the chunk.
-            self.chunk_left = None
-        return returned_chunk  # type: ignore[no-any-return]
-
     @property
     def url(self) -> str | None:
         """
@@ -979,7 +949,7 @@ class HTTPResponse(io.IOBase):
 
     def __iter__(self) -> typing.Iterator[bytes]:
         buffer: list[bytes] = []
-        for chunk in self.stream(decode_content=True):
+        for chunk in self.stream(-1, decode_content=True):
             if b"\n" in chunk:
                 chunks = chunk.split(b"\n")
                 yield b"".join(buffer) + chunks[0] + b"\n"

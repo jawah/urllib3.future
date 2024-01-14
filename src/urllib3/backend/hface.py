@@ -550,7 +550,9 @@ class HfaceBackend(BaseBackend):
         Can be used for the initial handshake for instance."""
         assert self._protocol is not None
         assert self.sock is not None
-        assert maximal_data_in_read is None or maximal_data_in_read >= 0
+        assert maximal_data_in_read is None or (
+            maximal_data_in_read >= 0 or maximal_data_in_read == -1
+        )
 
         data_out: bytes
         data_in: bytes
@@ -563,6 +565,11 @@ class HfaceBackend(BaseBackend):
         if maximal_data_in_read == 0:
             # The '0' case amt is handled higher in the stack.
             return events  # Defensive: This should be unreachable in the current project state.
+
+        if maximal_data_in_read and maximal_data_in_read < 0:
+            respect_end_stream_signal = False
+            maximal_data_in_read = None
+            data_in_len_from = None
 
         while True:
             if not self._protocol.has_pending_event():

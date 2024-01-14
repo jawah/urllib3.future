@@ -106,6 +106,24 @@ that urllib3 will only read from the socket when data is requested.
 
     resp.release_conn()
 
+If you desire to iterate over chunks as soon as they arrive, specify ``-1`` as the **amt**.
+
+.. code-block:: python
+
+    import urllib3
+
+    resp = urllib3.request(
+        "GET",
+        "https://httpbin.org/bytes/1024",
+        preload_content=False
+    )
+
+    for chunk in resp.stream(-1):
+        print(chunk)
+        # b"\x9e\xa97'\x8e\x1eT ....
+
+    resp.release_conn()
+
 However, you can also treat the :class:`~response.HTTPResponse` instance as
 a file-like object. This allows you to do buffering:
 

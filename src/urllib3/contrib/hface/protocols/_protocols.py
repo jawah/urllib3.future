@@ -62,7 +62,7 @@ class BaseProtocol(metaclass=ABCMeta):
         raise NotImplementedError
 
 
-class OverTCPProtocol(BaseProtocol):
+class OverTCPProtocol(BaseProtocol, metaclass=ABCMeta):
     """
     Interface for sans-IO protocols on top TCP.
     """
@@ -75,36 +75,10 @@ class OverTCPProtocol(BaseProtocol):
         raise NotImplementedError
 
 
-class OverUDPProtocol(BaseProtocol):
+class OverUDPProtocol(BaseProtocol, metaclass=ABCMeta):
     """
     Interface for sans-IO protocols on top UDP.
     """
-
-    @abstractmethod
-    def clock(self, now: float) -> None:
-        """
-        Notify the protocol that time has moved.
-
-        The clock value set by this method can be used in subsequent calls
-        to other methods. When the time is after the value of :meth:`get_timer`,
-        the protocol can handle various timeouts.
-
-        :param now: current time in seconds.
-            Typically, the event loop's internal clock.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_timer(self) -> float | None:
-        """
-        Return a clock value when the protocol wants to be notified.
-
-        If the protocol implementation needs to handle any timeouts,
-        it should return the closes timeout from this method.
-
-        :return: time in seconds or None if no timer is necessary
-        """
-        raise NotImplementedError
 
 
 class OverQUICProtocol(OverUDPProtocol):
@@ -300,7 +274,7 @@ class HTTPProtocol(metaclass=ABCMeta):
         raise NotImplementedError
 
 
-class HTTPOverTCPProtocol(HTTPProtocol, OverTCPProtocol):
+class HTTPOverTCPProtocol(HTTPProtocol, OverTCPProtocol, metaclass=ABCMeta):
     """
     :class:`HTTPProtocol` over a TCP connection
 
@@ -309,7 +283,7 @@ class HTTPOverTCPProtocol(HTTPProtocol, OverTCPProtocol):
     """
 
 
-class HTTPOverQUICProtocol(HTTPProtocol, OverQUICProtocol):
+class HTTPOverQUICProtocol(HTTPProtocol, OverQUICProtocol, metaclass=ABCMeta):
     """
     :class:`HTTPProtocol` over a QUIC connection
 
@@ -318,7 +292,7 @@ class HTTPOverQUICProtocol(HTTPProtocol, OverQUICProtocol):
     """
 
 
-class HTTP1Protocol(HTTPOverTCPProtocol):
+class HTTP1Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):
     """
     Sans-IO representation of an HTTP/1 connection
 
@@ -342,7 +316,7 @@ class HTTP1Protocol(HTTPOverTCPProtocol):
     )
 
 
-class HTTP2Protocol(HTTPOverTCPProtocol):
+class HTTP2Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):
     """
     Sans-IO representation of an HTTP/2 connection
 
@@ -361,7 +335,7 @@ class HTTP2Protocol(HTTPOverTCPProtocol):
     )
 
 
-class HTTP3Protocol(HTTPOverQUICProtocol):
+class HTTP3Protocol(HTTPOverQUICProtocol, metaclass=ABCMeta):
     """
     Sans-IO representation of an HTTP/2 connection
 

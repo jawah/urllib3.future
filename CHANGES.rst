@@ -1,3 +1,12 @@
+2.4.904 (2024-01-15)
+====================
+
+- Fixed an issue where a idle QUIC connection would not be recycled properly when expired.
+- Added support for passing ``-1`` as the **amt** in ``HTTPResponse`` (read, or stream) as the strict equivalent of ``read1``.
+  This allows you to fetch content as soon as it arrive.
+- Removed orphaned method ``_handle_chunk``, ``_update_chunk_length`` from ``HTTPResponse``.
+- Fixed the iterator in ``HTTPResponse`` that hung until the complete content was downloaded.
+
 2.4.903 (2024-01-07)
 ====================
 
