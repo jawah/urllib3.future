@@ -68,6 +68,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             verify_hostname=tls_config.verify_hostname,
             secrets_log_file=open(keylogfile_path, "w+") if keylogfile_path else None,  # type: ignore[arg-type]
             quic_logger=QuicFileLogger(qlogdir_path) if qlogdir_path else None,
+            idle_timeout=300.0,
         )
 
         if tls_config.ciphers:
@@ -120,6 +121,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
+        self._quic.handle_timer(monotonic())
+        if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
+            self._event_buffer += self._map_quic_event(self._quic._close_event)
         return self._terminated
 
     @property
@@ -176,15 +180,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     @property
     def connection_ids(self) -> Sequence[bytes]:
         return list(self._connection_ids)
-
-    def clock(self, now: float) -> None:
-        timer = self._quic.get_timer()
-        if timer is not None and now >= timer:
-            self._quic.handle_timer(now)
-            self._fetch_events()
-
-    def get_timer(self) -> float | None:
-        return self._quic.get_timer()
 
     def connection_lost(self) -> None:
         self._terminated = True

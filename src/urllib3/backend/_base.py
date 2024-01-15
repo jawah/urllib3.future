@@ -167,7 +167,7 @@ class LowLevelResponse:
                 data = self.__buffer_excess[:__size]
                 self.__buffer_excess = self.__buffer_excess[__size:]
 
-        if __size is not None and len(data) > __size:
+        if __size is not None and (0 < __size < len(data)):
             self.__buffer_excess = data[__size:]
             data = data[:__size]
 

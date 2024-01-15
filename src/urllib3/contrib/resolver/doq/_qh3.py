@@ -57,6 +57,7 @@ class QUICResolver(PlainResolver):
             if "ca_cert_data" in kwargs
             else None,
             cafile=kwargs["ca_certs"] if "ca_certs" in kwargs else None,
+            idle_timeout=300.0,
         )
 
         if "cert_file" in kwargs:
@@ -106,6 +107,9 @@ class QUICResolver(PlainResolver):
                 self._terminated = True
 
     def is_available(self) -> bool:
+        self._quic.handle_timer(monotonic())
+        if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
+            self._terminated = True
         return not self._terminated
 
     def getaddrinfo(
