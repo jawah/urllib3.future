@@ -401,7 +401,11 @@ class HTTPSResolver(BaseResolver):
 
                         if rr.startswith("\\#"):  # it means, raw, bytes.
                             rr = rr[2:].replace(" ", "")
-                            raw_record = bytes.fromhex(rr)
+
+                            try:
+                                raw_record = bytes.fromhex(rr)
+                            except ValueError:
+                                raw_record = b""
 
                             if b"h3" not in raw_record:
                                 continue

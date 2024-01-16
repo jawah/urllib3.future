@@ -1,3 +1,8 @@
+2.4.905 (2024-01-16)
+====================
+
+- Fixed an edge case where a HTTPS record was misinterpreted when using a DNS-over-HTTPS resolver.
+
 2.4.904 (2024-01-15)
 ====================
 
