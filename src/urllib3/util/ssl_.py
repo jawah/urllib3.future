@@ -19,6 +19,7 @@ SSLContext = None
 SSLTransport = None
 HAS_NEVER_CHECK_COMMON_NAME = False
 ALPN_PROTOCOLS = ["http/1.1"]
+DEFAULT_CIPHERS = MOZ_INTERMEDIATE_CIPHERS
 
 _TYPE_VERSION_INFO = typing.Tuple[int, int, int, str, int]
 
@@ -545,11 +546,12 @@ def is_capable_for_quic(
     quic_disable: bool = False
 
     if ctx is not None:
-        if (
-            isinstance(ctx.maximum_version, ssl.TLSVersion)
-            and ctx.maximum_version <= ssl.TLSVersion.TLSv1_2
-        ):
-            quic_disable = True
+        if isinstance(ctx.maximum_version, ssl.TLSVersion):
+            if (
+                ctx.maximum_version != ssl.TLSVersion.MAXIMUM_SUPPORTED
+                and ctx.maximum_version <= ssl.TLSVersion.TLSv1_2
+            ):
+                quic_disable = True
         else:
             any_capable_cipher: bool = False
             for cipher_dict in ctx.get_ciphers():

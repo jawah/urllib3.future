@@ -1,3 +1,14 @@
+2.4.906 (2024-01-19)
+====================
+
+- Fixed a rare case of HTTP/3 being disabled when forwarding a custom SSLContext created.
+- Re-introduce ``DEFAULT_CIPHERS`` constant in ``urllib3.util.ssl_`` due to the demands.
+  It contains the Mozilla recommended cipher suite that was introduced in version 2.2.900.
+- Fixed handling of OpenSSL 3.2.0 new error message for misconfiguring an HTTP proxy as HTTPS.
+  Ported from urllib3/3271.
+- Fixed ``request_sent_latency`` that wasn't computed when request was stopped early (prior to sending the
+  complete body).
+
 2.4.905 (2024-01-16)
 ====================
 
