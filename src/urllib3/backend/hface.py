@@ -1041,6 +1041,11 @@ class HfaceBackend(BaseBackend):
 
                     # this is a bad sign. we should stop sending and instead retrieve the response.
                     if self._protocol.has_pending_event(stream_id=self._stream_id):
+                        if self._start_last_request and self.conn_info:
+                            self.conn_info.request_sent_latency = (
+                                datetime.now(tz=timezone.utc) - self._start_last_request
+                            )
+
                         rp = ResponsePromise(self, self._stream_id, self.__headers)
                         self._promises[rp.uid] = rp
 
