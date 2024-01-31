@@ -110,7 +110,8 @@ filterwarnings = [
     '''default:ast\.(Num|NameConstant|Str) is deprecated and will be removed in Python 3\.14; use ast\.Constant instead:DeprecationWarning:_pytest''',
     '''default:Attribute s is deprecated and will be removed in Python 3\.14; use value instead:DeprecationWarning:_pytest''',
     '''default:A conflicting charset has been set in Content-Type:UserWarning''',
-    '''default:util\.connection\.create_connection\(\) is deprecated and scheduled for removal:DeprecationWarning''',
+    '''ignore:util\.connection\.create_connection\(\) is deprecated and scheduled for removal:DeprecationWarning''',
+    '''ignore:RecentlyUsedContainer is deprecated and scheduled for removal:DeprecationWarning''',
 ]
 
 [tool.isort]

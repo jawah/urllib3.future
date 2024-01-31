@@ -450,7 +450,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
             with pytest.raises(MaxRetryError):
                 http.request("GET", "/", retries=0, release_conn=False)
             assert http.pool is not None
-            assert http.pool.qsize() == http.pool.maxsize
+            assert http.pool.qsize() == 0
 
     def test_connection_read_timeout(self) -> None:
         timed_out = Event()
@@ -479,7 +479,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 timed_out.set()
 
             assert http.pool is not None
-            assert http.pool.qsize() == http.pool.maxsize
+            assert http.pool.qsize() == 0
 
     def test_read_timeout_dont_retry_method_not_in_allowlist(self) -> None:
         timed_out = Event()
@@ -695,14 +695,15 @@ class TestSocketClosing(SocketDummyServerTestCase):
         self._start_server(socket_handler)
         with HTTPConnectionPool(self.host, self.port) as pool:
             assert pool.pool is not None
-            poolsize = pool.pool.qsize()
+            assert 0 == pool.pool.qsize()
             response = pool.urlopen(
                 "GET", "/", retries=0, preload_content=False, timeout=LONG_TIMEOUT
             )
+            assert 0 == pool.pool.qsize()
             try:
                 with pytest.raises(ReadTimeoutError):
                     response.read()
-                assert poolsize == pool.pool.qsize()
+                assert 1 == pool.pool.qsize()
             finally:
                 timed_out.set()
 
@@ -771,12 +772,13 @@ class TestSocketClosing(SocketDummyServerTestCase):
         self._start_server(socket_handler)
         with HTTPConnectionPool(self.host, self.port) as pool:
             assert pool.pool is not None
-            poolsize = pool.pool.qsize()
+            assert 0 == pool.pool.qsize()
             response = pool.request("GET", "/", retries=0, preload_content=False)
+            assert 0 == pool.pool.qsize()
 
             with pytest.raises(ProtocolError):
                 response.read()
-            assert poolsize == pool.pool.qsize()
+            assert 1 == pool.pool.qsize()
 
     def test_connection_closed_on_read_timeout_preload_false(self) -> None:
         timed_out = Event()

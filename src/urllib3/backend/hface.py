@@ -572,7 +572,7 @@ class HfaceBackend(BaseBackend):
             data_in_len_from = None
 
         while True:
-            if not self._protocol.has_pending_event():
+            if not self._protocol.has_pending_event(stream_id=stream_id):
                 if receive_first is False:
                     while True:
                         data_out = self._protocol.bytes_to_send()
@@ -629,7 +629,9 @@ class HfaceBackend(BaseBackend):
 
                         self.sock.sendall(data_out)
 
-            for event in iter(self._protocol.next_event, None):  # type: Event
+            for event in iter(
+                lambda: self._protocol.next_event(stream_id=stream_id), None  # type: ignore[union-attr]
+            ):  # type: Event
                 if stream_id is not None and hasattr(event, "stream_id"):
                     if event.stream_id != stream_id:
                         reshelve_events.append(event)
@@ -1113,10 +1115,15 @@ class HfaceBackend(BaseBackend):
                     # overly protective, made in case of possible exception leak.
                     raise ProtocolError(e) from e  # Defensive:
                 else:
-                    goodbye_trame: bytes = self._protocol.bytes_to_send()
-
-                    if goodbye_trame:
-                        self.sock.sendall(goodbye_trame)
+                    # we have a heisenbug somewhere deep.
+                    # during garbage collection, hazmat.openssl binding start acting crazy in (very specific contexts)
+                    # todo: investigate the seg fault and report to cpython.
+                    if self._svn != HttpVersion.h3:
+                        while True:
+                            goodbye_frame = self._protocol.bytes_to_send()
+                            if not goodbye_frame:
+                                break
+                            self.sock.sendall(goodbye_frame)
 
             self.sock.close()
 

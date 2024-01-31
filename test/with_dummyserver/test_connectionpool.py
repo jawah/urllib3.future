@@ -404,9 +404,9 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             # Grab the connection and mock the inner socket.
             assert pool.pool is not None
             conn = pool.pool.get_nowait()
-            conn_sock = mock.Mock(wraps=conn.sock)
-            conn.sock = conn_sock
-            pool._put_conn(conn)
+            conn_sock = mock.Mock(wraps=conn.sock)  # type: ignore[union-attr]
+            conn.sock = conn_sock  # type: ignore[union-attr]
+            pool._put_conn(conn)  # type: ignore[arg-type]
 
             # Assert that sock.settimeout() is called with the new connect timeout, then the read timeout.
             pool.urlopen("GET", "/", timeout=timeout)
@@ -427,9 +427,9 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             # Grab the connection and mock the inner socket.
             assert pool.pool is not None
             conn = pool.pool.get_nowait()
-            conn_sock = mock.Mock(wraps=conn.sock)
-            conn.sock = conn_sock
-            pool._put_conn(conn)
+            conn_sock = mock.Mock(wraps=conn.sock)  # type: ignore[union-attr]
+            conn.sock = conn_sock  # type: ignore[union-attr]
+            pool._put_conn(conn)  # type: ignore[arg-type]
 
             # Assert that sock.settimeout() is called with the new connect timeout, then the read timeout.
             pool.urlopen("GET", "/", timeout=timeout)
@@ -523,8 +523,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             # because _get_conn() is where the check & reset occurs
             assert pool.pool is not None
             conn = pool.pool.get()
-            assert conn.sock is None
-            pool._put_conn(conn)
+            assert conn.sock is None  # type: ignore[union-attr]
+            pool._put_conn(conn)  # type: ignore[arg-type]
 
             # Now with keep-alive
             r = pool.request(
@@ -537,8 +537,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             # The dummyserver responded with Connection:keep-alive, the connection
             # persists.
             conn = pool.pool.get()
-            assert conn.sock is not None
-            pool._put_conn(conn)
+            assert conn.sock is not None  # type: ignore[union-attr]
+            pool._put_conn(conn)  # type: ignore[arg-type]
 
             # Another request asking the server to close the connection. This one
             # should get cleaned up for the next request.
@@ -549,8 +549,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert r.status == 200
 
             conn = pool.pool.get()
-            assert conn.sock is None
-            pool._put_conn(conn)
+            assert conn.sock is None  # type: ignore[union-attr]
+            pool._put_conn(conn)  # type: ignore[arg-type]
 
             # Next request
             r = pool.request("GET", "/keepalive?close=0")
@@ -719,46 +719,15 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
             assert pool.num_connections == 1
 
-    def test_for_double_release(self) -> None:
-        MAXSIZE = 5
-
-        # Check default state
-        with HTTPConnectionPool(self.host, self.port, maxsize=MAXSIZE) as pool:
-            assert pool.num_connections == 0
-            assert pool.pool is not None
-            assert pool.pool.qsize() == MAXSIZE
-
-            # Make an empty slot for testing
-            pool.pool.get()
-            assert pool.pool.qsize() == MAXSIZE - 1
-
-            # Check state after simple request
-            pool.urlopen("GET", "/")
-            assert pool.pool.qsize() == MAXSIZE - 1
-
-            # Check state without release
-            pool.urlopen("GET", "/", preload_content=False)
-            assert pool.pool.qsize() == MAXSIZE - 2
-
-            pool.urlopen("GET", "/")
-            assert pool.pool.qsize() == MAXSIZE - 2
-
-            # Check state after read
-            pool.urlopen("GET", "/").data
-            assert pool.pool.qsize() == MAXSIZE - 2
-
-            pool.urlopen("GET", "/")
-            assert pool.pool.qsize() == MAXSIZE - 2
-
     def test_release_conn_parameter(self) -> None:
         MAXSIZE = 5
         with HTTPConnectionPool(self.host, self.port, maxsize=MAXSIZE) as pool:
             assert pool.pool is not None
-            assert pool.pool.qsize() == MAXSIZE
+            assert pool.pool.qsize() == 0
 
             # Make request without releasing connection
             pool.request("GET", "/", release_conn=False, preload_content=False)
-            assert pool.pool.qsize() == MAXSIZE - 1
+            assert pool.pool.qsize() == 0
 
     def test_dns_error(self) -> None:
         with HTTPConnectionPool(
@@ -841,7 +810,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             self.host, self.port, maxsize=poolsize, block=True
         ) as http:
             assert http.pool is not None
-            assert http.pool.qsize() == poolsize
+            assert http.pool.qsize() == 0
 
             # force a connection error by supplying a non-existent
             # url. We won't get a response for this  and so the
@@ -865,7 +834,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             r.release_conn()
 
             # the pool should still contain poolsize elements
-            assert http.pool.qsize() == http.pool.maxsize
+            assert http.pool.qsize() == 1
 
     def test_mixed_case_hostname(self) -> None:
         with HTTPConnectionPool("LoCaLhOsT", self.port) as pool:

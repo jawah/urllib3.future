@@ -62,6 +62,8 @@ def test_releases_conn(pool: HTTPConnectionPool) -> None:
     # back into the pool.
     response._pool = pool
     response._connection = conn
+    response._police_officer = pool.pool
+    pool.pool.memorize(response, conn)  # type: ignore[union-attr]
 
     response.release_conn()
     assert pool.pool.qsize() == 1  # type: ignore[union-attr]

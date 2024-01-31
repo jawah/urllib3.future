@@ -75,6 +75,9 @@ class HTTPSResolver(BaseResolver):
             kwargs["_proxy"] = parse_url(kwargs["proxy"])
             kwargs.pop("proxy")
 
+        if "maxsize" not in kwargs:
+            kwargs["maxsize"] = 10
+
         if "proxy_headers" in kwargs and "_proxy" in kwargs:
             proxy_headers = HTTPHeaderDict()
 

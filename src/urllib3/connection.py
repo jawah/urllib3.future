@@ -21,6 +21,7 @@ if typing.TYPE_CHECKING:
         _TYPE_TIMEOUT_INTERNAL,
         ProxyConfig,
     )
+    from .util.traffic_police import TrafficPolice
 
 from ._constant import DEFAULT_BLOCKSIZE
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
@@ -510,7 +511,10 @@ class HTTPConnection(HfaceBackend):
         return rp
 
     def getresponse(  # type: ignore[override]
-        self, *, promise: ResponsePromise | None = None
+        self,
+        *,
+        promise: ResponsePromise | None = None,
+        police_officer: TrafficPolice[HTTPConnection] | None = None,
     ) -> HTTPResponse:
         """
         Get the response from the server.
@@ -554,6 +558,8 @@ class HTTPConnection(HfaceBackend):
             enforce_content_length=resp_options.enforce_content_length,
             request_method=resp_options.request_method,
             request_url=resp_options.request_url,
+            connection=self,
+            police_officer=police_officer,
         )
         return response
 

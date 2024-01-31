@@ -14,10 +14,9 @@
 
 from __future__ import annotations
 
-from collections import deque
-
 import h11
 
+from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType, HeaderType
 from ...events import ConnectionTerminated, DataReceived, Event, HeadersReceived
 from .._protocols import HTTP1Protocol
@@ -117,7 +116,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def __init__(self) -> None:
         self._connection: h11.Connection = h11.Connection(h11.CLIENT)
         self._data_buffer: list[bytes] = []
-        self._event_buffer: deque[Event] = deque()
+        self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
         self._switched: bool = False
 
@@ -171,7 +170,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         if self._connection.their_state == h11.SWITCHED_PROTOCOL:
             self._data_buffer.append(data)
             if end_stream:
-                self._event_buffer.append(self._connection_terminated())
+                self._events.append(self._connection_terminated())
             return
         self._h11_submit(h11.Data(data))
         if end_stream:
@@ -184,7 +183,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def connection_lost(self) -> None:
         if self._connection.their_state == h11.SWITCHED_PROTOCOL:
-            self._event_buffer.append(self._connection_terminated())
+            self._events.append(self._connection_terminated())
             return
         # This method is called when the connection is closed without an EOF.
         # But not all connections support EOF, so being here does not
@@ -197,11 +196,11 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         # messages from partial messages interrupted by network failure.
         if not self._terminated:
             self._connection.send_failed()
-            self._event_buffer.append(self._connection_terminated())
+            self._events.append(self._connection_terminated())
 
     def eof_received(self) -> None:
         if self._connection.their_state == h11.SWITCHED_PROTOCOL:
-            self._event_buffer.append(self._connection_terminated())
+            self._events.append(self._connection_terminated())
             return
         self._h11_data_received(b"")
 
@@ -209,7 +208,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         if not data:
             return  # h11 treats empty data as EOF.
         if self._connection.their_state == h11.SWITCHED_PROTOCOL:
-            self._event_buffer.append(DataReceived(self._current_stream_id, data))
+            self._events.append(DataReceived(self._current_stream_id, data))
             return
         else:
             self._h11_data_received(data)
@@ -220,13 +219,11 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         self._maybe_start_next_cycle()
         return data
 
-    def next_event(self) -> Event | None:
-        if not self._event_buffer:
-            return None
-        return self._event_buffer.popleft()
+    def next_event(self, stream_id: int | None = None) -> Event | None:
+        return self._events.popleft(stream_id=stream_id)
 
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        return len(self._event_buffer) > 0
+        return self._events.count(stream_id=stream_id) > 0
 
     def _h11_submit(self, h11_event: h11.Event) -> None:
         chunks = self._connection.send_with_data_passthrough(h11_event)
@@ -239,7 +236,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         self._maybe_start_next_cycle()
 
     def _fetch_events(self) -> None:
-        a = self._event_buffer.append
+        a = self._events.append
         while not self._terminated:
             try:
                 h11_event = self._connection.next_event()
@@ -258,15 +255,10 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             elif isinstance(h11_event, h11.EndOfMessage):
                 # HTTP/2 and HTTP/3 send END_STREAM flag with HEADERS and DATA frames.
                 # We emulate similar behavior for HTTP/1.
-                if self._event_buffer and isinstance(
-                    self._event_buffer[-1], (HeadersReceived, DataReceived)
-                ):
-                    last_event = self._event_buffer[-1]
-                else:
-                    last_event = DataReceived(self._current_stream_id, b"")
-                    a(last_event)
-                if self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL:  # type: ignore[attr-defined]
-                    last_event.end_stream = True
+                last_event: DataReceived = DataReceived(
+                    self._current_stream_id, b"", self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL  # type: ignore[attr-defined]
+                )
+                a(last_event)
                 self._maybe_start_next_cycle()
             elif isinstance(h11_event, h11.ConnectionClosed):
                 a(self._connection_terminated())
@@ -293,7 +285,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         if h11.SWITCHED_PROTOCOL == self._connection.their_state and not self._switched:
             data, closed = self._connection.trailing_data
             if data:
-                self._event_buffer.append(DataReceived(self._current_stream_id, data))
+                self._events.append(DataReceived(self._current_stream_id, data))
             self._switched = True
 
     def reshelve(self, *events: Event) -> None:

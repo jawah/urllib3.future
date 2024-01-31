@@ -34,6 +34,7 @@ from qh3.quic.logger import QuicFileLogger
 from qh3.tls import CipherSuite, SessionTicket
 
 from ..._configuration import QuicTLSConfig
+from ..._stream_matrix import StreamMatrix
 from ..._typing import AddressType, HeadersType
 from ...events import ConnectionTerminated, DataReceived, Event
 from ...events import HandshakeCompleted as _HandshakeCompleted
@@ -99,7 +100,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._quic: QuicConnection = QuicConnection(configuration=self._configuration)
         self._connection_ids: set[bytes] = set()
         self._remote_address = remote_address
-        self._event_buffer: deque[Event] = deque()
+        self._events: StreamMatrix = StreamMatrix()
         self._packets: deque[bytes] = deque()
         self._http: H3Connection | None = None
         self._terminated: bool = False
@@ -123,7 +124,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def has_expired(self) -> bool:
         self._quic.handle_timer(monotonic())
         if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
-            self._event_buffer += self._map_quic_event(self._quic._close_event)
+            self._events.extend(self._map_quic_event(self._quic._close_event))
         return self._terminated
 
     @property
@@ -164,18 +165,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
         self._quic.reset_stream(stream_id, error_code)
 
-    def next_event(self) -> Event | None:
-        if not self._event_buffer:
-            return None
-        return self._event_buffer.popleft()
+    def next_event(self, stream_id: int | None = None) -> Event | None:
+        return self._events.popleft(stream_id=stream_id)
 
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        if stream_id is None:
-            return len(self._event_buffer) > 0
-        for ev in self._event_buffer:
-            if hasattr(ev, "stream_id") and ev.stream_id == stream_id:
-                return True
-        return False
+        return self._events.count(stream_id=stream_id) > 0
 
     @property
     def connection_ids(self) -> Sequence[bytes]:
@@ -183,7 +177,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def connection_lost(self) -> None:
         self._terminated = True
-        self._event_buffer.append(ConnectionTerminated())
+        self._events.append(ConnectionTerminated())
 
     def bytes_received(self, data: bytes) -> None:
         self._quic.receive_datagram(data, self._remote_address, now=monotonic())
@@ -211,12 +205,12 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         assert self._http is not None
 
         for quic_event in iter(self._quic.next_event, None):
-            self._event_buffer += self._map_quic_event(quic_event)
+            self._events.extend(self._map_quic_event(quic_event))
             for h3_event in self._http.handle_event(quic_event):
-                self._event_buffer += self._map_h3_event(h3_event)
+                self._events.extend(self._map_h3_event(h3_event))
 
         if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
-            self._event_buffer += self._map_quic_event(self._quic._close_event)
+            self._events.extend(self._map_quic_event(self._quic._close_event))
 
     def _map_quic_event(self, quic_event: quic_events.QuicEvent) -> Iterable[Event]:
         if isinstance(quic_event, quic_events.ConnectionIdIssued):
@@ -293,9 +287,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "serialNumber": ("%x" % x509_certificate.serial_number).upper(),
             "subject": [],
             "issuer": [],
-            "notBefore": x509_certificate.not_valid_before.strftime("%b %d %H:%M:%S %Y")
+            "notBefore": (
+                x509_certificate.not_valid_before
+                if not hasattr(x509_certificate, "not_valid_before_utc")
+                else x509_certificate.not_valid_before_utc
+            ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
-            "notAfter": x509_certificate.not_valid_after.strftime("%b %d %H:%M:%S %Y")
+            "notAfter": (
+                x509_certificate.not_valid_after
+                if not hasattr(x509_certificate, "not_valid_after_utc")
+                else x509_certificate.not_valid_after_utc
+            ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
         }
 
@@ -378,9 +380,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "serialNumber": ("%x" % x509_certificate.serial_number).upper(),
             "subject": [],
             "issuer": [],
-            "notBefore": x509_certificate.not_valid_before.strftime("%b %d %H:%M:%S %Y")
+            "notBefore": (
+                x509_certificate.not_valid_before
+                if not hasattr(x509_certificate, "not_valid_before_utc")
+                else x509_certificate.not_valid_before_utc
+            ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
-            "notAfter": x509_certificate.not_valid_after.strftime("%b %d %H:%M:%S %Y")
+            "notAfter": (
+                x509_certificate.not_valid_after
+                if not hasattr(x509_certificate, "not_valid_after_utc")
+                else x509_certificate.not_valid_after_utc
+            ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
             "subjectAltName": [],
             "OCSP": [],
@@ -503,4 +513,4 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
-            self._event_buffer.appendleft(ev)
+            self._events.appendleft(ev)

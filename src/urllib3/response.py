@@ -38,7 +38,7 @@ except (AttributeError, ImportError, ValueError):  # Defensive:
 
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
-from .backend import HttpVersion, LowLevelResponse, ResponsePromise
+from .backend import LowLevelResponse, ResponsePromise
 from .connection import BaseSSLError, HTTPConnection
 from .exceptions import (
     DecodeError,
@@ -58,6 +58,7 @@ if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
     from .connectionpool import HTTPConnectionPool
+    from .util.traffic_police import TrafficPolice
 
 log = logging.getLogger(__name__)
 
@@ -341,6 +342,7 @@ class HTTPResponse(io.IOBase):
         request_method: str | None = None,
         request_url: str | None = None,
         auto_close: bool = True,
+        police_officer: TrafficPolice[HTTPConnection] | None = None,
     ) -> None:
         if isinstance(headers, HTTPHeaderDict):
             self.headers = headers
@@ -400,6 +402,11 @@ class HTTPResponse(io.IOBase):
 
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
+
+        self._police_officer: TrafficPolice[HTTPConnection] | None = police_officer
+
+        if self._police_officer is not None:
+            self._police_officer.memorize(self, self._connection)
 
         # If requested, preload the body.
         if preload_content and not self._body:
@@ -526,12 +533,12 @@ class HTTPResponse(io.IOBase):
         return self.url
 
     def release_conn(self) -> None:
-        if not self._pool or not self._connection:
+        if not self._connection:
             return None
 
-        # todo: propose a better way to handle this case graciously
-        if self._connection._svn is None or self._connection._svn == HttpVersion.h11:
-            self._pool._put_conn(self._connection)
+        if self._police_officer is not None:
+            if self._police_officer.busy:
+                self._police_officer.release()
 
         self._connection = None
 
@@ -799,60 +806,84 @@ class HTTPResponse(io.IOBase):
             after having ``.read()`` the file object. (Overridden if ``amt`` is
             set.)
         """
-        self._init_decoder()
-        if decode_content is None:
-            decode_content = self.decode_content
+        try:
+            self._init_decoder()
+            if decode_content is None:
+                decode_content = self.decode_content
 
-        if amt is not None:
-            cache_content = False
+            if amt is not None:
+                cache_content = False
 
-            if amt < 0 and len(self._decoded_buffer):
-                return self._decoded_buffer.get(len(self._decoded_buffer))
+                if amt < 0 and len(self._decoded_buffer):
+                    return self._decoded_buffer.get(len(self._decoded_buffer))
 
-            if 0 < amt <= len(self._decoded_buffer):
-                return self._decoded_buffer.get(amt)
+                if 0 < amt <= len(self._decoded_buffer):
+                    return self._decoded_buffer.get(amt)
 
-        data = self._raw_read(amt)
+            if self._police_officer is not None and not self._police_officer.busy:
+                with self._police_officer.borrow(self):
+                    data = self._raw_read(amt)
+            else:
+                data = self._raw_read(amt)
 
-        if amt and amt < 0:
-            amt = len(data)
+            if amt and amt < 0:
+                amt = len(data)
 
-        flush_decoder = False
-        if amt is None:
-            flush_decoder = True
-        elif amt != 0 and not data:
-            flush_decoder = True
+            flush_decoder = False
+            if amt is None:
+                flush_decoder = True
+            elif amt != 0 and not data:
+                flush_decoder = True
 
-        if not data and len(self._decoded_buffer) == 0:
-            return data
-
-        if amt is None:
-            data = self._decode(data, decode_content, flush_decoder)
-            if cache_content:
-                self._body = data
-        else:
-            # do not waste memory on buffer when not decoding
-            if not decode_content:
-                if self._has_decoded_content:
-                    raise RuntimeError(
-                        "Calling read(decode_content=False) is not supported after "
-                        "read(decode_content=True) was called."
-                    )
+            if not data and len(self._decoded_buffer) == 0:
                 return data
 
-            decoded_data = self._decode(data, decode_content, flush_decoder)
-            self._decoded_buffer.put(decoded_data)
+            if amt is None:
+                data = self._decode(data, decode_content, flush_decoder)
+                if cache_content:
+                    self._body = data
+            else:
+                # do not waste memory on buffer when not decoding
+                if not decode_content:
+                    if self._has_decoded_content:
+                        raise RuntimeError(
+                            "Calling read(decode_content=False) is not supported after "
+                            "read(decode_content=True) was called."
+                        )
+                    return data
 
-            while len(self._decoded_buffer) < amt and data:
-                # TODO make sure to initially read enough data to get past the headers
-                # For example, the GZ file header takes 10 bytes, we don't want to read
-                # it one byte at a time
-                data = self._raw_read(amt)
                 decoded_data = self._decode(data, decode_content, flush_decoder)
                 self._decoded_buffer.put(decoded_data)
-            data = self._decoded_buffer.get(amt)
 
-        return data
+                while len(self._decoded_buffer) < amt and data:
+                    # TODO make sure to initially read enough data to get past the headers
+                    # For example, the GZ file header takes 10 bytes, we don't want to read
+                    # it one byte at a time
+                    if (
+                        self._police_officer is not None
+                        and not self._police_officer.busy
+                    ):
+                        with self._police_officer.borrow(self):
+                            data = self._raw_read(amt)
+                    else:
+                        data = self._raw_read(amt)
+
+                    decoded_data = self._decode(data, decode_content, flush_decoder)
+                    self._decoded_buffer.put(decoded_data)
+                data = self._decoded_buffer.get(amt)
+
+            return data
+        finally:
+            if (
+                self._fp
+                and hasattr(self._fp, "_eot")
+                and self._fp._eot
+                and self._police_officer is not None
+            ):
+                self._police_officer.forget(self)
+                if self._police_officer.busy:
+                    self._police_officer.release()
+                self._police_officer = None
 
     def stream(
         self, amt: int | None = 2**16, decode_content: bool | None = None

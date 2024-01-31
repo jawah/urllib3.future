@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing
+import warnings
 from collections import OrderedDict
 from enum import Enum, auto
 from threading import RLock
@@ -89,6 +90,13 @@ class RecentlyUsedContainer(typing.Generic[_KT, _VT], typing.MutableMapping[_KT,
         self.dispose_func = dispose_func
         self._container = OrderedDict()
         self.lock = RLock()
+
+        warnings.warn(
+            "RecentlyUsedContainer is deprecated and scheduled for removal in urllib3.future v3. "
+            "It has been replaced by a more suitable implementation in urllib3.util.traffic_police.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     def __getitem__(self, key: _KT) -> _VT:
         # Re-insert the item, moving it to the end of the eviction line.
