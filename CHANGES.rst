@@ -1,3 +1,8 @@
+2.5.901 (2024-02-02)
+====================
+
+- Fixed a compatibility issue with ``boto3`` when trying to send data (got an unexpected keyword argument). #79
+
 2.5.900 (2024-02-02)
 ====================
 

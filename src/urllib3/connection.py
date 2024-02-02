@@ -486,7 +486,15 @@ class HTTPConnection(HfaceBackend):
                     total_sent += len(chunk)
                     if on_upload_body is not None:
                         on_upload_body(total_sent, content_length, False, False)
-                rp = self.send(b"", eot=True)
+                try:
+                    rp = self.send(b"", eot=True)
+                except TypeError:
+                    # AWSConnection override the send() method
+                    # thus preventing us to add an additional kwarg in send(...)
+                    # reason (AWS side): urllib3 2.0 chunks and calls send potentially thousands of
+                    # times inside `request` unlike the standard library[...]
+                    # response (urllib3-future): not concerned by this. bypass the bypass.
+                    rp = super().send(b"", eot=True)
                 if on_upload_body is not None:
                     on_upload_body(total_sent, content_length, True, False)
         except EarlyResponse as e:
