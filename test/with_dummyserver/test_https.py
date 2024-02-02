@@ -264,6 +264,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         ) as https_pool:
             conn = https_pool._new_conn()
             assert conn.__class__ == VerifiedHTTPSConnection
+            https_pool._put_conn(conn)
 
             with warnings.catch_warnings(record=True) as w:
                 r = https_pool.request("GET", "/")
@@ -279,6 +280,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         with HTTPSConnectionPool(self.host, self.port, ssl_context=ctx) as https_pool:
             conn = https_pool._new_conn()
             assert conn.__class__ == VerifiedHTTPSConnection
+            https_pool._put_conn(conn)
 
             with mock.patch("warnings.warn") as warn:
                 r = https_pool.request("GET", "/")
@@ -294,6 +296,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         ) as https_pool:
             conn = https_pool._new_conn()
             assert conn.__class__ == VerifiedHTTPSConnection
+            https_pool._put_conn(conn)
 
             with mock.patch("warnings.warn") as warn:
                 r = https_pool.request("GET", "/")
@@ -321,6 +324,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         ) as https_pool:
             conn = https_pool._new_conn()
             assert conn.__class__ == VerifiedHTTPSConnection
+            https_pool._put_conn(conn)
 
             with warnings.catch_warnings(record=True) as w:
                 r = https_pool.request("GET", "/")

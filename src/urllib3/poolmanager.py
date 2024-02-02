@@ -8,7 +8,7 @@ import warnings
 from types import TracebackType
 from urllib.parse import urljoin
 
-from ._collections import HTTPHeaderDict, RecentlyUsedContainer
+from ._collections import HTTPHeaderDict
 from ._constant import DEFAULT_BLOCKSIZE
 from ._request_methods import RequestMethods
 from ._typing import (
@@ -37,6 +37,7 @@ from .util.proxy import connection_requires_http_tunnel
 from .util.request import NOT_FORWARDABLE_HEADERS
 from .util.retry import Retry
 from .util.timeout import Timeout
+from .util.traffic_police import TrafficPolice, UnavailableTraffic
 from .util.url import Url, parse_url
 
 if typing.TYPE_CHECKING:
@@ -237,8 +238,9 @@ class PoolManager(RequestMethods):
 
         self._num_pools = num_pools
 
-        self.pools: RecentlyUsedContainer[PoolKey, HTTPConnectionPool]
-        self.pools = RecentlyUsedContainer(num_pools)
+        self.pools: TrafficPolice[HTTPConnectionPool] = TrafficPolice(
+            num_pools, concurrency=True
+        )
 
         # Locally set the pool classes and keys so other PoolManagers can
         # override them.
@@ -397,7 +399,7 @@ class PoolManager(RequestMethods):
         request_context = self._merge_pool_kwargs(pool_kwargs)
         request_context["scheme"] = scheme or "http"
         if not port:
-            port = port_by_scheme.get(request_context["scheme"].lower(), 80)
+            port = port_by_scheme.get(request_context["scheme"].lower())
         request_context["port"] = port
         request_context["host"] = host
 
@@ -436,19 +438,22 @@ class PoolManager(RequestMethods):
         objects. At a minimum it must have the ``scheme``, ``host``, and
         ``port`` fields.
         """
-        with self.pools.lock:
-            # If the scheme, host, or port doesn't match existing open
-            # connections, open a new ConnectionPool.
-            pool = self.pools.get(pool_key)
-            if pool:
-                return pool
+        # If the scheme, host, or port doesn't match existing open
+        # connections, open a new ConnectionPool.
+        if self.pools.busy:
+            self.pools.release()
 
-            # Make a fresh ConnectionPool of the desired type
-            scheme = request_context["scheme"]
-            host = request_context["host"]
-            port = request_context["port"]
-            pool = self._new_pool(scheme, host, port, request_context=request_context)
-            self.pools[pool_key] = pool
+        pool = self.pools.locate(pool_key, block=False)
+
+        if pool:
+            return pool
+
+        # Make a fresh ConnectionPool of the desired type
+        scheme = request_context["scheme"]
+        host = request_context["host"]
+        port = request_context["port"]
+        pool = self._new_pool(scheme, host, port, request_context=request_context)
+        self.pools.put(pool, pool_key, immediately_unavailable=True)
 
         return pool
 
@@ -513,27 +518,13 @@ class PoolManager(RequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
-        put_back_pool = []
-        response = None
-
-        for pool_key in self.pools.keys():
-            pool: HTTPConnectionPool | None = self.pools.get(pool_key)
-
-            if not pool:
-                continue
-
-            try:
+        try:
+            with self.pools.borrow(
+                promise or ResponsePromise, block=False, not_idle_only=True
+            ) as pool:
                 response = pool.get_response(promise=promise)
-            except ValueError:
-                response = None
-
-            put_back_pool.append((pool_key, pool))
-
-            if response:
-                break
-
-        for pool_key, pool in put_back_pool:
-            self.pools[pool_key] = pool
+        except UnavailableTraffic:
+            return None
 
         if promise is not None and response is None:
             raise ValueError(
@@ -559,6 +550,8 @@ class PoolManager(RequestMethods):
             raise ValueError(
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
+
+        self.pools.forget(from_promise)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -740,6 +733,9 @@ class PoolManager(RequestMethods):
             response = conn.urlopen(method, url, **kw)
         else:
             response = conn.urlopen(method, u.request_uri, **kw)
+
+        self.pools.memorize(response, conn)
+        self.pools.release()
 
         if "multiplexed" in kw and kw["multiplexed"]:
             if isinstance(response, ResponsePromise):

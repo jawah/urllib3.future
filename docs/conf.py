@@ -89,8 +89,8 @@ html_theme_options = {
         </a>
     """,
     "sidebar_hide_name": True,
-    "light_logo": "banner.svg",
-    "dark_logo": "dark-logo.svg",
+    "light_logo": "logo.png",
+    "dark_logo": "logo.png",
 }
 
 intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
@@ -142,4 +142,6 @@ nitpick_ignore = [
     ("py:class", "socket.AddressFamily"),
     ("py:class", "timedelta"),
     ("py:class", "TLSVersion"),
+    ("py:class", "TrafficPolice"),
+    ("py:class", "urllib3.util.traffic_police.TrafficPolice"),
 ]

@@ -255,7 +255,7 @@ class HTTPProtocol(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def next_event(self) -> Event | None:
+    def next_event(self, stream_id: int | None = None) -> Event | None:
         """
         Consume next HTTP event.
 

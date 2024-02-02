@@ -6,7 +6,6 @@ import queue
 import sys
 import typing
 import warnings
-import weakref
 from datetime import timedelta
 from socket import timeout as SocketTimeout
 from types import TracebackType
@@ -42,7 +41,6 @@ from .exceptions import (
     ProtocolError,
     ProxyError,
     ReadTimeoutError,
-    ResponseNotReady,
     SSLError,
     TimeoutError,
 )
@@ -53,6 +51,7 @@ from .util.request import NOT_FORWARDABLE_HEADERS, set_file_position
 from .util.retry import Retry
 from .util.ssl_match_hostname import CertificateError
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
+from .util.traffic_police import TrafficPolice, UnavailableTraffic
 from .util.url import Url, _encode_target
 from .util.url import _normalize_host as normalize_host
 from .util.url import parse_url
@@ -81,7 +80,7 @@ class ConnectionPool:
     """
 
     scheme: str | None = None
-    QueueCls = queue.LifoQueue
+    QueueCls = TrafficPolice
 
     def __init__(self, host: str, port: int | None = None) -> None:
         if not host:
@@ -210,19 +209,25 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         self.retries = retries
 
         self._maxsize = maxsize
-        self.pool: queue.LifoQueue[typing.Any] | None = self.QueueCls(maxsize)
-        self.saturated_pool: queue.LifoQueue[typing.Any] = self.QueueCls(
-            64 if maxsize < 64 else maxsize
-        )
+
+        if self.QueueCls is not TrafficPolice and not issubclass(
+            self.QueueCls, TrafficPolice
+        ):
+            warnings.warn(
+                "ConnectionPool QueueCls no longer support typical queue implementation "
+                "due to its inability to answer urllib3.future needs to handle concurrent streams "
+                "in a single connection. You may customize the implementation by passing a subclass of "
+                "urllib3.util.traffic_police.TrafficPolice if necessary.",
+                DeprecationWarning,
+            )
+            self.QueueCls = TrafficPolice
+
+        self.pool: TrafficPolice[HTTPConnection] | None = self.QueueCls(maxsize)
         self.block = block
 
         self.proxy = _proxy
         self.proxy_headers = _proxy_headers or {}
         self.proxy_config = _proxy_config
-
-        # Fill the queue up so that doing get() on it will block properly
-        for _ in range(maxsize):
-            self.pool.put(None)
 
         # These are mostly for testing and debugging purposes.
         self.num_connections = 0
@@ -292,20 +297,17 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         self.conn_kw["resolver"] = self._resolver
 
-        # Do not pass 'self' as callback to 'finalize'.
-        # Then the 'finalize' would keep an endless living (leak) to self.
-        # By just passing a reference to the pool allows the garbage collector
-        # to free self if nobody else has a reference to it.
-        pool = self.pool
-
-        # Close all the HTTPConnections in the pool before the
-        # HTTPConnectionPool object is garbage collected.
-        weakref.finalize(self, _close_pool_connections, pool)
+    @property
+    def is_idle(self) -> bool:
+        return self.pool is None or self.pool.bag_only_idle
 
     def _new_conn(self) -> HTTPConnection:
         """
         Return a fresh :class:`HTTPConnection`.
         """
+        if self.pool is None:
+            raise ClosedPoolError(self, "Pool is closed")
+
         self.num_connections += 1
         log.debug(
             "Starting new HTTP connection (%d): %s:%s",
@@ -320,11 +322,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             timeout=self.timeout.connect_timeout,
             **self.conn_kw,
         )
+        self.pool.put(conn, immediately_unavailable=True)
         return conn
 
-    def _get_conn(
-        self, timeout: float | None = None, no_new: bool = False
-    ) -> HTTPConnection:
+    def _get_conn(self, timeout: float | None = None) -> HTTPConnection:
         """
         Get a connection. Will return a pooled connection if one is available.
 
@@ -342,7 +343,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             raise ClosedPoolError(self, "Pool is closed.")
 
         try:
-            conn = self.pool.get(block=self.block, timeout=timeout)
+            conn = self.pool.get(
+                block=self.block, timeout=timeout, non_saturated_only=True
+            )
         except AttributeError:  # self.pool is None
             raise ClosedPoolError(self, "Pool is closed.") from None  # Defensive:
 
@@ -354,9 +357,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 ) from None
             pass  # Oh well, we'll create a new connection then
 
-        if no_new and conn is None:
-            raise ValueError("Explicitly asked to stop get_conn early with no_new=True")
-
         # If this is a persistent connection, check if it got disconnected
         if conn and is_connection_dropped(conn):
             log.debug("Resetting dropped connection: %s", self.host)
@@ -364,7 +364,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         return conn or self._new_conn()
 
-    def _put_conn(self, conn: HTTPConnection | None) -> None:
+    def _put_conn(self, conn: HTTPConnection) -> None:
         """
         Put a connection back into the pool.
 
@@ -380,30 +380,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         """
 
         if self.pool is not None:
-            if conn:
-                if conn.is_multiplexed and conn.is_saturated:
-                    try:
-                        self.saturated_pool.put(conn, block=False)
-                    except queue.Full:
-                        warnings.warn(
-                            "Unable to keep aside a multiplexed connection. You will loose access to the responses. "
-                            "You need to either increase the pool maxsize or collect responses to avoid this.",
-                            UserWarning,
-                            stacklevel=2,
-                        )
-                        self.num_connections -= 1
-                        conn.close()
-                    return
-                elif (
-                    conn.is_multiplexed
-                    and conn.is_idle
-                    and self.pool.maxsize > self._maxsize
-                ):
-                    self.num_connections -= 1
-                    self.pool.maxsize -= 1
-                    conn.close()
-                    return
-
             try:
                 self.pool.put(conn, block=False)
                 return  # Everything is dandy, done.
@@ -433,7 +409,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                             self.pool.qsize(),
                         )
 
-                        self.pool.maxsize += 1
+                        if self.pool.maxsize is not None:
+                            self.pool.maxsize += 1
                         return self._put_conn(conn)
 
                 log.warning(
@@ -499,50 +476,18 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
-        connections = []
-        irrelevant_connections = []
-        response: HTTPResponse | None = None
+        if self.pool is None:
+            raise ClosedPoolError(self, "Pool is closed")
 
         try:
-            conn = self.saturated_pool.get(False)
-            connections.append(conn)
-        except queue.Empty:
-            pass
-
-        if not connections:
-            while True:
-                try:
-                    conn = self._get_conn(no_new=True)
-                except ValueError:
-                    break
-
-                if conn.is_idle is False:
-                    connections.append(conn)
-                    break
-                else:
-                    irrelevant_connections.append(conn)
-
-        for conn in irrelevant_connections:
-            self._put_conn(conn)
-
-        if not connections:
+            with self.pool.borrow(
+                promise or ResponsePromise,
+                block=promise is not None,
+                not_idle_only=promise is None,
+            ) as conn:
+                response = conn.getresponse(promise=promise, police_officer=self.pool)
+        except UnavailableTraffic:
             return None
-
-        for conn in connections:
-            if promise:
-                if promise in conn:
-                    response = conn.getresponse(promise=promise)
-                else:
-                    continue
-            else:
-                try:
-                    response = conn.getresponse()
-                except ResponseNotReady:
-                    continue
-            break
-
-        for conn in connections:
-            self._put_conn(conn)
 
         if promise is not None and response is None:
             raise ValueError(
@@ -568,6 +513,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             raise ValueError(
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
+
+        self.pool.forget(from_promise)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -907,14 +854,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         # Receive the response from the server
         try:
-            response = conn.getresponse()
+            response = conn.getresponse(police_officer=self.pool)
         except (BaseSSLError, OSError) as e:
             self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
             raise
 
         # Set properties that are used by the pooling layer.
         response.retries = retries
-        response._connection = response_conn
         response._pool = self
 
         log.debug(
@@ -938,11 +884,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         """
         if self.pool is None:
             return
+
         # Disable access to the pool
         old_pool, self.pool = self.pool, None
 
         # Close all the HTTPConnections in the pool.
-        _close_pool_connections(old_pool)
+        old_pool.clear()
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
@@ -1332,11 +1279,19 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 # multiplexing allows us to issue more requests.
                 release_this_conn = True
 
-            if release_this_conn is True:
+            if release_this_conn is True and conn is not None:
                 # Put the connection back to be reused. If the connection is
                 # expired then it will be None, which will get replaced with a
                 # fresh connection during _get_conn.
                 self._put_conn(conn)
+                if (
+                    clean_exit
+                    and isinstance(response, ResponsePromise)
+                    and self.pool is not None
+                ):
+                    self.pool.memorize(response, conn)
+            elif release_this_conn is True and self.pool is not None:
+                self.pool.kill_cursor()
 
         if not conn:
             # Try again
@@ -1537,6 +1492,8 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         """
         Return a fresh :class:`urllib3.connection.HTTPConnection`.
         """
+        if self.pool is None:
+            raise ClosedPoolError(self, "Pool is closed")
         self.num_connections += 1
         log.debug(
             "Starting new HTTPS connection (%d): %s:%s",
@@ -1556,7 +1513,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             actual_host = self.proxy.host
             actual_port = self.proxy.port
 
-        return self.ConnectionCls(
+        conn = self.ConnectionCls(
             host=actual_host,
             port=actual_port,
             timeout=self.timeout.connect_timeout,
@@ -1576,6 +1533,8 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             key_data=self.key_data,
             **self.conn_kw,
         )
+        self.pool.put(conn, immediately_unavailable=True)
+        return conn
 
     def _validate_conn(self, conn: HTTPConnection) -> None:
         """
@@ -1661,14 +1620,3 @@ def _url_from_pool(
 ) -> str:
     """Returns the URL from a given connection pool. This is mainly used for testing and logging."""
     return Url(scheme=pool.scheme, host=pool.host, port=pool.port, path=path).url
-
-
-def _close_pool_connections(pool: queue.LifoQueue[typing.Any]) -> None:
-    """Drains a queue of connections and closes each one."""
-    try:
-        while True:
-            conn = pool.get(block=False)
-            if conn:
-                conn.close()
-    except queue.Empty:
-        pass  # Done.

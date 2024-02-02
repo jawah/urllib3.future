@@ -12,10 +12,10 @@ urllib3.future
    contributing
    changelog
 
-⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.
-⚡ urllib3.future goes beyond supported features while remaining compatible.
+- ⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.
+- ⚡ urllib3.future goes beyond supported features while remaining compatible.
+- ⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries and **urllib3**:
 
-⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries and **urllib3**:
 
 - Thread safety.
 - Connection pooling.

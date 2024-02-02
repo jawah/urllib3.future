@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 from typing import Iterator
 
 import h2.config  # type: ignore
@@ -22,6 +21,7 @@ import h2.connection  # type: ignore
 import h2.events  # type: ignore
 import h2.exceptions  # type: ignore
 
+from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
 from ...events import (
     ConnectionTerminated,
@@ -58,7 +58,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
         self._open_stream_count: int = 0
         self._connection.initiate_connection()
-        self._events: deque[Event] = deque()
+        self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
 
     @staticmethod
@@ -96,21 +96,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._connection.reset_stream(stream_id, error_code)
         self._events.append(StreamResetSent(stream_id, error_code))
 
-    def next_event(self) -> Event | None:
-        if not self._events:
-            return None
-
-        return self._events.popleft()
+    def next_event(self, stream_id: int | None = None) -> Event | None:
+        return self._events.popleft(stream_id=stream_id)
 
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        if stream_id is None:
-            return len(self._events) > 0
-
-        for ev in self._events:
-            if hasattr(ev, "stream_id") and ev.stream_id == stream_id:
-                return True
-
-        return False
+        return self._events.count(stream_id=stream_id) > 0
 
     def _map_events(self, h2_events: list[h2.events.Event]) -> Iterator[Event]:
         for e in h2_events:

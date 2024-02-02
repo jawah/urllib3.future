@@ -3,7 +3,6 @@ from __future__ import annotations
 import http.client as httplib
 import ssl
 import typing
-from queue import Empty
 from socket import error as SocketError
 from ssl import SSLError as BaseSSLError
 from test import SHORT_TIMEOUT
@@ -23,7 +22,6 @@ from urllib3.connectionpool import (
 from urllib3.exceptions import (
     ClosedPoolError,
     EmptyPoolError,
-    FullPoolError,
     HostChangedError,
     LocationValueError,
     MaxRetryError,
@@ -246,15 +244,13 @@ class TestConnectionPool:
                     pool._put_conn(conn1)
                     pool._put_conn(conn2)
 
-            assert conn1_close.called is False
+            assert conn1_close.called is True
             assert conn2_close.called is True
 
-            assert conn1 == pool._get_conn()
+            assert conn1 != pool._get_conn()
             assert conn2 != pool._get_conn()
 
-            assert pool.num_connections == 2
-            assert "Connection pool is full, discarding connection" in caplog.text
-            assert "Connection pool size: 1" in caplog.text
+            assert pool.num_connections == 3
 
     def test_put_conn_when_pool_is_full_blocking(self) -> None:
         """
@@ -268,8 +264,10 @@ class TestConnectionPool:
             with patch.object(conn1, "close") as conn1_close:
                 with patch.object(conn2, "close") as conn2_close:
                     pool._put_conn(conn1)
-                    with pytest.raises(FullPoolError):
-                        pool._put_conn(conn2)
+                    # Bellow is disabled since the introduction of TrafficPolice scheduler.
+                    # Idle conn are automatically evicted.
+                    # with pytest.raises(FullPoolError):
+                    #     pool._put_conn(conn2)
 
             assert conn1_close.called is False
             assert conn2_close.called is True
@@ -331,22 +329,19 @@ class TestConnectionPool:
                 if reason is not None:
                     assert isinstance(excinfo.value.reason, reason)  # type: ignore[attr-defined]
                 assert pool.pool is not None
-                assert pool.pool.qsize() == POOL_SIZE
+                assert pool.pool.qsize() == 0
 
-            # Make sure that all of the exceptions return the connection
-            # to the pool
+            # Broken conn are to be dismissed.
             _test(BaseSSLError, MaxRetryError, SSLError)
             _test(CertificateError, MaxRetryError, SSLError)
 
-            # The pool should never be empty, and with these two exceptions
-            # being raised, a retry will be triggered, but that retry will
-            # fail, eventually raising MaxRetryError, not EmptyPoolError
-            # See: https://github.com/urllib3/urllib3/issues/76
+            # The pool can be empty when we encounter what appear to be
+            # unrecoverable conn.
             with patch.object(pool, "_make_request", side_effect=OSError()):
                 with pytest.raises(MaxRetryError):
                     pool.request("GET", "/", retries=1, pool_timeout=SHORT_TIMEOUT)
             assert pool.pool is not None
-            assert pool.pool.qsize() == POOL_SIZE
+            assert pool.pool.qsize() == 0
 
     def test_empty_does_not_put_conn(self) -> None:
         """Do not put None back in the pool if the pool was empty"""
@@ -378,8 +373,6 @@ class TestConnectionPool:
         pool._put_conn(conn1)
         pool._put_conn(conn2)
 
-        old_pool_queue = pool.pool
-
         pool.close()
         assert pool.pool is None
 
@@ -391,9 +384,10 @@ class TestConnectionPool:
         with pytest.raises(ClosedPoolError):
             pool._get_conn()
 
-        with pytest.raises(Empty):
-            assert old_pool_queue is not None
-            old_pool_queue.get(block=False)
+        # Bellow is disabled since the introduction of TrafficPolice scheduler.
+        # with pytest.raises(Empty):
+        #     assert old_pool_queue is not None
+        #     old_pool_queue.get(block=False)
 
     def test_pool_close_twice(self) -> None:
         pool = connection_from_url("http://google.com:80")
@@ -439,8 +433,6 @@ class TestConnectionPool:
             pool._put_conn(conn1)
             pool._put_conn(conn2)
 
-            old_pool_queue = pool.pool
-
         assert pool.pool is None
         with pytest.raises(ClosedPoolError):
             pool._get_conn()
@@ -448,9 +440,11 @@ class TestConnectionPool:
         pool._put_conn(conn3)
         with pytest.raises(ClosedPoolError):
             pool._get_conn()
-        with pytest.raises(Empty):
-            assert old_pool_queue is not None
-            old_pool_queue.get(block=False)
+
+        # Bellow is disabled since the introduction of TrafficPolice scheduler.
+        # with pytest.raises(Empty):
+        #     assert old_pool_queue is not None
+        #     old_pool_queue.get(block=False)
 
     def test_url_from_pool(self) -> None:
         with connection_from_url("http://google.com:80") as pool:
@@ -545,7 +539,7 @@ class TestConnectionPool:
                     request_url=url,
                     preload_content=False,
                     connection=response_conn,
-                    pool=self._pool,
+                    police_officer=self._pool.pool,
                 )
                 return response
 

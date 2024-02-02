@@ -6,7 +6,8 @@
   <a href="https://pypi.org/project/urllib3-future"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3-future.svg?maxAge=86400" /></a>
   <a href="https://pypi.org/project/urllib3-future"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3-future.svg?maxAge=86400" /></a>
   <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
-  <br><small>✨🍰Enjoy HTTP like its 2024🍰✨</small>
+  <br><small>✨🍰 Enjoy HTTP like its 2024 🍰✨</small>
+  <br><small>💰 Promotional offer, get everything and more for <del>40k</del> <b>0</b>$!</small>
 </p>
 
 ⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.<br>

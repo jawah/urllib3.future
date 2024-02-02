@@ -26,6 +26,8 @@ class Event:
     This is an abstract base class that should not be initialized.
     """
 
+    _id: int
+
 
 #
 # Connection events
