@@ -1,4 +1,4 @@
-2.5.900 (2024-02-01)
+2.5.900 (2024-02-02)
 ====================
 
 - Improved performance and reliability for concurrent streams handled by a single connection.
