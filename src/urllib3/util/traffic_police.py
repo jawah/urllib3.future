@@ -104,7 +104,7 @@ class TrafficPolice(typing.Generic[T]):
         with self._map_lock:
             outdated_keys = []
             for key, val in self._map.items():
-                if id(val) == id(value):
+                if id(val) == obj_id:
                     outdated_keys.append(key)
 
             for key in outdated_keys:
@@ -179,7 +179,7 @@ class TrafficPolice(typing.Generic[T]):
                     break
 
             if eligible_obj_id is not None and eligible_conn_or_pool is not None:
-                eligible_conn_or_pool.close()
+                self._map_clear(eligible_conn_or_pool)
 
                 del self._registry[eligible_obj_id]
                 del self._states[eligible_obj_id]

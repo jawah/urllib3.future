@@ -1,3 +1,8 @@
+2.5.902 (2024-02-04)
+====================
+
+- Fixed missed cleanup of unused PoolKey stored in ``PoliceTraffic`` upon a full ``PoolManager``.
+
 2.5.901 (2024-02-02)
 ====================
 
