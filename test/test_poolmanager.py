@@ -11,7 +11,7 @@ from urllib3 import connection_from_url
 from urllib3._constant import DEFAULT_BLOCKSIZE
 from urllib3.connectionpool import HTTPSConnectionPool
 from urllib3.exceptions import LocationValueError
-from urllib3.poolmanager import PoolManager, key_fn_by_scheme
+from urllib3.poolmanager import PoolKey, PoolManager, key_fn_by_scheme
 from urllib3.util import retry, timeout
 from urllib3.util.url import Url
 
@@ -62,6 +62,20 @@ class TestPoolManager:
             connections.add(conn)
 
         assert len(connections) == 5
+
+    def test_full_manager(self) -> None:
+        urls = [
+            "http://yahoo.com",
+            "http://bing.com",
+            "http://yahoo.co.jp/",
+        ]
+
+        p = PoolManager(2)
+
+        for url in urls:
+            p.connection_from_url(url)
+
+        assert len([e for e in p.pools._map if isinstance(e, PoolKey)]) == 2
 
     def test_manager_clear(self) -> None:
         p = PoolManager(5)
