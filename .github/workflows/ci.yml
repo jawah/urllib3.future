@@ -61,7 +61,7 @@ jobs:
             experimental: false
             nox-session: test-pypy
             traefik-server: true
-          - python-version: "pypy-3.9"
+          - python-version: "pypy-3.9-v7.3.13"  # urllib3#3308
             os: ubuntu-latest
             experimental: false
             nox-session: test-pypy
