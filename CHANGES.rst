@@ -1,3 +1,8 @@
+2.5.903 (2024-02-20)
+====================
+
+- Fixed an edge case where a simultaneous call to ``get_response()`` without a specific promise could lead to a non-thread safe operation.
+
 2.5.902 (2024-02-04)
 ====================
 

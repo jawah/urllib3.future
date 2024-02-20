@@ -117,10 +117,15 @@ class TrafficPolice(typing.Generic[T]):
             for k, v in self._map_types.items():
                 if v is traffic_type:
                     conn_or_pool = self._map[k]
+                    # this method may be subject to quick states mutation
+                    # due to the (internal) map independent lock
+                    if hasattr(conn_or_pool, "is_idle") and conn_or_pool.is_idle:
+                        continue
                     with self._lock:
-                        if id(conn_or_pool) in self._container:
+                        obj_id = id(conn_or_pool)
+                        if obj_id in self._container:
                             return conn_or_pool
-        return None
+            return None
 
     def kill_cursor(self) -> None:
         """In case there is no other way, a conn or pool may be unusable and should be destroyed.
