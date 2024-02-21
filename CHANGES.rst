@@ -1,3 +1,8 @@
+2.5.904 (2024-02-21)
+====================
+
+- Improved reliability with PoliceTraffic.borrow with type as indicator when heavily accessed by many threads.
+
 2.5.903 (2024-02-20)
 ====================
 
