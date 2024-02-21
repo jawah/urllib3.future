@@ -402,7 +402,7 @@ class TrafficPolice(typing.Generic[T]):
 
     def locate(
         self,
-        traffic_indicator: MappableTraffic | type,
+        traffic_indicator: MappableTraffic,
         block: bool = True,
         timeout: float | None = None,
     ) -> T | None:
@@ -426,8 +426,7 @@ class TrafficPolice(typing.Generic[T]):
                     conn_or_pool = self._map[key]
                     obj_id = id(conn_or_pool)
         else:
-            conn_or_pool = self._find_by(traffic_indicator)
-            obj_id = id(conn_or_pool) if conn_or_pool is not None else None
+            raise ValueError("unsupported traffic_indicator")
 
         if conn_or_pool is None and obj_id is None:
             with self._lock:
@@ -488,9 +487,33 @@ class TrafficPolice(typing.Generic[T]):
     ) -> typing.Generator[T, None, None]:
         try:
             if traffic_indicator:
-                conn_or_pool = self.locate(
-                    traffic_indicator, block=block, timeout=timeout
-                )
+                if isinstance(traffic_indicator, type):
+                    with self._map_lock:
+                        with self._lock:
+                            conn_or_pool = self._find_by(traffic_indicator)
+
+                            if conn_or_pool:
+                                obj_id = id(conn_or_pool)
+
+                                if self.busy:
+                                    (
+                                        cursor_obj_id,
+                                        cursor_conn_or_pool,
+                                    ) = self._local.cursor
+
+                                    if cursor_obj_id != obj_id:
+                                        raise AtomicTraffic(
+                                            "Seeking to locate a connection when having another one used, did you forget a call to release?"
+                                        )
+
+                                if self.concurrency is False:
+                                    self._container.pop(obj_id)
+
+                                self._local.cursor = (obj_id, conn_or_pool)
+                else:
+                    conn_or_pool = self.locate(
+                        traffic_indicator, block=block, timeout=timeout
+                    )
             else:
                 # simulate reentrant lock/borrow
                 # get_response PM -> get_response HPM -> read R
