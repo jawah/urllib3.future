@@ -497,6 +497,10 @@ COMMON_RCODE_LABEL: dict[int, str] = {
 }
 
 
+class DomainNameServerParseException(Exception):
+    ...
+
+
 class DomainNameServerReturn:
     """
     Minimalist DNS response parser. Allow to quickly extract key-data out of it.
@@ -504,61 +508,67 @@ class DomainNameServerReturn:
     """
 
     def __init__(self, payload: bytes) -> None:
-        up = struct.unpack("!HHHHHH", payload[:12])
+        try:
+            up = struct.unpack("!HHHHHH", payload[:12])
 
-        self._id = up[0]
-        self._flags = up[1]
-        self._qd_count = up[2]
-        self._an_count = up[3]
+            self._id = up[0]
+            self._flags = up[1]
+            self._qd_count = up[2]
+            self._an_count = up[3]
 
-        self._rcode = int(f"0x{hex(payload[3])[-1]}", 16)
+            self._rcode = int(f"0x{hex(payload[3])[-1]}", 16)
 
-        self._hostname: str = ""
+            self._hostname: str = ""
 
-        idx = 12
+            idx = 12
 
-        while True:
-            c = payload[idx]
+            while True:
+                c = payload[idx]
 
-            if c == 0:
-                idx += 1
-                break
+                if c == 0:
+                    idx += 1
+                    break
 
-            self._hostname += payload[idx + 1 : idx + 1 + c].decode("ascii") + "."
+                self._hostname += payload[idx + 1 : idx + 1 + c].decode("ascii") + "."
 
-            idx += c + 1
+                idx += c + 1
 
-        self._records: list[tuple[SupportedQueryType, int, str]] = []
+            self._records: list[tuple[SupportedQueryType, int, str]] = []
 
-        if self._an_count:
-            idx += 4
+            if self._an_count:
+                idx += 4
 
-            while idx < len(payload):
-                up = struct.unpack("!HHHI", payload[idx : idx + 10])
-                entry_size = struct.unpack("!H", payload[idx + 10 : idx + 12])[0]
+                while idx < len(payload):
+                    up = struct.unpack("!HHHI", payload[idx : idx + 10])
+                    entry_size = struct.unpack("!H", payload[idx + 10 : idx + 12])[0]
 
-                data = payload[idx + 12 : idx + 12 + entry_size]
+                    data = payload[idx + 12 : idx + 12 + entry_size]
 
-                if len(data) == 4:
-                    decoded_data = inet4_ntoa(data)
-                elif len(data) == 16:
-                    decoded_data = inet6_ntoa(data)
-                else:
-                    alpn = []
-                    if b"h2" in data:
-                        alpn.append("h2")
-                    if b"h3" in data:
-                        alpn.append("h3")
-                    decoded_data = f"alpn={','.join(alpn)}"
+                    if len(data) == 4:
+                        decoded_data = inet4_ntoa(data)
+                    elif len(data) == 16:
+                        decoded_data = inet6_ntoa(data)
+                    else:
+                        alpn = []
+                        if b"h2" in data:
+                            alpn.append("h2")
+                        if b"h3" in data:
+                            alpn.append("h3")
+                        decoded_data = f"alpn={','.join(alpn)}"
 
-                try:
-                    self._records.append(
-                        (SupportedQueryType(up[1]), up[-1], decoded_data)
-                    )
-                except ValueError:
-                    pass
+                    try:
+                        self._records.append(
+                            (SupportedQueryType(up[1]), up[-1], decoded_data)
+                        )
+                    except ValueError:
+                        pass
 
-                idx += 12 + entry_size
+                    idx += 12 + entry_size
+        except (struct.error, IndexError, ValueError, UnicodeDecodeError) as e:
+            raise DomainNameServerParseException(
+                "A protocol error occurred while parsing the DNS response payload: "
+                f"{str(e)}"
+            ) from e
 
     @property
     def id(self) -> int:

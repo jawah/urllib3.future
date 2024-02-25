@@ -14,6 +14,16 @@ Response
     .. autoattribute:: status
     .. autoattribute:: headers
 
+.. autoclass:: urllib3.AsyncHTTPResponse
+    :members:
+    :undoc-members:
+    :show-inheritance:
+    :inherited-members: json
+
+    .. autoattribute:: auto_close
+    .. autoattribute:: status
+    .. autoattribute:: headers
+
 Decoders
 --------
 

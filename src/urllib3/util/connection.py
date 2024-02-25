@@ -7,11 +7,15 @@ import warnings
 if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
     from ..connection import HTTPConnection
+    from .._async.connection import AsyncHTTPConnection
+    from ..contrib.ssa import AsyncSocket
 
 from .timeout import _DEFAULT_TIMEOUT
 
 
-def is_connection_dropped(conn: HTTPConnection) -> bool:  # Platform-specific
+def is_connection_dropped(
+    conn: HTTPConnection | AsyncHTTPConnection,
+) -> bool:  # Platform-specific
     """
     Returns True if the connection is dropped and should be closed.
     :param conn: :class:`urllib3.connection.HTTPConnection` object.
@@ -61,7 +65,7 @@ def create_connection(
 
 
 def _set_socket_options(
-    sock: socket.socket, options: _TYPE_SOCKET_OPTIONS | None
+    sock: socket.socket | AsyncSocket, options: _TYPE_SOCKET_OPTIONS | None
 ) -> None:
     if options is None:
         return

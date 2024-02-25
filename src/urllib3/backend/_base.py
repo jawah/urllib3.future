@@ -10,6 +10,7 @@ from secrets import token_bytes
 if typing.TYPE_CHECKING:
     from ssl import SSLSocket, SSLContext, TLSVersion
     from .._typing import _TYPE_SOCKET_OPTIONS
+    from ._async import AsyncLowLevelResponse
 
 from .._collections import HTTPHeaderDict
 from .._constant import DEFAULT_BLOCKSIZE
@@ -192,7 +193,7 @@ class ResponsePromise:
         self._uid: str = b64encode(token_bytes(16)).decode("ascii")
         self._conn: BaseBackend = conn
         self._stream_id: int = stream_id
-        self._response: LowLevelResponse | None = None
+        self._response: LowLevelResponse | AsyncLowLevelResponse | None = None
         self._request_headers = request_headers
         self._parameters: typing.MutableMapping[str, typing.Any] = parameters
 
@@ -221,13 +222,13 @@ class ResponsePromise:
         return self._response is not None
 
     @property
-    def response(self) -> LowLevelResponse:
+    def response(self) -> LowLevelResponse | AsyncLowLevelResponse:
         if not self._response:
             raise OSError
         return self._response
 
     @response.setter
-    def response(self, value: LowLevelResponse) -> None:
+    def response(self, value: LowLevelResponse | AsyncLowLevelResponse) -> None:
         self._response = value
 
     def set_parameter(self, key: str, value: typing.Any) -> None:
@@ -290,7 +291,7 @@ class BaseBackend:
         self.socket_options = socket_options
         self.sock: socket.socket | SSLSocket | None = None
 
-        self._response: LowLevelResponse | None = None
+        self._response: LowLevelResponse | AsyncLowLevelResponse | None = None
         # Set it as default
         self._svn: HttpVersion | None = HttpVersion.h11
 
@@ -312,7 +313,9 @@ class BaseBackend:
         self.conn_info: ConnectionInfo | None = None
 
         self._promises: dict[str, ResponsePromise] = {}
-        self._pending_responses: dict[int, LowLevelResponse] = {}
+        self._pending_responses: dict[
+            int, LowLevelResponse | AsyncLowLevelResponse
+        ] = {}
 
         self._start_last_request: datetime | None = None
 

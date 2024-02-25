@@ -151,7 +151,7 @@ Releases
 
 A release candidate can be created by any contributor.
 
-- Announce intent to release on Discord, see if anyone wants to include last minute
+- Announce intent to release on Github, see if anyone wants to include last minute
   changes.
 - Run ``towncrier build`` to update ``CHANGES.rst`` with the release notes, adjust as
   necessary.

@@ -12,7 +12,7 @@ def tests_impl(
     byte_string_comparisons: bool = False,
 ) -> None:
     # Install deps and the package itself.
-    session.install("-r", "dev-requirements.txt")
+    session.install("-r", "dev-requirements.txt", silent=False)
     session.install(f".[{extras}]", silent=False)
 
     # Show the pip version.
@@ -118,7 +118,14 @@ def downstream_niquests(session: nox.Session) -> None:
     session.cd(f"{tmp_dir}/niquests")
 
     session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
-    session.run("pytest", "tests")
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "-v",
+        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
+        *(session.posargs or ("tests/",)),
+    )
 
 
 @nox.session()

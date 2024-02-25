@@ -19,3 +19,13 @@ Connection Pools
     :show-inheritance:
 
 .. autofunction:: urllib3.connectionpool.connection_from_url
+
+.. autoclass:: urllib3.AsyncHTTPConnectionPool
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. autoclass:: urllib3.AsyncHTTPSConnectionPool
+    :members:
+    :undoc-members:
+    :show-inheritance:

@@ -16,3 +16,14 @@ Pool Manager
     :members:
     :undoc-members:
     :show-inheritance:
+
+.. autoclass:: urllib3.AsyncPoolManager
+    :members:
+    :undoc-members:
+    :show-inheritance:
+    :inherited-members:
+
+.. autoclass:: urllib3.AsyncProxyManager
+    :members:
+    :undoc-members:
+    :show-inheritance:
