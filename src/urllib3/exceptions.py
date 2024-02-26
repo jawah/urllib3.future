@@ -5,6 +5,9 @@ import typing
 from email.errors import MessageDefect
 
 if typing.TYPE_CHECKING:
+    from ._async.connection import AsyncHTTPConnection
+    from ._async.connectionpool import AsyncConnectionPool
+    from ._async.response import AsyncHTTPResponse
     from ._typing import _TYPE_REDUCE_RESULT
     from .backend import ResponsePromise
     from .connection import HTTPConnection
@@ -26,7 +29,9 @@ class HTTPWarning(Warning):
 class PoolError(HTTPError):
     """Base exception for errors caused within a pool."""
 
-    def __init__(self, pool: ConnectionPool, message: str) -> None:
+    def __init__(
+        self, pool: ConnectionPool | AsyncConnectionPool, message: str
+    ) -> None:
         self.pool = pool
         super().__init__(f"{pool}: {message}")
 
@@ -38,7 +43,9 @@ class PoolError(HTTPError):
 class RequestError(PoolError):
     """Base exception for PoolErrors that have associated URLs."""
 
-    def __init__(self, pool: ConnectionPool, url: str, message: str) -> None:
+    def __init__(
+        self, pool: ConnectionPool | AsyncConnectionPool, url: str, message: str
+    ) -> None:
         self.url = url
         super().__init__(pool, message)
 
@@ -89,7 +96,10 @@ class MaxRetryError(RequestError):
     """
 
     def __init__(
-        self, pool: ConnectionPool, url: str, reason: Exception | None = None
+        self,
+        pool: ConnectionPool | AsyncConnectionPool,
+        url: str,
+        reason: Exception | None = None,
     ) -> None:
         self.reason = reason
 
@@ -102,7 +112,10 @@ class HostChangedError(RequestError):
     """Raised when an existing pool gets a request for a foreign host."""
 
     def __init__(
-        self, pool: ConnectionPool, url: str, retries: Retry | int = 3
+        self,
+        pool: ConnectionPool | AsyncConnectionPool,
+        url: str,
+        retries: Retry | int = 3,
     ) -> None:
         message = f"Tried to open a foreign host with url: {url}"
         super().__init__(pool, url, message)
@@ -134,7 +147,9 @@ class ConnectTimeoutError(TimeoutError):
 class NewConnectionError(ConnectTimeoutError, HTTPError):
     """Raised when we fail to establish a new connection. Usually ECONNREFUSED."""
 
-    def __init__(self, conn: HTTPConnection, message: str) -> None:
+    def __init__(
+        self, conn: HTTPConnection | AsyncHTTPConnection, message: str
+    ) -> None:
         self.conn = conn
         super().__init__(f"{conn}: {message}")
 
@@ -142,7 +157,12 @@ class NewConnectionError(ConnectTimeoutError, HTTPError):
 class NameResolutionError(NewConnectionError):
     """Raised when host name resolution fails."""
 
-    def __init__(self, host: str, conn: HTTPConnection, reason: socket.gaierror):
+    def __init__(
+        self,
+        host: str,
+        conn: HTTPConnection | AsyncHTTPConnection,
+        reason: socket.gaierror,
+    ):
         message = f"Failed to resolve '{host}' ({reason})"
         super().__init__(conn, message)
 
@@ -253,7 +273,9 @@ class IncompleteRead(ProtocolError):
 class InvalidChunkLength(ProtocolError):
     """Invalid chunk length in a chunked response."""
 
-    def __init__(self, response: HTTPResponse, length: bytes) -> None:
+    def __init__(
+        self, response: HTTPResponse | AsyncHTTPResponse, length: bytes
+    ) -> None:
         self.partial: int = response.tell()
         self.expected: int | None = response.length_remaining
         self.response = response

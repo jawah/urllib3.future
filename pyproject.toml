@@ -6,9 +6,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "urllib3-future"
-description = "urllib3.future is a powerful HTTP 1.1, 2, and 3 client"
+description = "urllib3.future is a powerful HTTP 1.1, 2, and 3 client with both sync and async interfaces"
 readme = "README.md"
-keywords = ["urllib", "httplib", "threadsafe", "filepost", "http", "https", "ssl", "pooling", "multiplexed", "concurrent", "dns", "dot", "doq", "doh", "dou", "dns-over-quic", "dns-over-https", "dns-over-tls"]
+keywords = ["urllib", "httplib", "threadsafe", "filepost", "http", "https", "ssl", "pooling", "multiplexed", "concurrent", "dns", "dot", "doq", "doh", "dou", "dns-over-quic", "dns-over-https", "dns-over-tls", "async", "tasksafe"]
 authors = [
   {name = "Andrey Petrov", email = "andrey.petrov@shazow.net"}
 ]
@@ -77,6 +77,7 @@ include = [
   "/CHANGES.rst",
   "/README.md",
   "/LICENSE.txt",
+  "/hatch_build.py",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -105,6 +106,7 @@ filterwarnings = [
     '''default:ssl\.PROTOCOL_TLSv1_1 is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1_2 is deprecated:DeprecationWarning''',
     '''default:unclosed .*:ResourceWarning''',
+    '''default:loop is closed:ResourceWarning''',
     '''default:ssl NPN is deprecated, use ALPN instead:DeprecationWarning''',
     # https://github.com/pytest-dev/pytest/issues/10977
     '''default:ast\.(Num|NameConstant|Str) is deprecated and will be removed in Python 3\.14; use ast\.Constant instead:DeprecationWarning:_pytest''',
@@ -112,6 +114,9 @@ filterwarnings = [
     '''default:A conflicting charset has been set in Content-Type:UserWarning''',
     '''ignore:util\.connection\.create_connection\(\) is deprecated and scheduled for removal:DeprecationWarning''',
     '''ignore:RecentlyUsedContainer is deprecated and scheduled for removal:DeprecationWarning''',
+    '''ignore:The event_loop fixture provided by:DeprecationWarning''',
+    '''ignore:A plugin raised an exception during''',
+    '''ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning''',
 ]
 
 [tool.isort]

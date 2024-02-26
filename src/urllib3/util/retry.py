@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import email
 import logging
 import random
@@ -21,6 +22,8 @@ from ..exceptions import (
 from .util import reraise
 
 if typing.TYPE_CHECKING:
+    from .._async.connectionpool import AsyncConnectionPool
+    from .._async.response import AsyncHTTPResponse
     from ..connectionpool import ConnectionPool
     from ..response import HTTPResponse
 
@@ -358,6 +361,28 @@ class Retry:
 
         self._sleep_backoff()
 
+    async def async_sleep_for_retry(self, response: AsyncHTTPResponse) -> bool:
+        retry_after = self.get_retry_after(response)
+        if retry_after:
+            await asyncio.sleep(retry_after)
+            return True
+
+        return False
+
+    async def _async_sleep_backoff(self) -> None:
+        backoff = self.get_backoff_time()
+        if backoff <= 0:
+            return
+        await asyncio.sleep(backoff)
+
+    async def async_sleep(self, response: AsyncHTTPResponse | None = None) -> None:
+        if self.respect_retry_after_header and response:
+            slept = await self.async_sleep_for_retry(response)
+            if slept:
+                return
+
+        await self._async_sleep_backoff()
+
     def _is_connection_error(self, err: Exception) -> bool:
         """Errors when we're fairly sure that the server did not receive the
         request, so it should be safe to retry.
@@ -425,9 +450,9 @@ class Retry:
         self,
         method: str | None = None,
         url: str | None = None,
-        response: HTTPResponse | None = None,
+        response: HTTPResponse | AsyncHTTPResponse | None = None,
         error: Exception | None = None,
-        _pool: ConnectionPool | None = None,
+        _pool: ConnectionPool | AsyncConnectionPool | None = None,
         _stacktrace: TracebackType | None = None,
     ) -> Retry:
         """Return a new Retry object with incremented retry counters.

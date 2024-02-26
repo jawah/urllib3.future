@@ -7,6 +7,7 @@ urllib3.future
 
    v2-migration-guide
    user-guide
+   async
    advanced-usage
    reference/index
    contributing
@@ -17,6 +18,8 @@ urllib3.future
 - ⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries and **urllib3**:
 
 
+- Async.
+- Task safety.
 - Thread safety.
 - Connection pooling.
 - Client-side SSL/TLS verification.
@@ -29,7 +32,7 @@ urllib3.future
 - Proxy support for HTTP and SOCKS.
 - Detailed connection inspection.
 - Multiplexed connection.
-- 95% test coverage.
+- Mirrored Sync & Async.
 
 urllib3 is powerful and easy to use:
 

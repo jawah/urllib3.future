@@ -14,6 +14,8 @@
 ⚡ urllib3.future goes beyond supported features while remaining compatible.<br>
 ⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries **and urllib3**:
 
+- Async.
+- Task safety.
 - Thread safety.
 - Connection pooling.
 - Client-side SSL/TLS verification.
@@ -26,19 +28,37 @@
 - Proxy support for HTTP and SOCKS.
 - Detailed connection inspection.
 - Multiplexed connection.
-- 95% test coverage.
+- Mirrored Sync & Async.
 
 urllib3.future is powerful and easy to use:
 
 ```python
 >>> import urllib3
->>> resp = urllib3.request("GET", "https://httpbin.org/robots.txt")
+>>> pm = urllib3.PoolManager()
+>>> resp = pm.request("GET", "https://httpbin.org/robots.txt")
 >>> resp.status
 200
 >>> resp.data
 b"User-agent: *\nDisallow: /deny\n"
 >>> resp.version
 20
+```
+
+or using asyncio!
+
+```python
+import asyncio
+import urllib3
+
+async def main() -> None:
+    async with urllib3.AsyncPoolManager() as pm:
+        resp = await pm.request("GET", "https://httpbin.org/robots.txt")
+        print(resp.status)  # 200
+        body = await resp.data
+        print(body)  # # b"User-agent: *\nDisallow: /deny\n"
+        print(resp.version)  # 20
+
+asyncio.run(main())
 ```
 
 ## Installing
@@ -95,7 +115,7 @@ python -m pip install urllib3.future
 ```
 
 Nowadays, we suggest using the package [**Niquests**](https://github.com/jawah/niquests) as a drop-in replacement for **Requests**. 
-It leverages urllib3.future capabilities.
+It leverages urllib3.future capabilities appropriately.
 
 ## Documentation
 

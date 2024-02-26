@@ -4,6 +4,7 @@ import typing
 from enum import Enum
 
 from .backend import LowLevelResponse
+from .backend._async import AsyncLowLevelResponse
 from .fields import RequestField
 from .util.request import _TYPE_FAILEDTELL
 from .util.timeout import _TYPE_DEFAULT, Timeout
@@ -26,6 +27,7 @@ _TYPE_BODY: typing.TypeAlias = typing.Union[
     typing.Iterable[str],
     str,
     LowLevelResponse,
+    AsyncLowLevelResponse,
 ]
 
 _TYPE_FIELD_VALUE: typing.TypeAlias = typing.Union[str, bytes]
@@ -48,8 +50,8 @@ _TYPE_ENCODE_URL_FIELDS: typing.TypeAlias = typing.Union[
 ]
 _TYPE_SOCKET_OPTIONS: typing.TypeAlias = typing.Sequence[
     typing.Union[
-        typing.Tuple[int, int, typing.Union[int, bytes]],
-        typing.Tuple[int, int, typing.Union[int, bytes], str],
+        typing.Tuple[int, int, int],
+        typing.Tuple[int, int, int, str],
     ]
 ]
 _TYPE_REDUCE_RESULT: typing.TypeAlias = typing.Tuple[

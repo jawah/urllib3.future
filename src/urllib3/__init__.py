@@ -12,12 +12,18 @@ from logging import NullHandler
 from os import environ
 
 from . import exceptions
+from ._async.connectionpool import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
+from ._async.connectionpool import connection_from_url as async_connection_from_url
+from ._async.poolmanager import AsyncPoolManager, AsyncProxyManager
+from ._async.poolmanager import proxy_from_url as async_proxy_from_url
+from ._async.response import AsyncHTTPResponse
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY, _TYPE_FIELDS
 from ._version import __version__
 from .backend import ConnectionInfo, HttpVersion, ResponsePromise
 from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, connection_from_url
 from .contrib.resolver import ResolverDescription
+from .contrib.resolver._async import AsyncResolverDescription
 from .filepost import encode_multipart_formdata
 from .poolmanager import PoolManager, ProxyManager, proxy_from_url
 from .response import BaseHTTPResponse, HTTPResponse
@@ -70,6 +76,14 @@ __all__ = (
     "ConnectionInfo",
     "ResponsePromise",
     "ResolverDescription",
+    "AsyncHTTPResponse",
+    "AsyncResolverDescription",
+    "AsyncHTTPConnectionPool",
+    "AsyncHTTPSConnectionPool",
+    "AsyncPoolManager",
+    "AsyncProxyManager",
+    "async_proxy_from_url",
+    "async_connection_from_url",
 )
 
 logging.getLogger(__name__).addHandler(NullHandler())
@@ -99,10 +113,14 @@ def add_stderr_logger(
 del NullHandler
 
 
-if environ.get("SSHKEYLOGFILE", None) or environ.get("QUICLOGDIR", None):
+if (
+    environ.get("SSHKEYLOGFILE", None) is not None
+    or environ.get("QUICLOGDIR", None) is not None
+):
     warnings.warn(
-        """urllib3 detected that development/debug environment variable are set. If you are not aware of it
-        please audit your environment. Look for variables 'SSHKEYLOGFILE' and 'QUICLOGDIR'.""",
+        "urllib3.future detected that development/debug environment variable are set. "
+        "If you are unaware of it please audit your environment. "
+        "Variables 'SSHKEYLOGFILE' and 'QUICLOGDIR' can only be set in a non-production environment.",
         exceptions.SecurityWarning,
     )
 

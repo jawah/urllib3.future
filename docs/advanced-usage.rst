@@ -319,7 +319,7 @@ After you make the change the return value of ``urllib.request.getproxies()`` sh
     }
 
 If you still can't figure out how to configure your proxy after all these steps
-please `join our community Discord <https://discord.gg/urllib3>`_ and we'll try to help you with your issue.
+please `create an issue <https://github.com/jawah/urllib3.future>`_ and we'll try to help you with your issue.
 
 SOCKS Proxies
 ~~~~~~~~~~~~~

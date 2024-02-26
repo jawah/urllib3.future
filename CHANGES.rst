@@ -1,3 +1,22 @@
+2.6.900 (2024-02-26)
+====================
+
+- Added full asynchronous support using asyncio.
+  urllib3.future officially support asyncio as his asynchronous scheduler.
+  The following public classes are immediately available:
+
+  ``AsyncPoolManager``, ``AsyncHTTPConnectionPool``, ``AsyncHTTPSConnectionPool``, ``AsyncProxyManager``,
+  ``AsyncResolverDescription``.
+
+  Finally, bellow functions are also available:
+
+  ``async_proxy_from_url``, and ``async_connection_from_url``.
+
+  Explore the documentation section about async to learn more about this awesome feature with detailed
+  examples. No extra dependencies are required. We rely exclusively on the standard library.
+
+  Async SOCKS proxies are also supported at no additional costs with ``contrib.socks.AsyncSOCKSProxyManager``.
+
 2.5.904 (2024-02-21)
 ====================
 

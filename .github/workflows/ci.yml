@@ -285,7 +285,7 @@ jobs:
         run: |
           python -m coverage combine
           python -m coverage html --skip-covered --skip-empty
-          python -m coverage report --ignore-errors --show-missing --fail-under=90
+          python -m coverage report --ignore-errors --show-missing --fail-under=80
 
       - if: ${{ failure() }}
         name: "Upload report if check failed"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import platform
 import socket
 import ssl
 import typing
@@ -373,3 +374,12 @@ def requires_traefik() -> None:
     else:
         _TRAEFIK_AVAILABLE = True
         sock.close()
+
+
+if platform.system() == "Windows":
+
+    @pytest.fixture
+    def event_loop() -> typing.Generator[asyncio.AbstractEventLoop, None, None]:
+        loop = asyncio.get_event_loop_policy().new_event_loop()
+        yield loop
+        loop.close()
