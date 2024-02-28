@@ -127,7 +127,7 @@ _blocking_errnos = {errno.EAGAIN, errno.EWOULDBLOCK}
 
 class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
     """
-    Thread-safe connection pool for one host.
+    Task-safe async connection pool for one host.
 
     :param host:
         Host used for this HTTP Connection (e.g. "localhost"), passed into
@@ -170,11 +170,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
     :param _proxy_headers:
         A dictionary with proxy headers, should not be used directly,
-        instead, see :class:`urllib3.ProxyManager`
+        instead, see :class:`urllib3.AsyncProxyManager`
 
     :param \\**conn_kw:
-        Additional parameters are used to create fresh :class:`urllib3.connection.HTTPConnection`,
-        :class:`urllib3.connection.HTTPSConnection` instances.
+        Additional parameters are used to create fresh :class:`urllib3._async.connection.AsyncHTTPConnection`,
+        :class:`urllib3._async.connection.AsyncHTTPSConnection` instances.
     """
 
     scheme = "http"

@@ -335,38 +335,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 cipher_tuple = self.sock.sslobj.cipher()
 
                 # Python 3.10+
-                if hasattr(self.sock.sslobj, "get_verified_chain"):
-                    chain = self.sock.sslobj.get_verified_chain()
-
-                    if (
-                        len(chain) > 1
-                        and Certificate is not None
-                        and isinstance(chain[1], Certificate)
-                        and hasattr(ssl, "PEM_cert_to_DER_cert")
-                    ):
-                        self.conn_info.issuer_certificate_der = (
-                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
-                        )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
-
-            elif hasattr(self.sock, "getpeercert"):
-                self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
-                try:
-                    self.conn_info.certificate_dict = self.sock.getpeercert(
-                        binary_form=False
-                    )
-                except ValueError:
-                    # not supported on MacOS!
-                    self.conn_info.certificate_dict = None
-                cipher_tuple = (
-                    self.sock.cipher() if hasattr(self.sock, "cipher") else None
-                )
-
-                # Python 3.10+
-                if hasattr(self.sock, "_sslobj") and hasattr(
-                    self.sock._sslobj, "get_verified_chain"
+                if hasattr(self.sock.sslobj, "_sslobj") and hasattr(
+                    self.sock.sslobj._sslobj, "get_verified_chain"
                 ):
-                    chain = self.sock._sslobj.get_verified_chain()
+                    chain = self.sock.sslobj._sslobj.get_verified_chain()
 
                     if (
                         len(chain) > 1

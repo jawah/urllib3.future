@@ -53,6 +53,8 @@ class AsyncSocket:
         self._sock: socket.socket = socket.socket(
             family=self.family, type=self.type, proto=self.proto, fileno=fileno
         )
+        # set nonblocking / or cause the loop to block with dgram socket...
+        self._sock.settimeout(0)
 
         # only initialized in STREAM ctx
         self._writer: asyncio.StreamWriter | None = None
@@ -209,7 +211,18 @@ class AsyncSocket:
                 return await self._reader.read(n=size)
             finally:
                 self._reader_semaphore.release()
+
         try:
+            if self._external_timeout is not None:
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.get_running_loop().sock_recv(self._sock, size),
+                        self._external_timeout,
+                    )
+                except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
+                    self._reader_semaphore.release()
+                    raise StandardTimeoutError from e
+
             return await asyncio.get_running_loop().sock_recv(self._sock, size)
         finally:
             self._reader_semaphore.release()
@@ -240,10 +253,6 @@ class AsyncSocket:
         await self.sendall(data)
 
     def settimeout(self, __value: float | None = None) -> None:
-        try:
-            self._sock.settimeout(__value)
-        except ValueError:
-            pass
         self._external_timeout = __value
 
     def getpeername(self) -> tuple[str, int]:

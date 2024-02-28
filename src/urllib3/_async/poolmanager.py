@@ -54,7 +54,7 @@ pool_classes_by_scheme = {
 
 class AsyncPoolManager(AsyncRequestMethods):
     """
-    Allows for arbitrary requests while transparently keeping track of
+    Allows for arbitrary async requests while transparently keeping track of
     necessary connection pools for you.
 
     :param num_pools:
@@ -67,7 +67,7 @@ class AsyncPoolManager(AsyncRequestMethods):
 
     :param \\**connection_pool_kw:
         Additional parameters are used to create fresh
-        :class:`urllib3.connectionpool.ConnectionPool` instances.
+        :class:`urllib3._async.connectionpool.AsyncConnectionPool` instances.
 
     Example:
 
@@ -75,11 +75,11 @@ class AsyncPoolManager(AsyncRequestMethods):
 
         import urllib3
 
-        http = urllib3.PoolManager(num_pools=2)
+        http = urllib3.AsyncPoolManager(num_pools=2)
 
-        resp1 = http.request("GET", "https://google.com/")
-        resp2 = http.request("GET", "https://google.com/mail")
-        resp3 = http.request("GET", "https://yahoo.com/")
+        resp1 = await http.request("GET", "https://google.com/")
+        resp2 = await http.request("GET", "https://google.com/mail")
+        resp3 = await http.request("GET", "https://yahoo.com/")
 
         print(len(http.pools))
         # 2
@@ -194,7 +194,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         request_context: dict[str, typing.Any] | None = None,
     ) -> AsyncHTTPConnectionPool:
         """
-        Create a new :class:`urllib3.connectionpool.ConnectionPool` based on host, port, scheme, and
+        Create a new :class:`urllib3._async.connectionpool.AsyncConnectionPool` based on host, port, scheme, and
         any additional pool keyword arguments.
 
         If ``request_context`` is provided, it is provided as keyword arguments
@@ -255,7 +255,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         pool_kwargs: dict[str, typing.Any] | None = None,
     ) -> AsyncHTTPConnectionPool:
         """
-        Get a :class:`urllib3.connectionpool.ConnectionPool` based on the host, port, and scheme.
+        Get a :class:`urllib3._async.connectionpool.AsyncConnectionPool` based on the host, port, and scheme.
 
         If ``port`` isn't given, it will be derived from the ``scheme`` using
         ``urllib3.connectionpool.port_by_scheme``. If ``pool_kwargs`` is
@@ -280,7 +280,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         self, request_context: dict[str, typing.Any]
     ) -> AsyncHTTPConnectionPool:
         """
-        Get a :class:`urllib3.connectionpool.ConnectionPool` based on the request context.
+        Get a :class:`urllib3._async.connectionpool.AsyncConnectionPool` based on the request context.
 
         ``request_context`` must at least contain the ``scheme`` key and its
         value must be a key in ``key_fn_by_scheme`` instance variable.
@@ -305,7 +305,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         self, pool_key: PoolKey, request_context: dict[str, typing.Any]
     ) -> AsyncHTTPConnectionPool:
         """
-        Get a :class:`urllib3.connectionpool.ConnectionPool` based on the provided pool key.
+        Get a :class:`urllib3._async.connectionpool.AsyncConnectionPool` based on the provided pool key.
 
         ``pool_key`` should be a namedtuple that only contains immutable
         objects. At a minimum it must have the ``scheme``, ``host``, and
@@ -335,7 +335,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         self, url: str, pool_kwargs: dict[str, typing.Any] | None = None
     ) -> AsyncHTTPConnectionPool:
         """
-        Similar to :func:`urllib3.connectionpool.connection_from_url`.
+        Similar to :func:`urllib3.async_connection_from_url`.
 
         If ``pool_kwargs`` is not provided and a new pool needs to be
         constructed, ``self.connection_pool_kw`` is used to initialize
@@ -576,12 +576,12 @@ class AsyncPoolManager(AsyncRequestMethods):
         self, method: str, url: str, redirect: bool = True, **kw: typing.Any
     ) -> AsyncHTTPResponse | ResponsePromise:
         """
-        Same as :meth:`urllib3.HTTPConnectionPool.urlopen`
+        Same as :meth:`urllib3.AsyncHTTPConnectionPool.urlopen`
         with custom cross-host redirect logic and only sends the request-uri
         portion of the ``url``.
 
         The given ``url`` parameter must be absolute, such that an appropriate
-        :class:`urllib3.connectionpool.ConnectionPool` can be chosen for it.
+        :class:`urllib3._async.connectionpool.AsyncConnectionPool` can be chosen for it.
         """
         u = parse_url(url)
 
@@ -711,16 +711,16 @@ class AsyncProxyManager(AsyncPoolManager):
 
         import urllib3
 
-        proxy = urllib3.ProxyManager("https://localhost:3128/")
+        proxy = urllib3.AsyncProxyManager("https://localhost:3128/")
 
-        resp1 = proxy.request("GET", "https://google.com/")
-        resp2 = proxy.request("GET", "https://httpbin.org/")
+        resp1 = await proxy.request("GET", "https://google.com/")
+        resp2 = await proxy.request("GET", "https://httpbin.org/")
 
         print(len(proxy.pools))
         # 1
 
-        resp3 = proxy.request("GET", "https://httpbin.org/")
-        resp4 = proxy.request("GET", "https://twitter.com/")
+        resp3 = await proxy.request("GET", "https://httpbin.org/")
+        resp4 = await proxy.request("GET", "https://twitter.com/")
 
         print(len(proxy.pools))
         # 3

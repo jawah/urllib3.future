@@ -1,3 +1,10 @@
+2.6.901 (2024-02-28)
+====================
+
+- Fixed blocking IO just after HTTP/3 is negotiated in an asynchronous context.
+- Added explicit warning in case your pool of connections is insufficiently sized for the given charge in an asynchronous context.
+- Fixed automatic retrieval of the issuer certificate in an asynchronous context (``ConnectionInfo``).
+
 2.6.900 (2024-02-26)
 ====================
 
