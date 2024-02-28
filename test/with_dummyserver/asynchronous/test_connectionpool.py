@@ -4,6 +4,7 @@ import asyncio
 import io
 import platform
 import socket
+import sys
 import time
 import typing
 import warnings
@@ -28,6 +29,7 @@ from urllib3.exceptions import (
     NameResolutionError,
     NewConnectionError,
     ReadTimeoutError,
+    TimeoutError,
     UnrewindableBodyError,
 )
 from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS
@@ -45,10 +47,11 @@ def wait_for_socket(ready_event: Event) -> None:
 
 @pytest.mark.asyncio
 class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
-    @pytest.mark.xfail(
-        platform.system() == "Windows",
+    @pytest.mark.skipif(
+        platform.system() == "Windows"
+        and sys.version_info < (3, 11)
+        and sys.version_info >= (3, 8),
         reason="unstable on py 3.8, 3.9 and 3.10",
-        strict=False,
     )
     async def test_timeout_float(self) -> None:
         block_event = Event()
@@ -56,7 +59,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
         async with AsyncHTTPConnectionPool(self.host, self.port, retries=False) as pool:
             wait_for_socket(ready_event)
-            with pytest.raises(ReadTimeoutError):
+            with pytest.raises(TimeoutError):
                 await pool.request("GET", "/", timeout=SHORT_TIMEOUT)
             block_event.set()  # Release block
 
@@ -65,10 +68,11 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
             block_event.set()  # Pre-release block
             await pool.request("GET", "/", timeout=LONG_TIMEOUT)
 
-    @pytest.mark.xfail(
-        platform.system() == "Windows",
+    @pytest.mark.skipif(
+        platform.system() == "Windows"
+        and sys.version_info < (3, 11)
+        and sys.version_info >= (3, 8),
         reason="unstable on py 3.8, 3.9 and 3.10",
-        strict=False,
     )
     async def test_conn_closed(self) -> None:
         block_event = Event()
@@ -80,7 +84,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
             conn = await pool._get_conn()
             await pool._put_conn(conn)
             try:
-                with pytest.raises(ReadTimeoutError):
+                with pytest.raises(TimeoutError):
                     await pool.urlopen("GET", "/")
                 if not conn.is_closed:
                     with pytest.raises(socket.error):
@@ -90,10 +94,11 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
             block_event.set()
 
-    @pytest.mark.xfail(
-        platform.system() == "Windows",
+    @pytest.mark.skipif(
+        platform.system() == "Windows"
+        and sys.version_info < (3, 11)
+        and sys.version_info >= (3, 8),
         reason="unstable on py 3.8, 3.9 and 3.10",
-        strict=False,
     )
     async def test_timeout(self) -> None:
         # Requests should time out when expected
@@ -108,7 +113,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
             wait_for_socket(ready_event)
             block_event.clear()
 
-            with pytest.raises(ReadTimeoutError):
+            with pytest.raises(TimeoutError):
                 await pool.request("GET", "/")
             block_event.set()  # Release request
 
@@ -118,7 +123,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
         ) as pool:
             wait_for_socket(ready_event)
             now = time.time()
-            with pytest.raises(ReadTimeoutError):
+            with pytest.raises(TimeoutError):
                 await pool.request("GET", "/", timeout=LONG_TIMEOUT)
             delta = time.time() - now
 
@@ -128,7 +133,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
             # Timeout passed directly to request should raise a request timeout
             wait_for_socket(ready_event)
-            with pytest.raises(ReadTimeoutError):
+            with pytest.raises(TimeoutError):
                 await pool.request("GET", "/", timeout=SHORT_TIMEOUT)
             block_event.set()  # Release request
 
@@ -182,10 +187,11 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
             finally:
                 await conn.close()
 
-    @pytest.mark.xfail(
-        platform.system() == "Windows",
+    @pytest.mark.skipif(
+        platform.system() == "Windows"
+        and sys.version_info < (3, 11)
+        and sys.version_info >= (3, 8),
         reason="unstable on py 3.8, 3.9 and 3.10",
-        strict=False,
     )
     async def test_total_timeout(self) -> None:
         block_event = Event()
@@ -197,7 +203,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
         async with AsyncHTTPConnectionPool(
             self.host, self.port, timeout=timeout, retries=False
         ) as pool:
-            with pytest.raises(ReadTimeoutError):
+            with pytest.raises(TimeoutError):
                 await pool.request("GET", "/")
 
             block_event.set()
@@ -209,7 +215,7 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
         async with AsyncHTTPConnectionPool(
             self.host, self.port, timeout=timeout, retries=False
         ) as pool:
-            with pytest.raises(ReadTimeoutError):
+            with pytest.raises(TimeoutError):
                 await pool.request("GET", "/")
 
     async def test_create_connection_timeout(self) -> None:
