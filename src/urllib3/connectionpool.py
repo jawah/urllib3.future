@@ -479,6 +479,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
 
+        if promise is not None and not isinstance(promise, ResponsePromise):
+            raise TypeError(
+                f"get_response only support ResponsePromise but received {type(promise)} instead. "
+                f"This may occur if you expected the remote peer to support multiplexing but did not."
+            )
+
         try:
             with self.pool.borrow(
                 promise or ResponsePromise,

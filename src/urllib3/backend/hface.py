@@ -767,11 +767,30 @@ class HfaceBackend(BaseBackend):
 
         encoded_header = header.encode("ascii") if isinstance(header, str) else header
 
+        # only h11 support chunked transfer encoding, we internally translate
+        # it to the right method for h2 and h3.
+        support_te_chunked: bool = self._svn == HttpVersion.h11
+
+        # We MUST never use that header in h2 and h3 over quic.
+        # It may(should) break the connection.
+        if not support_te_chunked and encoded_header == b"transfer-encoding":
+            return
+
         for value in values:
+            encoded_value = (
+                value.encode("iso-8859-1") if isinstance(value, str) else value
+            )
+
+            # Passing 'Connection' header is actually a protocol violation above h11.
+            # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
+            if not support_te_chunked and encoded_header == b"connection":
+                if encoded_value.lower() == b"keep-alive":
+                    continue
+
             self.__headers.append(
                 (
                     encoded_header,
-                    value.encode("iso-8859-1") if isinstance(value, str) else value,
+                    encoded_value,
                 )
             )
 
@@ -793,54 +812,45 @@ class HfaceBackend(BaseBackend):
 
         # unless anything hint the opposite, the request head frame is the end stream
         should_end_stream: bool = expect_body_afterward is False
-        # only h11 support chunked transfer encoding, we internally translate
-        # it to the right method for h2 and h3.
-        support_te_chunked: bool = self._svn == HttpVersion.h11
+        authority_set_bit: bool = False
+        legacy_host_entry: bytes | None = None
 
         # determine if stream should end there (absent body case)
         for raw_header, raw_value in self.__headers:
             # Some programs does set value to None, and that is... an issue here. We ignore those key, value.
             if raw_value is None:
                 continue
-            header: str = raw_header.decode("ascii").lower().replace("_", "-")
-            value: str = raw_value.decode("iso-8859-1")
-            if header.startswith(":"):
+            if raw_header == b":authority":
+                authority_set_bit = True
                 continue
+            elif raw_header.startswith(b":"):
+                continue
+
+            header: str = raw_header.decode("ascii").lower().replace("_", "-")
+
             if header == "content-length":
-                if value.isdigit():
+                value: str = raw_value.decode("iso-8859-1")
+                try:
                     self.__expected_body_length = int(value)
-                break
+                except ValueError:
+                    raise ProtocolError(
+                        f"Invalid content-length set. Given '{value}' when only digits are allowed."
+                    )
+            elif legacy_host_entry is None and header == "host":
+                legacy_host_entry = raw_value
 
         # handle cases where 'Host' header is set manually
-        if any(k == b":authority" for k, v in self.__headers) is False:
-            for raw_header, raw_value in self.__headers:
-                header = raw_header.decode("ascii").lower().replace("_", "-")
+        if authority_set_bit is False and legacy_host_entry is not None:
+            self.__headers.append((b":authority", legacy_host_entry))
+            authority_set_bit = True
 
-                if header == "host":
-                    self.__headers.append((b":authority", raw_value))
-                    break
-        if any(k == b":authority" for k, v in self.__headers) is False:
+        if authority_set_bit is False:
             raise ProtocolError(
                 (
                     "urllib3.future do not support emitting HTTP requests without the `Host` header",
-                    "It was only permitted in HTTP/1.0 and prior. This implementation ship with HTTP/1.1+.",
+                    "It was only permitted in HTTP/1.0 and prior. This client support HTTP/1.1+.",
                 )
             )
-
-        if not support_te_chunked:
-            # We MUST never use that header in h2 and h3 over quic.
-            # It may(should) break the connection.
-            try:
-                self.__headers.remove((b"transfer-encoding", b"chunked"))
-            except ValueError:
-                pass
-
-            # Passing 'Connection' header is actually a protocol violation above h11.
-            # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
-            try:
-                self.__headers.remove((b"connection", b"keep-alive"))
-            except ValueError:
-                pass
 
         try:
             self._protocol.submit_headers(
@@ -857,6 +867,7 @@ class HfaceBackend(BaseBackend):
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
+            self._promises_per_stream[rp.stream_id] = rp
             e.promise = rp  # type: ignore[attr-defined]
 
             raise e
@@ -869,6 +880,7 @@ class HfaceBackend(BaseBackend):
 
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
+            self._promises_per_stream[rp.stream_id] = rp
             return rp
 
         return None
@@ -939,7 +951,7 @@ class HfaceBackend(BaseBackend):
 
                 # special headers that represent (usually) the HTTP response status, version and reason.
                 if header.startswith(":"):
-                    if header == ":status" and value.isdigit():
+                    if header == ":status":
                         status = int(value)
                         continue
                     # this should be unreachable.
@@ -951,14 +963,12 @@ class HfaceBackend(BaseBackend):
                 headers.add(header, value)
 
         if promise is None:
-            for p in self._promises.values():
-                if p.stream_id == events[-1].stream_id:
-                    promise = p
-                    break
-            if promise is None:
+            if events[-1].stream_id not in self._promises_per_stream:
                 raise ProtocolError(
                     f"Response received (stream: {events[-1].stream_id}) but no promise in-flight"
                 )
+
+            promise = self._promises_per_stream[events[-1].stream_id]
 
         # this should be unreachable
         if status is None:
@@ -968,8 +978,15 @@ class HfaceBackend(BaseBackend):
 
         eot = events[-1].end_stream is True
 
+        http_verb = b""
+
+        for raw_header, raw_value in promise.request_headers:
+            if raw_header == b":method":
+                http_verb = raw_value
+                break
+
         response = LowLevelResponse(
-            dict(promise.request_headers)[b":method"].decode("ascii"),
+            http_verb.decode("ascii"),
             status,
             self._http_vsn,
             responses[status] if status in responses else "Unknown",
@@ -985,6 +1002,7 @@ class HfaceBackend(BaseBackend):
 
         # we delivered a response, we can safely remove the promise from queue.
         del self._promises[promise.uid]
+        del self._promises_per_stream[promise.stream_id]
 
         # keep last response
         self._response: LowLevelResponse = response
@@ -1050,6 +1068,7 @@ class HfaceBackend(BaseBackend):
 
                         rp = ResponsePromise(self, self._stream_id, self.__headers)
                         self._promises[rp.uid] = rp
+                        self._promises_per_stream[rp.stream_id] = rp
 
                         raise EarlyResponse(promise=rp)
 
@@ -1094,6 +1113,7 @@ class HfaceBackend(BaseBackend):
 
                 rp = ResponsePromise(self, self._stream_id, self.__headers)
                 self._promises[rp.uid] = rp
+                self._promises_per_stream[rp.stream_id] = rp
                 if remote_pipe_shutdown:
                     remote_pipe_shutdown.promise = rp  # type: ignore[attr-defined]
                     raise remote_pipe_shutdown
@@ -1130,6 +1150,7 @@ class HfaceBackend(BaseBackend):
         self._protocol = None
         self._stream_id = None
         self._promises = {}
+        self._promises_per_stream = {}
         self._pending_responses = {}
         self.__custom_tls_settings = None
         self.conn_info = None

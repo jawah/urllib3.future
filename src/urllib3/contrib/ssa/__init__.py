@@ -319,7 +319,34 @@ class SSLAsyncSocket(AsyncSocket):
         )
 
 
+def _has_complete_support_dgram() -> bool:
+    """A bug exist in PyPy asyncio implementation that prevent us to use a DGRAM socket.
+    This piece of code inform us, potentially, if PyPy has fixed the winapi implementation.
+    See https://github.com/pypy/pypy/issues/4008 and https://github.com/jawah/niquests/pull/87
+
+    The stacktrace look as follows:
+    File "C:\\hostedtoolcache\\windows\\PyPy\3.10.13\x86\\Lib\asyncio\\windows_events.py", line 594, in connect
+    _overlapped.WSAConnect(conn.fileno(), address)
+        AttributeError: module '_overlapped' has no attribute 'WSAConnect'
+    """
+    import platform
+
+    if platform.system() == "Windows" and platform.python_implementation() == "PyPy":
+        try:
+            import _overlapped  # type: ignore[import-not-found]
+        except ImportError:  # Defensive:
+            return False
+
+        if hasattr(_overlapped, "WSAConnect"):
+            return True
+
+        return False
+
+    return True
+
+
 __all__ = (
     "AsyncSocket",
     "SSLAsyncSocket",
+    "_has_complete_support_dgram",
 )

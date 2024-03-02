@@ -4,6 +4,7 @@ import pytest
 
 from dummyserver.server import DEFAULT_CA
 from urllib3 import ConnectionInfo, HttpVersion, async_proxy_from_url
+from urllib3.util._async.ssl_ import _SSLContextCache
 
 from .. import TraefikWithProxyTestCase
 
@@ -30,6 +31,8 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
             with open(DEFAULT_CA, "wb") as fp:
                 fp.write(trustme_ca)
                 fp.write(trustme_traefik_ca)
+
+        _SSLContextCache.clear()
 
     @classmethod
     def teardown_class(cls) -> None:

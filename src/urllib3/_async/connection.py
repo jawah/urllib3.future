@@ -827,18 +827,26 @@ async def _ssl_wrap_socket_and_match_hostname(
     that both proxies and targets have the same behavior when connecting via TLS.
     """
     default_ssl_context = False
+    sharable_ext_options: dict[str, int | str | None] = {
+        "ssl_version": resolve_ssl_version(ssl_version),
+        "ssl_minimum_version": ssl_minimum_version,
+        "ssl_maximum_version": ssl_maximum_version,
+        "cert_reqs": resolve_cert_reqs(cert_reqs),
+    }
+
     if ssl_context is None:
         default_ssl_context = True
-        context = create_urllib3_context(
-            ssl_version=resolve_ssl_version(ssl_version),
-            ssl_minimum_version=ssl_minimum_version,
-            ssl_maximum_version=ssl_maximum_version,
-            cert_reqs=resolve_cert_reqs(cert_reqs),
+        context = create_urllib3_context(**sharable_ext_options)  # type: ignore[arg-type]
+        sharable_ext_options.update(
+            {
+                "assert_fingerprint": assert_fingerprint,
+                "assert_hostname": assert_hostname,
+            }
         )
     else:
         context = ssl_context
 
-    context.verify_mode = resolve_cert_reqs(cert_reqs)
+    context.verify_mode = sharable_ext_options["cert_reqs"]  # type: ignore[assignment]
 
     # In some cases, we want to verify hostnames ourselves
     if (
@@ -888,6 +896,7 @@ async def _ssl_wrap_socket_and_match_hostname(
         alpn_protocols=alpn_protocols,
         certdata=cert_data,
         keydata=key_data,
+        sharable_ssl_context=sharable_ext_options if default_ssl_context else None,
     )
 
     try:

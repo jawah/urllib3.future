@@ -28,7 +28,6 @@ from urllib3.exceptions import (
     MaxRetryError,
     NameResolutionError,
     NewConnectionError,
-    ReadTimeoutError,
     TimeoutError,
     UnrewindableBodyError,
 )

@@ -1,3 +1,14 @@
+2.6.902 (2024-03-04)
+====================
+
+- Fixed PyPy error when running asynchronous code on Windows after trying to create a datagram socket.
+  This error is due to an incomplete implementation of the Windows socket API. We silently disabled HTTP/3
+  if running PyPy+Windows+asyncio until upstream issue resolution.
+- Overall performance improvements for both async and sync calls.
+- Fixed ProtocolError (No recent network activity after XYZ) error when it should recycle the connection automatically (sync only).
+- Added a user-friendly error message when invoking ``get_response`` from either ``PoolManager`` or ``ConnectionPool`` with anything
+  else than a ``ResponsePromise``.
+
 2.6.901 (2024-02-28)
 ====================
 
