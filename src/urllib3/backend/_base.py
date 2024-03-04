@@ -313,6 +313,7 @@ class BaseBackend:
         self.conn_info: ConnectionInfo | None = None
 
         self._promises: dict[str, ResponsePromise] = {}
+        self._promises_per_stream: dict[int, ResponsePromise] = {}
         self._pending_responses: dict[
             int, LowLevelResponse | AsyncLowLevelResponse
         ] = {}

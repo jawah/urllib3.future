@@ -5,6 +5,7 @@ import io
 import os
 import socket
 import sys
+import threading
 import typing
 import warnings
 from binascii import unhexlify
@@ -25,6 +26,83 @@ _TYPE_VERSION_INFO = typing.Tuple[int, int, int, str, int]
 
 # Maps the length of a digest to a possible hash function producing this digest
 HASHFUNC_MAP = {32: md5, 40: sha1, 64: sha256}
+
+
+def _compute_key_ctx_build(
+    *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None,
+) -> str:
+    """We want a dedicated hashing technics to cache ssl ctx, so that they are reusable across the runtime."""
+    key: str = ""
+
+    for arg in args:
+        if arg is None:
+            key += "\x00"
+            continue
+        if isinstance(arg, (int, bool)):
+            key += str(arg)
+            continue
+        if isinstance(
+            arg,
+            (
+                str,
+                bytes,
+            ),
+        ):
+            key += str(hash(arg))
+            continue
+        if isinstance(arg, dict):
+            key += str(arg)
+            continue
+        if isinstance(arg, list):
+            key += "("
+            for item in arg:
+                key += item
+            key += ")"
+
+    return key
+
+
+class _CacheableSSLContext:
+    def __init__(self, maxsize: int | None = 258) -> None:
+        self._maxsize = maxsize
+        self._container: dict[str, ssl.SSLContext] = {}
+        self._cache_key_get_fail: str | None = None
+        self._lock: threading.RLock = threading.RLock()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._container.clear()
+            self._cache_key_get_fail = None
+
+    def get(
+        self, *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None
+    ) -> ssl.SSLContext | None:
+        key = _compute_key_ctx_build(*args)
+        with self._lock:
+            if key in self._container:
+                self._cache_key_get_fail = None
+                return self._container[key]
+        self._cache_key_get_fail = key
+        return None
+
+    def save(
+        self,
+        ctx: ssl.SSLContext,
+        *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None,
+    ) -> None:
+        key = _compute_key_ctx_build(*args) if args else self._cache_key_get_fail
+
+        if key is None:
+            raise KeyError
+
+        with self._lock:
+            self._container[key] = ctx
+
+            if self._maxsize and len(self._container) > self._maxsize:
+                self._container.pop(next(self._container.keys().__iter__()))
+
+
+_SSLContextCache = _CacheableSSLContext()
 
 
 def _is_bpo_43522_fixed(
@@ -372,6 +450,7 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = ...,
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
+    sharable_ssl_context: dict[str, typing.Any] | None = ...,
 ) -> ssl.SSLSocket:
     ...
 
@@ -394,6 +473,7 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = ...,
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
+    sharable_ssl_context: dict[str, typing.Any] | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType:
     ...
 
@@ -415,6 +495,7 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = None,
     certdata: str | bytes | None = None,
     keydata: str | bytes | None = None,
+    sharable_ssl_context: dict[str, typing.Any] | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -446,46 +527,86 @@ def ssl_wrap_socket(
         Specify an in-memory client intermediary key for mTLS.
     """
     context = ssl_context
-    if context is None:
-        # Note: This branch of code and all the variables in it are only used in tests.
-        # We should consider deprecating and removing this code.
-        context = create_urllib3_context(ssl_version, cert_reqs, ciphers=ciphers)
 
-    if ca_certs or ca_cert_dir or ca_cert_data:
+    cached_ctx = (
+        _SSLContextCache.get(
+            keyfile,
+            certfile,
+            cert_reqs,
+            ca_certs,
+            ssl_version,
+            ciphers,
+            sharable_ssl_context,
+            ca_cert_dir,
+            alpn_protocols,
+            certdata,
+            keydata,
+        )
+        if sharable_ssl_context
+        else None
+    )
+
+    if cached_ctx is None:
+        if context is None:
+            # Note: This branch of code and all the variables in it are only used in tests.
+            # We should consider deprecating and removing this code.
+            context = create_urllib3_context(ssl_version, cert_reqs, ciphers=ciphers)
+
+        if ca_certs or ca_cert_dir or ca_cert_data:
+            try:
+                context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
+            except OSError as e:
+                raise SSLError(e) from e
+
+        elif ssl_context is None and hasattr(context, "load_default_certs"):
+            # try to load OS default certs; works well on Windows.
+            context.load_default_certs()
+
+        # Attempt to detect if we get the goofy behavior of the
+        # keyfile being encrypted and OpenSSL asking for the
+        # passphrase via the terminal and instead error out.
+        if keyfile and key_password is None and _is_key_file_encrypted(keyfile):
+            raise SSLError("Client private key is encrypted, password is required")
+
+        if certfile:
+            if key_password is None:
+                context.load_cert_chain(certfile, keyfile)
+            else:
+                context.load_cert_chain(certfile, keyfile, key_password)
+        elif certdata:
+            try:
+                _ctx_load_cert_chain(context, certdata, keydata, key_password)
+            except io.UnsupportedOperation as e:
+                warnings.warn(
+                    f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
+                    Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
+                    UserWarning,
+                )
+
         try:
-            context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
-        except OSError as e:
-            raise SSLError(e) from e
+            context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
+        except (
+            NotImplementedError
+        ):  # Defensive: in CI, we always have set_alpn_protocols
+            pass
 
-    elif ssl_context is None and hasattr(context, "load_default_certs"):
-        # try to load OS default certs; works well on Windows.
-        context.load_default_certs()
-
-    # Attempt to detect if we get the goofy behavior of the
-    # keyfile being encrypted and OpenSSL asking for the
-    # passphrase via the terminal and instead error out.
-    if keyfile and key_password is None and _is_key_file_encrypted(keyfile):
-        raise SSLError("Client private key is encrypted, password is required")
-
-    if certfile:
-        if key_password is None:
-            context.load_cert_chain(certfile, keyfile)
-        else:
-            context.load_cert_chain(certfile, keyfile, key_password)
-    elif certdata:
-        try:
-            _ctx_load_cert_chain(context, certdata, keydata, key_password)
-        except io.UnsupportedOperation as e:
-            warnings.warn(
-                f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
-                Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
-                UserWarning,
+        if sharable_ssl_context:
+            _SSLContextCache.save(
+                context,
+                keyfile,
+                certfile,
+                cert_reqs,
+                ca_certs,
+                ssl_version,
+                ciphers,
+                sharable_ssl_context,
+                ca_cert_dir,
+                alpn_protocols,
+                certdata,
+                keydata,
             )
-
-    try:
-        context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
-    except NotImplementedError:  # Defensive: in CI, we always have set_alpn_protocols
-        pass
+    else:
+        context = cached_ctx
 
     ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
     return ssl_sock

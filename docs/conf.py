@@ -156,4 +156,5 @@ nitpick_ignore = [
     ("py:class", "AsyncBaseResolver"),
     ("py:class", "AsyncTrafficPolice"),
     ("py:attr", "HTTPResponse.data"),
+    ("py:class", "_TYPE_PEER_CERT_RET_DICT"),
 ]

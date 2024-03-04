@@ -29,3 +29,5 @@ Connection Pools
     :members:
     :undoc-members:
     :show-inheritance:
+
+.. autofunction:: urllib3.async_connection_from_url

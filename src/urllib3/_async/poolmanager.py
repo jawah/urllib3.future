@@ -392,6 +392,12 @@ class AsyncPoolManager(AsyncRequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
+        if promise is not None and not isinstance(promise, ResponsePromise):
+            raise TypeError(
+                f"get_response only support ResponsePromise but received {type(promise)} instead. "
+                f"This may occur if you expected the remote peer to support multiplexing but did not."
+            )
+
         try:
             async with self.pools.borrow(
                 promise or ResponsePromise, block=False, not_idle_only=True
