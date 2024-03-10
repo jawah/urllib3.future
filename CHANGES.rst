@@ -1,3 +1,8 @@
+2.6.903 (2024-03-10)
+====================
+
+- Overall performance improvements for both async and sync calls.
+
 2.6.902 (2024-03-04)
 ====================
 

@@ -155,13 +155,9 @@ def _default_key_normalizer(
 
     # Map the kwargs to the names in the namedtuple - this is necessary since
     # namedtuples can't have fields starting with '_'.
-    for key in list(context.keys()):
-        context["key_" + key] = context.pop(key)
-
+    context = {f"key_{k}": v for k, v in context.items()}
     # Default to ``None`` for keys missing from the context
-    for field in key_class._fields:
-        if field not in context:
-            context[field] = None
+    context.update({k: None for k in key_class._fields if k not in context})
 
     # Default key_blocksize to DEFAULT_BLOCKSIZE if missing from the context
     if context.get("key_blocksize") is None:

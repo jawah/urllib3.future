@@ -36,6 +36,26 @@ from ...events import (
 from .._protocols import HTTP2Protocol
 
 
+class _PatchedH2Connection(h2.connection.H2Connection):  # type: ignore[misc]
+    """
+    This is a performance hotfix class. We internally, already keep
+    track of the open stream count.
+    """
+
+    def __init__(
+        self,
+        config: h2.config.H2Configuration | None = None,
+        observable_impl: HTTP2ProtocolHyperImpl | None = None,
+    ) -> None:
+        super().__init__(config=config)
+        self._observable_impl = observable_impl
+
+    def _open_streams(self, *args, **kwargs) -> int:  # type: ignore[no-untyped-def]
+        if self._observable_impl is not None:
+            return self._observable_impl._open_stream_count
+        return super()._open_streams(*args, **kwargs)  # type: ignore[no-any-return]
+
+
 class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     implementation: str = "h2"
 
@@ -47,14 +67,15 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         normalize_outbound_headers: bool = True,
         normalize_inbound_headers: bool = True,
     ) -> None:
-        self._connection: h2.connection.H2Connection = h2.connection.H2Connection(
+        self._connection: h2.connection.H2Connection = _PatchedH2Connection(
             h2.config.H2Configuration(
                 client_side=True,
                 validate_outbound_headers=validate_outbound_headers,
                 normalize_outbound_headers=normalize_outbound_headers,
                 validate_inbound_headers=validate_inbound_headers,
                 normalize_inbound_headers=normalize_inbound_headers,
-            )
+            ),
+            observable_impl=self,
         )
         self._open_stream_count: int = 0
         self._connection.initiate_connection()
@@ -84,8 +105,8 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def submit_headers(
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
-        self._open_stream_count += 1
         self._connection.send_headers(stream_id, headers, end_stream)
+        self._open_stream_count += 1
 
     def submit_data(
         self, stream_id: int, data: bytes, end_stream: bool = False
@@ -114,17 +135,23 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
+                    stream = self._connection.streams.pop(e.stream_id)
+                    self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield HeadersReceived(e.stream_id, e.headers, end_stream=end_stream)
             elif isinstance(e, h2.events.DataReceived):
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
+                    stream = self._connection.streams.pop(e.stream_id)
+                    self._connection._closed_streams[e.stream_id] = stream.closed_by
                 self._connection.acknowledge_received_data(
                     e.flow_controlled_length, e.stream_id
                 )
                 yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
             elif isinstance(e, h2.events.StreamReset):
                 self._open_stream_count -= 1
+                stream = self._connection.streams.pop(e.stream_id)
+                self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield StreamResetReceived(e.stream_id, e.error_code)
             elif isinstance(e, h2.events.ConnectionTerminated):
                 # ConnectionTerminated from h2 means that GOAWAY was received.
