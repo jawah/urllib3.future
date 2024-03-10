@@ -29,6 +29,7 @@
 - Detailed connection inspection.
 - Multiplexed connection.
 - Mirrored Sync & Async.
+- Amazingly Fast.
 
 urllib3.future is powerful and easy to use:
 

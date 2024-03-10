@@ -164,9 +164,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         # do not upgrade if not coming from TLS already.
         # we exclude SSLTransport, HTTP/3 is not supported in that condition anyway.
-        if type(self.sock) == AsyncSocket:
+        if type(self.sock) is AsyncSocket:
             return
-
         if self._svn == HttpVersion.h3:
             return
         if HttpVersion.h3 in self._disabled_svn:
@@ -786,24 +785,35 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             # Some programs does set value to None, and that is... an issue here. We ignore those key, value.
             if raw_value is None:
                 continue
-            if raw_header == b":authority":
-                authority_set_bit = True
-                continue
-            elif raw_header.startswith(b":"):
+            if raw_header.startswith(b":"):
+                if not authority_set_bit and raw_header[1:] == b"authority":
+                    authority_set_bit = True
                 continue
 
-            header: str = raw_header.decode("ascii").lower().replace("_", "-")
-
-            if header == "content-length":
-                value: str = raw_value.decode("iso-8859-1")
+            if (
+                expect_body_afterward
+                and self.__expected_body_length is None
+                and raw_header == b"content-length"
+            ):
                 try:
-                    self.__expected_body_length = int(value)
+                    self.__expected_body_length = int(raw_value)
                 except ValueError:
                     raise ProtocolError(
-                        f"Invalid content-length set. Given '{value}' when only digits are allowed."
+                        f"Invalid content-length set. Given '{raw_value.decode()}' when only digits are allowed."
                     )
-            elif legacy_host_entry is None and header == "host":
+
+            if (
+                not authority_set_bit
+                and legacy_host_entry is None
+                and raw_header == b"host"
+            ):
                 legacy_host_entry = raw_value
+
+            # evaluated cond verify if we still have something to find in headers.
+            if (authority_set_bit or legacy_host_entry is not None) and (
+                not expect_body_afterward or self.__expected_body_length is not None
+            ):
+                break
 
         # handle cases where 'Host' header is set manually
         if authority_set_bit is False and legacy_host_entry is not None:
@@ -813,7 +823,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if authority_set_bit is False:
             raise ProtocolError(
                 (
-                    "urllib3.future do not support emitting HTTP requests without the `Host` header",
+                    "urllib3.future do not support emitting HTTP requests without the `Host` header ",
                     "It was only permitted in HTTP/1.0 and prior. This client support HTTP/1.1+.",
                 )
             )
@@ -829,7 +839,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             raise ProtocolError(e) from e  # Defensive:
 
         try:
-            await self.sock.sendall(self._protocol.bytes_to_send())
+            while True:
+                buf = self._protocol.bytes_to_send()
+                if not buf:
+                    break
+                await self.sock.sendall(buf)
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
@@ -912,21 +926,18 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         for event in events:
             for raw_header, raw_value in event.headers:
-                header: str = raw_header.decode("ascii")
-                value: str = raw_value.decode("iso-8859-1")
-
                 # special headers that represent (usually) the HTTP response status, version and reason.
-                if header.startswith(":"):
-                    if header == ":status":
-                        status = int(value)
+                if raw_header.startswith(b":"):
+                    if raw_header[1:] == b"status":
+                        status = int(raw_value)
                         continue
                     # this should be unreachable.
                     # it is designed to detect eventual changes lower in the stack.
                     raise ProtocolError(  # Defensive:
-                        f"Unhandled special header '{header}'"
+                        f"Unhandled special header '{raw_header.decode()}'"
                     )
 
-                headers.add(header, value)
+                headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
 
         if promise is None:
             if events[-1].stream_id not in self._promises_per_stream:
