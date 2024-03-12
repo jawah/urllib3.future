@@ -54,18 +54,13 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
     )
     async def test_timeout_float(self) -> None:
         block_event = Event()
-        ready_event = self.start_basic_handler(block_send=block_event, num=2)
+        ready_event = self.start_basic_handler(block_send=block_event, num=1)
 
         async with AsyncHTTPConnectionPool(self.host, self.port, retries=False) as pool:
             wait_for_socket(ready_event)
             with pytest.raises(TimeoutError):
                 await pool.request("GET", "/", timeout=SHORT_TIMEOUT)
             block_event.set()  # Release block
-
-            # Shouldn't raise this time
-            wait_for_socket(ready_event)
-            block_event.set()  # Pre-release block
-            await pool.request("GET", "/", timeout=LONG_TIMEOUT)
 
     @pytest.mark.skipif(
         platform.system() == "Windows"

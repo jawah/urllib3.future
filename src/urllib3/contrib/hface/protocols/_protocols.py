@@ -263,6 +263,20 @@ class HTTPProtocol(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def events(self, stream_id: int | None = None) -> typing.Iterator[Event]:
+        """
+        Consume available HTTP events.
+
+        :return: an iterator that unpack "next_event" until exhausted.
+        """
+        while True:
+            ev = self.next_event(stream_id=stream_id)
+
+            if ev is None:
+                break
+
+            yield ev
+
     @abstractmethod
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         """Verify if there is queued event waiting to be consumed."""

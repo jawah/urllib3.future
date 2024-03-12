@@ -34,51 +34,41 @@ def capitalize_header_name(name: bytes) -> bytes:
     >>> capitalize_header_name(b"content_type")
     'Content-Type'
     """
-    return b"-".join([el.capitalize() for el in name.replace(b"_", b"-").split(b"-")])
+    return b"-".join(el.capitalize() for el in name.split(b"-"))
 
 
 def headers_to_request(headers: HeadersType) -> h11.Event:
-    method = scheme = authority = path = host = None
+    method = authority = path = host = None
     regular_headers = []
 
     for name, value in headers:
-        name = name.lower()
         if name.startswith(b":"):
             if name == b":method":
                 method = value
             elif name == b":scheme":
-                scheme = value
+                pass
             elif name == b":authority":
                 authority = value
             elif name == b":path":
                 path = value
             else:
                 raise ValueError("Unexpected request header: " + name.decode())
-            continue
-        if name == b"host":
-            if host is not None:
-                raise ValueError("Duplicate Host header.")
-            host = value
+        else:
+            if host is None and name == b"host":
+                host = value
 
-        regular_headers.append((capitalize_header_name(name), value))
+            # We found that many projects... actually expect the header name to be sent capitalized... hardcoded
+            # within their tests. Bad news, we have to keep doing this nonsense (namely capitalize_header_name)
+            regular_headers.append((capitalize_header_name(name), value))
 
-    if method is None:
-        raise ValueError("Missing request header: :method")
     if authority is None:
         raise ValueError("Missing request header: :authority")
+
     if method == b"CONNECT":
         # CONNECT requests are a special case.
-        if scheme is not None:
-            raise ValueError("Unexpected header for a CONNECT request: :scheme")
-        if path is not None:
-            raise ValueError("Unexpected header for a CONNECT request: :path")
         target = authority
     else:
-        if scheme is None:
-            raise ValueError("Missing request header: :scheme")
-        if path is None:
-            raise ValueError("Missing request header: :path")
-        target = path
+        target = path  # type: ignore[assignment]
 
     if host is None:
         regular_headers.insert(0, (b"Host", authority))
@@ -86,7 +76,7 @@ def headers_to_request(headers: HeadersType) -> h11.Event:
         raise ValueError("Host header does not match :authority.")
 
     return h11.Request(
-        method=method,
+        method=method,  # type: ignore[arg-type]
         headers=regular_headers,
         target=target,
     )
@@ -100,13 +90,10 @@ def headers_from_response(
 
     Generates from pseudo (colon) headers from a response line.
     """
-    headers: list[HeaderType] = []
-
-    headers.append((b":status", str(response.status_code).encode()))
-
-    for header, value in response.headers:
-        headers.append((header, value))
-
+    headers: list[HeaderType] = [
+        (b":status", str(response.status_code).encode("ascii"))
+    ]
+    headers.extend(response.headers)
     return headers
 
 
@@ -136,11 +123,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         return self._terminated
 
     def get_available_stream_id(self) -> int:
-        if self._connection.our_role != h11.CLIENT:
-            raise RuntimeError(
-                "Cannot generate a new stream ID because at the server side. "
-                "In HTTP/1.1, only clients can initiate information interchange."
-            )
         if not self.is_available():
             raise RuntimeError(
                 "Cannot generate a new stream ID because the connection is not idle. "
@@ -289,4 +271,5 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             self._switched = True
 
     def reshelve(self, *events: Event) -> None:
-        raise NotImplementedError("HTTP/1.1 is not multiplexed")
+        for ev in reversed(events):
+            self._events.appendleft(ev)

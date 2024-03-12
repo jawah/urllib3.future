@@ -15,7 +15,6 @@ from ._request_methods import RequestMethods
 from ._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
 from .backend import ConnectionInfo, ResponsePromise
 from .connection import (
-    BaseSSLError,
     BrokenPipeError,
     DummyConnection,
     HTTPConnection,
@@ -30,6 +29,7 @@ from .contrib.resolver import (
     ResolverDescription,
 )
 from .exceptions import (
+    BaseSSLError,
     ClosedPoolError,
     EmptyPoolError,
     FullPoolError,
@@ -524,36 +524,39 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
-        url = typing.cast(str, from_promise.get_parameter("url"))
-        body = typing.cast(
-            typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
-        )
-        headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
-        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
-        preload_content = typing.cast(
-            bool, from_promise.get_parameter("preload_content")
-        )
-        decode_content = typing.cast(bool, from_promise.get_parameter("decode_content"))
-        timeout = typing.cast(
-            typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
-        )
         redirect = typing.cast(bool, from_promise.get_parameter("redirect"))
-        assert_same_host = typing.cast(
-            bool, from_promise.get_parameter("assert_same_host")
-        )
-        pool_timeout = from_promise.get_parameter("pool_timeout")
-        response_kw = typing.cast(
-            typing.MutableMapping[str, typing.Any],
-            from_promise.get_parameter("response_kw"),
-        )
-        chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
-        body_pos = typing.cast(
-            _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
-        )
 
         # Handle redirect?
         redirect_location = redirect and response.get_redirect_location()
         if redirect_location:
+            url = typing.cast(str, from_promise.get_parameter("url"))
+            body = typing.cast(
+                typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
+            )
+            headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
+            preload_content = typing.cast(
+                bool, from_promise.get_parameter("preload_content")
+            )
+            decode_content = typing.cast(
+                bool, from_promise.get_parameter("decode_content")
+            )
+            timeout = typing.cast(
+                typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
+            )
+            assert_same_host = typing.cast(
+                bool, from_promise.get_parameter("assert_same_host")
+            )
+            pool_timeout = from_promise.get_parameter("pool_timeout")
+            response_kw = typing.cast(
+                typing.MutableMapping[str, typing.Any],
+                from_promise.get_parameter("response_kw"),
+            )
+            chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+            body_pos = typing.cast(
+                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+            )
+            retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+
             if response.status == 303:
                 method = "GET"
                 body = None
@@ -596,7 +599,36 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         # Check if we should retry the HTTP response.
         has_retry_after = bool(response.headers.get("Retry-After"))
+        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+
         if retries.is_retry(method, response.status, has_retry_after):
+            url = typing.cast(str, from_promise.get_parameter("url"))
+            body = typing.cast(
+                typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
+            )
+            headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
+            preload_content = typing.cast(
+                bool, from_promise.get_parameter("preload_content")
+            )
+            decode_content = typing.cast(
+                bool, from_promise.get_parameter("decode_content")
+            )
+            timeout = typing.cast(
+                typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
+            )
+            assert_same_host = typing.cast(
+                bool, from_promise.get_parameter("assert_same_host")
+            )
+            pool_timeout = from_promise.get_parameter("pool_timeout")
+            response_kw = typing.cast(
+                typing.MutableMapping[str, typing.Any],
+                from_promise.get_parameter("response_kw"),
+            )
+            chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+            body_pos = typing.cast(
+                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+            )
+
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)
             except MaxRetryError:

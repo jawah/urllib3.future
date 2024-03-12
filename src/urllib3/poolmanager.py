@@ -113,6 +113,11 @@ class PoolKey(typing.NamedTuple):
     key_key_data: str | bytes | None
 
 
+@functools.lru_cache(maxsize=8)
+def _empty_context(key_class: type[PoolKey]) -> dict[str, typing.Any]:
+    return {k: None for k in key_class._fields}
+
+
 def _default_key_normalizer(
     key_class: type[PoolKey], request_context: dict[str, typing.Any]
 ) -> PoolKey:
@@ -144,26 +149,26 @@ def _default_key_normalizer(
     for key in ("headers", "_proxy_headers", "_socks_options"):
         if key in context and context[key] is not None:
             context[key] = frozenset(context[key].items())
+
     if "disabled_svn" in context:
         context["disabled_svn"] = frozenset(context["disabled_svn"])
 
     # The socket_options key may be a list and needs to be transformed into a
     # tuple.
-    socket_opts = context.get("socket_options")
-    if socket_opts is not None:
-        context["socket_options"] = tuple(socket_opts)
-
-    # Map the kwargs to the names in the namedtuple - this is necessary since
-    # namedtuples can't have fields starting with '_'.
-    context = {f"key_{k}": v for k, v in context.items()}
-    # Default to ``None`` for keys missing from the context
-    context.update({k: None for k in key_class._fields if k not in context})
+    if "socket_options" in context and context["socket_options"] is not None:
+        context["socket_options"] = tuple(context["socket_options"])
 
     # Default key_blocksize to DEFAULT_BLOCKSIZE if missing from the context
-    if context.get("key_blocksize") is None:
-        context["key_blocksize"] = DEFAULT_BLOCKSIZE
+    if "blocksize" not in context:
+        context["blocksize"] = DEFAULT_BLOCKSIZE
 
-    return key_class(**context)
+    empty_default_ctx = _empty_context(key_class).copy()  # type: ignore[arg-type]
+    # Map the kwargs to the names in the namedtuple - this is necessary since
+    # namedtuples can't have fields starting with '_'.
+    # Default to ``None`` for keys missing from the context
+    empty_default_ctx.update({f"key_{k}": context[k] for k in context})
+
+    return key_class(**empty_default_ctx)
 
 
 #: A dictionary that maps a scheme to a callable that creates a pool key.
@@ -482,14 +487,14 @@ class PoolManager(RequestMethods):
         """
         base_pool_kwargs = self.connection_pool_kw.copy()
         if override:
-            for key, value in override.items():
-                if value is None:
-                    try:
-                        del base_pool_kwargs[key]
-                    except KeyError:
-                        pass
-                else:
-                    base_pool_kwargs[key] = value
+            base_pool_kwargs.update(
+                {k: v for k, v in override.items() if v is not None}
+            )
+            return {
+                k: v
+                for k, v in base_pool_kwargs.items()
+                if k not in override or override[k] is not None
+            }
         return base_pool_kwargs
 
     def _proxy_requires_url_absolute_form(self, parsed_url: Url) -> bool:
@@ -556,37 +561,41 @@ class PoolManager(RequestMethods):
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
-        url = typing.cast(str, from_promise.get_parameter("pm_url"))
-        body = typing.cast(
-            typing.Union[_TYPE_BODY, None], from_promise.get_parameter("body")
-        )
-        headers = typing.cast(
-            typing.Union[HTTPHeaderDict, None], from_promise.get_parameter("headers")
-        )
-        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
-        preload_content = typing.cast(
-            bool, from_promise.get_parameter("preload_content")
-        )
-        decode_content = typing.cast(bool, from_promise.get_parameter("decode_content"))
-        timeout = typing.cast(
-            typing.Union[_TYPE_TIMEOUT, None], from_promise.get_parameter("timeout")
-        )
         redirect = typing.cast(bool, from_promise.get_parameter("pm_redirect"))
-        assert_same_host = typing.cast(
-            bool, from_promise.get_parameter("assert_same_host")
-        )
-        pool_timeout = from_promise.get_parameter("pool_timeout")
-        response_kw = typing.cast(
-            typing.MutableMapping[str, typing.Any],
-            from_promise.get_parameter("response_kw"),
-        )
-        chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
-        body_pos = typing.cast(
-            _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
-        )
 
         # Handle redirect?
         if redirect and response.get_redirect_location():
+            url = typing.cast(str, from_promise.get_parameter("pm_url"))
+            body = typing.cast(
+                typing.Union[_TYPE_BODY, None], from_promise.get_parameter("body")
+            )
+            headers = typing.cast(
+                typing.Union[HTTPHeaderDict, None],
+                from_promise.get_parameter("headers"),
+            )
+            preload_content = typing.cast(
+                bool, from_promise.get_parameter("preload_content")
+            )
+            decode_content = typing.cast(
+                bool, from_promise.get_parameter("decode_content")
+            )
+            timeout = typing.cast(
+                typing.Union[_TYPE_TIMEOUT, None], from_promise.get_parameter("timeout")
+            )
+            assert_same_host = typing.cast(
+                bool, from_promise.get_parameter("assert_same_host")
+            )
+            pool_timeout = from_promise.get_parameter("pool_timeout")
+            response_kw = typing.cast(
+                typing.MutableMapping[str, typing.Any],
+                from_promise.get_parameter("response_kw"),
+            )
+            chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+            body_pos = typing.cast(
+                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+            )
+            retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+
             redirect_location = response.get_redirect_location()
             assert isinstance(redirect_location, str)
 
@@ -635,7 +644,39 @@ class PoolManager(RequestMethods):
 
         # Check if we should retry the HTTP response.
         has_retry_after = bool(response.headers.get("Retry-After"))
+        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+
         if retries.is_retry(method, response.status, has_retry_after):
+            url = typing.cast(str, from_promise.get_parameter("pm_url"))
+            body = typing.cast(
+                typing.Union[_TYPE_BODY, None], from_promise.get_parameter("body")
+            )
+            headers = typing.cast(
+                typing.Union[HTTPHeaderDict, None],
+                from_promise.get_parameter("headers"),
+            )
+            preload_content = typing.cast(
+                bool, from_promise.get_parameter("preload_content")
+            )
+            decode_content = typing.cast(
+                bool, from_promise.get_parameter("decode_content")
+            )
+            timeout = typing.cast(
+                typing.Union[_TYPE_TIMEOUT, None], from_promise.get_parameter("timeout")
+            )
+            assert_same_host = typing.cast(
+                bool, from_promise.get_parameter("assert_same_host")
+            )
+            pool_timeout = from_promise.get_parameter("pool_timeout")
+            response_kw = typing.cast(
+                typing.MutableMapping[str, typing.Any],
+                from_promise.get_parameter("response_kw"),
+            )
+            chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+            body_pos = typing.cast(
+                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+            )
+
             redirect_location = response.get_redirect_location()
             assert isinstance(redirect_location, str)
 

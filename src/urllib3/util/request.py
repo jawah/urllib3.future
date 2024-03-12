@@ -217,6 +217,22 @@ def body_to_chunks(
     chunks: typing.Iterable[bytes] | None
     content_length: int | None
 
+    # No body, we need to make a recommendation on 'Content-Length'
+    # based on whether that request method is expected to have
+    # a body or not.
+    if body is None:
+        chunks = None
+        if method.upper() not in _METHODS_NOT_EXPECTING_BODY:
+            content_length = 0
+        else:
+            content_length = None
+
+        return ChunksAndContentLength(
+            chunks=chunks,
+            content_length=content_length,
+            is_string=False,
+        )
+
     def chunk_readable() -> typing.Iterable[bytes]:
         nonlocal body, blocksize
         encode = isinstance(body, io.TextIOBase)
@@ -228,18 +244,8 @@ def body_to_chunks(
                 datablock = datablock.encode("utf-8")
             yield datablock
 
-    # No body, we need to make a recommendation on 'Content-Length'
-    # based on whether that request method is expected to have
-    # a body or not.
-    if body is None:
-        chunks = None
-        if method.upper() not in _METHODS_NOT_EXPECTING_BODY:
-            content_length = 0
-        else:
-            content_length = None
-
     # Bytes or strings become bytes
-    elif isinstance(body, (str, bytes)):
+    if isinstance(body, (str, bytes)):
         converted = to_bytes(body)
         content_length = len(converted)
 

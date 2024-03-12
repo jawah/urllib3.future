@@ -12,6 +12,7 @@ from .._collections import HTTPHeaderDict
 from .._typing import _TYPE_BODY
 from ..backend._async import AsyncLowLevelResponse
 from ..exceptions import (
+    BaseSSLError,
     HTTPError,
     IncompleteRead,
     ProtocolError,
@@ -21,7 +22,7 @@ from ..exceptions import (
 from ..response import BytesQueueBuffer, ContentDecoder, HTTPResponse
 from ..util.response import is_fp_closed
 from ..util.retry import Retry
-from .connection import AsyncHTTPConnection, BaseSSLError
+from .connection import AsyncHTTPConnection
 
 if typing.TYPE_CHECKING:
     from email.message import Message
@@ -55,7 +56,10 @@ class AsyncHTTPResponse(HTTPResponse):
             self.headers = headers
         else:
             self.headers = HTTPHeaderDict(headers)  # type: ignore[arg-type]
-        self.status = status
+        try:
+            self.status = int(status)
+        except ValueError:
+            self.status = 0  # merely for tests, was supported due to broken httplib.
         self.version = version
         self.reason = reason
         self.decode_content = decode_content
@@ -66,12 +70,14 @@ class AsyncHTTPResponse(HTTPResponse):
         self.retries = retries
 
         self.chunked = False
-        tr_enc = self.headers.get("transfer-encoding", "").lower()
-        # Don't incur the penalty of creating a list and then discarding it
-        encodings = (enc.strip() for enc in tr_enc.split(","))
 
-        if "chunked" in encodings:
-            self.chunked = True
+        if "transfer-encoding" in self.headers:
+            tr_enc = self.headers.get("transfer-encoding", "").lower()
+            # Don't incur the penalty of creating a list and then discarding it
+            encodings = (enc.strip() for enc in tr_enc.split(","))
+
+            if "chunked" in encodings:
+                self.chunked = True
 
         self._decoder: ContentDecoder | None = None
 

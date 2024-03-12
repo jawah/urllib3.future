@@ -1,3 +1,11 @@
+2.6.904 (2024-03-17)
+====================
+
+- Overall performance improvements for both async and sync calls.
+- Removed ``TrafficPolice`` internal caching for obj states of contained elements due to its inability to be up-to-date in some cases.
+- Fixed SSLError wrong message displayed when using the underlying ``qh3`` library (HTTP/3 only).
+- Fixed graceful shutdown for rare HTTP/2 servers configured to immediately forbid opening new streams.
+
 2.6.903 (2024-03-10)
 ====================
 

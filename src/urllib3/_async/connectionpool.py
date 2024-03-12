@@ -23,6 +23,7 @@ from ..contrib.resolver._async import (
     AsyncResolverDescription,
 )
 from ..exceptions import (
+    BaseSSLError,
     ClosedPoolError,
     EmptyPoolError,
     FullPoolError,
@@ -54,7 +55,6 @@ from ..util.util import to_str
 from .connection import (
     AsyncHTTPConnection,
     AsyncHTTPSConnection,
-    BaseSSLError,
     BrokenPipeError,
     DummyConnection,
 )
@@ -530,36 +530,40 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
-        url = typing.cast(str, from_promise.get_parameter("url"))
-        body = typing.cast(
-            typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
-        )
-        headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
-        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
-        preload_content = typing.cast(
-            bool, from_promise.get_parameter("preload_content")
-        )
-        decode_content = typing.cast(bool, from_promise.get_parameter("decode_content"))
-        timeout = typing.cast(
-            typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
-        )
         redirect = typing.cast(bool, from_promise.get_parameter("redirect"))
-        assert_same_host = typing.cast(
-            bool, from_promise.get_parameter("assert_same_host")
-        )
-        pool_timeout = from_promise.get_parameter("pool_timeout")
-        response_kw = typing.cast(
-            typing.MutableMapping[str, typing.Any],
-            from_promise.get_parameter("response_kw"),
-        )
-        chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
-        body_pos = typing.cast(
-            _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
-        )
 
         # Handle redirect?
         redirect_location = redirect and response.get_redirect_location()
         if redirect_location:
+            url = typing.cast(str, from_promise.get_parameter("url"))
+            body = typing.cast(
+                typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
+            )
+            headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
+            preload_content = typing.cast(
+                bool, from_promise.get_parameter("preload_content")
+            )
+            decode_content = typing.cast(
+                bool, from_promise.get_parameter("decode_content")
+            )
+            timeout = typing.cast(
+                typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
+            )
+
+            assert_same_host = typing.cast(
+                bool, from_promise.get_parameter("assert_same_host")
+            )
+            pool_timeout = from_promise.get_parameter("pool_timeout")
+            response_kw = typing.cast(
+                typing.MutableMapping[str, typing.Any],
+                from_promise.get_parameter("response_kw"),
+            )
+            chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+            body_pos = typing.cast(
+                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+            )
+            retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+
             if response.status == 303:
                 method = "GET"
                 body = None
@@ -602,7 +606,37 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         # Check if we should retry the HTTP response.
         has_retry_after = bool(response.headers.get("Retry-After"))
+        retries = typing.cast(Retry, from_promise.get_parameter("retries"))
+
         if retries.is_retry(method, response.status, has_retry_after):
+            url = typing.cast(str, from_promise.get_parameter("url"))
+            body = typing.cast(
+                typing.Optional[_TYPE_BODY], from_promise.get_parameter("body")
+            )
+            headers = typing.cast(HTTPHeaderDict, from_promise.get_parameter("headers"))
+            preload_content = typing.cast(
+                bool, from_promise.get_parameter("preload_content")
+            )
+            decode_content = typing.cast(
+                bool, from_promise.get_parameter("decode_content")
+            )
+            timeout = typing.cast(
+                typing.Optional[_TYPE_TIMEOUT], from_promise.get_parameter("timeout")
+            )
+
+            assert_same_host = typing.cast(
+                bool, from_promise.get_parameter("assert_same_host")
+            )
+            pool_timeout = from_promise.get_parameter("pool_timeout")
+            response_kw = typing.cast(
+                typing.MutableMapping[str, typing.Any],
+                from_promise.get_parameter("response_kw"),
+            )
+            chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
+            body_pos = typing.cast(
+                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+            )
+
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)
             except MaxRetryError:
@@ -1238,20 +1272,24 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 multiplexed = False
 
             if multiplexed:
-                response.set_parameter("method", method)
-                response.set_parameter("url", url)
-                response.set_parameter("body", body)
-                response.set_parameter("headers", headers)
-                response.set_parameter("retries", retries)
-                response.set_parameter("preload_content", preload_content)
-                response.set_parameter("decode_content", decode_content)
-                response.set_parameter("timeout", timeout_obj)
-                response.set_parameter("redirect", redirect)
-                response.set_parameter("response_kw", response_kw)
-                response.set_parameter("pool_timeout", pool_timeout)
-                response.set_parameter("assert_same_host", assert_same_host)
-                response.set_parameter("chunked", chunked)
-                response.set_parameter("body_pos", body_pos)
+                response.update_parameters(
+                    {
+                        "method": method,
+                        "url": url,
+                        "body": body,
+                        "headers": headers,
+                        "retries": retries,
+                        "preload_content": preload_content,
+                        "decode_content": decode_content,
+                        "timeout": timeout,
+                        "redirect": redirect,
+                        "response_kw": response_kw,
+                        "pool_timeout": pool_timeout,
+                        "assert_same_host": assert_same_host,
+                        "chunked": chunked,
+                        "body_pos": body_pos,
+                    }
+                )
                 release_this_conn = True if not conn.is_saturated else False
 
             # Everything went great!

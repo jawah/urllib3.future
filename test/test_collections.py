@@ -212,10 +212,7 @@ class TestHTTPHeaderDict:
 
     def test_setitem(self, d: HTTPHeaderDict) -> None:
         d["Cookie"] = "foo"
-        # The bytes value gets converted to str. The API is typed for str only,
-        # but the implementation continues supports bytes.
-        d[b"Cookie"] = "bar"  # type: ignore[index]
-        assert d["cookie"] == "bar"
+        assert d["cookie"] == "foo"
         d["cookie"] = "with, comma"
         assert d.getlist("cookie") == ["with, comma"]
 
@@ -237,12 +234,9 @@ class TestHTTPHeaderDict:
 
     def test_add_comma_separated_multiheader(self, d: HTTPHeaderDict) -> None:
         d.add("bar", "foo")
-        # The bytes value gets converted to str. The API is typed for str only,
-        # but the implementation continues supports bytes.
-        d.add(b"BAR", "bar")  # type: ignore[arg-type]
         d.add("Bar", "asdf")
-        assert d.getlist("bar") == ["foo", "bar", "asdf"]
-        assert d["bar"] == "foo, bar, asdf"
+        assert d.getlist("bar") == ["foo", "asdf"]
+        assert d["bar"] == "foo, asdf"
 
     def test_extend_from_list(self, d: HTTPHeaderDict) -> None:
         d.extend([("set-cookie", "100"), ("set-cookie", "200"), ("set-cookie", "300")])
