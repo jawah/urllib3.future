@@ -579,6 +579,11 @@ class TrafficPolice(typing.Generic[T]):
                 if cursor_obj_id in planned_removal:
                     self._local.cursor = None
 
+            # we've closed all conn/pool successfully, we can unset the shutdown toggle to
+            # prevent killing incoming new conn or pool.
+            if not self._registry:
+                self._shutdown = False
+
     def qsize(self) -> int:
         with self._lock:
             return len(self._container)
