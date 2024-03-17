@@ -1,3 +1,8 @@
+2.6.905 (2024-03-17)
+====================
+
+- Fixed traffic police shutdown procedure to avoid killing needlessly a new connection or pool.
+
 2.6.904 (2024-03-17)
 ====================
 

@@ -575,14 +575,16 @@ class AsyncTrafficPolice(typing.Generic[T]):
         """Shutdown traffic pool."""
         planned_removal = []
 
-        self._shutdown = True
-
         for obj_id in self._container:
             if traffic_state_of(self._container[obj_id]) == TrafficState.IDLE:  # type: ignore[arg-type]
                 planned_removal.append(obj_id)
 
         for obj_id in planned_removal:
             self._container.pop(obj_id)
+
+        # if we can't shut down them all, we need to toggle the shutdown bit to collect and close remaining connections.
+        if len(self._registry) > len(planned_removal):
+            self._shutdown = True
 
         for obj_id in planned_removal:
             conn_or_pool = self._registry.pop(obj_id)
