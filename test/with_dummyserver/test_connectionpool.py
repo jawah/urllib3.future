@@ -25,6 +25,7 @@ from urllib3.exceptions import (
     MaxRetryError,
     NameResolutionError,
     NewConnectionError,
+    ProtocolError,
     ReadTimeoutError,
     UnrewindableBodyError,
 )
@@ -738,7 +739,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
     @pytest.mark.parametrize("char", [" ", "\r", "\n", "\x00"])
     def test_invalid_method_not_allowed(self, char: str) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ProtocolError):
             with HTTPConnectionPool(self.host, self.port) as pool:
                 pool.request("GET" + char, "/")
 

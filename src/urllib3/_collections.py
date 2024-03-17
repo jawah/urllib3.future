@@ -4,6 +4,7 @@ import typing
 import warnings
 from collections import OrderedDict
 from enum import Enum, auto
+from functools import lru_cache
 from threading import RLock
 
 if typing.TYPE_CHECKING:
@@ -39,6 +40,12 @@ ValidHTTPHeaderSource = typing.Union[
 
 class _Sentinel(Enum):
     not_passed = auto()
+
+
+@lru_cache(maxsize=64)
+def _lower_wrapper(string: str) -> str:
+    """Reasoning: We are often calling lower on repetitive identical header key. This was unnecessary exhausting!"""
+    return string.lower()
 
 
 def ensure_can_construct_http_header_dict(
@@ -258,20 +265,18 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
 
     def __setitem__(self, key: str, val: str) -> None:
         # avoid a bytes/str comparison by decoding before httplib
-        if isinstance(key, bytes):
-            key = key.decode("latin-1")
-        self._container[key.lower()] = [key, val]
+        self._container[_lower_wrapper(key)] = [key, val]
 
     def __getitem__(self, key: str) -> str:
-        val = self._container[key.lower()]
+        val = self._container[_lower_wrapper(key)]
         return ", ".join(val[1:])
 
     def __delitem__(self, key: str) -> None:
-        del self._container[key.lower()]
+        del self._container[_lower_wrapper(key)]
 
     def __contains__(self, key: object) -> bool:
         if isinstance(key, str):
-            return key.lower() in self._container
+            return _lower_wrapper(key) in self._container
         return False
 
     def setdefault(self, key: str, default: str = "") -> str:
@@ -284,8 +289,8 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         else:
             other_as_http_header_dict = type(self)(maybe_constructable)
 
-        return {k.lower(): v for k, v in self.itermerged()} == {
-            k.lower(): v for k, v in other_as_http_header_dict.itermerged()
+        return {_lower_wrapper(k): v for k, v in self.itermerged()} == {
+            _lower_wrapper(k): v for k, v in other_as_http_header_dict.itermerged()
         }
 
     def __ne__(self, other: object) -> bool:
@@ -324,17 +329,13 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         >>> list(headers.items())
         [('foo', 'bar, baz, quz')]
         """
-        # avoid a bytes/str comparison by decoding before httplib
-        if isinstance(key, bytes):
-            key = key.decode("latin-1")
-        key_lower = key.lower()
+        key_lower = _lower_wrapper(key)
         new_vals = [key, val]
         # Keep the common case aka no item present as fast as possible
         vals = self._container.setdefault(key_lower, new_vals)
         if new_vals is not vals:
             # if there are values here, then there is at least the initial
             # key/value pair
-            assert len(vals) >= 2
             if combine:
                 vals[-1] = vals[-1] + ", " + val
             else:
@@ -387,7 +388,7 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         """Returns a list of all the values for the named field. Returns an
         empty list if the key doesn't exist."""
         try:
-            vals = self._container[key.lower()]
+            vals = self._container[_lower_wrapper(key)]
         except KeyError:
             if default is _Sentinel.not_passed:
                 # _DT is unbound; empty list is instance of List[str]
@@ -413,7 +414,7 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
     def _copy_from(self, other: HTTPHeaderDict) -> None:
         for key in other:
             val = other.getlist(key)
-            self._container[key.lower()] = [key, *val]
+            self._container[_lower_wrapper(key)] = [key, *val]
 
     def copy(self) -> HTTPHeaderDict:
         clone = type(self)()
@@ -423,14 +424,14 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
     def iteritems(self) -> typing.Iterator[tuple[str, str]]:
         """Iterate over all header lines, including duplicate ones."""
         for key in self:
-            vals = self._container[key.lower()]
+            vals = self._container[_lower_wrapper(key)]
             for val in vals[1:]:
                 yield vals[0], val
 
     def itermerged(self) -> typing.Iterator[tuple[str, str]]:
         """Iterate over all headers, merging duplicate ones together."""
         for key in self:
-            val = self._container[key.lower()]
+            val = self._container[_lower_wrapper(key)]
             yield val[0], ", ".join(val[1:])
 
     def items(self) -> HTTPHeaderDictItemView:  # type: ignore[override]
@@ -438,5 +439,5 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
 
     def _has_value_for_header(self, header_name: str, potential_value: str) -> bool:
         if header_name in self:
-            return potential_value in self._container[header_name.lower()][1:]
+            return potential_value in self._container[_lower_wrapper(header_name)][1:]
         return False

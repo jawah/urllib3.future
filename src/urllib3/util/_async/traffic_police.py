@@ -11,6 +11,7 @@ from ..traffic_police import (
     OverwhelmedTraffic,
     TrafficState,
     UnavailableTraffic,
+    traffic_state_of,
 )
 
 if typing.TYPE_CHECKING:
@@ -57,7 +58,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self.maxsize = maxsize
         self.concurrency = concurrency
         self._registry: dict[int, T] = {}
-        self._states: dict[int, TrafficState] = {}  # True means idle, False busy.
         self._container: dict[int, T] = {}
         self._map: dict[int | PoolKey, T] = {}
         self._map_types: dict[int | PoolKey, type] = {}
@@ -96,11 +96,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
     @property
     def bag_only_idle(self) -> bool:
-        return all(_ == TrafficState.IDLE for _ in self._states.values())
+        return all(
+            traffic_state_of(_) == TrafficState.IDLE for _ in self._registry.values()
+        )
 
     async def wait_for_available_or_available_slot(self) -> None:
         combined_wait: float = 0.0
         warn_raised: bool = False
+
         while True:
             if self.maxsize is None:  # case Inf.
                 return
@@ -108,9 +111,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if len(self._registry) < self.maxsize:
                 return
 
-            for obj_id, traffic_state in self._states.items():
+            for obj_id, conn_or_pool in self._registry.items():
                 if (
-                    traffic_state != TrafficState.SATURATED
+                    traffic_state_of(conn_or_pool) != TrafficState.SATURATED  # type: ignore[arg-type]
                     and obj_id in self._container
                 ):
                     return
@@ -136,8 +139,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if len(self._registry) < self.maxsize:
                 return
 
-            for obj_id, traffic_state in self._states.items():
-                if traffic_state == TrafficState.IDLE and obj_id in self._container:
+            for obj_id, conn_or_pool in self._registry.items():
+                if (
+                    traffic_state_of(conn_or_pool) == TrafficState.IDLE  # type: ignore[arg-type]
+                    and obj_id in self._container
+                ):
                     return
 
             await asyncio.sleep(0.001)
@@ -203,7 +209,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self._map_clear(conn_or_pool)
 
         del self._registry[obj_id]
-        del self._states[obj_id]
 
         try:
             await conn_or_pool.close()
@@ -222,7 +227,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
             return
 
         for obj_id, conn_or_pool in self._registry.items():
-            if obj_id in self._container and self._states[obj_id] == TrafficState.IDLE:
+            if (
+                obj_id in self._container
+                and traffic_state_of(conn_or_pool) == TrafficState.IDLE  # type: ignore[arg-type]
+            ):
                 eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
                 break
 
@@ -230,7 +238,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
             self._map_clear(eligible_conn_or_pool)
 
             del self._registry[eligible_obj_id]
-            del self._states[eligible_obj_id]
             del self._container[eligible_obj_id]
 
             try:
@@ -279,27 +286,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
         else:
             self._registry[obj_id] = conn_or_pool
 
-        if (
-            hasattr(conn_or_pool, "is_saturated")
-            and conn_or_pool.is_saturated
-            and hasattr(conn_or_pool, "sock")
-            and conn_or_pool.sock is not None
-        ):
-            self._states[obj_id] = TrafficState.SATURATED
-        elif hasattr(conn_or_pool, "is_idle"):
-            self._states[obj_id] = (
-                TrafficState.IDLE if conn_or_pool.is_idle else TrafficState.USED
-            )
-        else:
-            self._states[obj_id] = TrafficState.IDLE
-
         if not immediately_unavailable:
             new_container = {obj_id: conn_or_pool}
             new_container.update(self._container)
 
             self._container = new_container
         else:
-            self._states[obj_id] = TrafficState.IDLE
             self._set_cursor((obj_id, conn_or_pool))
 
             if self.concurrency is True:
@@ -351,7 +343,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if non_saturated_only:
                     obj_id, conn_or_pool = None, None
                     for cur_obj_id, cur_conn_or_pool in self._container.items():
-                        if self._states[cur_obj_id] == TrafficState.SATURATED:
+                        if traffic_state_of(cur_conn_or_pool) == TrafficState.SATURATED:  # type: ignore[arg-type]
                             continue
                         obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
                         break
@@ -363,7 +355,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     else:
                         obj_id, conn_or_pool = None, None
                         for cur_obj_id, cur_conn_or_pool in self._container.items():
-                            if self._states[cur_obj_id] == TrafficState.IDLE:
+                            if traffic_state_of(cur_conn_or_pool) == TrafficState.IDLE:  # type: ignore[arg-type]
                                 continue
                             obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
                             break
@@ -577,20 +569,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                 self._container = new_container
 
-            if (
-                hasattr(conn_or_pool, "is_saturated")
-                and conn_or_pool.is_saturated
-                and hasattr(conn_or_pool, "sock")
-                and conn_or_pool.sock is not None
-            ):
-                self._states[obj_id] = TrafficState.SATURATED
-            elif hasattr(conn_or_pool, "is_idle"):
-                self._states[obj_id] = (
-                    TrafficState.IDLE if conn_or_pool.is_idle else TrafficState.USED
-                )
-            else:
-                self._states[obj_id] = TrafficState.IDLE
-
             self._set_cursor(None)
 
     async def clear(self) -> None:
@@ -600,7 +578,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self._shutdown = True
 
         for obj_id in self._container:
-            if self._states[obj_id] == TrafficState.IDLE:
+            if traffic_state_of(self._container[obj_id]) == TrafficState.IDLE:  # type: ignore[arg-type]
                 planned_removal.append(obj_id)
 
         for obj_id in planned_removal:
@@ -617,7 +595,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 pass
 
             self._map_clear(conn_or_pool)
-            del self._states[obj_id]
 
         if self._cursor is not None:
             cursor_obj_id, conn_or_pool = self._cursor

@@ -237,6 +237,9 @@ class ResponsePromise:
     def get_parameter(self, key: str) -> typing.Any | None:
         return self._parameters[key] if key in self._parameters else None
 
+    def update_parameters(self, data: dict[str, typing.Any]) -> None:
+        self._parameters.update(data)
+
 
 _HostPortType: typing.TypeAlias = typing.Tuple[str, int]
 QuicPreemptiveCacheType: typing.TypeAlias = typing.MutableMapping[

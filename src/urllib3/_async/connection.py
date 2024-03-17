@@ -28,12 +28,8 @@ from ..util.util import to_str
 try:  # Compiled with SSL?
     import ssl
 
-    BaseSSLError = ssl.SSLError
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
-
-    class BaseSSLError(BaseException):  # type: ignore[no-redef]
-        pass
 
 
 from ..backend import HttpVersion, QuicPreemptiveCacheType, ResponsePromise
@@ -47,9 +43,13 @@ from ..connection import (
 )
 from ..contrib.resolver._async import AsyncBaseResolver, AsyncResolverDescription
 from ..contrib.ssa import AsyncSocket, SSLAsyncSocket
-from ..exceptions import ConnectTimeoutError, EarlyResponse
+from ..exceptions import BaseSSLError, ConnectTimeoutError, EarlyResponse  # noqa: F401
 from ..exceptions import HTTPError as HTTPException  # noqa
-from ..exceptions import NameResolutionError, NewConnectionError, ResponseNotReady
+from ..exceptions import (  # noqa: F401
+    NameResolutionError,
+    NewConnectionError,
+    ResponseNotReady,
+)
 from ..util import SKIP_HEADER, SKIPPABLE_HEADERS, ssl_
 from ..util._async.ssl_ import ssl_wrap_socket
 from ..util.request import body_to_chunks

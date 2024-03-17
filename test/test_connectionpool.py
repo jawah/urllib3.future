@@ -526,7 +526,7 @@ class TestConnectionPool:
                 httplib_response.headers = httplib_response.msg = httplib.HTTPMessage()
 
                 response_conn: HTTPConnection | None = kwargs.get("response_conn")
-
+                print(httplib_response.status, httplib_response.reason)
                 response = HTTPResponse(
                     body=httplib_response,
                     headers=httplib_response.headers,  # type: ignore[arg-type]

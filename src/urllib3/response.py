@@ -39,8 +39,8 @@ except (AttributeError, ImportError, ValueError):  # Defensive:
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
 from .backend import LowLevelResponse, ResponsePromise
-from .connection import BaseSSLError, HTTPConnection
 from .exceptions import (
+    BaseSSLError,
     DecodeError,
     HTTPError,
     IncompleteRead,
@@ -57,6 +57,7 @@ if typing.TYPE_CHECKING:
 
     from typing_extensions import Literal
 
+    from .connection import HTTPConnection
     from .connectionpool import HTTPConnectionPool
     from .util.traffic_police import TrafficPolice
 
@@ -348,7 +349,10 @@ class HTTPResponse(io.IOBase):
             self.headers = headers
         else:
             self.headers = HTTPHeaderDict(headers)  # type: ignore[arg-type]
-        self.status = status
+        try:
+            self.status = int(status)
+        except ValueError:
+            self.status = 0  # merely for tests, was supported due to broken httplib.
         self.version = version
         self.reason = reason
         self.decode_content = decode_content
@@ -359,12 +363,14 @@ class HTTPResponse(io.IOBase):
         self.retries = retries
 
         self.chunked = False
-        tr_enc = self.headers.get("transfer-encoding", "").lower()
-        # Don't incur the penalty of creating a list and then discarding it
-        encodings = (enc.strip() for enc in tr_enc.split(","))
 
-        if "chunked" in encodings:
-            self.chunked = True
+        if "transfer-encoding" in self.headers:
+            tr_enc = self.headers.get("transfer-encoding", "").lower()
+            # Don't incur the penalty of creating a list and then discarding it
+            encodings = (enc.strip() for enc in tr_enc.split(","))
+
+            if "chunked" in encodings:
+                self.chunked = True
 
         self._decoder: ContentDecoder | None = None
 
@@ -464,6 +470,8 @@ class HTTPResponse(io.IOBase):
         """
         # Note: content-encoding value should be case-insensitive, per RFC 7230
         # Section 3.2
+        if "content-encoding" not in self.headers:
+            return
         content_encoding = self.headers.get("content-encoding", "").lower()
         if self._decoder is None:
             if content_encoding in self.CONTENT_DECODERS:
@@ -606,13 +614,16 @@ class HTTPResponse(io.IOBase):
                 # (e.g. Content-Length: 42, 42). This line ensures the values
                 # are all valid ints and that as long as the `set` length is 1,
                 # all values are the same. Otherwise, the header is invalid.
-                lengths = {int(val) for val in content_length.split(",")}
-                if len(lengths) > 1:
-                    raise InvalidHeader(
-                        "Content-Length contained multiple "
-                        "unmatching values (%s)" % content_length
-                    )
-                length = lengths.pop()
+                if "," in content_length:
+                    lengths = {int(val) for val in content_length.split(",")}
+                    if len(lengths) > 1:
+                        raise InvalidHeader(
+                            "Content-Length contained multiple "
+                            "unmatching values (%s)" % content_length
+                        )
+                    length = lengths.pop()
+                else:
+                    length = int(content_length)
             except ValueError:
                 length = None
             else:
@@ -622,15 +633,12 @@ class HTTPResponse(io.IOBase):
         else:  # if content_length is None
             length = None
 
-        # Convert status to int for comparison
-        # In some cases, httplib returns a status of "_UNKNOWN"
-        try:
-            status = int(self.status)
-        except ValueError:
-            status = 0
-
         # Check for responses that shouldn't include a body
-        if status in (204, 304) or 100 <= status < 200 or request_method == "HEAD":
+        if (
+            self.status in (204, 304)
+            or 100 <= self.status < 200
+            or request_method == "HEAD"
+        ):
             length = 0
 
         return length
@@ -875,9 +883,8 @@ class HTTPResponse(io.IOBase):
             return data
         finally:
             if (
-                self._fp
-                and hasattr(self._fp, "_eot")
-                and self._fp._eot
+                hasattr(self._fp, "_eot")
+                and self._fp._eot  # type: ignore[union-attr]
                 and self._police_officer is not None
             ):
                 self._police_officer.forget(self)

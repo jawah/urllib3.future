@@ -12,7 +12,6 @@ from socket import timeout as SocketTimeout
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
-    from .response import HTTPResponse
     from .util.ssltransport import SSLTransport
     from ._typing import (
         _TYPE_BODY,
@@ -24,6 +23,7 @@ if typing.TYPE_CHECKING:
     from .util.traffic_police import TrafficPolice
 
 from ._constant import DEFAULT_BLOCKSIZE
+from .response import HTTPResponse
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
 from .util.wait import wait_for_read
@@ -31,17 +31,13 @@ from .util.wait import wait_for_read
 try:  # Compiled with SSL?
     import ssl
 
-    BaseSSLError = ssl.SSLError
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
-
-    class BaseSSLError(BaseException):  # type: ignore[no-redef]
-        pass
-
 
 from ._version import __version__
 from .backend import HfaceBackend, HttpVersion, QuicPreemptiveCacheType, ResponsePromise
 from .contrib.resolver import BaseResolver, ResolverDescription
+from .exceptions import BaseSSLError  # noqa
 from .exceptions import ConnectTimeoutError, EarlyResponse
 from .exceptions import HTTPError as HTTPException  # noqa
 from .exceptions import (
@@ -316,14 +312,6 @@ class HTTPConnection(HfaceBackend):
         skip_accept_encoding: bool = False,
     ) -> None:
         """"""
-        # Empty docstring because the indentation of CPython's implementation
-        # is broken but we don't want this method in our documentation.
-        match = _CONTAINS_CONTROL_CHAR_RE.search(method)
-        if match:
-            raise ValueError(
-                f"Method cannot contain non-token characters {method!r} (found at least {match.group()!r})"
-            )
-
         return super().putrequest(
             method, url, skip_host=skip_host, skip_accept_encoding=skip_accept_encoding
         )
@@ -378,10 +366,12 @@ class HTTPConnection(HfaceBackend):
         if headers is None:
             headers = {}
         header_keys = frozenset(to_str(k.lower()) for k in headers)
-        skip_accept_encoding = "accept-encoding" in header_keys
-        skip_host = "host" in header_keys
+
         self.putrequest(
-            method, url, skip_accept_encoding=skip_accept_encoding, skip_host=skip_host
+            method,
+            url,
+            skip_accept_encoding="accept-encoding" in header_keys,
+            skip_host="host" in header_keys,
         )
 
         # Transform the body into an iterable of sendall()-able chunks
@@ -541,9 +531,6 @@ class HTTPConnection(HfaceBackend):
         # we need to set the timeout on the socket.
         self.sock.settimeout(self.timeout)
 
-        # This is needed here to avoid circular import errors
-        from .response import HTTPResponse
-
         # Get the response from backend._base.BaseBackend
         low_response = super().getresponse(promise=promise)
 
@@ -554,11 +541,10 @@ class HTTPConnection(HfaceBackend):
             raise OSError
 
         resp_options: _ResponseOptions = promise.get_parameter("response_options")  # type: ignore[assignment]
-        headers = low_response.msg
 
         response = HTTPResponse(
             body=low_response,
-            headers=headers,
+            headers=low_response.msg,
             status=low_response.status,
             version=low_response.version,
             reason=low_response.reason,

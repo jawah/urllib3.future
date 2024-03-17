@@ -16,6 +16,15 @@ if typing.TYPE_CHECKING:
     from .util.retry import Retry
 
 # Base Exceptions
+try:  # Compiled with SSL?
+    import ssl
+
+    BaseSSLError = ssl.SSLError
+except (ImportError, AttributeError):
+    ssl = None  # type: ignore[assignment]
+
+    class BaseSSLError(BaseException):  # type: ignore[no-redef]
+        pass
 
 
 class HTTPError(Exception):

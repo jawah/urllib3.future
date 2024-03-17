@@ -104,6 +104,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__headers: list[tuple[bytes, bytes]] = []
         self.__expected_body_length: int | None = None
         self.__remaining_body_length: int | None = None
+        self.__authority_bit_set: bool = False
+        self.__legacy_host_entry: bytes | None = None
 
         # h3 specifics
         self.__custom_tls_settings: QuicTLSConfig | None = None
@@ -408,6 +410,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 binary_form=True
             )
 
+            # save the quic ticket for session resumption
+            self.__session_ticket = self._protocol.session_ticket
+
         if hasattr(self, "_connect_timings"):
             self.conn_info.tls_handshake_latency = (
                 datetime.now(tz=timezone.utc) - self._connect_timings[-1]
@@ -513,11 +518,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
     ) -> list[Event]:
         """This method simplify socket exchange in/out based on what the protocol state machine orders.
         Can be used for the initial handshake for instance."""
-        assert self._protocol is not None
-        assert self.sock is not None
-        assert maximal_data_in_read is None or (
-            maximal_data_in_read >= 0 or maximal_data_in_read == -1
-        )
+        assert self.sock is not None and self._protocol is not None
+
+        if maximal_data_in_read is not None:
+            if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
+                maximal_data_in_read = None
 
         data_out: bytes
         data_in: bytes
@@ -594,15 +599,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                         await self.sock.sendall(data_out)
 
-            for event in iter(
-                lambda: self._protocol.next_event(stream_id=stream_id), None  # type: ignore[union-attr]
-            ):  # type: Event
-                if stream_id is not None and hasattr(event, "stream_id"):
-                    if event.stream_id != stream_id:
-                        reshelve_events.append(event)
-                        continue
+            for event in self._protocol.events(stream_id=stream_id):  # type: Event
+                stream_related_event: bool = hasattr(event, "stream_id")
 
-                if isinstance(event, ConnectionTerminated):
+                if not stream_related_event and isinstance(event, ConnectionTerminated):
                     if (
                         event.error_code == 400
                         and event.message
@@ -643,19 +643,20 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         pass
 
                     raise ProtocolError(event.message)
-                elif isinstance(event, StreamResetReceived):
+                elif stream_related_event and isinstance(event, StreamResetReceived):
                     raise ProtocolError(
                         f"Stream {event.stream_id} was reset by remote peer. Reason: {hex(event.error_code)}."
                     )
-
-                if data_in_len_from:
-                    data_in_len += data_in_len_from(event)
 
                 if not event_type_collectable:
                     events.append(event)
                 else:
                     if isinstance(event, event_type_collectable):
                         events.append(event)
+
+                        if data_in_len_from:
+                            data_in_len += data_in_len_from(event)
+
                     else:
                         reshelve_events.append(event)
 
@@ -670,9 +671,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if (
                         target_cap_reached is False
                         and respect_end_stream_signal
-                        and hasattr(event, "end_stream")
+                        and stream_related_event
                     ):
-                        if event.end_stream is True:
+                        if event.end_stream is True:  # type: ignore[attr-defined]
                             if reshelve_events:
                                 self._protocol.reshelve(*reshelve_events)
                             return events
@@ -693,6 +694,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__headers = []
         self.__expected_body_length = None
         self.__remaining_body_length = None
+        self.__legacy_host_entry = None
+        self.__authority_bit_set = False
 
         self._start_last_request = datetime.now(tz=timezone.utc)
 
@@ -700,8 +703,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             host, port = self._tunnel_host, self._tunnel_port
         else:
             host, port = self.host, self.port
-
-        authority: bytes = host.encode("idna")
 
         self.__headers = [
             (b":method", method.encode("ascii")),
@@ -713,6 +714,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         ]
 
         if not skip_host:
+            authority: bytes = host.encode("idna")
+
             self.__headers.append(
                 (
                     b":authority",
@@ -721,9 +724,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     else authority + f":{port}".encode(),
                 ),
             )
+            self.__authority_bit_set = True
 
         if not skip_accept_encoding:
-            self.putheader("Accept-Encoding", "identity")
+            self.__headers.append(
+                (
+                    b"accept-encoding",
+                    b"identity",
+                )
+            )
 
     def putheader(self, header: str, *values: str) -> None:
         # note: requests allow passing headers as bytes (seen in requests/tests)
@@ -737,20 +746,29 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         support_te_chunked: bool = self._svn == HttpVersion.h11
 
         # We MUST never use that header in h2 and h3 over quic.
+        # Passing 'Connection' header is actually a protocol violation above h11.
+        # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
         # It may(should) break the connection.
-        if not support_te_chunked and encoded_header == b"transfer-encoding":
-            return
+        if not support_te_chunked:
+            if encoded_header in {b"transfer-encoding", b"connection"}:
+                return
+
+        if self.__expected_body_length is None and encoded_header == b"content-length":
+            try:
+                self.__expected_body_length = int(values[0])
+            except ValueError:
+                raise ProtocolError(
+                    f"Invalid content-length set. Given '{values[0]}' when only digits are allowed."
+                )
+        elif self.__legacy_host_entry is None and encoded_header == b"host":
+            self.__legacy_host_entry = (
+                values[0].encode("idna") if isinstance(values[0], str) else values[0]
+            )
 
         for value in values:
             encoded_value = (
                 value.encode("iso-8859-1") if isinstance(value, str) else value
             )
-
-            # Passing 'Connection' header is actually a protocol violation above h11.
-            # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
-            if not support_te_chunked and encoded_header == b"connection":
-                if encoded_value.lower() == b"keep-alive":
-                    continue
 
             self.__headers.append(
                 (
@@ -769,58 +787,19 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if self.sock is None:
             await self.connect()  # type: ignore[attr-defined]
 
-        assert self.sock is not None
-        assert self._protocol is not None
+        assert self.sock is not None and self._protocol is not None
 
         # only h2 and h3 support streams, it is faked/simulated for h1.
         self._stream_id = self._protocol.get_available_stream_id()
-
         # unless anything hint the opposite, the request head frame is the end stream
         should_end_stream: bool = expect_body_afterward is False
-        authority_set_bit: bool = False
-        legacy_host_entry: bytes | None = None
-
-        # determine if stream should end there (absent body case)
-        for raw_header, raw_value in self.__headers:
-            # Some programs does set value to None, and that is... an issue here. We ignore those key, value.
-            if raw_value is None:
-                continue
-            if raw_header.startswith(b":"):
-                if not authority_set_bit and raw_header[1:] == b"authority":
-                    authority_set_bit = True
-                continue
-
-            if (
-                expect_body_afterward
-                and self.__expected_body_length is None
-                and raw_header == b"content-length"
-            ):
-                try:
-                    self.__expected_body_length = int(raw_value)
-                except ValueError:
-                    raise ProtocolError(
-                        f"Invalid content-length set. Given '{raw_value.decode()}' when only digits are allowed."
-                    )
-
-            if (
-                not authority_set_bit
-                and legacy_host_entry is None
-                and raw_header == b"host"
-            ):
-                legacy_host_entry = raw_value
-
-            # evaluated cond verify if we still have something to find in headers.
-            if (authority_set_bit or legacy_host_entry is not None) and (
-                not expect_body_afterward or self.__expected_body_length is not None
-            ):
-                break
 
         # handle cases where 'Host' header is set manually
-        if authority_set_bit is False and legacy_host_entry is not None:
-            self.__headers.append((b":authority", legacy_host_entry))
-            authority_set_bit = True
+        if self.__authority_bit_set is False and self.__legacy_host_entry is not None:
+            self.__headers.append((b":authority", self.__legacy_host_entry))
+            self.__authority_bit_set = True
 
-        if authority_set_bit is False:
+        if self.__authority_bit_set is False:
             raise ProtocolError(
                 (
                     "urllib3.future do not support emitting HTTP requests without the `Host` header ",
@@ -866,7 +845,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         return None
 
     async def __read_st(
-        self, __amt: int | None = None, __stream_id: int | None = None
+        self, __amt: int | None, __stream_id: int | None
     ) -> tuple[bytes, bool]:
         """Allows us to defer the body loading after constructing the response object."""
         eot = False
@@ -875,77 +854,68 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             DataReceived,
             receive_first=True,
             # we ignore Trailers even if provided in response.
-            event_type_collectable=(DataReceived, HeadersReceived),
+            event_type_collectable=(DataReceived,),
             maximal_data_in_read=__amt,
-            data_in_len_from=lambda x: len(x.data)
-            if isinstance(x, DataReceived)
-            else 0,
+            data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
             stream_id=__stream_id,
         )
 
         if events and events[-1].end_stream:
             eot = True
 
-            if __stream_id in self._pending_responses:
-                del self._pending_responses[__stream_id]
+            try:
+                del self._pending_responses[__stream_id]  # type: ignore[arg-type]
+            except KeyError:
+                pass  # Hmm... this should be impossible.
 
-            if self.is_idle:
+            # remote can refuse future inquiries, so no need to go further with this conn.
+            if self._protocol.has_expired():  # type: ignore[union-attr]
+                await self.close()
+            elif self.is_idle:
                 # probe for h3/quic if available, and remember it.
                 await self._upgrade()
 
-            # remote can refuse future inquiries, so no need to go further with this conn.
-            if self._protocol and self._protocol.has_expired():
-                await self.close()
-
         return (
-            b"".join(e.data for e in events if isinstance(e, DataReceived)),
+            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,
             eot,
         )
 
     async def getresponse(  # type: ignore[override]
         self, *, promise: ResponsePromise | None = None
     ) -> AsyncLowLevelResponse:
-        if (
-            self.sock is None
-            or self._protocol is None
-            or self._svn is None
-            or not self._promises
-        ):
+        if self.sock is None or self._protocol is None or not self._promises:
             raise ResponseNotReady()  # Defensive: Comply with http.client, actually tested but not reported?
 
         headers = HTTPHeaderDict()
         status: int | None = None
 
-        events: list[HeadersReceived] = await self.__exchange_until(  # type: ignore[assignment]
-            HeadersReceived,
-            receive_first=True,
-            event_type_collectable=(HeadersReceived,),
-            respect_end_stream_signal=False,
-            stream_id=promise.stream_id if promise else None,
-        )
+        head_event: HeadersReceived = (
+            await self.__exchange_until(  # type: ignore[assignment]
+                HeadersReceived,
+                receive_first=True,
+                event_type_collectable=(HeadersReceived,),
+                respect_end_stream_signal=False,
+                stream_id=promise.stream_id if promise else None,
+            )
+        ).pop()
 
-        for event in events:
-            for raw_header, raw_value in event.headers:
-                # special headers that represent (usually) the HTTP response status, version and reason.
-                if raw_header.startswith(b":"):
-                    if raw_header[1:] == b"status":
-                        status = int(raw_value)
-                        continue
-                    # this should be unreachable.
-                    # it is designed to detect eventual changes lower in the stack.
-                    raise ProtocolError(  # Defensive:
-                        f"Unhandled special header '{raw_header.decode()}'"
-                    )
-
+        for raw_header, raw_value in head_event.headers:
+            # special headers that represent (usually) the HTTP response status, version and reason.
+            if raw_header.startswith(b":"):
+                if status is None and raw_header == b":status":
+                    status = int(raw_value)
+            else:
                 headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
 
         if promise is None:
-            if events[-1].stream_id not in self._promises_per_stream:
+            try:
+                promise = self._promises_per_stream.pop(head_event.stream_id)
+            except KeyError:
                 raise ProtocolError(
-                    f"Response received (stream: {events[-1].stream_id}) but no promise in-flight"
+                    f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
                 )
-
-            promise = self._promises_per_stream[events[-1].stream_id]
+        else:
+            del self._promises_per_stream[promise.stream_id]
 
         # this should be unreachable
         if status is None:
@@ -953,8 +923,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 "Got an HTTP response without a status code. This is a violation."
             )
 
-        eot = events[-1].end_stream is True
-
+        eot = head_event.end_stream is True
         http_verb = b""
 
         for raw_header, raw_value in promise.request_headers:
@@ -962,11 +931,16 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 http_verb = raw_value
                 break
 
-        response = AsyncLowLevelResponse(
+        try:
+            reason: str = responses[status]
+        except KeyError:
+            reason = "Unknown"
+
+        self._response = AsyncLowLevelResponse(
             http_verb.decode("ascii"),
             status,
             self._http_vsn,
-            responses[status] if status in responses else "Unknown",
+            reason,
             headers,
             self.__read_st if not eot else None,
             authority=self.host,
@@ -974,31 +948,22 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             stream_id=promise.stream_id,
         )
 
-        promise.response = response
-        response.from_promise = promise
+        promise.response = self._response
+        self._response.from_promise = promise
 
         # we delivered a response, we can safely remove the promise from queue.
         del self._promises[promise.uid]
-        del self._promises_per_stream[promise.stream_id]
-
-        # keep last response
-        self._response = response
-
-        # save the quic ticket for session resumption
-        if self._svn == HttpVersion.h3 and hasattr(self._protocol, "session_ticket"):
-            self.__session_ticket = self._protocol.session_ticket
 
         if eot:
-            if self.is_idle:
-                await self._upgrade()
-
             # remote can refuse future inquiries, so no need to go further with this conn.
-            if self._protocol and self._protocol.has_expired():
+            if self._protocol.has_expired():
                 await self.close()
+            elif self.is_idle:
+                await self._upgrade()
         else:
-            self._pending_responses[promise.stream_id] = response
+            self._pending_responses[promise.stream_id] = self._response
 
-        return response
+        return self._response
 
     async def send(  # type: ignore[override]
         self,

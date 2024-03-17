@@ -3,7 +3,10 @@ from __future__ import annotations
 from test import notMacOS
 from time import time
 
-from urllib3 import HTTPSConnectionPool, ResponsePromise
+import pytest
+
+from urllib3 import HTTPSConnectionPool, ResponsePromise, Retry
+from urllib3.exceptions import MaxRetryError
 
 from . import TraefikTestCase
 
@@ -105,3 +108,88 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
             assert pool.get_response() is None
             assert pool.pool is not None and pool.num_connections == 2
+
+    @pytest.mark.parametrize(
+        "depth, max_retries",
+        [
+            (
+                1,
+                None,
+            ),
+            (
+                2,
+                None,
+            ),
+            (
+                5,
+                None,
+            ),
+            (
+                1,
+                1,
+            ),
+            (
+                2,
+                2,
+            ),
+            (
+                5,
+                5,
+            ),
+            (
+                1,
+                0,
+            ),
+            (
+                2,
+                1,
+            ),
+            (
+                5,
+                4,
+            ),
+            (
+                1,
+                2,
+            ),
+            (
+                2,
+                3,
+            ),
+            (
+                5,
+                6,
+            ),
+        ],
+    )
+    def test_multiplexing_with_redirect(
+        self, depth: int, max_retries: int | None
+    ) -> None:
+        with HTTPSConnectionPool(
+            self.host, self.https_port, ca_certs=self.ca_authority
+        ) as pool:
+            retry = Retry(redirect=max_retries) if max_retries is not None else None
+            promise = pool.urlopen(
+                "GET",
+                f"/redirect/{depth}",
+                redirect=True,
+                retries=retry,
+                multiplexed=True,
+            )
+
+            assert isinstance(promise, ResponsePromise)
+
+            if (max_retries is not None and max_retries < depth) or (
+                max_retries is None
+                and isinstance(Retry.DEFAULT.total, int)
+                and depth > Retry.DEFAULT.total
+            ):
+                with pytest.raises(MaxRetryError):
+                    pool.get_response(promise=promise)
+            else:
+                response = pool.get_response(promise=promise)
+
+                assert response is not None
+                assert response.url is not None
+                assert "/redirect" not in response.url
+                assert 200 == response.status

@@ -64,7 +64,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         *,
         validate_outbound_headers: bool = False,
         validate_inbound_headers: bool = False,
-        normalize_outbound_headers: bool = True,
+        normalize_outbound_headers: bool = False,
         normalize_inbound_headers: bool = True,
     ) -> None:
         self._connection: h2.connection.H2Connection = _PatchedH2Connection(
@@ -81,12 +81,15 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._connection.initiate_connection()
         self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
+        self._goaway_to_honor: bool = False
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
         return h2.exceptions.ProtocolError, h2.exceptions.H2Error
 
     def is_available(self) -> bool:
+        if self._goaway_to_honor:
+            return False
         max_streams = self._connection.remote_settings.max_concurrent_streams
         return self._terminated is False and max_streams > self._open_stream_count
 
@@ -94,7 +97,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
-        return self._terminated
+        return self._terminated or self._goaway_to_honor
 
     def get_available_stream_id(self) -> int:
         return self._connection.get_next_available_stream_id()  # type: ignore[no-any-return]
@@ -160,6 +163,8 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 #
                 # Saying "connection was terminated" can be confusing,
                 # so we emit an event called "GoawayReceived".
+                if e.error_code == 0:
+                    self._goaway_to_honor = True
                 yield GoawayReceived(e.last_stream_id, e.error_code)
             elif isinstance(e, h2.events.SettingsAcknowledged):
                 yield HandshakeCompleted(alpn_protocol="h2")
@@ -173,6 +178,17 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def bytes_received(self, data: bytes) -> None:
         if not data:
             return
+
+        # GOAWAY allows an
+        # endpoint to gracefully stop accepting new streams while still
+        # finishing processing of previously established streams.
+        # see https://tools.ietf.org/html/rfc7540#section-6.8
+        # hyper/h2 does not allow such a thing for now. let's work around this.
+        if self._goaway_to_honor and not self._terminated and self._open_stream_count:
+            self._connection.state_machine.state = (
+                h2.connection.ConnectionState.CLIENT_OPEN
+            )
+
         try:
             h2_events = self._connection.receive_data(data)
         except h2.exceptions.ProtocolError as e:
