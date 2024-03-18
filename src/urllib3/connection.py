@@ -665,8 +665,8 @@ class HTTPSConnection(HTTPConnection):
         sock: socket.socket | ssl.SSLSocket
         self.sock = sock = self._new_conn()
 
-        try:
-            # the protocol/state-machine may also ship with an external TLS Engine.
+        # the protocol/state-machine may also ship with an external TLS Engine.
+        if (
             self._custom_tls(
                 self.ssl_context,
                 self.ca_certs,
@@ -681,7 +681,8 @@ class HTTPSConnection(HTTPConnection):
                 self.assert_hostname,
                 self.cert_reqs,
             )
-        except NotImplementedError:
+            is NotImplemented
+        ):
             server_hostname: str = self.host
             tls_in_tls = False
 

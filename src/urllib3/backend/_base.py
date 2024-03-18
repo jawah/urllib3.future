@@ -383,7 +383,7 @@ class BaseBackend:
         cert_file: str | None = None,
         key_file: str | None = None,
         key_password: str | None = None,
-    ) -> None:
+    ) -> bool:
         """This method serve as bypassing any default tls setup.
         It is most useful when the encryption does not lie on the TCP layer. This method
         WILL raise NotImplementedError if the connection is not concerned."""

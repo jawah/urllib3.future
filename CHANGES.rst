@@ -1,3 +1,10 @@
+2.6.906 (2024-03-18)
+====================
+
+- Fixed SSL context cache construction that did not take key_password into account.
+- Prefer return ``NotImplemented`` instead of raising ``NotImplementedError`` to avoid polluting the stack trace when trying to
+  initialize the external tls layer when not concerned (e.g. not http3 over QUIC).
+
 2.6.905 (2024-03-17)
 ====================
 

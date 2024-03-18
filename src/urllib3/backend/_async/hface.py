@@ -199,10 +199,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         cert_fingerprint: str | None = None,
         assert_hostname: None | str | typing.Literal[False] = None,
         cert_reqs: int | str | None = None,
-    ) -> None:
+    ) -> bool:
         """Meant to support TLS over QUIC meanwhile cpython does not ship with its native implementation."""
         if self._svn != HttpVersion.h3:
-            raise NotImplementedError
+            return NotImplemented
 
         cert_use_common_name = False
 
@@ -241,6 +241,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         )
 
         self.is_verified = not self.__custom_tls_settings.insecure
+
+        return True
 
     def __h3_probe(self) -> tuple[str, int] | None:
         """Determine if remote is capable of operating through the http/3 protocol over QUIC."""

@@ -98,6 +98,7 @@ async def ssl_wrap_socket(
             alpn_protocols,
             certdata,
             keydata,
+            key_password,
         )
         if sharable_ssl_context
         else None
