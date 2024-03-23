@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import errno
 import logging
 import queue
+import socket
 import sys
 import typing
 import warnings
-from datetime import timedelta
+from asyncio import Task
+from datetime import datetime, timedelta, timezone
+from itertools import zip_longest
 from socket import timeout as SocketTimeout
 from types import TracebackType
 
@@ -200,6 +204,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         | list[str]
         | AsyncBaseResolver
         | None = None,
+        happy_eyeballs: bool | int = False,
         **conn_kw: typing.Any,
     ):
         AsyncConnectionPool.__init__(self, host, port)
@@ -213,6 +218,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         self.timeout = timeout
         self.retries = retries
+        self.happy_eyeballs = happy_eyeballs
 
         self._maxsize = maxsize
 
@@ -311,7 +317,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
     def is_idle(self) -> bool:
         return self.pool is None or self.pool.bag_only_idle
 
-    async def _new_conn(self) -> AsyncHTTPConnection:
+    async def _new_conn(
+        self, *, heb_timeout: Timeout | None = None
+    ) -> AsyncHTTPConnection:
         """
         Return a fresh :class:`HTTPConnection`.
         """
@@ -326,16 +334,173 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             self.port or "80",
         )
 
-        conn = self.ConnectionCls(
-            host=self.host,
-            port=self.port,
-            timeout=self.timeout.connect_timeout,
-            **self.conn_kw,
-        )
+        conn = None
+
+        # this path is applicable if resolver yield at least two records.
+        # if A/AAAA records only (non-dual stack) -> spawn 4 (default) tasks with each record
+        # if A/AAAA records mixed (dual stack)    -> spawn 4 (default) tasks following this pattern (IPv6, IPv4, IPv6, IPv4)
+        # if single record A or AAAA -> ignore
+        # Don't mind about HTTP/2 or 3 in here, we're unencrypted here!
+        if self.happy_eyeballs:
+            log.debug(
+                "Attempting Happy-Eyeball %s:%s",
+                self.host,
+                self.port or "443",
+            )
+
+            dt_pre_resolve = datetime.now(tz=timezone.utc)
+            ip_addresses = await self._resolver.getaddrinfo(
+                self.host,
+                self.port,
+                socket.AF_UNSPEC
+                if "socket_family" not in self.conn_kw
+                else self.conn_kw["socket_family"],
+                socket.SOCK_STREAM,
+                quic_upgrade_via_dns_rr=False,
+            )
+            delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
+
+            if len(ip_addresses) > 1:
+                ipv6_addresses = []
+                ipv4_addresses = []
+
+                for ip_address in ip_addresses:
+                    if ip_address[0] == socket.AF_INET6:
+                        ipv6_addresses.append(ip_address)
+                    else:
+                        ipv4_addresses.append(ip_address)
+
+                if ipv4_addresses and ipv6_addresses:
+                    log.debug(
+                        "Happy-Eyeball Dual-Stack %s:%s",
+                        self.host,
+                        self.port or "443",
+                    )
+
+                    intermediary_addresses = []
+                    for ipv6_entry, ipv4_entry in zip_longest(
+                        ipv6_addresses, ipv4_addresses
+                    ):
+                        if ipv6_entry:
+                            intermediary_addresses.append(ipv6_entry)
+                        if ipv4_entry:
+                            intermediary_addresses.append(ipv4_entry)
+                    ip_addresses = intermediary_addresses
+                else:
+                    log.debug(
+                        "Happy-Eyeball Single-Stack %s:%s",
+                        self.host,
+                        self.port or "443",
+                    )
+
+                challengers = []
+                max_task = (
+                    4 if isinstance(self.happy_eyeballs, bool) else self.happy_eyeballs
+                )
+
+                if heb_timeout is None:
+                    heb_timeout = self.timeout
+
+                override_timeout = (
+                    heb_timeout.connect_timeout
+                    if heb_timeout.connect_timeout is not None
+                    and isinstance(heb_timeout.connect_timeout, (float, int))
+                    else None
+                )
+
+                for ip_address in ip_addresses[:max_task]:
+                    conn_kw = self.conn_kw.copy()
+                    target_solo_addr = (
+                        f"[{ip_address[-1][0]}]"
+                        if ip_address[0] == socket.AF_INET6
+                        else ip_address[-1][0]
+                    )
+                    conn_kw["resolver"] = AsyncResolverDescription.from_url(
+                        f"in-memory://default?hosts={self.host}:{target_solo_addr}"
+                    ).new()
+                    conn_kw["socket_family"] = ip_address[0]
+
+                    challengers.append(
+                        self.ConnectionCls(
+                            host=self.host,
+                            port=self.port,
+                            timeout=self.timeout.connect_timeout,
+                            **conn_kw,
+                        )
+                    )
+
+                tasks = [
+                    asyncio.create_task(challenger.connect())
+                    for i, challenger in enumerate(challengers)
+                ]
+
+                winner_task = None
+                remnant_tasks = []
+                pending: set[Task[None]] = set()
+
+                while True:
+                    done, pending = await asyncio.wait(
+                        tasks if not pending else pending,
+                        return_when=asyncio.FIRST_COMPLETED,
+                        timeout=override_timeout,
+                    )
+
+                    while done:
+                        finished_task = done.pop()
+
+                        if finished_task.exception() is None:
+                            winner_task = finished_task
+
+                        if finished_task.exception():
+                            continue
+
+                        remnant_tasks.append(finished_task)
+
+                    if winner_task:
+                        break
+
+                for task in pending:
+                    task.cancel()
+
+                if winner_task is None:
+                    within_delay_msg: str = (
+                        f" within {override_timeout}s" if override_timeout else ""
+                    )
+                    raise NewConnectionError(
+                        challengers[0],
+                        f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs algorithm for {self.host}:{self.port}{within_delay_msg}",
+                    ) from tasks[0].exception()
+
+                conn = challengers[tasks.index(winner_task)]
+
+                # we have to replace the resolution latency metric
+                if conn.conn_info:
+                    conn.conn_info.resolution_latency = delta_post_resolve
+
+                if len(remnant_tasks):
+                    # we may have more than one conn ready, we shall then carefully close the others.
+                    for disposable_remnant in remnant_tasks:
+                        await challengers[tasks.index(disposable_remnant)].close()
+            else:
+                log.debug(
+                    "Happy-Eyeball Ineligible %s:%s",
+                    self.host,
+                    self.port or "443",
+                )
+
+        if conn is None:
+            conn = self.ConnectionCls(
+                host=self.host,
+                port=self.port,
+                timeout=self.timeout.connect_timeout,
+                **self.conn_kw,
+            )
         await self.pool.put(conn, immediately_unavailable=True)
         return conn
 
-    async def _get_conn(self, timeout: float | None = None) -> AsyncHTTPConnection:
+    async def _get_conn(
+        self, timeout: float | None = None, *, heb_timeout: Timeout | None = None
+    ) -> AsyncHTTPConnection:
         """
         Get a connection. Will return a pooled connection if one is available.
 
@@ -372,7 +537,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             log.debug("Resetting dropped connection: %s", self.host)
             await conn.close()
 
-        return conn or await self._new_conn()
+        return conn or await self._new_conn(heb_timeout=heb_timeout)
 
     async def _put_conn(self, conn: AsyncHTTPConnection) -> None:
         """
@@ -1228,7 +1393,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # Request a connection from the queue.
             timeout_obj = self._get_timeout(timeout)
             await self.pool.wait_for_available_or_available_slot()
-            conn = await self._get_conn(timeout=pool_timeout)
+            conn = await self._get_conn(timeout=pool_timeout, heb_timeout=timeout_obj)
 
             conn.timeout = timeout_obj.connect_timeout  # type: ignore[assignment]
 
@@ -1562,7 +1727,9 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         )
         await conn.connect()
 
-    async def _new_conn(self) -> AsyncHTTPSConnection:
+    async def _new_conn(
+        self, *, heb_timeout: Timeout | None = None
+    ) -> AsyncHTTPSConnection:
         """
         Return a fresh :class:`urllib3.connection.HTTPConnection`.
         """
@@ -1587,26 +1754,216 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
             actual_host = self.proxy.host
             actual_port = self.proxy.port
 
-        conn = self.ConnectionCls(
-            host=actual_host,
-            port=actual_port,
-            timeout=self.timeout.connect_timeout,
-            cert_file=self.cert_file,
-            key_file=self.key_file,
-            key_password=self.key_password,
-            cert_reqs=self.cert_reqs,
-            ca_certs=self.ca_certs,
-            ca_cert_dir=self.ca_cert_dir,
-            ca_cert_data=self.ca_cert_data,
-            assert_hostname=self.assert_hostname,
-            assert_fingerprint=self.assert_fingerprint,
-            ssl_version=self.ssl_version,
-            ssl_minimum_version=self.ssl_minimum_version,
-            ssl_maximum_version=self.ssl_maximum_version,
-            cert_data=self.cert_data,
-            key_data=self.key_data,
-            **self.conn_kw,
-        )
+        conn = None
+
+        if self.happy_eyeballs:
+            # Taking this path forward will establish a connection (aka. connect) prior to what usually
+            # take place. This is the only place where it is the most convenient.
+            log.debug(
+                "Attempting Happy-Eyeball %s:%s",
+                self.host,
+                self.port or "443",
+            )
+
+            # we have to get this metric here, as the underlying Connection object
+            # will have the DNS resolution set to 0s!
+            dt_pre_resolve = datetime.now(tz=timezone.utc)
+            ip_addresses = await self._resolver.getaddrinfo(
+                actual_host,
+                actual_port,
+                socket.AF_UNSPEC
+                if "socket_family" not in self.conn_kw
+                else self.conn_kw["socket_family"],
+                socket.SOCK_STREAM,
+                quic_upgrade_via_dns_rr=True,  # we don't know if H3 is actually supported by the underlying Connection,
+                # we don't care, it will sort it out later.
+            )
+            delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
+
+            target_pqc = {}
+
+            # does the user provided us with a quic capability cache? if so, use it!
+            if (
+                "preemptive_quic_cache" in self.conn_kw
+                and self.conn_kw["preemptive_quic_cache"] is not None
+            ):
+                target_pqc = self.conn_kw["preemptive_quic_cache"]
+
+            # if the resolver hinted us toward using a DGRAM, we inject it into the quic capability cache.
+            if any(_[1] == socket.SOCK_DGRAM for _ in ip_addresses):
+                if (self.host, self.port) not in target_pqc:
+                    target_pqc[(self.host, self.port)] = (self.host, self.port)
+
+            # HEB algorithm only make sense if the name resolution yield more than 1 record.
+            if len(ip_addresses) > 1:
+                ipv6_addresses = []
+                ipv4_addresses = []
+
+                for ip_address in ip_addresses:
+                    if ip_address[0] == socket.AF_INET6:
+                        ipv6_addresses.append(ip_address)
+                    else:
+                        ipv4_addresses.append(ip_address)
+
+                # if we have BOTH IPv4 and IPv6 entries, we want to reorder the records
+                # so that we can be as fair as possible when spawning the tasks.
+                if ipv4_addresses and ipv6_addresses:
+                    log.debug(
+                        "Happy-Eyeball Dual-Stack %s:%s",
+                        self.host,
+                        self.port or "443",
+                    )
+                    intermediary_addresses = []
+                    for ipv6_entry, ipv4_entry in zip_longest(
+                        ipv6_addresses, ipv4_addresses
+                    ):
+                        if ipv6_entry:
+                            intermediary_addresses.append(ipv6_entry)
+                        if ipv4_entry:
+                            intermediary_addresses.append(ipv4_entry)
+                    ip_addresses = intermediary_addresses
+                else:
+                    log.debug(
+                        "Happy-Eyeball Single-Stack %s:%s",
+                        self.host,
+                        self.port or "443",
+                    )
+
+                challengers = []
+                max_task = (
+                    4 if isinstance(self.happy_eyeballs, bool) else self.happy_eyeballs
+                )
+
+                if heb_timeout is None:
+                    heb_timeout = self.timeout
+
+                override_timeout = (
+                    heb_timeout.connect_timeout
+                    if heb_timeout.connect_timeout is not None
+                    and isinstance(heb_timeout.connect_timeout, (float, int))
+                    else None
+                )
+
+                for ip_address in ip_addresses[:max_task]:
+                    conn_kw = self.conn_kw.copy()
+                    target_solo_addr = (
+                        f"[{ip_address[-1][0]}]"
+                        if ip_address[0] == socket.AF_INET6
+                        else ip_address[-1][0]
+                    )
+                    conn_kw["resolver"] = AsyncResolverDescription.from_url(
+                        f"in-memory://default?hosts={self.host}:{target_solo_addr}"
+                    ).new()
+                    conn_kw["socket_family"] = ip_address[0]
+                    conn_kw["preemptive_quic_cache"] = target_pqc
+
+                    challengers.append(
+                        self.ConnectionCls(
+                            host=actual_host,
+                            port=actual_port,
+                            timeout=override_timeout,
+                            cert_file=self.cert_file,
+                            key_file=self.key_file,
+                            key_password=self.key_password,
+                            cert_reqs=self.cert_reqs,
+                            ca_certs=self.ca_certs,
+                            ca_cert_dir=self.ca_cert_dir,
+                            ca_cert_data=self.ca_cert_data,
+                            assert_hostname=self.assert_hostname,
+                            assert_fingerprint=self.assert_fingerprint,
+                            ssl_version=self.ssl_version,
+                            ssl_minimum_version=self.ssl_minimum_version,
+                            ssl_maximum_version=self.ssl_maximum_version,
+                            cert_data=self.cert_data,
+                            key_data=self.key_data,
+                            **conn_kw,
+                        )
+                    )
+
+                tasks = [
+                    asyncio.create_task(challenger.connect())
+                    for i, challenger in enumerate(challengers)
+                ]
+
+                winner_task = None
+                remnant_tasks = []
+                pending: set[Task[None]] = set()
+
+                # here we'll need at least one task that ended successfully OR every task terminated/completed.
+                while True:
+                    done, pending = await asyncio.wait(
+                        tasks if not pending else pending,
+                        return_when=asyncio.FIRST_COMPLETED,
+                        timeout=override_timeout,
+                    )
+
+                    while done:
+                        finished_task = done.pop()
+
+                        if finished_task.exception() is None:
+                            winner_task = finished_task
+
+                        if finished_task.exception():
+                            continue
+
+                        remnant_tasks.append(finished_task)
+
+                    if winner_task or not pending:
+                        break
+
+                # we need to kill the remaining tasks.
+                for task in pending:
+                    task.cancel()
+
+                if winner_task is None:
+                    within_delay_msg: str = (
+                        f" within {override_timeout}s" if override_timeout else ""
+                    )
+                    raise NewConnectionError(
+                        challengers[
+                            0
+                        ],  # that's a bummer, but it wasn't planned for this algorithm.
+                        f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs algorithm for {actual_host}:{actual_port}{within_delay_msg}",
+                    ) from tasks[0].exception()
+
+                conn = challengers[tasks.index(winner_task)]
+
+                # we have to replace the resolution latency metric
+                if conn.conn_info:
+                    conn.conn_info.resolution_latency = delta_post_resolve
+
+                if len(remnant_tasks):
+                    # we may have more than one conn ready, we shall then carefully close the others.
+                    for disposable_remnant in remnant_tasks:
+                        await challengers[tasks.index(disposable_remnant)].close()
+            else:
+                log.debug(
+                    "Happy-Eyeball Ineligible %s:%s",
+                    self.host,
+                    self.port or "443",
+                )
+
+        if conn is None:
+            conn = self.ConnectionCls(
+                host=actual_host,
+                port=actual_port,
+                timeout=self.timeout.connect_timeout,
+                cert_file=self.cert_file,
+                key_file=self.key_file,
+                key_password=self.key_password,
+                cert_reqs=self.cert_reqs,
+                ca_certs=self.ca_certs,
+                ca_cert_dir=self.ca_cert_dir,
+                ca_cert_data=self.ca_cert_data,
+                assert_hostname=self.assert_hostname,
+                assert_fingerprint=self.assert_fingerprint,
+                ssl_version=self.ssl_version,
+                ssl_minimum_version=self.ssl_minimum_version,
+                ssl_maximum_version=self.ssl_maximum_version,
+                cert_data=self.cert_data,
+                key_data=self.key_data,
+                **self.conn_kw,
+            )
 
         await self.pool.put(conn, immediately_unavailable=True)
         return conn

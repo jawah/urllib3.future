@@ -1,3 +1,14 @@
+2.7.900 (2024-03-25)
+====================
+
+- Added Happy-Eyeballs support.
+  This feature is disabled by default, you can enable it by passing ``happy_eyeballs=True``
+  into ``AsyncPoolManager``, ``AsyncHTTPConnectionPool`` or its synchronous counterparts.
+  See the documentation to learn more.
+- Fixed an issue where passing a IPv6 address to the in-memory resolver provider would be improperly registered.
+- Fixed unclosed socket when the user attempt to set a impossible port to bind on (i.e. not in range 0-65535) leading to a ResourceWarning.
+- Fixed a rare issue with DNS-over-HTTPS where a HTTPS record would also be interpreted as a normal record.
+
 2.6.906 (2024-03-18)
 ====================
 

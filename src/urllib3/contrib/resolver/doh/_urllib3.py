@@ -463,7 +463,7 @@ class HTTPSResolver(BaseResolver):
                                         )
                                     )
 
-                            continue
+                        continue
 
                     inet_type = (
                         socket.AF_INET if answer["type"] == 1 else socket.AF_INET6

@@ -1387,3 +1387,89 @@ By writing exactly this::
 
 In this example, you are enforcing connecting to a IPv4 only address, and thanks to the callback ``on_post_connection``
 you will be able to inspect the ``ConnectionInfo`` and verify the destination address.
+
+Happy Eyeballs
+--------------
+
+.. note:: Available since version 2.7+
+
+Introduction
+~~~~~~~~~~~~
+
+Happy Eyeballs (also called Fast Fallback) is an algorithm published by the IETF that
+makes dual-stack applications (those that understand both IPv4 and IPv6) more responsive
+to users by attempting to connect using both IPv4 and IPv6 at the same time (preferring IPv6), thus
+minimizing common problems experienced by users with imperfect IPv6 connections or setups.
+
+The name "happy eyeballs" derives from the term "eyeball" to describe endpoints which represent
+human Internet end-users, as opposed to servers.
+
+Source: https://en.wikipedia.org/wiki/Happy_Eyeballs
+
+Support
+~~~~~~~
+
+urllib3.future is capable of serving the Happy Eyeballs algorithm even if there is only one type
+of addresses available (e.g. IPv4 OR IPv6).
+
+We choose to limit the numbers of concurrent connections to 4 (by default) at the time we wrote this.
+
+By default, for backward compatibility sake, it is disabled.
+You will have to enable it this way::
+
+    import urllib3
+
+    async with urllib3.AsyncPoolManager(happy_eyeballs=True) as pm:
+        ...
+
+.. note:: The keyword argument ``happy_eyeballs`` can be used in ``AsyncPoolManager``, ``AsyncHTTPConnectionPool`` and its synchronous counterparts.
+
+This feature works out-of-the-box no matter what protocol you are using or interpreter version.
+
+Debug
+~~~~~
+
+urllib3.future logs its attempt and help you track why it choose one method or the other.
+
+Concurrency model
+~~~~~~~~~~~~~~~~~
+
+urllib3.future serve both synchronous and asynchronous interface, so we had to use two different concurrency models.
+Happy Eyeballs requires to do concurrent tasks.
+
+- Synchronous mode: ThreadPoolExecutor
+- Asynchronous mode: Asyncio native tasks
+
+.. note:: The asynchronous algorithm is more efficient than its synchronous counterpart.
+
+.. warning:: A particularity exist in the synchronous context, a timeout is mandatory due its nature (threads: cannot kill them if pending I/O). By default we expect a max delay of 400ms at most.
+
+In what scenario do I gain using this?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Here are a few use cases where you may gain a substantial performance gain:
+
+- I want to download a video from BigProvider XYZ (e.g. YouTube) that yield 10 IP addresses per DNS query. It will pick the fastest server available.
+- I am inside of a Kubernetes environment, and I want to pick the fastest endpoint when the service has more than 1 IP tied to it.
+- IPv6 fail sometime or IPv4, and I cannot predict it easily so I have to try them.
+
+.. note:: In the last item "IPv6 fail sometime or IPv4", you may are facing the unusual "my connect timeout" isn't respected. It was due to attempting connect to several addresses sequentially, thus making the connect timeout applied "or waited" several times.
+
+Change the number of concurrent connections
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+urllib3.future always try up to 4 IP addresses by default, but that behavior is easily overridable.
+So, instead of passing a boolean, pass an integer that must be > 1, otherwise, it will be considered
+as disabled.
+
+Here is a simple example::
+
+    import urllib3
+
+    async with urllib3.AsyncPoolManager(happy_eyeballs=10) as pm:
+        ...
+
+This will enable up to 10 concurrent connections. To be clear, with that setting,
+if your DNS resolver yield 6 addresses, you will spawn 6 tasks.
+
+.. warning:: Setting more than 20 is impracticable, DNS servers have a set limit of how many records can be returned. Most of the time, regular user are advised to leave the default value.

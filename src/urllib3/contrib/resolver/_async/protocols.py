@@ -136,10 +136,12 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                     )
 
                 return sock
-            except OSError as _:
+            except (OSError, OverflowError) as _:
                 err = _
                 if sock is not None:
                     sock.close()
+                if isinstance(_, OverflowError):
+                    break
 
         if err is not None:
             try:

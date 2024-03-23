@@ -683,6 +683,11 @@ def test_dgram_upgrade(dns_url: str) -> None:
             "abc.tld",
             "::1",
         ),
+        (
+            "in-memory://default/?hosts=abc.tld:[::1],def.tld:8.8.8.8",
+            "abc.tld",
+            "::1",
+        ),
     ],
 )
 def test_in_memory_resolver(
