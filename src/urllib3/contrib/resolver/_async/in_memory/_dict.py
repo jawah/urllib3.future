@@ -56,14 +56,15 @@ class InMemoryResolver(AsyncBaseResolver):
         else:
             for e in self._hosts[hostname]:
                 t, addr = e
-                if ipaddr == addr:
+                if addr in ipaddr:
                     return
 
         if _IPV6_ADDRZ_RE.match(ipaddr):
+            self._hosts[hostname].append((socket.AF_INET6, ipaddr[1:-1]))
+        elif is_ipv6(ipaddr):
             self._hosts[hostname].append((socket.AF_INET6, ipaddr))
-            return
-
-        self._hosts[hostname].append((socket.AF_INET, ipaddr))
+        else:
+            self._hosts[hostname].append((socket.AF_INET, ipaddr))
 
         if len(self._hosts) > self._maxsize:
             k = None

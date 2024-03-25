@@ -224,7 +224,9 @@ class LogRecorder:
     def __init__(self, target: logging.Logger = logging.root) -> None:
         super().__init__()
         self._target = target
+        self._target.setLevel(logging.DEBUG)
         self._handler = _ListHandler()
+        self._handler.setLevel(logging.DEBUG)
 
     @property
     def records(self) -> list[logging.LogRecord]:

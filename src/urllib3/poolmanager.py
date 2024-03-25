@@ -111,6 +111,7 @@ class PoolKey(typing.NamedTuple):
     key_disabled_svn: set[HttpVersion] | None
     key_cert_data: str | bytes | None
     key_key_data: str | bytes | None
+    key_happy_eyeballs: bool | int | None
 
 
 @functools.lru_cache(maxsize=8)

@@ -161,16 +161,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        if not _HAS_HTTP3_SUPPORT:
+        if not _HAS_HTTP3_SUPPORT or not _HAS_DGRAM_SUPPORT:
             return
 
         # do not upgrade if not coming from TLS already.
-        # we exclude SSLTransport, HTTP/3 is not supported in that condition anyway.
-        if type(self.sock) is AsyncSocket:
-            return
-        if self._svn == HttpVersion.h3:
-            return
-        if HttpVersion.h3 in self._disabled_svn:
+        if (
+            type(self.sock) is AsyncSocket
+            or self._svn == HttpVersion.h3
+            or HttpVersion.h3 in self._disabled_svn
+        ):
             return
 
         self.__alt_authority = self.__h3_probe()
