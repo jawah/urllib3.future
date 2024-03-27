@@ -666,6 +666,9 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
             assert r.read(5) == resp_data[:5]
             assert r.read() == resp_data[5:]
+            assert (
+                r.read() == b""
+            )  # it should yield empty bytes, as we ended / closed the stream!
 
     def test_lazy_load_twice(self) -> None:
         # This test is sad and confusing. Need to figure out what's

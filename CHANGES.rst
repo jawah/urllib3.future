@@ -1,3 +1,11 @@
+2.7.901 (2024-03-27)
+====================
+
+- Fixed an edge case with Response::read() confusing situation where passing a positive amount to read then
+  passing ``None`` n-times would continuously return cached data if the stream was closed (content consumed).
+- Fixed IncompleteRead exception property ``expected`` that did not contain the "remaining" amount expected but rather
+  the total expected.
+
 2.7.900 (2024-03-25)
 ====================
 

@@ -672,15 +672,14 @@ class HfaceBackend(BaseBackend):
                                 "",
                             ).strip("()")
 
-                            received, expected = tuple(msg.split(", "))
+                            received, expected = (
+                                int("".join(c for c in _ if c.isdigit()).strip())
+                                for _ in tuple(msg.split(", "))
+                            )
 
                             raise IncompleteRead(
-                                partial=int(
-                                    "".join(c for c in received if c.isdigit()).strip()
-                                ),
-                                expected=int(
-                                    "".join(c for c in expected if c.isdigit()).strip()
-                                ),
+                                partial=received,
+                                expected=expected - received,
                             )
                     except (ValueError, IndexError):
                         pass
