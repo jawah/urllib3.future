@@ -2046,7 +2046,9 @@ class TestBadContentLength(SocketDummyServerTestCase):
                 "GET", url="/", preload_content=False, enforce_content_length=True
             )
             data = get_response.stream(100)
-            with pytest.raises(IncompleteRead, match="received 12 bytes, expected 22"):
+            with pytest.raises(
+                IncompleteRead, match="received 12 bytes, expected 10 more"
+            ):
                 next(data)
             done_event.set()
 

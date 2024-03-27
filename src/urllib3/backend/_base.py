@@ -164,6 +164,7 @@ class LowLevelResponse:
         else:
             if __size is None:
                 data = self.__buffer_excess
+                self.__buffer_excess = b""
             else:
                 data = self.__buffer_excess[:__size]
                 self.__buffer_excess = self.__buffer_excess[__size:]
