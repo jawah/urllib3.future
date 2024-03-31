@@ -117,6 +117,7 @@ filterwarnings = [
     '''ignore:The event_loop fixture provided by:DeprecationWarning''',
     '''ignore:A plugin raised an exception during''',
     '''ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning''',
+    '''ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning''',
 ]
 
 [tool.isort]
