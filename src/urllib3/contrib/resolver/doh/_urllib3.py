@@ -334,8 +334,8 @@ class HTTPSResolver(BaseResolver):
                         if response:
                             self._unconsumed.remove(response)
 
-                if not response:
-                    response = self._pool.get_response()
+                    if not response:
+                        response = self._pool.get_response()
 
                 if response is None:
                     raise socket.gaierror(
