@@ -344,6 +344,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 ):
                     chain = self.sock.sslobj._sslobj.get_verified_chain()
 
+                    # When cert_reqs=0 CPython returns an empty dict for the peer cert.
+                    if not self.conn_info.certificate_dict and chain:
+                        self.conn_info.certificate_dict = chain[0].get_info()
+
                     if (
                         len(chain) > 1
                         and Certificate is not None
