@@ -228,7 +228,7 @@ jobs:
 
       - name: "Traefik: Start stack"
         if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
-        run: docker-compose up -d
+        run: docker compose up -d || docker-compose up -d
 
       - name: "Traefik: Wait for service"
         uses: nick-fields/retry@v3

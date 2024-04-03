@@ -1,3 +1,9 @@
+2.7.902 (2024-04-03)
+====================
+
+- Fixed a rare racing condition occurring on PyPy when using DNS-over-HTTPS leading to a socket.gaierror exception.
+- Fixed retrieving the dict peer certificate when ``cert_reqs=0`` aka. disabled TLS over TCP verification.
+
 2.7.901 (2024-03-27)
 ====================
 
