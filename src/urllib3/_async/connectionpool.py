@@ -1392,7 +1392,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         try:
             # Request a connection from the queue.
             timeout_obj = self._get_timeout(timeout)
-            await self.pool.wait_for_available_or_available_slot()
+            await self.pool.wait_for_unallocated_or_available_slot()
             conn = await self._get_conn(timeout=pool_timeout, heb_timeout=timeout_obj)
 
             conn.timeout = timeout_obj.connect_timeout  # type: ignore[assignment]
