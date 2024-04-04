@@ -1,3 +1,8 @@
+2.7.903 (2024-04-04)
+====================
+
+- Removed warning about "unresponsive" pool of connection due to how it can confuse users.
+
 2.7.902 (2024-04-03)
 ====================
 

@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import contextvars
 import typing
-import warnings
 
 from ..traffic_police import (
     AtomicTraffic,
@@ -100,9 +99,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
             traffic_state_of(_) == TrafficState.IDLE for _ in self._registry.values()
         )
 
-    async def wait_for_available_or_available_slot(self) -> None:
+    async def wait_for_unallocated_or_available_slot(
+        self, timeout: float | None = None
+    ) -> None:
+        """Wait for EITHER free slot in the pool OR one conn is not saturated!"""
         combined_wait: float = 0.0
-        warn_raised: bool = False
 
         while True:
             if self.maxsize is None:  # case Inf.
@@ -121,17 +122,16 @@ class AsyncTrafficPolice(typing.Generic[T]):
             await asyncio.sleep(0.001)
             combined_wait += 0.001
 
-            if not warn_raised and combined_wait >= 1.0:
-                warn_raised = True
-                warnings.warn(
-                    "Your connection pool seems unresponsive, please try to "
-                    "increase the maxsize capacity or release connections manually. "
-                    "In case of pending requests, please consume them.",
-                    UserWarning,
-                    stacklevel=2,
+            if timeout is not None and combined_wait >= combined_wait:
+                raise TimeoutError(
+                    "Timed out while waiting for conn_or_pool to become available"
                 )
 
-    async def wait_for_idle_or_available_slot(self) -> None:
+    async def wait_for_idle_or_available_slot(
+        self, timeout: float | None = None
+    ) -> None:
+        combined_wait: float = 0.0
+
         while True:
             if self.maxsize is None:  # case Inf.
                 return
@@ -147,6 +147,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     return
 
             await asyncio.sleep(0.001)
+            combined_wait += 0.001
+
+            if timeout is not None and combined_wait >= combined_wait:
+                raise TimeoutError(
+                    "Timed out while waiting for conn_or_pool to become available"
+                )
 
     def __len__(self) -> int:
         return len(self._registry)
