@@ -239,7 +239,9 @@ class HfaceBackend(BaseBackend):
             # mTLS end
             cert_fingerprint=cert_fingerprint,
             cert_use_common_name=cert_use_common_name,
-            verify_hostname=bool(assert_hostname),
+            verify_hostname=assert_hostname
+            if isinstance(assert_hostname, bool)
+            else True,
             assert_hostname=assert_hostname
             if isinstance(assert_hostname, str)
             else None,

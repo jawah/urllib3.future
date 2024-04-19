@@ -1,3 +1,9 @@
+2.7.904 (2024-04-19)
+====================
+
+- Added support for qh3 version v1
+- **Security:** Fixed ignored DNS matching with its certificate in certain conditions while negotiating HTTP/3 over QUIC
+
 2.7.903 (2024-04-04)
 ====================
 
