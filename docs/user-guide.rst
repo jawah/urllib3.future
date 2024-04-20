@@ -25,6 +25,10 @@ automatically available depending on the availability of the wheel on your platf
 
 This may require some external toolchain to be available (compilation).
 
+.. note:: HTTP/3 is automatically installed and ready-to-use if you fulfill theses requirements: Linux, Windows or MacOS using Python (or PyPy) 3.7 onward with one of the supported architecture (arm64/aarch64/s390x/x86_64/amd64/ppc64/ppc64le).
+
+.. caution:: If the requirements aren't fulfilled for HTTP/3, your package manager won't pick qh3 for installation when installing urllib3-future and it will be silently disabled. We choose not to impose compilation and keep a safe pure Python fallback.
+
 Making Requests
 ---------------
 

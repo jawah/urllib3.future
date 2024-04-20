@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import datetime
 import ssl
 import typing
 from collections import deque
@@ -24,14 +25,19 @@ from typing import Any, Iterable, Sequence
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
-import qh3.h3.events as h3_events
-import qh3.quic.events as quic_events
-from qh3.h3.connection import H3Connection, ProtocolError
-from qh3.h3.exceptions import H3Error
-from qh3.quic.configuration import QuicConfiguration
-from qh3.quic.connection import QuicConnection, QuicConnectionError
-from qh3.quic.logger import QuicFileLogger
-from qh3.tls import CipherSuite, SessionTicket
+from qh3 import (
+    CipherSuite,
+    H3Connection,
+    H3Error,
+    ProtocolError,
+    QuicConfiguration,
+    QuicConnection,
+    QuicConnectionError,
+    QuicFileLogger,
+    SessionTicket,
+    h3_events,
+    quic_events,
+)
 
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
@@ -67,7 +73,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             hostname_checks_common_name=tls_config.cert_use_common_name,
             assert_fingerprint=tls_config.cert_fingerprint,
             verify_hostname=tls_config.verify_hostname,
-            secrets_log_file=open(keylogfile_path, "w+") if keylogfile_path else None,  # type: ignore[arg-type]
+            secrets_log_file=open(keylogfile_path, "w") if keylogfile_path else None,  # type: ignore[arg-type]
             quic_logger=QuicFileLogger(qlogdir_path) if qlogdir_path else None,
             idle_timeout=300.0,
         )
@@ -272,31 +278,24 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         x509_certificate = self._quic.get_issuercerts()[0]
 
-        try:
-            from cryptography.hazmat.primitives._serialization import Encoding
-        except ImportError as e:
-            raise ValueError(
-                "Unable to generate a dict-form representation due to missing dependencies or sub-module"
-            ) from e
-
         if binary_form:
-            return x509_certificate.public_bytes(Encoding.DER)
+            return x509_certificate.public_bytes()
+
+        datetime.datetime.fromtimestamp(
+            x509_certificate.not_valid_before, tz=datetime.timezone.utc
+        )
 
         issuer_info = {
-            "version": x509_certificate.version.value + 1,
-            "serialNumber": ("%x" % x509_certificate.serial_number).upper(),
+            "version": x509_certificate.version + 1,
+            "serialNumber": x509_certificate.serial_number.upper(),
             "subject": [],
             "issuer": [],
-            "notBefore": (
-                x509_certificate.not_valid_before
-                if not hasattr(x509_certificate, "not_valid_before_utc")
-                else x509_certificate.not_valid_before_utc
+            "notBefore": datetime.datetime.fromtimestamp(
+                x509_certificate.not_valid_before, tz=datetime.timezone.utc
             ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
-            "notAfter": (
-                x509_certificate.not_valid_after
-                if not hasattr(x509_certificate, "not_valid_after_utc")
-                else x509_certificate.not_valid_after_utc
+            "notAfter": datetime.datetime.fromtimestamp(
+                x509_certificate.not_valid_after, tz=datetime.timezone.utc
             ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
         }
@@ -312,32 +311,22 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "DC": "domainComponent",
         }
 
-        for item in x509_certificate.subject:
-            name = (
-                item.rfc4514_attribute_name
-                if item.rfc4514_attribute_name not in _short_name_assoc
-                else _short_name_assoc[item.rfc4514_attribute_name]
-            )
+        for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
             issuer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        name,
-                        item.value,
+                        _short_name_assoc[rfc4514_attribute_name],
+                        value.decode(),
                     ),
                 )
             )
 
-        for item in x509_certificate.issuer:
-            name = (
-                item.rfc4514_attribute_name
-                if item.rfc4514_attribute_name not in _short_name_assoc
-                else _short_name_assoc[item.rfc4514_attribute_name]
-            )
+        for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
             issuer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        name,
-                        item.value,
+                        _short_name_assoc[rfc4514_attribute_name],
+                        value.decode(),
                     ),
                 )
             )
@@ -360,36 +349,20 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if x509_certificate is None:
             raise ValueError("TLS handshake has not been done yet")
 
-        try:
-            from cryptography import x509
-            from cryptography.hazmat._oid import (
-                AuthorityInformationAccessOID,
-                ExtensionOID,
-            )
-            from cryptography.hazmat.primitives._serialization import Encoding
-        except ImportError as e:
-            raise ValueError(
-                "Unable to generate a dict-form representation due to missing dependencies or sub-module"
-            ) from e
-
         if binary_form:
-            return x509_certificate.public_bytes(Encoding.DER)
+            return x509_certificate.public_bytes()
 
         peer_info = {
-            "version": x509_certificate.version.value + 1,
-            "serialNumber": ("%x" % x509_certificate.serial_number).upper(),
+            "version": x509_certificate.version + 1,
+            "serialNumber": x509_certificate.serial_number.upper(),
             "subject": [],
             "issuer": [],
-            "notBefore": (
-                x509_certificate.not_valid_before
-                if not hasattr(x509_certificate, "not_valid_before_utc")
-                else x509_certificate.not_valid_before_utc
+            "notBefore": datetime.datetime.fromtimestamp(
+                x509_certificate.not_valid_before, tz=datetime.timezone.utc
             ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
-            "notAfter": (
-                x509_certificate.not_valid_after
-                if not hasattr(x509_certificate, "not_valid_after_utc")
-                else x509_certificate.not_valid_after_utc
+            "notAfter": datetime.datetime.fromtimestamp(
+                x509_certificate.not_valid_after, tz=datetime.timezone.utc
             ).strftime("%b %d %H:%M:%S %Y")
             + " UTC",
             "subjectAltName": [],
@@ -409,86 +382,60 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "DC": "domainComponent",
         }
 
-        for item in x509_certificate.subject:
-            name = (
-                item.rfc4514_attribute_name
-                if item.rfc4514_attribute_name not in _short_name_assoc
-                else _short_name_assoc[item.rfc4514_attribute_name]
-            )
+        for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
             peer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        name,
-                        item.value,
+                        _short_name_assoc[rfc4514_attribute_name],
+                        value.decode(),
                     ),
                 )
             )
 
-        for item in x509_certificate.issuer:
-            name = (
-                item.rfc4514_attribute_name
-                if item.rfc4514_attribute_name not in _short_name_assoc
-                else _short_name_assoc[item.rfc4514_attribute_name]
-            )
+        for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
             peer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        name,
-                        item.value,
+                        _short_name_assoc[rfc4514_attribute_name],
+                        value.decode(),
                     ),
                 )
             )
 
-        for ext in x509_certificate.extensions:
-            if isinstance(ext.value, x509.SubjectAlternativeName):
-                for name in ext.value:
-                    if isinstance(name, x509.DNSName):
-                        peer_info["subjectAltName"].append(("DNS", name.value))  # type: ignore[attr-defined]
-                    elif isinstance(name, x509.IPAddress):
-                        peer_info["subjectAltName"].append(  # type: ignore[attr-defined]
-                            ("IP Address", str(name.value))
-                        )
-
-        try:
-            aia = x509_certificate.extensions.get_extension_for_oid(
-                ExtensionOID.AUTHORITY_INFORMATION_ACCESS
-            ).value
-            ocsp_locations = [
-                ia for ia in aia if ia.access_method == AuthorityInformationAccessOID.OCSP  # type: ignore[attr-defined]
+        for alt_name in x509_certificate.get_subject_alt_names():
+            decoded_alt_name = alt_name.decode()
+            in_parenthesis = decoded_alt_name[
+                decoded_alt_name.index("(") + 1 : decoded_alt_name.index(")")
             ]
+            if decoded_alt_name.startswith("DNS"):
+                peer_info["subjectAltName"].append(("DNS", in_parenthesis))  # type: ignore[attr-defined]
+            else:
+                from ....resolver.utils import inet4_ntoa, inet6_ntoa
 
-            peer_info["OCSP"] = [e.access_location.value for e in ocsp_locations]
-        except x509.extensions.ExtensionNotFound:
-            pass
+                if len(in_parenthesis) == 11:
+                    ip_address_decoded = inet4_ntoa(
+                        bytes.fromhex(in_parenthesis.replace(":", ""))
+                    )
+                else:
+                    ip_address_decoded = inet6_ntoa(
+                        bytes.fromhex(in_parenthesis.replace(":", ""))
+                    )
+                peer_info["subjectAltName"].append(("IP Address", ip_address_decoded))  # type: ignore[attr-defined]
 
-        try:
-            aia = x509_certificate.extensions.get_extension_for_oid(
-                ExtensionOID.AUTHORITY_INFORMATION_ACCESS
-            ).value
-            ca_issuers_locations = [
-                ia
-                for ia in aia  # type: ignore[attr-defined]
-                if ia.access_method == AuthorityInformationAccessOID.CA_ISSUERS
-            ]
+        peer_info["OCSP"] = []
 
-            peer_info["caIssuers"] = [
-                e.access_location.value for e in ca_issuers_locations
-            ]
-        except x509.extensions.ExtensionNotFound:
-            pass
+        for endpoint in x509_certificate.get_ocsp_endpoints():
+            decoded_endpoint = endpoint.decode()
 
-        try:
-            aia = x509_certificate.extensions.get_extension_for_oid(
-                ExtensionOID.CRL_DISTRIBUTION_POINTS
-            ).value
+            peer_info["OCSP"].append(decoded_endpoint[decoded_endpoint.index("(") + 1 : -1])  # type: ignore[attr-defined]
 
-            peer_info["crlDistributionPoints"] = [
-                ia.full_name[0].value
-                for ia in aia  # type: ignore[attr-defined]
-                if hasattr(ia, "full_name")
-            ]
-        except x509.extensions.ExtensionNotFound:
-            pass
+        peer_info["caIssuers"] = []
+
+        for endpoint in x509_certificate.get_issuer_endpoints():
+            decoded_endpoint = endpoint.decode()
+            peer_info["caIssuers"].append(decoded_endpoint[decoded_endpoint.index("(") + 1 : -1])  # type: ignore[attr-defined]
+
+        peer_info["crlDistributionPoints"] = []
 
         pop_keys = []
 
