@@ -253,7 +253,7 @@ jobs:
           NOX_SESSION: ${{ matrix.nox-session }}
 
       - name: "Upload artifact"
-        uses: "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
+        uses: "actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba"
         with:
           name: coverage-data
           path: ".coverage.*"
@@ -289,7 +289,7 @@ jobs:
 
       - if: ${{ failure() }}
         name: "Upload report if check failed"
-        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce
+        uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba
         with:
           name: coverage-report
           path: htmlcov
