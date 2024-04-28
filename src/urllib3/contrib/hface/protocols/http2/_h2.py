@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from typing import Iterator
 
-import h2.config  # type: ignore
-import h2.connection  # type: ignore
-import h2.events  # type: ignore
-import h2.exceptions  # type: ignore
+import jh2.config  # type: ignore
+import jh2.connection  # type: ignore
+import jh2.events  # type: ignore
+import jh2.exceptions  # type: ignore
 
 from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
@@ -36,7 +36,7 @@ from ...events import (
 from .._protocols import HTTP2Protocol
 
 
-class _PatchedH2Connection(h2.connection.H2Connection):  # type: ignore[misc]
+class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
     """
     This is a performance hotfix class. We internally, already keep
     track of the open stream count.
@@ -44,7 +44,7 @@ class _PatchedH2Connection(h2.connection.H2Connection):  # type: ignore[misc]
 
     def __init__(
         self,
-        config: h2.config.H2Configuration | None = None,
+        config: jh2.config.H2Configuration | None = None,
         observable_impl: HTTP2ProtocolHyperImpl | None = None,
     ) -> None:
         super().__init__(config=config)
@@ -67,8 +67,8 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         normalize_outbound_headers: bool = False,
         normalize_inbound_headers: bool = True,
     ) -> None:
-        self._connection: h2.connection.H2Connection = _PatchedH2Connection(
-            h2.config.H2Configuration(
+        self._connection: jh2.connection.H2Connection = _PatchedH2Connection(
+            jh2.config.H2Configuration(
                 client_side=True,
                 validate_outbound_headers=validate_outbound_headers,
                 normalize_outbound_headers=normalize_outbound_headers,
@@ -85,7 +85,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
-        return h2.exceptions.ProtocolError, h2.exceptions.H2Error
+        return jh2.exceptions.ProtocolError, jh2.exceptions.H2Error
 
     def is_available(self) -> bool:
         if self._goaway_to_honor:
@@ -126,13 +126,13 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def has_pending_event(self, *, stream_id: int | None = None) -> bool:
         return self._events.count(stream_id=stream_id) > 0
 
-    def _map_events(self, h2_events: list[h2.events.Event]) -> Iterator[Event]:
+    def _map_events(self, h2_events: list[jh2.events.Event]) -> Iterator[Event]:
         for e in h2_events:
             if isinstance(
                 e,
                 (
-                    h2.events.ResponseReceived,
-                    h2.events.TrailersReceived,
+                    jh2.events.ResponseReceived,
+                    jh2.events.TrailersReceived,
                 ),
             ):
                 end_stream = e.stream_ended is not None
@@ -141,7 +141,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     stream = self._connection.streams.pop(e.stream_id)
                     self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield HeadersReceived(e.stream_id, e.headers, end_stream=end_stream)
-            elif isinstance(e, h2.events.DataReceived):
+            elif isinstance(e, jh2.events.DataReceived):
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
@@ -151,12 +151,12 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     e.flow_controlled_length, e.stream_id
                 )
                 yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
-            elif isinstance(e, h2.events.StreamReset):
+            elif isinstance(e, jh2.events.StreamReset):
                 self._open_stream_count -= 1
                 stream = self._connection.streams.pop(e.stream_id)
                 self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield StreamResetReceived(e.stream_id, e.error_code)
-            elif isinstance(e, h2.events.ConnectionTerminated):
+            elif isinstance(e, jh2.events.ConnectionTerminated):
                 # ConnectionTerminated from h2 means that GOAWAY was received.
                 # A server can send GOAWAY for graceful shutdown, where clients
                 # do not open new streams, but inflight requests can be completed.
@@ -166,7 +166,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 if e.error_code == 0:
                     self._goaway_to_honor = True
                 yield GoawayReceived(e.last_stream_id, e.error_code)
-            elif isinstance(e, h2.events.SettingsAcknowledged):
+            elif isinstance(e, jh2.events.SettingsAcknowledged):
                 yield HandshakeCompleted(alpn_protocol="h2")
 
     def connection_lost(self) -> None:
@@ -186,12 +186,12 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         # hyper/h2 does not allow such a thing for now. let's work around this.
         if self._goaway_to_honor and not self._terminated and self._open_stream_count:
             self._connection.state_machine.state = (
-                h2.connection.ConnectionState.CLIENT_OPEN
+                jh2.connection.ConnectionState.CLIENT_OPEN
             )
 
         try:
             h2_events = self._connection.receive_data(data)
-        except h2.exceptions.ProtocolError as e:
+        except jh2.exceptions.ProtocolError as e:
             self._connection_terminated(e.error_code, str(e))
         else:
             self._events.extend(self._map_events(h2_events))

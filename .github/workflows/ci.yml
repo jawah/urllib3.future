@@ -44,7 +44,7 @@ jobs:
       matrix:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12"]
         os:
-          - macos-latest
+          - macos-12
           - windows-latest
           - ubuntu-20.04  # OpenSSL 1.1.1
           - ubuntu-latest  # OpenSSL 3.0
@@ -89,7 +89,7 @@ jobs:
             os: ubuntu-22.04
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-latest":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-latest":"Ubuntu Latest (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-12":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-latest":"Ubuntu Latest (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 40
     steps:
@@ -253,7 +253,7 @@ jobs:
           NOX_SESSION: ${{ matrix.nox-session }}
 
       - name: "Upload artifact"
-        uses: "actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba"
+        uses: "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
         with:
           name: coverage-data
           path: ".coverage.*"
@@ -277,7 +277,7 @@ jobs:
         run: "python -m pip install --upgrade coverage"
 
       - name: "Download artifact"
-        uses: actions/download-artifact@8caf195ad4b1dee92908e23f56eeb0696f1dd42d
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a
         with:
           name: coverage-data
 
@@ -289,7 +289,7 @@ jobs:
 
       - if: ${{ failure() }}
         name: "Upload report if check failed"
-        uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce
         with:
           name: coverage-report
           path: htmlcov

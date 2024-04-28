@@ -1,3 +1,9 @@
+2.7.905 (2024-04-28)
+====================
+
+- Added support for ``jh2>=5,<6`` instead of ``h2~=4.0`` as a drop-in replacement.
+  Expect a significant performance improvement with HTTP/2. We successfully reduced our dependency footprint to the minimum.
+
 2.7.904 (2024-04-20)
 ====================
 
