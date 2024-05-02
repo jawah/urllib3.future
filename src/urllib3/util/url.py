@@ -349,6 +349,7 @@ def _idna_encode(name: str) -> bytes:
     return name.lower().encode("ascii")
 
 
+@lru_cache(maxsize=1024)
 def _encode_target(target: str) -> str:
     """Percent-encodes a request target so that there are no invalid characters
 

@@ -108,8 +108,11 @@ class LowLevelResponse:
         self._method = method
 
         self.__internal_read_st = body
-        self.closed = True if self.__internal_read_st is None else False
-        self._eot = True if self.__internal_read_st is None else False
+
+        has_body = self.__internal_read_st is not None
+
+        self.closed = has_body is False
+        self._eot = self.closed
 
         # is kept to determine if we can upgrade conn
         self.authority = authority
@@ -324,6 +327,8 @@ class BaseBackend:
 
         self._start_last_request: datetime | None = None
 
+        self._cached_http_vsn: int | None = None
+
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises
 
@@ -341,7 +346,9 @@ class BaseBackend:
     def _http_vsn(self) -> int:
         """Reimplemented for backward compatibility purposes."""
         assert self._svn is not None
-        return int(self._svn.value.split("/")[-1].replace(".", ""))
+        if self._cached_http_vsn is None:
+            self._cached_http_vsn = int(self._svn.value.split("/")[-1].replace(".", ""))
+        return self._cached_http_vsn
 
     @property
     def is_saturated(self) -> bool:

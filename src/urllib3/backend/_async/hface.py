@@ -907,8 +907,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         for raw_header, raw_value in head_event.headers:
             # special headers that represent (usually) the HTTP response status, version and reason.
-            if raw_header.startswith(b":"):
-                if status is None and raw_header == b":status":
+            if status is None and raw_header[0] == 0x3A:
+                if raw_header == b":status":
                     status = int(raw_value)
             else:
                 headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
@@ -1105,3 +1105,4 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__expected_body_length = None
         self.__remaining_body_length = None
         self._start_last_request = None
+        self._cached_http_vsn = None

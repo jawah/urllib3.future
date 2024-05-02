@@ -1,3 +1,8 @@
+2.7.906 (2024-05-02)
+====================
+
+- Overall performance improvement with HTTP/2 in a highly concurrent context.
+
 2.7.905 (2024-04-28)
 ====================
 

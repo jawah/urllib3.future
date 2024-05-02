@@ -219,16 +219,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._events.extend(self._map_quic_event(self._quic._close_event))
 
     def _map_quic_event(self, quic_event: quic_events.QuicEvent) -> Iterable[Event]:
-        if isinstance(quic_event, quic_events.ConnectionIdIssued):
-            self._connection_ids.add(quic_event.connection_id)
-        elif isinstance(quic_event, quic_events.ConnectionIdRetired):
-            try:
-                self._connection_ids.remove(quic_event.connection_id)
-            except (
-                KeyError
-            ):  # it is surprising, learn more about this with aioquic maintainer.
-                pass
-
         if isinstance(quic_event, quic_events.HandshakeCompleted):
             yield _HandshakeCompleted(quic_event.alpn_protocol)
         elif isinstance(quic_event, quic_events.ConnectionTerminated):

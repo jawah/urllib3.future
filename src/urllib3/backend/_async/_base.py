@@ -38,8 +38,11 @@ class AsyncLowLevelResponse:
         self._method = method
 
         self.__internal_read_st = body
-        self.closed = True if self.__internal_read_st is None else False
-        self._eot = True if self.__internal_read_st is None else False
+
+        has_body = self.__internal_read_st is not None
+
+        self.closed = has_body is False
+        self._eot = self.closed
 
         # is kept to determine if we can upgrade conn
         self.authority = authority
