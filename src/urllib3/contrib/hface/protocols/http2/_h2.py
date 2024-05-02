@@ -82,16 +82,16 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
         self._goaway_to_honor: bool = False
+        self._max_stream_count = self._connection.remote_settings.max_concurrent_streams
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
         return jh2.exceptions.ProtocolError, jh2.exceptions.H2Error
 
     def is_available(self) -> bool:
-        if self._goaway_to_honor:
+        if self._terminated or self._goaway_to_honor:
             return False
-        max_streams = self._connection.remote_settings.max_concurrent_streams
-        return self._terminated is False and max_streams > self._open_stream_count
+        return self._max_stream_count > self._open_stream_count  # type: ignore[no-any-return]
 
     def is_idle(self) -> bool:
         return self._terminated is False and self._open_stream_count == 0
@@ -195,6 +195,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             self._connection_terminated(e.error_code, str(e))
         else:
             self._events.extend(self._map_events(h2_events))
+
+        if self._connection.remote_settings.has_update:
+            self._max_stream_count = (
+                self._connection.remote_settings.max_concurrent_streams
+            )
 
     def bytes_to_send(self) -> bytes:
         return self._connection.data_to_send()  # type: ignore[no-any-return]
