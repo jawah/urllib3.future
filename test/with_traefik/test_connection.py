@@ -5,6 +5,7 @@ import pytest
 from urllib3 import HttpVersion
 from urllib3.connection import HTTPSConnection
 from urllib3.exceptions import ResponseNotReady
+from urllib3.util import create_urllib3_context
 
 from . import TraefikTestCase
 
@@ -142,3 +143,34 @@ class TestConnection(TraefikTestCase):
 
         assert len(quic_cache_resumption.keys()) == 1
         assert (self.host, self.https_port) in quic_cache_resumption
+
+    def test_quic_extract_ssl_ctx_ca_root(self) -> None:
+        quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
+            (self.host, self.https_port): ("", self.https_port)
+        }
+
+        ctx = create_urllib3_context()
+        ctx.load_verify_locations(cafile=self.ca_authority)
+
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ssl_context=ctx,
+            preemptive_quic_cache=quic_cache_resumption,
+        )
+
+        conn.request("GET", "/get")
+        resp = conn.getresponse()
+
+        assert conn._HfaceBackend__custom_tls_settings is not None  # type: ignore
+        detect_ctx_fallback = conn._HfaceBackend__custom_tls_settings.cadata  # type: ignore
+
+        assert detect_ctx_fallback is not None
+        assert isinstance(detect_ctx_fallback, bytes)
+        assert self.ca_authority is not None
+
+        with open(self.ca_authority, "rb") as fp:
+            assert fp.read() in detect_ctx_fallback
+
+        assert resp.status == 200
+        assert resp.version == 30

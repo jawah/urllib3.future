@@ -215,6 +215,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             if ssl_context.verify_mode == ssl.CERT_NONE:
                 allow_insecure = True
 
+            if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
+                ctx_root_certificates = ssl_context.get_ca_certs(True)
+
+                if ctx_root_certificates:
+                    ca_cert_data = "\n".join(
+                        ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
+                    )
+
         if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
             allow_insecure = True
 
@@ -911,7 +919,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 if raw_header == b":status":
                     status = int(raw_value)
             else:
-                headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
+                headers.add(raw_header.decode("ascii"), raw_value.decode("latin-1"))
 
         if promise is None:
             try:

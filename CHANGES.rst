@@ -1,3 +1,8 @@
+2.7.907 (2024-05-05)
+====================
+
+- Passing a ssl context containing manually loaded root certificates no longer is ignored with HTTP/3 over QUIC.
+
 2.7.906 (2024-05-02)
 ====================
 

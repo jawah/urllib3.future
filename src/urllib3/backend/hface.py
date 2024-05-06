@@ -221,6 +221,14 @@ class HfaceBackend(BaseBackend):
             if ssl_context.verify_mode == ssl.CERT_NONE:
                 allow_insecure = True
 
+            if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
+                ctx_root_certificates = ssl_context.get_ca_certs(True)
+
+                if ctx_root_certificates:
+                    ca_cert_data = "\n".join(
+                        ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
+                    )
+
         if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
             allow_insecure = True
 
@@ -947,7 +955,7 @@ class HfaceBackend(BaseBackend):
             event_type_collectable=(HeadersReceived,),
             respect_end_stream_signal=False,
             stream_id=promise.stream_id if promise else None,
-        ).pop()
+        )[0]
 
         headers = HTTPHeaderDict()
         status: int | None = None
