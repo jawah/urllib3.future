@@ -919,7 +919,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 if raw_header == b":status":
                     status = int(raw_value)
             else:
-                headers.add(raw_header.decode("ascii"), raw_value.decode("latin-1"))
+                headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
 
         if promise is None:
             try:

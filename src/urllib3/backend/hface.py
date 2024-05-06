@@ -955,7 +955,7 @@ class HfaceBackend(BaseBackend):
             event_type_collectable=(HeadersReceived,),
             respect_end_stream_signal=False,
             stream_id=promise.stream_id if promise else None,
-        )[0]
+        ).pop()
 
         headers = HTTPHeaderDict()
         status: int | None = None
