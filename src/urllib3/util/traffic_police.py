@@ -49,15 +49,12 @@ class AtomicTraffic(TrafficPoliceFine, queue.Empty):
 
 def traffic_state_of(manageable_traffic: ManageableTraffic) -> TrafficState:
     if (
-        hasattr(manageable_traffic, "is_saturated")
+        getattr(manageable_traffic, "is_saturated", None)
         and manageable_traffic.sock is not None  # type: ignore[union-attr]
-        and manageable_traffic.is_saturated
     ):
         return TrafficState.SATURATED
-    elif hasattr(manageable_traffic, "is_idle"):
-        return TrafficState.IDLE if manageable_traffic.is_idle else TrafficState.USED
     else:
-        return TrafficState.IDLE
+        return TrafficState.IDLE if manageable_traffic.is_idle else TrafficState.USED
 
 
 class TrafficPolice(typing.Generic[T]):
