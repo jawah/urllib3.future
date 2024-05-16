@@ -64,10 +64,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self.__ctx_cursor: contextvars.ContextVar[
             tuple[int, T] | None
-        ] = contextvars.ContextVar("cursor")
+        ] = contextvars.ContextVar("cursor", default=None)
         self.__ctx_wait_clock: contextvars.ContextVar[
             float | None
-        ] = contextvars.ContextVar("wait_clock")
+        ] = contextvars.ContextVar("wait_clock", default=None)
 
     @property
     def _cursor(self) -> tuple[int, T] | None:

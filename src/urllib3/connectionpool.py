@@ -120,6 +120,10 @@ class ConnectionPool:
         Close all pooled connections and disable the pool.
         """
 
+    @property
+    def is_idle(self) -> bool:
+        raise NotImplementedError
+
 
 # This is taken from http://hg.python.org/cpython/file/7aaba721ebc0/Lib/socket.py#l252
 _blocking_errnos = {errno.EAGAIN, errno.EWOULDBLOCK}

@@ -1,3 +1,8 @@
+2.7.908 (2024-05-16)
+====================
+
+- Improve ``traffic_state_of`` function to improve the overall performance in a highly concurrent context.
+
 2.7.907 (2024-05-05)
 ====================
 
