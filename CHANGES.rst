@@ -1,3 +1,9 @@
+2.7.909 (2024-05-17)
+====================
+
+- Improve (large) data download performance by increasing the default blocksize.
+- Improve HTTP/1.1 performance by reducing the amount of time we want to infer "if next cycle" should be triggered.
+
 2.7.908 (2024-05-16)
 ====================
 
