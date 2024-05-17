@@ -133,7 +133,6 @@ class TestPostBody(TraefikTestCase):
         ) -> None:
             nonlocal progress_track
             progress_track.append((total_sent, content_length, is_completed, any_error))
-            print(progress_track[-1])
 
         async with AsyncHTTPSConnectionPool(
             self.host, self.https_port, ca_certs=self.ca_authority
@@ -144,7 +143,7 @@ class TestPostBody(TraefikTestCase):
         assert progress_track[-1][-2] is True
         assert progress_track[0][1] == 16800 * 3
         assert progress_track[-1][0] == 16800 * 3
-        assert progress_track[0][0] < 16800 * 3
+        assert progress_track[0][0] <= 16800 * 3
 
     async def test_upload_track_progress_no_content_length(self) -> None:
         progress_track = []
@@ -169,4 +168,4 @@ class TestPostBody(TraefikTestCase):
         assert progress_track[-1][-2] is True
         assert progress_track[0][1] is None
         assert progress_track[-1][0] == 16800 * 3
-        assert progress_track[0][0] < 16800 * 3
+        assert progress_track[0][0] <= 16800 * 3

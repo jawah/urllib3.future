@@ -14,14 +14,17 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import h11
 
 from ..._stream_matrix import StreamMatrix
-from ..._typing import HeadersType, HeaderType
+from ..._typing import HeadersType
 from ...events import ConnectionTerminated, DataReceived, Event, HeadersReceived
 from .._protocols import HTTP1Protocol
 
 
+@lru_cache(maxsize=64)
 def capitalize_header_name(name: bytes) -> bytes:
     """
     Take a header name and capitalize it.
@@ -90,11 +93,9 @@ def headers_from_response(
 
     Generates from pseudo (colon) headers from a response line.
     """
-    headers: list[HeaderType] = [
+    return [
         (b":status", str(response.status_code).encode("ascii"))
-    ]
-    headers.extend(response.headers)
-    return headers
+    ] + response.headers.raw_items()
 
 
 class HTTP1ProtocolHyperImpl(HTTP1Protocol):
@@ -215,7 +216,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def _h11_data_received(self, data: bytes) -> None:
         self._connection.receive_data(data)
         self._fetch_events()
-        self._maybe_start_next_cycle()
 
     def _fetch_events(self) -> None:
         a = self._events.append
@@ -248,8 +248,9 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def _headers_from_h11_response(
         self, h11_event: h11.Response | h11.InformationalResponse
     ) -> Event:
-        headers = headers_from_response(h11_event)
-        return HeadersReceived(self._current_stream_id, headers)
+        return HeadersReceived(
+            self._current_stream_id, headers_from_response(h11_event)
+        )
 
     def _data_from_h11(self, h11_event: h11.Data) -> Event:
         return DataReceived(self._current_stream_id, h11_event.data)

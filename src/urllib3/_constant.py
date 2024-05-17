@@ -219,7 +219,9 @@ responses: typing.Mapping[int, str] = {
 
 # Default value for `blocksize` - a new parameter introduced to
 # http.client.HTTPConnection & http.client.HTTPSConnection in Python 3.7
-DEFAULT_BLOCKSIZE: int = 16384
+# The maximum TCP packet size is 65535 octets. But Python seems to buffer packets, so
+# passing a "very-high" value does improve responsiveness.
+DEFAULT_BLOCKSIZE: int = 65535 * 2
 
 # Mozilla TLS recommendations for ciphers
 # General-purpose servers with a variety of clients, recommended for almost all systems.
