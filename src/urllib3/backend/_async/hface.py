@@ -76,7 +76,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):
-        if not _HAS_HTTP3_SUPPORT or not _HAS_DGRAM_SUPPORT:
+        if not _HAS_HTTP3_SUPPORT() or not _HAS_DGRAM_SUPPORT:
             if disabled_svn is None:
                 disabled_svn = set()
             disabled_svn.add(HttpVersion.h3)
@@ -161,7 +161,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        if not _HAS_HTTP3_SUPPORT or not _HAS_DGRAM_SUPPORT:
+        if not _HAS_HTTP3_SUPPORT() or not _HAS_DGRAM_SUPPORT:
             return
 
         # do not upgrade if not coming from TLS already.
@@ -179,6 +179,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 self._preemptive_quic_cache[
                     (self.host, self.port or 443)
                 ] = self.__alt_authority
+
+                if (self.host, self.port or 443) not in self._preemptive_quic_cache:
+                    return
             self._svn = HttpVersion.h3
             # We purposely ignore setting the Hostname. Avoid MITM attack from local cache attack.
             self.port = self.__alt_authority[1]
@@ -1091,15 +1094,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     # overly protective, made in case of possible exception leak.
                     raise ProtocolError(e) from e  # Defensive:
                 else:
-                    # we have a heisenbug somewhere deep.
-                    # during garbage collection, hazmat.openssl binding start acting crazy in (very specific contexts)
-                    # todo: investigate the seg fault and report to cpython.
-                    if self._svn != HttpVersion.h3:
-                        while True:
-                            goodbye_frame = self._protocol.bytes_to_send()
-                            if not goodbye_frame:
-                                break
-                            await self.sock.sendall(goodbye_frame)
+                    while True:
+                        goodbye_frame = self._protocol.bytes_to_send()
+                        if not goodbye_frame:
+                            break
+                        await self.sock.sendall(goodbye_frame)
 
             self.sock.close()
 

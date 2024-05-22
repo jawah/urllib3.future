@@ -4,6 +4,7 @@ import socket
 import sys
 import typing
 from datetime import datetime, timezone
+from functools import lru_cache
 from socket import SOCK_DGRAM, SOCK_STREAM
 
 try:  # Compiled with SSL?
@@ -61,7 +62,16 @@ if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS
 
 _HAS_SYS_AUDIT = hasattr(sys, "audit")
-_HAS_HTTP3_SUPPORT = HTTPProtocolFactory.has(HTTP3Protocol)  # type: ignore[type-abstract]
+
+
+@lru_cache(maxsize=1)
+def _HAS_HTTP3_SUPPORT() -> bool:
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("qh3") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 
 class HfaceBackend(BaseBackend):
@@ -80,7 +90,7 @@ class HfaceBackend(BaseBackend):
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
     ):
-        if not _HAS_HTTP3_SUPPORT:
+        if not _HAS_HTTP3_SUPPORT():
             if disabled_svn is None:
                 disabled_svn = set()
             disabled_svn.add(HttpVersion.h3)
@@ -165,7 +175,7 @@ class HfaceBackend(BaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        if not _HAS_HTTP3_SUPPORT:
+        if not _HAS_HTTP3_SUPPORT():
             return
 
         # do not upgrade if not coming from TLS already.
@@ -185,6 +195,10 @@ class HfaceBackend(BaseBackend):
                 self._preemptive_quic_cache[
                     (self.host, self.port or 443)
                 ] = self.__alt_authority
+
+                if (self.host, self.port or 443) not in self._preemptive_quic_cache:
+                    return
+
             self._svn = HttpVersion.h3
             # We purposely ignore setting the Hostname. Avoid MITM attack from local cache attack.
             self.port = self.__alt_authority[1]
@@ -1138,15 +1152,11 @@ class HfaceBackend(BaseBackend):
                     # overly protective, made in case of possible exception leak.
                     raise ProtocolError(e) from e  # Defensive:
                 else:
-                    # we have a heisenbug somewhere deep.
-                    # during garbage collection, hazmat.openssl binding start acting crazy in (very specific contexts)
-                    # todo: investigate the seg fault and report to cpython.
-                    if self._svn != HttpVersion.h3:
-                        while True:
-                            goodbye_frame = self._protocol.bytes_to_send()
-                            if not goodbye_frame:
-                                break
-                            self.sock.sendall(goodbye_frame)
+                    while True:
+                        goodbye_frame = self._protocol.bytes_to_send()
+                        if not goodbye_frame:
+                            break
+                        self.sock.sendall(goodbye_frame)
 
             self.sock.close()
 
