@@ -1,3 +1,11 @@
+2.7.910 (2024-05-22)
+====================
+
+- Removed workaround for a bug that existed in qh3 < 1.0 with cryptography in a concurrent (thread) environment.
+- Avoid loading qh3 at runtime in order to improve import delay. It was used to probe HTTP/3 support. We compute it lazily from now on.
+- Added the possibility to use the ``preemptive_quic_cache`` MutableMapping to exclude endpoints.
+  If your implementation discard the recently set key/entry it will prevent the connection from upgrading itself.
+
 2.7.909 (2024-05-17)
 ====================
 
