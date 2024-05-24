@@ -836,6 +836,7 @@ class HfaceBackend(BaseBackend):
             self.__legacy_host_entry = (
                 values[0].encode("idna") if isinstance(values[0], str) else values[0]
             )
+            return
 
         for value in values:
             encoded_value = (
@@ -867,8 +868,20 @@ class HfaceBackend(BaseBackend):
         should_end_stream: bool = expect_body_afterward is False
 
         # handle cases where 'Host' header is set manually
-        if self.__authority_bit_set is False and self.__legacy_host_entry is not None:
-            self.__headers.append((b":authority", self.__legacy_host_entry))
+        if self.__legacy_host_entry is not None:
+            existing_authority = None
+
+            for cursor_header, cursor_value in self.__headers:
+                if cursor_header == b":authority":
+                    existing_authority = (cursor_header, cursor_value)
+                    break
+                if not cursor_header.startswith(b":"):
+                    break
+
+            if existing_authority is not None:
+                self.__headers.remove(existing_authority)
+
+            self.__headers.insert(3, (b":authority", self.__legacy_host_entry))
             self.__authority_bit_set = True
 
         if self.__authority_bit_set is False:
