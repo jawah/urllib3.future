@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import socket
+
 import pytest
 
-from urllib3 import HTTPHeaderDict, HTTPSConnectionPool
-from urllib3.exceptions import ProtocolError
+from urllib3 import HTTPHeaderDict, HTTPSConnectionPool, ResolverDescription
+from urllib3.exceptions import InsecureRequestWarning, ProtocolError
+from urllib3.util import parse_url
 from urllib3.util.request import SKIP_HEADER
 
 from . import TraefikTestCase
@@ -60,3 +63,44 @@ class TestProtocolLevel(TraefikTestCase):
                     assert temoin.get(key) in value
 
             assert len(seen) == len(dict_headers.keys())
+
+    def test_override_authority_via_host_header(self) -> None:
+        assert self.https_url is not None
+
+        parsed_url = parse_url(self.https_url)
+        assert parsed_url.host is not None
+
+        resolver = ResolverDescription.from_url("system://").new()
+
+        records = resolver.getaddrinfo(
+            parsed_url.host,
+            parsed_url.port,
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+        )
+
+        target_ip = records[0][-1][0]
+
+        with pytest.warns(InsecureRequestWarning):
+            with HTTPSConnectionPool(
+                target_ip, self.https_port, ca_certs=self.ca_authority, cert_reqs=0
+            ) as p:
+                resp = p.request(
+                    "GET",
+                    f"{self.https_url.replace(parsed_url.host, target_ip)}/get",
+                    headers={"host": parsed_url.host},
+                    retries=False,
+                )
+
+                assert resp.status == 200
+                assert resp.version == 20
+
+                resp = p.request(
+                    "GET",
+                    f"{self.https_url.replace(parsed_url.host, target_ip)}/get",
+                    headers={"host": parsed_url.host},
+                    retries=False,
+                )
+
+                assert resp.status == 200
+                assert resp.version == 30

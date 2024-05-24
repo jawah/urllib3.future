@@ -1,3 +1,8 @@
+2.7.911 (2024-05-24)
+====================
+
+- Fixed the ability to override properly the ``:authority`` special header via the legacy ``Host`` header.
+
 2.7.910 (2024-05-22)
 ====================
 
