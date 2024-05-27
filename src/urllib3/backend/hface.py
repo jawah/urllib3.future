@@ -243,6 +243,13 @@ class HfaceBackend(BaseBackend):
                         ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
                     )
 
+            if (
+                assert_hostname is None
+                and hasattr(ssl_context, "check_hostname")
+                and ssl_context.check_hostname is False
+            ):
+                assert_hostname = False
+
         if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
             allow_insecure = True
 
@@ -425,7 +432,9 @@ class HfaceBackend(BaseBackend):
 
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]
-                if cipher_tuple[1] == "TLSv1.1":
+                if cipher_tuple[1] == "TLSv1.0":
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1
+                elif cipher_tuple[1] == "TLSv1.1":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1
                 elif cipher_tuple[1] == "TLSv1.2":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_2

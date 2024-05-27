@@ -1,4 +1,6 @@
 # Copyright 2022 Akamai Technologies, Inc
+# Largely rewritten in 2023 for urllib3-future
+# Copyright 2024 Ahmed Tahri
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.

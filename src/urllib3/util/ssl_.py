@@ -668,7 +668,9 @@ def is_capable_for_quic(
     quic_disable: bool = False
 
     if ctx is not None:
-        if isinstance(ctx.maximum_version, ssl.TLSVersion):
+        if ssl.OP_NO_TLSv1_3 in ctx.options:
+            quic_disable = True
+        elif isinstance(ctx.maximum_version, ssl.TLSVersion):
             if (
                 ctx.maximum_version != ssl.TLSVersion.MAXIMUM_SUPPORTED
                 and ctx.maximum_version <= ssl.TLSVersion.TLSv1_2

@@ -1,3 +1,11 @@
+2.7.912 (2024-05-27)
+====================
+
+- Fixed unset ``tls_version`` within ``ConnectionInfo`` when using the legacy TLSv1 protocol.
+- Fixed license metadata SPDX in package.
+- Fixed custom ssl context with ``OP_NO_TLSv1_3`` option that did not disable HTTP/3.
+- Fixed custom ssl context with ``assert_hostname=False`` parameter not forwarded to QUIC configuration.
+
 2.7.911 (2024-05-24)
 ====================
 
