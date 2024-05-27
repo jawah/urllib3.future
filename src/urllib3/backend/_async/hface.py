@@ -374,7 +374,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]
-                if cipher_tuple[1] == "TLSv1.1":
+                if cipher_tuple[1] == "TLSv1.0":
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1
+                elif cipher_tuple[1] == "TLSv1.1":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1
                 elif cipher_tuple[1] == "TLSv1.2":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_2
