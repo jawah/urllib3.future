@@ -527,7 +527,16 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             log.debug("Resetting dropped connection: %s", self.host)
             conn.close()
 
-        return conn or self._new_conn(heb_timeout=heb_timeout)
+        try:
+            return conn or self._new_conn(heb_timeout=heb_timeout)
+        except (
+            TypeError
+        ):  # this branch catch overridden pool that don't support Happy-Eyeballs!
+            conn = self._new_conn()
+            # as this branch is meant for people bypassing our main logic, we have to memorize the conn immediately
+            # into our pool of conn.
+            self.pool.put(conn, immediately_unavailable=True)
+            return conn
 
     def _put_conn(self, conn: HTTPConnection) -> None:
         """

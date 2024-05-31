@@ -807,6 +807,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if self.sock is None:
             await self.connect()  # type: ignore[attr-defined]
 
+        # some libraries override connect(), thus bypassing our state machine initialization.
+        if self._protocol is None:
+            await self._post_conn()
+
         assert self.sock is not None and self._protocol is not None
 
         # only h2 and h3 support streams, it is faked/simulated for h1.
