@@ -1,3 +1,8 @@
+2.7.913 (2024-05-31)
+====================
+
+- Relaxed constraints around ``HTTPConnectionPool._new_conn`` private method in order to ensure a broader compatibility. (#122)
+
 2.7.912 (2024-05-27)
 ====================
 

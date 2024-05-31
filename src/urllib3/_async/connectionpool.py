@@ -537,7 +537,16 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             log.debug("Resetting dropped connection: %s", self.host)
             await conn.close()
 
-        return conn or await self._new_conn(heb_timeout=heb_timeout)
+        try:
+            return conn or await self._new_conn(heb_timeout=heb_timeout)
+        except (
+            TypeError
+        ):  # this branch catch overridden pool that don't support Happy-Eyeballs!
+            conn = await self._new_conn()
+            # as this branch is meant for people bypassing our main logic, we have to memorize the conn immediately
+            # into our pool of conn.
+            await self.pool.put(conn, immediately_unavailable=True)
+            return conn
 
     async def _put_conn(self, conn: AsyncHTTPConnection) -> None:
         """
