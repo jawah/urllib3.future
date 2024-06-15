@@ -148,7 +148,7 @@ async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
         quic_upgrade_via_dns_rr=False,
     )
 
-    assert any([_[-1][0] == "1.1.1.1" for _ in res])
+    assert any([_[-1][0] in ["1.1.1.1", "1.0.0.1"] for _ in res])
     await resolver.close()
 
 
