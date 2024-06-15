@@ -48,6 +48,23 @@ class AsyncLowLevelResponse:
         self.authority = authority
         self.port = port
 
+        # http.client compat layer
+        self.debuglevel: int = 0  # no-op flag, kept for strict backward compatibility!
+        self.chunked: bool = (  # is "chunked" being used? http1 only!
+            self.version == 11 and "chunked" == self.msg.get("transfer-encoding")
+        )
+        self.chunk_left: int | None = None  # bytes left to read in current chunk
+        self.length: int | None = None  # number of bytes left in response
+        self.will_close: bool = (
+            False  # no-op flag, kept for strict backward compatibility!
+        )
+
+        if not self.chunked:
+            content_length = self.msg.get("content-length")
+            self.length = int(content_length) if content_length else None
+
+        self.fp = None
+
         self._stream_id = stream_id
 
         self.__buffer_excess: bytes = b""
@@ -108,6 +125,13 @@ class AsyncLowLevelResponse:
 
         if self._eot and len(self.__buffer_excess) == 0:
             self.closed = True
+
+        if self.chunked:
+            self.chunk_left = (
+                len(self.__buffer_excess) if self.__buffer_excess else None
+            )
+        elif self.length is not None:
+            self.length -= len(data)
 
         return data
 

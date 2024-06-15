@@ -1,3 +1,9 @@
+2.7.914 (2024-06-15)
+====================
+
+- Further improved compatibility with some third party programs that accessed hazardous materials within http.client standard library.
+- Add "ARM64" architecture for qh3 automatic installation on Windows.
+
 2.7.913 (2024-05-31)
 ====================
 

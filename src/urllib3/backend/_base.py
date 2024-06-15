@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import socket
 import typing
+import warnings
 from base64 import b64encode
 from datetime import datetime, timedelta
 from secrets import token_bytes
@@ -100,6 +101,7 @@ class LowLevelResponse:
         authority: str | None = None,
         port: int | None = None,
         stream_id: int | None = None,
+        sock: socket.socket | None = None,
     ):
         self.status = status
         self.version = version
@@ -118,10 +120,51 @@ class LowLevelResponse:
         self.authority = authority
         self.port = port
 
+        # http.client additional compat layer
+        # although rarely used, some 3rd party library may
+        # peek at those for whatever reason. most of the time they
+        # are wrong to do so.
+        self.debuglevel: int = 0  # no-op flag, kept for strict backward compatibility!
+        self.chunked: bool = (  # is "chunked" being used? http1 only!
+            self.version == 11 and "chunked" == self.msg.get("transfer-encoding")
+        )
+        self.chunk_left: int | None = None  # bytes left to read in current chunk
+        self.length: int | None = None  # number of bytes left in response
+        self.will_close: bool = (
+            False  # no-op flag, kept for strict backward compatibility!
+        )
+
+        if not self.chunked:
+            content_length = self.msg.get("content-length")
+            self.length = int(content_length) if content_length else None
+
+        # tricky part...
+        # sometime 3rd party library tend to access hazardous materials...
+        # they want a direct socket access.
+        self._sock = sock
+
         self._stream_id = stream_id
 
         self.__buffer_excess: bytes = b""
         self.__promise: ResponsePromise | None = None
+
+    @property
+    def fp(self) -> socket.SocketIO | None:
+        warnings.warn(
+            (
+                "This is a rather awkward situation. A program (probably) tried to access the socket object "
+                "directly, thus bypassing our state-machine protocol. This is currently unsupported and dangerous. "
+                "We tried to be rather strict on the backward compatibility between urllib3 and urllib3-future, "
+                "but this is rather complicated to support (e.g. direct socket access). "
+                "You are probably better off using our higher level read() function. "
+                "Please open an issue at https://github.com/jawah/urllib3.future/issues to gain support or "
+                "insights on it."
+            ),
+            DeprecationWarning,
+            2,
+        )
+
+        return self._sock.makefile("rb") if self._sock is not None else None  # type: ignore[return-value]
 
     @property
     def from_promise(self) -> ResponsePromise | None:
@@ -178,12 +221,21 @@ class LowLevelResponse:
 
         if self._eot and len(self.__buffer_excess) == 0:
             self.closed = True
+            self._sock = None
+
+        if self.chunked:
+            self.chunk_left = (
+                len(self.__buffer_excess) if self.__buffer_excess else None
+            )
+        elif self.length is not None:
+            self.length -= len(data)
 
         return data
 
     def close(self) -> None:
         self.__internal_read_st = None
         self.closed = True
+        self._sock = None
 
 
 class ResponsePromise:
