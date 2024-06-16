@@ -142,6 +142,7 @@ class LowLevelResponse:
         # sometime 3rd party library tend to access hazardous materials...
         # they want a direct socket access.
         self._sock = sock
+        self._fp: socket.SocketIO | None = None
 
         self._stream_id = stream_id
 
@@ -153,7 +154,8 @@ class LowLevelResponse:
         warnings.warn(
             (
                 "This is a rather awkward situation. A program (probably) tried to access the socket object "
-                "directly, thus bypassing our state-machine protocol. This is currently unsupported and dangerous. "
+                "directly, thus bypassing our state-machine protocol (amongst other things). "
+                "This is currently unsupported and dangerous. Errors will occurs if you negotiated HTTP/2 or later versions. "
                 "We tried to be rather strict on the backward compatibility between urllib3 and urllib3-future, "
                 "but this is rather complicated to support (e.g. direct socket access). "
                 "You are probably better off using our higher level read() function. "
@@ -164,7 +166,13 @@ class LowLevelResponse:
             2,
         )
 
-        return self._sock.makefile("rb") if self._sock is not None else None  # type: ignore[return-value]
+        if self._sock is None:
+            return None
+
+        if self._fp is None:
+            self._fp = self._sock.makefile("rb")  # type: ignore[assignment]
+
+        return self._fp
 
     @property
     def from_promise(self) -> ResponsePromise | None:

@@ -1047,7 +1047,9 @@ class HfaceBackend(BaseBackend):
             authority=self.host,
             port=self.port,
             stream_id=promise.stream_id,
-            sock=self.sock,  # kept for BC purposes[...] one should not try to read from it.
+            sock=self.sock
+            if self._http_vsn == 11
+            else None,  # kept for BC purposes[...] one should not try to read from it.
         )
 
         promise.response = self._response

@@ -63,12 +63,17 @@ class AsyncLowLevelResponse:
             content_length = self.msg.get("content-length")
             self.length = int(content_length) if content_length else None
 
-        self.fp = None
-
         self._stream_id = stream_id
 
         self.__buffer_excess: bytes = b""
         self.__promise: ResponsePromise | None = None
+
+    @property
+    def fp(self) -> typing.NoReturn:
+        raise RuntimeError(
+            "urllib3-future no longer expose a filepointer-like in responses. It was a remnant from the http.client era. "
+            "We no longer support it."
+        )
 
     @property
     def from_promise(self) -> ResponsePromise | None:
