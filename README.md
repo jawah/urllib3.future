@@ -29,6 +29,7 @@
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
 - Proxy support for HTTP and SOCKS.
 - Detailed connection inspection.
+- HTTP/2 with prior knowledge.
 - Multiplexed connection.
 - Mirrored Sync & Async.
 - Amazingly Fast.
@@ -84,7 +85,18 @@ Or...
 import urllib3_future
 ```
 
-Doing `import urllib3_future` is the safest option for you as there is a significant number of projects that
+Or... upgrade any of your containers with...
+
+```dockerfile
+FROM python:3.12
+
+# ... your installation ...
+RUN pip install .
+# then! (after every other pip call)
+RUN pip install urllib3-future
+```
+
+Doing `import urllib3_future` is the safest option if you start a project from scratch for you as there is a significant number of projects that
 require `urllib3`.
 
 ## Notes

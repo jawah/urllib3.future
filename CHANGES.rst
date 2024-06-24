@@ -1,3 +1,12 @@
+2.8.900 (2024-06-24)
+====================
+
+- Support for HTTP/2 with prior knowledge over non-encrypted connection to leverage multiplexing in internal networks.
+  To leverage this feature, you have to disable HTTP/1.1 so that `urllib3-future` can infer your intent.
+  Disabling HTTP/1.1 is to be made as follow: ``PoolManager(disabled_svn={HttpVersion.h11})``.
+- Added raw data bytes counter in ``LowLevelResponse`` to help end-users track download speed accordingly if they use
+  brotli, gzip or zstd transfer-encoding during downloads.
+
 2.7.914 (2024-06-15)
 ====================
 

@@ -154,6 +154,13 @@ class HfaceBackend(BaseBackend):
                     self._svn = HttpVersion.h3
                     # we ignore alt-host as we do not trust cache security
                     self.port: int = self.__alt_authority[1]
+            elif (
+                HttpVersion.h11 in self._disabled_svn
+                and HttpVersion.h2 in self._disabled_svn
+            ):
+                self.__alt_authority = (self.host, self.port or 443)
+                self._svn = HttpVersion.h3
+                self.port = self.__alt_authority[1]
 
         if self._svn == HttpVersion.h3:
             self.socket_kind = SOCK_DGRAM
@@ -311,9 +318,12 @@ class HfaceBackend(BaseBackend):
             self.sock is not None
         ), "probable attempt to call _post_conn() prior to successful _new_conn()"
 
-        # first request was not made yet
+        # first request was not made yet // need to infer what protocol to use.
         if self._svn is None:
-            if isinstance(self.sock, (ssl.SSLSocket, SSLTransport)):
+            # if we are on a TLS connection, inspect ALPN.
+            is_tcp_tls_conn = isinstance(self.sock, (ssl.SSLSocket, SSLTransport))
+
+            if is_tcp_tls_conn:
                 alpn: str | None = (
                     self.sock.selected_alpn_protocol()
                     if isinstance(self.sock, ssl.SSLSocket)
@@ -324,11 +334,42 @@ class HfaceBackend(BaseBackend):
                     if alpn == "h2":
                         self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
                         self._svn = HttpVersion.h2
-                    elif alpn != "http/1.1":
+                    elif alpn == "http/1.1":
+                        self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                        self._svn = HttpVersion.h11
+                    else:
                         raise ProtocolError(  # Defensive: This should be unreachable as ALPN is explicit higher in the stack.
-                            f"Unsupported ALPN '{alpn}' during handshake"
+                            f"Unsupported ALPN '{alpn}' during handshake. Did you try to reach a non-HTTP server ?"
                         )
-        else:
+                else:
+                    # no-alpn, let's decide between H2 or H11
+                    # by default, try HTTP/1.1
+                    if HttpVersion.h11 not in self._disabled_svn:
+                        self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                        self._svn = HttpVersion.h11
+                    elif HttpVersion.h2 not in self._disabled_svn:
+                        self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                        self._svn = HttpVersion.h2
+                    else:
+                        raise RuntimeError(
+                            "No compatible protocol are enabled to emit request. You currently are connected using "
+                            "TCP TLS and must have HTTP/1.1 or/and HTTP/2 enabled to pursue."
+                        )
+            else:
+                # no-TLS, let's decide between H2 or H11
+                # by default, try HTTP/1.1
+                if HttpVersion.h11 not in self._disabled_svn:
+                    self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                    self._svn = HttpVersion.h11
+                elif HttpVersion.h2 not in self._disabled_svn:
+                    self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                    self._svn = HttpVersion.h2
+                else:
+                    raise RuntimeError(
+                        "No compatible protocol are enabled to emit request. You currently are connected using "
+                        "TCP Unencrypted and must have HTTP/1.1 or/and HTTP/2 enabled to pursue."
+                    )
+        else:  # we or someone manually set the SVN / http version, so load the protocol regardless of what we know.
             if self._svn == HttpVersion.h2:
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
             elif self._svn == HttpVersion.h3:
@@ -359,6 +400,7 @@ class HfaceBackend(BaseBackend):
             self.conn_info.resolution_latency = self._connect_timings[0]
             self.conn_info.established_latency = self._connect_timings[1]
 
+        #: Populating the ConnectionInfo using Python native capabilities
         if self._svn != HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
 
@@ -448,10 +490,15 @@ class HfaceBackend(BaseBackend):
             ):
                 self.conn_info.destination_address = self.sock.getpeername()[:2]
 
-        # fallback to http/1.1
+        # fallback to http/1.1 or http/2 with prior knowledge!
         if self._protocol is None or self._svn == HttpVersion.h11:
-            self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
-            self._svn = HttpVersion.h11
+            if self._protocol is None and HttpVersion.h11 in self._disabled_svn:
+                self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h2
+            else:
+                self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h11
+
             self.conn_info.http_version = self._svn
 
             if (
@@ -471,6 +518,7 @@ class HfaceBackend(BaseBackend):
             receive_first=False,
         )
 
+        #: Populating ConnectionInfo using QUIC TLS interfaces
         if isinstance(self._protocol, HTTPOverQUICProtocol):
             self.conn_info.certificate_der = self._protocol.getpeercert(
                 binary_form=True

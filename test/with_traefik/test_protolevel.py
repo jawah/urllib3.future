@@ -4,7 +4,13 @@ import socket
 
 import pytest
 
-from urllib3 import HTTPHeaderDict, HTTPSConnectionPool, ResolverDescription
+from urllib3 import (
+    HTTPConnectionPool,
+    HTTPHeaderDict,
+    HTTPSConnectionPool,
+    HttpVersion,
+    ResolverDescription,
+)
 from urllib3.exceptions import InsecureRequestWarning, ProtocolError
 from urllib3.util import parse_url
 from urllib3.util.request import SKIP_HEADER
@@ -104,3 +110,18 @@ class TestProtocolLevel(TraefikTestCase):
 
                 assert resp.status == 200
                 assert resp.version == 30
+
+    def test_http2_with_prior_knowledge(self) -> None:
+        with HTTPConnectionPool(
+            self.host,
+            self.http_port,
+            disabled_svn={HttpVersion.h11},
+        ) as p:
+            resp = p.request(
+                "GET",
+                f"{self.http_url}/get",
+                retries=False,
+            )
+
+            assert resp.status == 200
+            assert resp.version == 20

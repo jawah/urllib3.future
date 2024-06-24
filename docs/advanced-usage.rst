@@ -1473,3 +1473,23 @@ This will enable up to 10 concurrent connections. To be clear, with that setting
 if your DNS resolver yield 6 addresses, you will spawn 6 tasks.
 
 .. warning:: Setting more than 20 is impracticable, DNS servers have a set limit of how many records can be returned. Most of the time, regular user are advised to leave the default value.
+
+HTTP/2 with prior knowledge
+---------------------------
+
+.. note:: Available since version 2.8+
+
+In some cases, mostly internal networks, you may desire to leverage multiplexing within a single HTTP connection without
+bothering with TLS (ALPN extensions) to discover and use HTTP/2 capabilities.
+
+You're in luck! urllib3-future now support talking with HTTP/2 server over an unencrypted connection.
+The only things you have to do is to disable HTTP/1.1 so that we can infer that you want to negotiate HTTP/2
+without any prior clear indicative that the remote can.
+
+Here is a simple example::
+
+    import urllib3
+
+    with urllib3.PoolManager(disabled_svn={urllib3.HttpVersion.h11}) as pm:
+        r = pm.urlopen("GET", "http://my-internal.svc.local/")
+

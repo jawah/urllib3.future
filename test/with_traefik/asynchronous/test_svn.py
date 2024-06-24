@@ -69,7 +69,24 @@ class TestSvnCapability(TraefikTestCase):
                 resp = await p.request("GET", "/get")
                 assert resp.version == (11 if i == 0 else 30)
 
-    async def test_cannot_disable_h11(self) -> None:
+    async def test_can_disable_h11(self) -> None:
+        p = AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            timeout=1,
+            retries=0,
+            ca_certs=self.ca_authority,
+            disabled_svn={HttpVersion.h11},
+        )
+
+        r = await p.request("GET", "/get")
+
+        assert r.version == 20
+        assert r.status == 200
+
+        await p.close()
+
+    async def test_cannot_disable_everything(self) -> None:
         with pytest.raises(RuntimeError):
             p = AsyncHTTPSConnectionPool(
                 self.host,
@@ -77,7 +94,18 @@ class TestSvnCapability(TraefikTestCase):
                 timeout=1,
                 retries=0,
                 ca_certs=self.ca_authority,
-                disabled_svn={HttpVersion.h11},
+                disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
+            )
+
+            await p.request("GET", "/get")
+
+        with pytest.raises(RuntimeError):
+            p = AsyncHTTPConnectionPool(  # type: ignore[assignment]
+                self.host,
+                self.http_port,
+                timeout=1,
+                retries=0,
+                disabled_svn={HttpVersion.h11, HttpVersion.h2},
             )
 
             await p.request("GET", "/get")
@@ -224,3 +252,18 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 30
 
         assert len(dumb_cache.keys()) == 1
+
+    async def test_http2_with_prior_knowledge(self) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host,
+            self.http_port,
+            disabled_svn={HttpVersion.h11},
+        ) as p:
+            resp = await p.request(
+                "GET",
+                f"{self.http_url}/get",
+                retries=False,
+            )
+
+            assert resp.status == 200
+            assert resp.version == 20
