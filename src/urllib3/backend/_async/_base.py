@@ -63,6 +63,9 @@ class AsyncLowLevelResponse:
             content_length = self.msg.get("content-length")
             self.length = int(content_length) if content_length else None
 
+        #: not part of http.client but useful to track (raw) download speeds!
+        self.data_in_count = 0
+
         self._stream_id = stream_id
 
         self.__buffer_excess: bytes = b""
@@ -131,12 +134,16 @@ class AsyncLowLevelResponse:
         if self._eot and len(self.__buffer_excess) == 0:
             self.closed = True
 
+        size_in = len(data)
+
         if self.chunked:
             self.chunk_left = (
                 len(self.__buffer_excess) if self.__buffer_excess else None
             )
         elif self.length is not None:
-            self.length -= len(data)
+            self.length -= size_in
+
+        self.data_in_count += size_in
 
         return data
 

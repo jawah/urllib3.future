@@ -138,6 +138,9 @@ class LowLevelResponse:
             content_length = self.msg.get("content-length")
             self.length = int(content_length) if content_length else None
 
+        #: not part of http.client but useful to track (raw) download speeds!
+        self.data_in_count = 0
+
         # tricky part...
         # sometime 3rd party library tend to access hazardous materials...
         # they want a direct socket access.
@@ -231,12 +234,16 @@ class LowLevelResponse:
             self.closed = True
             self._sock = None
 
+        size_in = len(data)
+
         if self.chunked:
             self.chunk_left = (
                 len(self.__buffer_excess) if self.__buffer_excess else None
             )
         elif self.length is not None:
-            self.length -= len(data)
+            self.length -= size_in
+
+        self.data_in_count += size_in
 
         return data
 
@@ -371,9 +378,9 @@ class BaseBackend:
         self._preemptive_quic_cache = preemptive_quic_cache
 
         if self._disabled_svn:
-            if HttpVersion.h11 in self._disabled_svn:
+            if len(self._disabled_svn) == len(list(HttpVersion)):
                 raise RuntimeError(
-                    "HTTP/1.1 cannot be disabled. It will be allowed in a future major version."
+                    "You disabled every supported protocols. The HTTP connection object is left with no outcomes."
                 )
 
         # valuable intel

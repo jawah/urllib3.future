@@ -63,7 +63,22 @@ class TestSvnCapability(TraefikTestCase):
                 resp = p.request("GET", "/get")
                 assert resp.version == (11 if i == 0 else 30)
 
-    def test_cannot_disable_h11(self) -> None:
+    def test_can_disable_h11(self) -> None:
+        p = HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            timeout=1,
+            retries=0,
+            ca_certs=self.ca_authority,
+            disabled_svn={HttpVersion.h11},
+        )
+
+        r = p.request("GET", "/get")
+
+        assert r.status == 200
+        assert r.version == 20
+
+    def test_cannot_disable_everything(self) -> None:
         with pytest.raises(RuntimeError):
             p = HTTPSConnectionPool(
                 self.host,
@@ -71,7 +86,18 @@ class TestSvnCapability(TraefikTestCase):
                 timeout=1,
                 retries=0,
                 ca_certs=self.ca_authority,
-                disabled_svn={HttpVersion.h11},
+                disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
+            )
+
+            p.request("GET", "/get")
+
+        with pytest.raises(RuntimeError):
+            p = HTTPConnectionPool(  # type: ignore[assignment]
+                self.host,
+                self.http_port,
+                timeout=1,
+                retries=0,
+                disabled_svn={HttpVersion.h11, HttpVersion.h2},
             )
 
             p.request("GET", "/get")

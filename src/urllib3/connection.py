@@ -735,7 +735,7 @@ class HTTPSConnection(HTTPConnection):
                 tls_in_tls=tls_in_tls,
                 assert_hostname=self.assert_hostname,
                 assert_fingerprint=self.assert_fingerprint,
-                alpn_protocols=alpn_protocols,
+                alpn_protocols=alpn_protocols or None,
                 cert_data=self.cert_data,
                 key_data=self.key_data,
             )

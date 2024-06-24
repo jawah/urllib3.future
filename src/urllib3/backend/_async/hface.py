@@ -140,6 +140,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     self._svn = HttpVersion.h3
                     # we ignore alt-host as we do not trust cache security
                     self.port: int = self.__alt_authority[1]
+            elif (
+                HttpVersion.h11 in self._disabled_svn
+                and HttpVersion.h2 in self._disabled_svn
+            ):
+                self.__alt_authority = (self.host, self.port or 443)
+                self._svn = HttpVersion.h3
+                self.port = self.__alt_authority[1]
 
         if self._svn == HttpVersion.h3:
             self.socket_kind = SOCK_DGRAM
@@ -289,19 +296,51 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         # first request was not made yet
         if self._svn is None:
-            if isinstance(
-                self.sock, (SSLAsyncSocket,)
-            ):  # TODO: Complete and verify this section
-                alpn: str | None = self.sock.selected_alpn_protocol()
+            # if we are on a TLS connection, inspect ALPN.
+            is_tcp_tls_conn = isinstance(self.sock, SSLAsyncSocket)
+
+            if is_tcp_tls_conn:
+                alpn: str | None = self.sock.selected_alpn_protocol()  # type: ignore[attr-defined]
 
                 if alpn is not None:
                     if alpn == "h2":
                         self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
                         self._svn = HttpVersion.h2
-                    elif alpn != "http/1.1":
+                    elif alpn == "http/1.1":
+                        self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                        self._svn = HttpVersion.h11
+                    else:
                         raise ProtocolError(  # Defensive: This should be unreachable as ALPN is explicit higher in the stack.
-                            f"Unsupported ALPN '{alpn}' during handshake"
+                            f"Unsupported ALPN '{alpn}' during handshake. Did you try to reach a non-HTTP server ?"
                         )
+                else:
+                    # no-alpn, let's decide between H2 or H11
+                    # by default, try HTTP/1.1
+                    if HttpVersion.h11 not in self._disabled_svn:
+                        self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                        self._svn = HttpVersion.h11
+                    elif HttpVersion.h2 not in self._disabled_svn:
+                        self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                        self._svn = HttpVersion.h2
+                    else:
+                        raise RuntimeError(
+                            "No compatible protocol are enabled to emit request. You currently are connected using "
+                            "TCP TLS and must have HTTP/1.1 or/and HTTP/2 enabled to pursue."
+                        )
+            else:
+                # no-TLS, let's decide between H2 or H11
+                # by default, try HTTP/1.1
+                if HttpVersion.h11 not in self._disabled_svn:
+                    self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                    self._svn = HttpVersion.h11
+                elif HttpVersion.h2 not in self._disabled_svn:
+                    self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                    self._svn = HttpVersion.h2
+                else:
+                    raise RuntimeError(
+                        "No compatible protocol are enabled to emit request. You currently are connected using "
+                        "TCP Unencrypted and must have HTTP/1.1 or/and HTTP/2 enabled to pursue."
+                    )
         else:
             if self._svn == HttpVersion.h2:
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
@@ -392,8 +431,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         # fallback to http/1.1
         if self._protocol is None or self._svn == HttpVersion.h11:
-            self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
-            self._svn = HttpVersion.h11
+            if self._protocol is None and HttpVersion.h11 in self._disabled_svn:
+                self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h2
+            else:
+                self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h11
+
             self.conn_info.http_version = self._svn
 
             if (
