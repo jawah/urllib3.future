@@ -760,7 +760,19 @@ class HTTPResponse(io.IOBase):
 
         with self._error_catcher():
             data = self._fp_read(amt) if not fp_closed else b""
-            if amt is not None and amt != 0 and not data:
+
+            # Mocking library often use io.BytesIO
+            # which does not auto-close when reading data
+            # with amt=None.
+            is_foreign_fp_unclosed = (
+                amt is None and getattr(self._fp, "closed", False) is False
+            )
+
+            if (amt is not None and amt != 0 and not data) or is_foreign_fp_unclosed:
+                if is_foreign_fp_unclosed:
+                    self._fp_bytes_read += len(data)
+                    if self.length_remaining is not None:
+                        self.length_remaining -= len(data)
                 # Platform-specific: Buggy versions of Python.
                 # Close the connection when no data is returned
                 #
@@ -782,10 +794,11 @@ class HTTPResponse(io.IOBase):
                     # Content-Length are caught.
                     raise IncompleteRead(self._fp_bytes_read, self.length_remaining)
 
-        if data:
+        if data and not is_foreign_fp_unclosed:
             self._fp_bytes_read += len(data)
             if self.length_remaining is not None:
                 self.length_remaining -= len(data)
+
         return data
 
     def read(

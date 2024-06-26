@@ -138,7 +138,7 @@ class TestResponse:
 
         r = HTTPResponse(fp, preload_content=True)
 
-        assert fp.tell() == len(b"foo")
+        assert fp.closed is True
         assert r.data == b"foo"
 
     def test_no_preload(self) -> None:
@@ -148,7 +148,7 @@ class TestResponse:
 
         assert fp.tell() == 0
         assert r.data == b"foo"
-        assert fp.tell() == len(b"foo")
+        assert fp.closed is True
 
     def test_decode_bad_data(self) -> None:
         fp = BytesIO(b"\x00" * 10)

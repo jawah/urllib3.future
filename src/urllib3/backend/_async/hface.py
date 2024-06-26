@@ -477,7 +477,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             # save the quic ticket for session resumption
             self.__session_ticket = self._protocol.session_ticket
 
-        if hasattr(self, "_connect_timings"):
+        if (
+            self.conn_info.certificate_der
+            and hasattr(self, "_connect_timings")
+            and not self.conn_info.tls_handshake_latency
+        ):
             self.conn_info.tls_handshake_latency = (
                 datetime.now(tz=timezone.utc) - self._connect_timings[-1]
             )

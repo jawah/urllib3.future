@@ -265,18 +265,16 @@ class IncompleteRead(ProtocolError):
     for ``partial`` to avoid creating large objects on streamed reads.
     """
 
-    def __init__(self, partial: int, expected: int) -> None:
-        super().__init__(
-            f"peer closed connection without sending complete message body (received {partial} bytes, expected {expected} more)"
-        )
+    def __init__(self, partial: int, expected: int | None = None) -> None:
         self.partial = partial
         self.expected = expected
 
     def __repr__(self) -> str:
-        return "IncompleteRead(%i bytes read, %i more expected)" % (
-            self.partial,
-            self.expected,
-        )
+        if self.expected is not None:
+            return f"IncompleteRead({self.partial} bytes read, {self.expected} more expected)"
+        return f"IncompleteRead({self.partial} bytes read)"
+
+    __str__ = object.__str__
 
 
 class InvalidChunkLength(ProtocolError):
