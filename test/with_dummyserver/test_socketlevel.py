@@ -2047,7 +2047,7 @@ class TestBadContentLength(SocketDummyServerTestCase):
             )
             data = get_response.stream(100)
             with pytest.raises(
-                IncompleteRead, match="received 12 bytes, expected 10 more"
+                IncompleteRead, match=r"12 bytes read\, 10 more expected"
             ):
                 next(data)
             done_event.set()

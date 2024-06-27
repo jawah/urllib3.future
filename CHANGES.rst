@@ -1,3 +1,11 @@
+2.8.901 (2024-06-27)
+====================
+
+- Improved compatibility with httplib exception for ``IncompleteRead`` that did not behave exactly like expected (repr/str format over it).
+- The metric TLS handshake delay was wrongfully set when using HTTP/2 over cleartext.
+- Fixed compatibility with some third-party mocking library that are injecting io.BytesIO in HTTPResponse.
+  In some cases, ``IncompleteRead`` might not be raised like expected.
+
 2.8.900 (2024-06-24)
 ====================
 
