@@ -8,6 +8,7 @@
   <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
   <br><small>✨🍰 Enjoy HTTP like its 2024 🍰✨</small>
   <br><small>💰 Promotional offer, get everything and more for <del>40k</del> <b>0</b>$!</small>
+  <br><small>Wondering why and how this fork exist? Why urllib3 does not merge this, even partially? <a href="https://medium.com/@ahmed.tahri/revived-the-promise-made-six-years-ago-for-requests-3-37b440e6a064">Take a peek at this article!</a></small>
 </p>
 
 ⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.<br>
