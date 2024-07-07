@@ -16,7 +16,13 @@ from types import TracebackType
 
 from .._collections import HTTPHeaderDict
 from .._request_methods import AsyncRequestMethods
-from .._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
+from .._typing import (
+    _TYPE_ASYNC_BODY,
+    _TYPE_BODY,
+    _TYPE_BODY_POSITION,
+    _TYPE_TIMEOUT,
+    ProxyConfig,
+)
 from ..backend import ConnectionInfo, ResponsePromise
 from ..connection import _wrap_proxy_error
 from ..connectionpool import _normalize_host
@@ -851,7 +857,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         conn: AsyncHTTPConnection,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = ...,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = ...,
         headers: typing.Mapping[str, str] | None = ...,
         retries: Retry | None = ...,
         timeout: _TYPE_TIMEOUT = ...,
@@ -876,7 +882,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         conn: AsyncHTTPConnection,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = ...,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = ...,
         headers: typing.Mapping[str, str] | None = ...,
         retries: Retry | None = ...,
         timeout: _TYPE_TIMEOUT = ...,
@@ -900,7 +906,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         conn: AsyncHTTPConnection,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         headers: typing.Mapping[str, str] | None = None,
         retries: Retry | None = None,
         timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
@@ -1151,7 +1157,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = ...,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = ...,
         headers: typing.Mapping[str, str] | None = ...,
         retries: Retry | bool | int | None = ...,
         redirect: bool = ...,
@@ -1179,7 +1185,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = ...,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = ...,
         headers: typing.Mapping[str, str] | None = ...,
         retries: Retry | bool | int | None = ...,
         redirect: bool = ...,
@@ -1206,7 +1212,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         headers: typing.Mapping[str, str] | None = None,
         retries: Retry | bool | int | None = None,
         redirect: bool = True,

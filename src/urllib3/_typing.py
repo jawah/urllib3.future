@@ -30,6 +30,11 @@ _TYPE_BODY: typing.TypeAlias = typing.Union[
     AsyncLowLevelResponse,
 ]
 
+_TYPE_ASYNC_BODY: typing.TypeAlias = typing.Union[
+    typing.AsyncIterable[bytes],
+    typing.AsyncIterable[str],
+]
+
 _TYPE_FIELD_VALUE: typing.TypeAlias = typing.Union[str, bytes]
 _TYPE_FIELD_VALUE_TUPLE: typing.TypeAlias = typing.Union[
     _TYPE_FIELD_VALUE,

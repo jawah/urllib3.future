@@ -1,3 +1,11 @@
+2.8.902 (2024-07-07)
+====================
+
+- Added support for async iterable yielding either bytes or str when passing a body into your requests.
+- Added dummy module (e.g. http2 and emscriptem) like upstream without serving any of them. Those modules won't be served and are empty as we diverged since.
+- Added a better error message for http3 handshake failure to help out users figuring out what is happening.
+- Added official support for Python 3.13
+
 2.8.901 (2024-06-27)
 ====================
 

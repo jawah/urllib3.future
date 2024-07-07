@@ -15,7 +15,7 @@ authors = [
   {name = "Andrey Petrov", email = "andrey.petrov@shazow.net"}
 ]
 maintainers = [
-  {name = "Ahmed R. TAHRI", email="ahmed.tahri@cloudnursery.dev"},
+  {name = "Ahmed R. TAHRI", email="tahri.ahmed@proton.me"},
 ]
 classifiers = [
   "Environment :: Web Environment",

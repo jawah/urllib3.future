@@ -147,3 +147,8 @@ The following properties and methods are awaitable:
 
 In addition to that, ``AsyncHTTPResponse`` ships with an async iterator.
 
+Sending async iterable
+----------------------
+
+In our asynchronous APIs, you can send async iterable using the ``body=...`` keyword argument.
+It is most useful when trying to send files that are IO bound, thus blocking your event loop needlessly.

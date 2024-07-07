@@ -8,7 +8,7 @@ import nox
 
 def tests_impl(
     session: nox.Session,
-    extras: str = "socks,brotli,zstd",
+    extras: str = "socks,brotli",
     byte_string_comparisons: bool = False,
 ) -> None:
     # Install deps and the package itself.
@@ -44,7 +44,7 @@ def tests_impl(
     )
 
 
-@nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "pypy"])
+@nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "pypy"])
 def test(session: nox.Session) -> None:
     tests_impl(session)
 
