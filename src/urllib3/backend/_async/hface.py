@@ -452,10 +452,18 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             return
 
         # it may be required to send some initial data, aka. magic header (PRI * HTTP/2..)
-        await self.__exchange_until(
-            HandshakeCompleted,
-            receive_first=False,
-        )
+        try:
+            await self.__exchange_until(
+                HandshakeCompleted,
+                receive_first=False,
+            )
+        except ProtocolError as e:
+            if isinstance(self._protocol, HTTPOverQUICProtocol):
+                raise ProtocolError(
+                    "It is likely that the server yielded its support for HTTP/3 through the Alt-Svc header while unable to do so. "
+                    "To remediate that issue, either disable http3 or reach out to the server admin."
+                ) from e
+            raise
 
         if isinstance(self._protocol, HTTPOverQUICProtocol):
             self.conn_info.certificate_der = self._protocol.getpeercert(

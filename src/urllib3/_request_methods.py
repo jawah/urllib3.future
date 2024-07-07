@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from ._async.response import AsyncHTTPResponse
 from ._collections import HTTPHeaderDict
-from ._typing import _TYPE_BODY, _TYPE_ENCODE_URL_FIELDS, _TYPE_FIELDS
+from ._typing import _TYPE_ASYNC_BODY, _TYPE_BODY, _TYPE_ENCODE_URL_FIELDS, _TYPE_FIELDS
 from .filepost import encode_multipart_formdata
 from .response import HTTPResponse
 
@@ -377,7 +377,7 @@ class AsyncRequestMethods:
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         headers: typing.Mapping[str, str] | None = None,
         encode_multipart: bool = True,
         multipart_boundary: str | None = None,
@@ -392,7 +392,7 @@ class AsyncRequestMethods:
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         headers: typing.Mapping[str, str] | None = None,
         encode_multipart: bool = True,
         multipart_boundary: str | None = None,
@@ -406,7 +406,7 @@ class AsyncRequestMethods:
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         headers: typing.Mapping[str, str] | None = None,
         encode_multipart: bool = True,
         multipart_boundary: str | None = None,
@@ -422,7 +422,7 @@ class AsyncRequestMethods:
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = ...,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = ...,
         fields: _TYPE_FIELDS | None = ...,
         headers: typing.Mapping[str, str] | None = ...,
         json: typing.Any | None = ...,
@@ -437,7 +437,7 @@ class AsyncRequestMethods:
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = ...,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = ...,
         fields: _TYPE_FIELDS | None = ...,
         headers: typing.Mapping[str, str] | None = ...,
         json: typing.Any | None = ...,
@@ -451,7 +451,7 @@ class AsyncRequestMethods:
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         fields: _TYPE_FIELDS | None = None,
         headers: typing.Mapping[str, str] | None = None,
         json: typing.Any | None = None,

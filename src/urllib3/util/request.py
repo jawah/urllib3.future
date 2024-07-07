@@ -194,7 +194,7 @@ def rewind_body(body: typing.IO[typing.AnyStr], body_pos: _TYPE_BODY_POSITION) -
 
 
 class ChunksAndContentLength(typing.NamedTuple):
-    chunks: typing.Iterable[bytes] | None
+    chunks: typing.Iterable[bytes] | typing.AsyncIterable[bytes] | None
     content_length: int | None
     is_string: bool
 
@@ -214,7 +214,7 @@ def body_to_chunks(
     for framing instead.
     """
 
-    chunks: typing.Iterable[bytes] | None
+    chunks: typing.Iterable[bytes] | typing.AsyncIterable[bytes] | None
     content_length: int | None
 
     # No body, we need to make a recommendation on 'Content-Length'
@@ -244,6 +244,25 @@ def body_to_chunks(
                 datablock = datablock.encode("utf-8")
             yield datablock
 
+    async def chunk_areadable() -> typing.AsyncIterable[bytes]:
+        nonlocal body, blocksize
+        assert body is not None and hasattr(body, "__aiter__")
+        encode: bool | None = None
+
+        buf = b""
+
+        async for block in body:
+            if encode is None:
+                encode = isinstance(block, str)
+            if len(buf) >= blocksize:
+                yield buf
+                buf = b""
+                continue
+            buf += block.encode("utf-8") if encode else block
+
+        if buf:
+            yield buf
+
     # Bytes or strings become bytes
     if isinstance(body, (str, bytes)):
         converted = to_bytes(body)
@@ -259,7 +278,9 @@ def body_to_chunks(
     elif hasattr(body, "read"):
         chunks = chunk_readable()
         content_length = None
-
+    elif hasattr(body, "__aiter__"):
+        chunks = chunk_areadable()
+        content_length = None
     # Otherwise we need to start checking via duck-typing.
     else:
         try:

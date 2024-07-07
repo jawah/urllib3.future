@@ -467,6 +467,10 @@ class HTTPConnection(HfaceBackend):
         try:
             # If we're given a body we start sending that in chunks.
             if chunks is not None:
+                if hasattr(chunks, "__aiter__"):
+                    raise RuntimeError(
+                        "Unable to send an async iterable through a synchronous connection"
+                    )
                 for chunk in chunks:
                     # Sending empty chunks isn't allowed for TE: chunked
                     # as it indicates the end of the body.

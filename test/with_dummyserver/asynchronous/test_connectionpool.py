@@ -288,6 +288,42 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             with pytest.raises(TypeError):
                 await pool.request("POST", "/echo", body=body, fields=fields)
 
+    async def test_sending_async_iterable_orig_bytes(self) -> None:
+        async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+
+            async def abody() -> typing.AsyncIterable[bytes]:
+                await asyncio.sleep(0.01)
+                yield b"foo"
+                await asyncio.sleep(0.01)
+                yield b"bar"
+
+            r = await pool.request("POST", "/echo", body=abody())
+            assert await r.data == b"foobar"
+
+    async def test_sending_async_iterable_orig_str(self) -> None:
+        async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+
+            async def abody() -> typing.AsyncIterable[str]:
+                await asyncio.sleep(0.01)
+                yield "foo"
+                await asyncio.sleep(0.01)
+                yield "bar"
+
+            r = await pool.request("POST", "/echo", body=abody())
+            assert await r.data == b"foobar"
+
+    async def test_sending_async_iterable_orig_str_non_ascii(self) -> None:
+        async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+
+            async def abody() -> typing.AsyncIterable[str]:
+                await asyncio.sleep(0.01)
+                yield "hélloà"
+                await asyncio.sleep(0.01)
+                yield "bar"
+
+            r = await pool.request("POST", "/echo", body=abody())
+            assert await r.data == "hélloàbar".encode()
+
     async def test_unicode_upload(self) -> None:
         fieldname = "myfile"
         filename = "\xe2\x99\xa5.txt"

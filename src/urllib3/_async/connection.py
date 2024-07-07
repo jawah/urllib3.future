@@ -18,6 +18,7 @@ if typing.TYPE_CHECKING:
         _TYPE_SOCKET_OPTIONS,
         _TYPE_TIMEOUT_INTERNAL,
         ProxyConfig,
+        _TYPE_ASYNC_BODY,
     )
     from ..util._async.traffic_police import AsyncTrafficPolice
 
@@ -324,7 +325,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         self,
         method: str,
         url: str,
-        body: _TYPE_BODY | None = None,
+        body: _TYPE_BODY | _TYPE_ASYNC_BODY | None = None,
         headers: typing.Mapping[str, str] | None = None,
         *,
         chunked: bool = False,
@@ -459,17 +460,32 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         try:
             # If we're given a body we start sending that in chunks.
             if chunks is not None:
-                for chunk in chunks:
-                    # Sending empty chunks isn't allowed for TE: chunked
-                    # as it indicates the end of the body.
-                    if not chunk:
-                        continue
-                    if isinstance(chunk, str):
-                        chunk = chunk.encode("utf-8")
-                    await self.send(chunk)
-                    total_sent += len(chunk)
-                    if on_upload_body is not None:
-                        await on_upload_body(total_sent, content_length, False, False)
+                if hasattr(chunks, "__aiter__"):
+                    async for chunk in chunks:
+                        if not chunk:
+                            continue
+                        if isinstance(chunk, str):
+                            chunk = chunk.encode("utf-8")
+                        await self.send(chunk)
+                        total_sent += len(chunk)
+                        if on_upload_body is not None:
+                            await on_upload_body(
+                                total_sent, content_length, False, False
+                            )
+                else:
+                    for chunk in chunks:
+                        # Sending empty chunks isn't allowed for TE: chunked
+                        # as it indicates the end of the body.
+                        if not chunk:
+                            continue
+                        if isinstance(chunk, str):
+                            chunk = chunk.encode("utf-8")
+                        await self.send(chunk)
+                        total_sent += len(chunk)
+                        if on_upload_body is not None:
+                            await on_upload_body(
+                                total_sent, content_length, False, False
+                            )
                 try:
                     rp = await self.send(b"", eot=True)
                 except TypeError:
