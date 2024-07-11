@@ -99,7 +99,7 @@ RUN pip install urllib3-future
 Doing `import urllib3_future` is the safest option if you start a project from scratch for you as there is a significant number of projects that
 require `urllib3`.
 
-## Notes
+## Notes / Frequently Asked Questions
 
 - **It's a fork**
 
@@ -108,6 +108,75 @@ The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node is
 
 Support for bugs or improvements is served in this repository. We regularly sync this fork
 with the main branch of urllib3/urllib3 against bugfixes and security patches if applicable.
+
+- **Why replacing urllib3 when it is maintained?**
+
+Progress does not necessarily mean to be a revisionist, first we need to embrace
+what was graciously made by our predecessors.
+
+We attempted to participate in urllib3 development only to find that we were in disagreement on how
+to proceed. It happens all the time, even on the biggest project out there (e.g. OpenSSL vs BoringSSL or NSS or LibreSSL...))
+
+- **OK, but I got there because I saw that urllib3 was replaced in my environment!**
+
+It how package manager do things, unfortunately. Forks are allowed (fortunately for us)
+We know how sensible this matter is, this is why we are obligated to ensure the highest
+level of compatibility and a fast support in case anything happen.
+
+We regularly test this fork against the most used packages (that depend on urllib3).
+
+Finally, no one is "fully aware" of transitive dependencies. And "urllib3" is forced
+into your environments regardless of your preferences.
+
+- **Wasn't there any other solution than having an in-place fork?**
+
+We assessed many solutions but none were completely satisfying for our users.
+We agree that this solution isn't perfect and actually put a lot of pressure on us (urllib3-future).
+
+Here are some of the reasons (not exhaustive) we choose to work this way:
+
+- A) Some major companies may not be able to touch the production code but can "change/swap" dependencies
+- B) urllib3-future main purpose is to fuel Niquests, which is itself a drop-in replacement of Requests. And there's more than 100 packages that plug into Requests, but the code (of the packages) invoke urllib3
+  So... We cannot fork those 100+ projects to patch urllib3 usage, it is impossible at the moment, given our means.
+- C) We don't have to reinvent the wheel.
+- D) Some of our partners started noticing that HTTP/1 started to be disabled by some webservices in favor of HTTP/2+
+  So, this fork can unblock them at (almost) zero cost.
+
+- **Is this funded?**
+
+Yes! We have some funds coming in regularly to ensure its sustainability.
+
+- **How can I restore urllib3 to the "legacy" version?**
+
+You can easily do so:
+
+```
+# remove both
+python -m pip uninstall -y urllib3 urllib3-future
+# reinstate legacy urllib3
+python -m pip install urllib3
+```
+
+OK! How to let them both?
+
+```
+# remove both
+python -m pip uninstall -y urllib3 urllib3-future
+# install urllib3-future
+python -m pip install urllib3-future
+# reinstate legacy urllib3
+python -m pip install urllib3
+```
+
+The order is (actually) important.
+
+- **Can you guarantee us that everything will go smooth?**
+
+Guarantee is a strong word with a lot of (legal) implication. We cannot offer a "guarantee".
+But, we answer and solve issues in a timely manner as you may have seen in our tracker.
+
+We take a lot of precaution with this fork, and we welcome any contribution at the sole condition
+that you don't break the compatibility between the projects.
 
 - **OS Package Managers**
 
@@ -120,7 +189,7 @@ It will prevent the override.
 
 ## Compatibility with downstream
 
-You should _always_ install the downstream project prior to this fork.
+You should _always_ install the downstream project prior to this fork. It is compatible with any program that use urllib3 directly or indirectly.
 
 e.g. I want `requests` to be use this package.
 
@@ -131,6 +200,23 @@ python -m pip install urllib3.future
 
 Nowadays, we suggest using the package [**Niquests**](https://github.com/jawah/niquests) as a drop-in replacement for **Requests**. 
 It leverages urllib3.future capabilities appropriately.
+
+## Testing
+
+To ensure that we serve HTTP/1.1, HTTP/2 and HTTP/3 correctly we use containers
+that simulate a real-world server that is not made with Python.
+
+Although it is not made mandatory to run the test suite, it is strongly recommended.
+
+You should have docker installed and the compose plugin available. The rest will be handled automatically.
+
+```
+python -m pip install nox
+nox -s test-3.11
+```
+
+The nox script will attempt to start a Traefik server along with a httpbin instance.
+Both Traefik and httpbin are written in golang.
 
 ## Documentation
 

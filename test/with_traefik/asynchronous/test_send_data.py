@@ -15,7 +15,10 @@ from .. import TraefikTestCase
 class TestPostBody(TraefikTestCase):
     async def test_overrule_unicode_content_length(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             resp = await p.request(
                 "POST", "/post", body="🚀", headers={"Content-Length": "1"}
@@ -50,7 +53,10 @@ class TestPostBody(TraefikTestCase):
     )
     async def test_h2n3_data(self, method: str, body: bytes | str | BytesIO) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 if isinstance(body, BytesIO):
@@ -108,7 +114,10 @@ class TestPostBody(TraefikTestCase):
     )
     async def test_h2n3_form_field(self, method: str, fields: dict[str, str]) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(2):
                 resp = await p.request(method, f"/{method.lower()}", fields=fields)
@@ -135,7 +144,10 @@ class TestPostBody(TraefikTestCase):
             progress_track.append((total_sent, content_length, is_completed, any_error))
 
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             await p.urlopen("POST", "/post", body=b"foo" * 16800, on_upload_body=track)
 
@@ -158,7 +170,10 @@ class TestPostBody(TraefikTestCase):
             progress_track.append((total_sent, content_length, is_completed, any_error))
 
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             await p.urlopen(
                 "POST", "/post", body=io.BytesIO(b"foo" * 16800), on_upload_body=track

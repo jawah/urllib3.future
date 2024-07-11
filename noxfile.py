@@ -1,9 +1,176 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import platform
 import shutil
+import subprocess
+import time
+import typing
+from http.client import RemoteDisconnected
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import nox
+
+
+@contextlib.contextmanager
+def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
+    """
+    Start a server to reliably test HTTP/1.1, HTTP/2 and HTTP/3 over QUIC.
+    """
+    # we may want to avoid starting the traefik server...
+    if os.environ.get("TRAEFIK_HTTPBIN_ENABLE", "true") != "true":
+        yield
+        return
+
+    external_stack_started = False
+    is_windows = platform.system() == "Windows"
+    dc_v1_legacy = is_windows is False and shutil.which("docker-compose") is not None
+    traefik_ipv4 = os.environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1")
+
+    if dc_v1_legacy:
+        dc_v2_probe = subprocess.Popen(["docker", "compose", "ps"])
+
+        dc_v2_probe.wait()
+        dc_v1_legacy = dc_v2_probe.returncode != 0
+
+    if not os.path.exists("./traefik/httpbin.local.pem"):
+        session.log("Prepare fake certificates for our Traefik server...")
+
+        addon_proc = subprocess.Popen(["python", "-m", "pip", "install", "trustme"])
+
+        addon_proc.wait()
+
+        if addon_proc.returncode != 0:
+            yield
+            session.warn("Unable to install trustme outside of the nox Session")
+            return
+
+        trustme_proc = subprocess.Popen(
+            [
+                "python",
+                "-m",
+                "trustme",
+                "-i",
+                "httpbin.local",
+                "alt.httpbin.local",
+                "-d",
+                "./traefik",
+            ]
+        )
+
+        trustme_proc.wait()
+
+        if trustme_proc.returncode != 0:
+            session.warn("Unable to issue required certificates for our Traefik stack")
+            yield
+            return
+
+        shutil.move("./traefik/server.pem", "./traefik/httpbin.local.pem")
+
+        if os.path.exists("./traefik/httpbin.local.key"):
+            os.unlink("./traefik/httpbin.local.key")
+
+        shutil.move("./traefik/server.key", "./traefik/httpbin.local.key")
+
+        if os.path.exists("./rootCA.pem"):
+            os.unlink("./rootCA.pem")
+
+        shutil.move("./traefik/client.pem", "./rootCA.pem")
+
+    try:
+        session.log("Attempt to start Traefik with go-httpbin[...]")
+
+        if is_windows:
+            if not os.path.exists("./go-httpbin"):
+                clone_proc = subprocess.Popen(
+                    ["git", "clone", "https://github.com/mccutchen/go-httpbin.git"]
+                )
+
+                clone_proc.wait()
+
+            shutil.copyfile(
+                "./traefik/patched.Dockerfile", "./go-httpbin/patched.Dockerfile"
+            )
+
+            pre_build = subprocess.Popen(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    "docker-compose.win.yaml",
+                    "build",
+                    "httpbin",
+                ]
+            )
+
+            pre_build.wait()
+
+            if pre_build.returncode == 0:
+                dc_process = subprocess.Popen(
+                    [
+                        "docker",
+                        "compose",
+                        "-f",
+                        "docker-compose.win.yaml",
+                        "up",
+                        "-d",
+                    ]
+                )
+            else:
+                raise OSError("Unable to build go-httpbin on Windows")
+        else:
+            if dc_v1_legacy:
+                dc_process = subprocess.Popen(["docker-compose", "up", "-d"])
+            else:
+                dc_process = subprocess.Popen(["docker", "compose", "up", "-d"])
+
+        dc_process.wait()
+    except OSError as e:
+        session.warn(
+            f"Traefik server cannot be run due to an error with containers: {e}"
+        )
+    else:
+        session.log("Traefik server is starting[...]")
+
+        i = 0
+
+        while True:
+            if i >= 60:
+                raise TimeoutError(
+                    "Error while waiting for the Traefik server (timeout/readiness)"
+                )
+
+            try:
+                r = urlopen(
+                    Request(
+                        f"http://{traefik_ipv4}:8888/get",
+                        headers={"Host": "httpbin.local"},
+                    ),
+                    timeout=1.0,
+                )
+            except (HTTPError, URLError, RemoteDisconnected) as e:
+                i += 1
+                time.sleep(1)
+                session.log(f"Waiting for the Traefik server: {e}...")
+                continue
+
+            if int(r.status) == 200:
+                break
+
+        session.log("Traefik server is ready to accept connections[...]")
+        external_stack_started = True
+
+    yield
+
+    if external_stack_started:
+        if dc_v1_legacy:
+            dc_process = subprocess.Popen(["docker-compose", "stop"])
+        else:
+            dc_process = subprocess.Popen(["docker", "compose", "stop"])
+
+        dc_process.wait()
 
 
 def tests_impl(
@@ -11,37 +178,38 @@ def tests_impl(
     extras: str = "socks,brotli",
     byte_string_comparisons: bool = False,
 ) -> None:
-    # Install deps and the package itself.
-    session.install("-r", "dev-requirements.txt", silent=False)
-    session.install(f".[{extras}]", silent=False)
+    with traefik_boot(session):
+        # Install deps and the package itself.
+        session.install("-r", "dev-requirements.txt", silent=False)
+        session.install(f".[{extras}]", silent=False)
 
-    # Show the pip version.
-    session.run("pip", "--version")
-    # Print the Python version and bytesize.
-    session.run("python", "--version")
-    session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
+        # Show the pip version.
+        session.run("pip", "--version")
+        # Print the Python version and bytesize.
+        session.run("python", "--version")
+        session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
 
-    # Inspired from https://hynek.me/articles/ditch-codecov-python/
-    # We use parallel mode and then combine in a later CI step
-    session.run(
-        "python",
-        *(("-bb",) if byte_string_comparisons else ()),
-        "-m",
-        "coverage",
-        "run",
-        "--parallel-mode",
-        "-m",
-        "pytest",
-        "-v",
-        "-ra",
-        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
-        "--tb=native",
-        "--durations=10",
-        "--strict-config",
-        "--strict-markers",
-        *(session.posargs or ("test/",)),
-        env={"PYTHONWARNINGS": "always::DeprecationWarning"},
-    )
+        # Inspired from https://hynek.me/articles/ditch-codecov-python/
+        # We use parallel mode and then combine in a later CI step
+        session.run(
+            "python",
+            *(("-bb",) if byte_string_comparisons else ()),
+            "-m",
+            "coverage",
+            "run",
+            "--parallel-mode",
+            "-m",
+            "pytest",
+            "-v",
+            "-ra",
+            f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
+            "--tb=native",
+            "--durations=10",
+            "--strict-config",
+            "--strict-markers",
+            *(session.posargs or ("test/",)),
+            env={"PYTHONWARNINGS": "always::DeprecationWarning"},
+        )
 
 
 @nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "pypy"])

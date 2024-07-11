@@ -47,7 +47,10 @@ class TestPostBody(TraefikTestCase):
     )
     def test_h2n3_data(self, method: str, body: bytes | str | BytesIO) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 if isinstance(body, BytesIO):
@@ -105,7 +108,10 @@ class TestPostBody(TraefikTestCase):
     )
     def test_h2n3_form_field(self, method: str, fields: dict[str, str]) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(2):
                 resp = p.request(method, f"/{method.lower()}", fields=fields)
@@ -132,7 +138,10 @@ class TestPostBody(TraefikTestCase):
             progress_track.append((total_sent, content_length, is_completed, any_error))
 
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             p.urlopen("POST", "/post", body=b"foo" * 16800, on_upload_body=track)
 
@@ -155,7 +164,10 @@ class TestPostBody(TraefikTestCase):
             progress_track.append((total_sent, content_length, is_completed, any_error))
 
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             p.urlopen(
                 "POST", "/post", body=io.BytesIO(b"foo" * 16800), on_upload_body=track

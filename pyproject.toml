@@ -81,6 +81,11 @@ include = [
   "/README.md",
   "/LICENSE.txt",
   "/hatch_build.py",
+  "/docker-compose.yaml",
+  "/traefik/certificate.toml",
+  "/traefik/linux.sh",
+  "/traefik/macos.sh",
+  "/traefik/windows.sh",
 ]
 
 [tool.hatch.build.targets.wheel]

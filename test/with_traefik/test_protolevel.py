@@ -4,13 +4,7 @@ import socket
 
 import pytest
 
-from urllib3 import (
-    HTTPConnectionPool,
-    HTTPHeaderDict,
-    HTTPSConnectionPool,
-    HttpVersion,
-    ResolverDescription,
-)
+from urllib3 import HTTPConnectionPool, HTTPHeaderDict, HTTPSConnectionPool, HttpVersion
 from urllib3.exceptions import InsecureRequestWarning, ProtocolError
 from urllib3.util import parse_url
 from urllib3.util.request import SKIP_HEADER
@@ -21,7 +15,10 @@ from . import TraefikTestCase
 class TestProtocolLevel(TraefikTestCase):
     def test_forbid_request_without_authority(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             with pytest.raises(
                 ProtocolError,
@@ -47,7 +44,10 @@ class TestProtocolLevel(TraefikTestCase):
         dict_headers = dict(headers)
 
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             resp = p.request(
                 "GET",
@@ -76,7 +76,7 @@ class TestProtocolLevel(TraefikTestCase):
         parsed_url = parse_url(self.https_url)
         assert parsed_url.host is not None
 
-        resolver = ResolverDescription.from_url("system://").new()
+        resolver = self.test_resolver.new()
 
         records = resolver.getaddrinfo(
             parsed_url.host,
@@ -116,6 +116,7 @@ class TestProtocolLevel(TraefikTestCase):
             self.host,
             self.http_port,
             disabled_svn={HttpVersion.h11},
+            resolver=self.test_resolver,
         ) as p:
             resp = p.request(
                 "GET",

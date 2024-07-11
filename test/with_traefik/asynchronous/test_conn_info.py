@@ -10,7 +10,9 @@ from .. import TraefikTestCase
 @pytest.mark.asyncio
 class TestConnectionInfo(TraefikTestCase):
     async def test_no_tls(self) -> None:
-        p = AsyncPoolManager(ca_certs=self.ca_authority)
+        p = AsyncPoolManager(
+            ca_certs=self.ca_authority, resolver=self.test_async_resolver
+        )
 
         conn_info: ConnectionInfo | None = None
 
@@ -28,7 +30,9 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.certificate_dict is None
 
     async def test_tls_on_tcp(self) -> None:
-        p = AsyncPoolManager(ca_certs=self.ca_authority)
+        p = AsyncPoolManager(
+            ca_certs=self.ca_authority, resolver=self.test_async_resolver
+        )
 
         conn_info: ConnectionInfo | None = None
 
@@ -52,6 +56,7 @@ class TestConnectionInfo(TraefikTestCase):
                 (self.host, self.https_port): (self.host, self.https_port)
             },
             ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         )
 
         conn_info: ConnectionInfo | None = None

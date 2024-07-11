@@ -364,7 +364,7 @@ def requires_traefik() -> None:
         return
 
     try:
-        sock = socket.create_connection(("httpbin.local", 8888), timeout=0.3)
+        sock = socket.create_connection(("127.0.0.1", 8888), timeout=0.3)
     except (ConnectionRefusedError, socket.gaierror, TimeoutError):
         _TRAEFIK_AVAILABLE = False
         pytest.skip(

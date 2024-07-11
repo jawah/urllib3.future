@@ -10,12 +10,16 @@ from . import TraefikTestCase
 
 class TestSvnCapability(TraefikTestCase):
     def test_h11_only(self) -> None:
-        with HTTPConnectionPool(self.host, self.http_port) as p:
+        with HTTPConnectionPool(
+            self.host, self.http_port, resolver=self.test_resolver
+        ) as p:
             resp = p.request("GET", "/get")
             assert resp.version == 11
 
     def test_h11_no_upgrade(self) -> None:
-        with HTTPConnectionPool(host="httpbin.local", port=8888) as p:
+        with HTTPConnectionPool(
+            host="httpbin.local", port=8888, resolver=self.test_resolver
+        ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get")
 
@@ -23,7 +27,10 @@ class TestSvnCapability(TraefikTestCase):
 
     def test_alpn_h2_default(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             resp = p.request("GET", "/get")
 
@@ -31,7 +38,12 @@ class TestSvnCapability(TraefikTestCase):
 
     def test_upgrade_h3(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, timeout=1, retries=0, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            timeout=1,
+            retries=0,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get")
@@ -45,6 +57,7 @@ class TestSvnCapability(TraefikTestCase):
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get")
@@ -58,6 +71,7 @@ class TestSvnCapability(TraefikTestCase):
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h2},
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get")
@@ -71,6 +85,7 @@ class TestSvnCapability(TraefikTestCase):
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h11},
+            resolver=self.test_resolver,
         )
 
         r = p.request("GET", "/get")
@@ -87,6 +102,7 @@ class TestSvnCapability(TraefikTestCase):
                 retries=0,
                 ca_certs=self.ca_authority,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
+                resolver=self.test_resolver,
             )
 
             p.request("GET", "/get")
@@ -98,6 +114,7 @@ class TestSvnCapability(TraefikTestCase):
                 timeout=1,
                 retries=0,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2},
+                resolver=self.test_resolver,
             )
 
             p.request("GET", "/get")
@@ -109,6 +126,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request(
@@ -130,6 +148,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request(
@@ -151,6 +170,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request(
@@ -166,7 +186,12 @@ class TestSvnCapability(TraefikTestCase):
                 )
 
     def test_drop_h3_upgrade(self) -> None:
-        conn = HTTPSConnection(self.host, self.https_port, ca_certs=self.ca_authority)
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        )
 
         conn.request("GET", "/get")
         resp = conn.getresponse()
@@ -186,7 +211,12 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.status == 200
 
     def test_drop_post_established_h3(self) -> None:
-        conn = HTTPSConnection(self.host, self.https_port, ca_certs=self.ca_authority)
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        )
 
         conn.request("GET", "/get")
         resp = conn.getresponse()
@@ -214,7 +244,11 @@ class TestSvnCapability(TraefikTestCase):
 
     def test_pool_manager_quic_cache(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
-        pm = PoolManager(ca_certs=self.ca_authority, preemptive_quic_cache=dumb_cache)
+        pm = PoolManager(
+            ca_certs=self.ca_authority,
+            preemptive_quic_cache=dumb_cache,
+            resolver=self.test_resolver,
+        )
 
         conn = pm.connection_from_url(self.https_url)
 
@@ -227,7 +261,11 @@ class TestSvnCapability(TraefikTestCase):
 
         conn.close()
 
-        pm = PoolManager(ca_certs=self.ca_authority, preemptive_quic_cache=dumb_cache)
+        pm = PoolManager(
+            ca_certs=self.ca_authority,
+            preemptive_quic_cache=dumb_cache,
+            resolver=self.test_resolver,
+        )
         conn = pm.connection_from_url(self.https_url)
 
         resp = conn.urlopen("GET", "/get")

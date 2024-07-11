@@ -26,7 +26,10 @@ class TestStreamResponse(TraefikTestCase):
     )
     async def test_h2n3_stream(self, amt: int | None) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get", preload_content=False)
@@ -54,7 +57,10 @@ class TestStreamResponse(TraefikTestCase):
 
     async def test_read_zero(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             resp = await p.request("GET", "/get", preload_content=False)
             assert resp.status == 200

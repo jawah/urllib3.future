@@ -4,15 +4,17 @@ import asyncio
 import contextlib
 import threading
 import typing
-from os import path
+from os import environ, path
 
 import pytest
 from tornado import httpserver, ioloop, web
 
 from dummyserver.server import DEFAULT_CERTS, run_loop_in_thread, run_tornado_app
 from dummyserver.testcase import ProxyHandler  # type: ignore[attr-defined]
+from urllib3 import AsyncResolverDescription, ResolverDescription
 
 CA_PATH = path.join(path.dirname(__file__), *[".." for i in range(2)])
+TRAEFIK_HTTPBIN_IPV4: str = environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1")
 
 
 @pytest.mark.usefixtures("requires_traefik")
@@ -31,6 +33,14 @@ class TraefikTestCase:
 
     http_alt_url: str = f"http://{host}:{http_alt_port}"
     https_alt_url: str = f"https://{host}:{https_alt_port}"
+
+    test_resolver: ResolverDescription = ResolverDescription.from_url(
+        f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}"
+    )
+
+    test_async_resolver: AsyncResolverDescription = AsyncResolverDescription.from_url(
+        f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}"
+    )
 
     ca_authority: str | None = None
 

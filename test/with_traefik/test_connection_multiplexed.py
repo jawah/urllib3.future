@@ -9,7 +9,12 @@ from . import TraefikTestCase
 
 class TestConnectionMultiplexed(TraefikTestCase):
     def test_multiplexing_fastest_to_slowest(self) -> None:
-        conn = HTTPSConnection(self.host, self.https_port, ca_certs=self.ca_authority)
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        )
 
         promises = []
 
@@ -34,7 +39,12 @@ class TestConnectionMultiplexed(TraefikTestCase):
         conn.close()
 
     def test_multiplexing_slowest_to_fastest(self) -> None:
-        conn = HTTPSConnection(self.host, self.https_port, ca_certs=self.ca_authority)
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        )
 
         promises = []
 
@@ -59,7 +69,12 @@ class TestConnectionMultiplexed(TraefikTestCase):
         conn.close()
 
     def test_multiplexing_wait_for_promise(self) -> None:
-        conn = HTTPSConnection(self.host, self.https_port, ca_certs=self.ca_authority)
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        )
 
         promises = []
 
@@ -82,7 +97,12 @@ class TestConnectionMultiplexed(TraefikTestCase):
         assert len(conn._promises) == 0
 
     def test_multiplexing_upgrade_h3(self) -> None:
-        conn = HTTPSConnection(self.host, self.https_port, ca_certs=self.ca_authority)
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        )
 
         for i in range(3):
             conn.request("GET", "/get")
