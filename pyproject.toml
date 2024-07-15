@@ -81,11 +81,11 @@ include = [
   "/README.md",
   "/LICENSE.txt",
   "/hatch_build.py",
+  "/noxfile.py",
   "/docker-compose.yaml",
+  "/docker-compose.win.yaml",
   "/traefik/certificate.toml",
-  "/traefik/linux.sh",
-  "/traefik/macos.sh",
-  "/traefik/windows.sh",
+  "/traefik/patched.Dockerfile",
 ]
 
 [tool.hatch.build.targets.wheel]

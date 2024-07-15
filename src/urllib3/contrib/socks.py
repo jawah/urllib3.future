@@ -56,14 +56,28 @@ except ImportError:
 
     from ..exceptions import DependencyWarning
 
-    warnings.warn(
-        (
-            "SOCKS support in urllib3.future requires the installation of an optional "
-            "dependency: python-socks. For more information, see "
-            "https://urllib3future.readthedocs.io/en/latest/contrib.html#socks-proxies"
-        ),
-        DependencyWarning,
-    )
+    try:
+        import socks  # type: ignore  # noqa
+    except ImportError:
+        warnings.warn(
+            (
+                "SOCKS support in urllib3.future requires the installation of an optional "
+                "dependency: python-socks. For more information, see "
+                "https://urllib3future.readthedocs.io/en/latest/contrib.html#socks-proxies"
+            ),
+            DependencyWarning,
+        )
+    else:
+        warnings.warn(
+            (
+                "SOCKS support in urllib3.future requires the installation of an optional "
+                "dependency: python-socks. We detected that you have the older and unmaintained PySocks"
+                "To remediate this, install python-socks instead. For more information, see "
+                "https://urllib3future.readthedocs.io/en/latest/contrib.html#socks-proxies"
+            ),
+            DependencyWarning,
+        )
+
     raise
 
 import typing

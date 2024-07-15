@@ -24,6 +24,8 @@ DEFAULT_CIPHERS = MOZ_INTERMEDIATE_CIPHERS
 
 _TYPE_VERSION_INFO = typing.Tuple[int, int, int, str, int]
 
+IS_PYOPENSSL = False  # kept for BC reason
+
 # Maps the length of a digest to a possible hash function producing this digest
 HASHFUNC_MAP = {32: md5, 40: sha1, 64: sha256}
 

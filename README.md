@@ -112,32 +112,40 @@ with the main branch of urllib3/urllib3 against bugfixes and security patches if
 - **Why replacing urllib3 when it is maintained?**
 
 Progress does not necessarily mean to be a revisionist, first we need to embrace
-what was graciously made by our predecessors.
+what was graciously made by our predecessors. So much knowledge has been poured into this that
+we must just extend it.
 
 We attempted to participate in urllib3 development only to find that we were in disagreement on how
-to proceed. It happens all the time, even on the biggest project out there (e.g. OpenSSL vs BoringSSL or NSS or LibreSSL...))
+to proceed. It happens all the time, even on the biggest projects out there (e.g. OpenSSL vs BoringSSL or NSS or LibreSSL...))
 
 - **OK, but I got there because I saw that urllib3 was replaced in my environment!**
 
-It how package manager do things, unfortunately. Forks are allowed (fortunately for us)
+Since Forks are allowed (fortunately for us); It how package manager do things.
+
 We know how sensible this matter is, this is why we are obligated to ensure the highest
-level of compatibility and a fast support in case anything happen.
+level of compatibility and a fast support in case anything happen. We are probably going to be
+less forgiven in case of bugs than the original urllib3. For good~ish reasons, we know.
+
+The matter is taken with utmost seriousness and everyone can inspect this package at will.
 
 We regularly test this fork against the most used packages (that depend on urllib3).
 
-Finally, no one is "fully aware" of transitive dependencies. And "urllib3" is forced
+Finally, rare is someone "fully aware" of their transitive dependencies. And "urllib3" is forced
 into your environments regardless of your preferences.
 
 - **Wasn't there any other solution than having an in-place fork?**
 
-We assessed many solutions but none were completely satisfying for our users.
+We assessed many solutions but none were completely satisfying.
 We agree that this solution isn't perfect and actually put a lot of pressure on us (urllib3-future).
 
 Here are some of the reasons (not exhaustive) we choose to work this way:
 
-- A) Some major companies may not be able to touch the production code but can "change/swap" dependencies
-- B) urllib3-future main purpose is to fuel Niquests, which is itself a drop-in replacement of Requests. And there's more than 100 packages that plug into Requests, but the code (of the packages) invoke urllib3
+- A) Some major companies may not be able to touch the production code but can "change/swap" dependencies.
+- B) urllib3-future main purpose is to fuel Niquests, which is itself a drop-in replacement of Requests.
+  And there's more than 100 packages commonly used that plug into Requests, but the code (of the packages) invoke urllib3
   So... We cannot fork those 100+ projects to patch urllib3 usage, it is impossible at the moment, given our means.
+  Requests trapped us, and there should be a way to escape the nonsense "migrate" to another http client that reinvent
+  basic things and interactions.
 - C) We don't have to reinvent the wheel.
 - D) Some of our partners started noticing that HTTP/1 started to be disabled by some webservices in favor of HTTP/2+
   So, this fork can unblock them at (almost) zero cost.
@@ -176,7 +184,14 @@ Guarantee is a strong word with a lot of (legal) implication. We cannot offer a 
 But, we answer and solve issues in a timely manner as you may have seen in our tracker.
 
 We take a lot of precaution with this fork, and we welcome any contribution at the sole condition
-that you don't break the compatibility between the projects.
+that you don't break the compatibility between the projects. Namely, urllib3 and urllib3-future.
+
+Every software is subject to bugs no matter what we do.
+
+This being said, rest assured, we kept all the tests from urllib3 to ensure that what was
+guaranteed by upstream is also carefully watched down there. See the CI/pipeline for yourself.
+
+In addition to that, we enforced key integration tests to watch how urllib3-future act with some critical projects.
 
 - **OS Package Managers**
 
@@ -217,6 +232,12 @@ nox -s test-3.11
 
 The nox script will attempt to start a Traefik server along with a httpbin instance.
 Both Traefik and httpbin are written in golang.
+
+You may prevent the containers from starting by passing the following environment variable:
+
+```
+TRAEFIK_HTTPBIN_ENABLE=false nox -s test-3.11
+```
 
 ## Documentation
 

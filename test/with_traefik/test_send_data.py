@@ -14,7 +14,10 @@ from . import TraefikTestCase
 class TestPostBody(TraefikTestCase):
     def test_overrule_unicode_content_length(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             resp = p.request("POST", "/post", body="🚀", headers={"Content-Length": "1"})
 

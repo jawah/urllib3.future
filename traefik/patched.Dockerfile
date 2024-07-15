@@ -5,12 +5,13 @@ WORKDIR /go/src/github.com/mccutchen/go-httpbin
 COPY . .
 
 RUN mkdir dist
-RUN go build -ldflags="-s" -o dist/go-httpbin ./cmd/go-httpbin
+RUN go build -ldflags="-s" -o dist/go-httpbin.exe ./cmd/go-httpbin
 
-FROM mcr.microsoft.com/windows/server:ltsc2022
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2019
+
+COPY --from=build /go/src/github.com/mccutchen/go-httpbin/dist /app
 
 WORKDIR /app
-COPY --from=build /go/src/github.com/mccutchen/go-httpbin/dist/go-httpbin /app/go-httpbin
 
 EXPOSE 8080
-CMD ["/app/go-httpbin"]
+CMD ["/app/go-httpbin.exe"]

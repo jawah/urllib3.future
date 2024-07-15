@@ -38,7 +38,16 @@ def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
     if not os.path.exists("./traefik/httpbin.local.pem"):
         session.log("Prepare fake certificates for our Traefik server...")
 
-        addon_proc = subprocess.Popen(["python", "-m", "pip", "install", "trustme"])
+        addon_proc = subprocess.Popen(
+            [
+                "python",
+                "-m",
+                "pip",
+                "install",
+                "cffi==1.17.0rc1; python_version > '3.12'",
+                "trustme",
+            ]
+        )
 
         addon_proc.wait()
 
@@ -137,7 +146,19 @@ def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
         i = 0
 
         while True:
-            if i >= 60:
+            if i >= 120:
+                if not dc_v1_legacy:
+                    subprocess.Popen(
+                        [
+                            "docker",
+                            "compose",
+                            "-f",
+                            "docker-compose.win.yaml",
+                            "logs",
+                            "--tail=128",
+                        ]
+                    )
+
                 raise TimeoutError(
                     "Error while waiting for the Traefik server (timeout/readiness)"
                 )
@@ -284,6 +305,90 @@ def downstream_niquests(session: nox.Session) -> None:
     session.cd(root)
     session.install(".", silent=False)
     session.cd(f"{tmp_dir}/niquests")
+
+    session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "-v",
+        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
+        *(session.posargs or ("tests/",)),
+    )
+
+
+@nox.session()
+def downstream_requests(session: nox.Session) -> None:
+    root = os.getcwd()
+    tmp_dir = session.create_tmp()
+
+    session.cd(tmp_dir)
+    git_clone(session, "https://github.com/psf/requests")
+    session.chdir("requests")
+
+    for patch in [
+        "0004-Requests-ChunkedEncodingError.patch",
+    ]:
+        session.run("git", "apply", f"{root}/ci/{patch}", external=True)
+
+    session.run("git", "rev-parse", "HEAD", external=True)
+    session.install(".[socks]", silent=False)
+    session.install("-r", "requirements-dev.txt", silent=False)
+
+    session.cd(root)
+    session.install(".[socks]", silent=False)
+    session.cd(f"{tmp_dir}/requests")
+
+    session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "-v",
+        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
+        *(session.posargs or ("tests/",)),
+    )
+
+
+@nox.session()
+def downstream_boto3(session: nox.Session) -> None:
+    root = os.getcwd()
+    tmp_dir = session.create_tmp()
+
+    session.cd(tmp_dir)
+    git_clone(session, "https://github.com/boto/boto3")
+    session.chdir("boto3")
+
+    session.run("git", "rev-parse", "HEAD", external=True)
+    session.install(".", silent=False)
+    session.install("-r", "requirements-dev.txt", silent=False)
+
+    session.cd(root)
+    session.install(".", silent=False)
+    session.cd(f"{tmp_dir}/boto3")
+
+    session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
+    session.run(
+        "python",
+        "scripts/ci/run-tests",
+    )
+
+
+@nox.session()
+def downstream_sphinx(session: nox.Session) -> None:
+    root = os.getcwd()
+    tmp_dir = session.create_tmp()
+
+    session.cd(tmp_dir)
+    git_clone(session, "https://github.com/sphinx-doc/sphinx")
+    session.chdir("sphinx")
+
+    session.run("git", "rev-parse", "HEAD", external=True)
+    session.install(".[test]", silent=False)
+
+    session.cd(root)
+    session.install(".", silent=False)
+    session.cd(f"{tmp_dir}/sphinx")
 
     session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
     session.run(

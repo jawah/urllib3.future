@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v2.10.7-windowsservercore-ltsc2022
+    image: traefik:v2.10.4-windowsservercore-1809
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
@@ -32,12 +32,13 @@ services:
       - type: npipe
         source: \\.\pipe\docker_engine
         target: \\.\pipe\docker_engine
-      - ./traefik:\certs
+      - ./traefik:c:/certs
     command:
       # Enable Docker in Traefik, so that it reads labels from Docker services
       - --providers.docker
+      - --providers.docker.endpoint=npipe:////./pipe/docker_engine
       # TLS providers
-      - --providers.file.directory=\certs
+      - --providers.file.directory=c:/certs
       # Auto discovery
       - --providers.file.watch=true
       # Do not expose all Docker services, only the ones explicitly exposed
