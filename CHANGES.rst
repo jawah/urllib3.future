@@ -1,3 +1,11 @@
+2.8.903 (2024-07-17)
+====================
+
+- Added ``IS_PYOPENSSL`` constant that is exposed by upstream in ``urllib3.util.ssl_`` submodule.
+- Fixed missing exception (``ImportError``) when importing ``urllib3.contrib.pyopenssl`` when PyOpenSSL isn't present in environment.
+- Lowered and simplified testing requirements for HTTP/2, and HTTP/3.
+- Added ``boto3``, ``sphinx``, and ``requests`` to our downstream test cases (nox).
+
 2.8.902 (2024-07-07)
 ====================
 
