@@ -10,6 +10,8 @@ See https://urllib3future.readthedocs.io/en/latest/advanced-usage.html#in-memory
     stacklevel=2,
 )
 
+import OpenSSL.SSL  # type: ignore  # noqa
+
 __all__ = ["inject_into_urllib3", "extract_from_urllib3"]
 
 

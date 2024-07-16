@@ -16,12 +16,16 @@ from .. import TraefikTestCase
 @pytest.mark.asyncio
 class TestSvnCapability(TraefikTestCase):
     async def test_h11_only(self) -> None:
-        async with AsyncHTTPConnectionPool(self.host, self.http_port) as p:
+        async with AsyncHTTPConnectionPool(
+            self.host, self.http_port, resolver=self.test_async_resolver
+        ) as p:
             resp = await p.request("GET", "/get")
             assert resp.version == 11
 
     async def test_h11_no_upgrade(self) -> None:
-        async with AsyncHTTPConnectionPool(host="httpbin.local", port=8888) as p:
+        async with AsyncHTTPConnectionPool(
+            host="httpbin.local", port=8888, resolver=self.test_async_resolver
+        ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get")
 
@@ -29,7 +33,10 @@ class TestSvnCapability(TraefikTestCase):
 
     async def test_alpn_h2_default(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             resp = await p.request("GET", "/get")
 
@@ -37,7 +44,12 @@ class TestSvnCapability(TraefikTestCase):
 
     async def test_upgrade_h3(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, timeout=1, retries=0, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            timeout=1,
+            retries=0,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get")
@@ -51,6 +63,7 @@ class TestSvnCapability(TraefikTestCase):
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get")
@@ -64,6 +77,7 @@ class TestSvnCapability(TraefikTestCase):
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h2},
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get")
@@ -77,6 +91,7 @@ class TestSvnCapability(TraefikTestCase):
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h11},
+            resolver=self.test_async_resolver,
         )
 
         r = await p.request("GET", "/get")
@@ -95,6 +110,7 @@ class TestSvnCapability(TraefikTestCase):
                 retries=0,
                 ca_certs=self.ca_authority,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
+                resolver=self.test_async_resolver,
             )
 
             await p.request("GET", "/get")
@@ -106,6 +122,7 @@ class TestSvnCapability(TraefikTestCase):
                 timeout=1,
                 retries=0,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2},
+                resolver=self.test_async_resolver,
             )
 
             await p.request("GET", "/get")
@@ -117,6 +134,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request(
@@ -138,6 +156,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request(
@@ -159,6 +178,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as p:
             for i in range(3):
                 resp = await p.request(
@@ -175,7 +195,10 @@ class TestSvnCapability(TraefikTestCase):
 
     async def test_drop_h3_upgrade(self) -> None:
         conn = AsyncHTTPSConnection(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -197,7 +220,10 @@ class TestSvnCapability(TraefikTestCase):
 
     async def test_drop_post_established_h3(self) -> None:
         conn = AsyncHTTPSConnection(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -227,7 +253,9 @@ class TestSvnCapability(TraefikTestCase):
     async def test_pool_manager_quic_cache(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
         pm = AsyncPoolManager(
-            ca_certs=self.ca_authority, preemptive_quic_cache=dumb_cache
+            ca_certs=self.ca_authority,
+            preemptive_quic_cache=dumb_cache,
+            resolver=self.test_async_resolver,
         )
 
         conn = await pm.connection_from_url(self.https_url)
@@ -242,7 +270,9 @@ class TestSvnCapability(TraefikTestCase):
         await conn.close()
 
         pm = AsyncPoolManager(
-            ca_certs=self.ca_authority, preemptive_quic_cache=dumb_cache
+            ca_certs=self.ca_authority,
+            preemptive_quic_cache=dumb_cache,
+            resolver=self.test_async_resolver,
         )
         conn = await pm.connection_from_url(self.https_url)
 
@@ -258,6 +288,7 @@ class TestSvnCapability(TraefikTestCase):
             self.host,
             self.http_port,
             disabled_svn={HttpVersion.h11},
+            resolver=self.test_async_resolver,
         ) as p:
             resp = await p.request(
                 "GET",

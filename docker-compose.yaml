@@ -1,0 +1,77 @@
+services:
+  proxy:
+    image: traefik:v2.10.4
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    ports:
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: host
+      - target: 4443
+        published: 4443
+        protocol: tcp
+        mode: host
+      - target: 4443
+        published: 4443
+        protocol: udp
+        mode: host
+      - target: 9999
+        published: 9999
+        protocol: tcp
+        mode: host
+      - target: 8754
+        published: 8754
+        protocol: tcp
+        mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik:/certs
+    command:
+      # Enable Docker in Traefik, so that it reads labels from Docker services
+      - --providers.docker
+      # TLS providers
+      - --providers.file.directory=/certs/
+      # Auto discovery
+      - --providers.file.watch=true
+      # Do not expose all Docker services, only the ones explicitly exposed
+      - --providers.docker.exposedbydefault=false
+      # Create an entrypoint "http" listening on port 8080
+      - --entrypoints.http.address=:8888
+      # Create an entrypoint "https" listening on port 4443
+      - --entrypoints.https.address=:4443
+      # Create alt-no-quic entrypoints
+      - --entrypoints.alt-http.address=:9999
+      - --entrypoints.alt-https.address=:8754
+      # QUIC Related Configuration
+      - --experimental.http3=true
+      - --entrypoints.https.http3=true
+      - --entrypoints.alt-https.http3=false
+      # Enable the access log, with HTTP requests
+      - --accesslog
+      # Enable the Traefik log, for configurations and errors
+      - --log
+      # Disable the Dashboard and API
+      - --api.dashboard=false
+      # Enable healthcheck
+      - --ping
+      - --log.level=INFO
+
+  httpbin:
+    image: mccutchen/go-httpbin:v2.14.0
+    restart: unless-stopped
+    depends_on:
+      proxy:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
+      - traefik.http.routers.httpbin-http.entrypoints=http,alt-http
+      - traefik.http.routers.httpbin-https.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
+      - traefik.http.routers.httpbin-https.entrypoints=https,alt-https
+      - traefik.http.routers.httpbin-https.tls=true
+      - traefik.http.services.httpbin.loadbalancer.server.port=8080

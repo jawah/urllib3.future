@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import ssl
 import sys
@@ -53,6 +54,15 @@ class ProxyHandler(tornado.web.RequestHandler):
 
         assert self.request.uri is not None
         assert self.request.method is not None
+
+        traefik_ipv4 = os.environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1")
+
+        for fake_host in ["alt.httpbin.local", "httpbin.local"]:
+            if fake_host in self.request.uri:
+                self.request.uri = self.request.uri.replace(fake_host, traefik_ipv4)
+                self.request.headers["Host"] = fake_host
+                break
+
         req = tornado.httpclient.HTTPRequest(
             url=self.request.uri,
             method=self.request.method,
@@ -104,6 +114,11 @@ class ProxyHandler(tornado.web.RequestHandler):
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         upstream = tornado.iostream.IOStream(s)
+
+        # special case for our tests...
+        if host in ["httpbin.local", "alt.httpbin.local"]:
+            host = os.environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1")
+
         await upstream.connect((host, int(port)))
 
         client.write(b"HTTP/1.0 200 Connection established\r\n\r\n")

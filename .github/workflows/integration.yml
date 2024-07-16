@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        downstream: [botocore, niquests]
+        downstream: [botocore, niquests, requests, boto3, sphinx]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

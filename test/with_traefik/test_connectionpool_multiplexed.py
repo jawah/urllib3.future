@@ -14,7 +14,10 @@ from . import TraefikTestCase
 class TestConnectionPoolMultiplexed(TraefikTestCase):
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as pool:
             promises = []
 
@@ -50,7 +53,10 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
     def test_multiplexing_without_preload(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as pool:
             promises = []
 
@@ -86,7 +92,11 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
     @notMacOS()
     def test_multiplexing_stream_saturation(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority, maxsize=2
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            maxsize=2,
+            resolver=self.test_resolver,
         ) as pool:
             promises = []
 
@@ -166,7 +176,10 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
         self, depth: int, max_retries: int | None
     ) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as pool:
             retry = Retry(redirect=max_retries) if max_retries is not None else None
             promise = pool.urlopen(

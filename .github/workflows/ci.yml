@@ -45,7 +45,7 @@ jobs:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
         os:
           - macos-12
-          - windows-latest
+          - windows-2019
           - ubuntu-20.04  # OpenSSL 1.1.1
           - ubuntu-latest  # OpenSSL 3.0
         nox-session: ['']
@@ -89,154 +89,16 @@ jobs:
             os: ubuntu-22.04
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-12":"macOS","windows-latest":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-latest":"Ubuntu Latest (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-12":"macOS","windows-2019":"Windows","ubuntu-latest":"Ubuntu","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-latest":"Ubuntu Latest (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 40
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
 
-      - name: "Traefik: Prerequisites - CA, Host, Tools (Linux)"
-        if: ${{ matrix.traefik-server && contains(matrix.os, 'ubuntu') }}
-        run: |
-          mkdir ./certs
-          pip install trustme
-          python -m trustme -i httpbin.local alt.httpbin.local -d ./certs
-          mv ./certs/server.pem ./certs/httpbin.local.pem
-          mv ./certs/server.key ./certs/httpbin.local.key
-          mv ./certs/client.pem ./rootCA.pem
-          echo "127.0.0.1   httpbin.local alt.httpbin.local" | sudo tee -a /etc/hosts
-
-#      - name: "Traefik: Prerequisites - CA, Host, Tools (Windows)"
-#        if: ${{ matrix.traefik-server && contains(matrix.os, 'windows') }}
-#        run: |
-#          mkdir ./certs
-#          pip install trustme
-#          python -m trustme -i httpbin.local alt.httpbin.local -d ./certs
-#          mv ./certs/server.pem ./certs/httpbin.local.pem
-#          mv ./certs/server.key ./certs/httpbin.local.key
-#          mv ./certs/client.pem ./rootCA.pem
-#          echo 127.0.0.1 httpbin.local alt.httpbin.local >> %WinDir%\system32\drivers\etc\hosts
-#          choco install -y curl
-
-      - name: "Traefik: Prerequisites - CA, Host, Tools (MacOS)"
+      - name: "Traefik: Prerequisites - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        run: |
-          sudo security authorizationdb write com.apple.trust-settings.admin allow
-          mkdir ./certs
-          pip install trustme
-          python -m trustme -i httpbin.local alt.httpbin.local -d ./certs
-          mv ./certs/server.pem ./certs/httpbin.local.pem
-          mv ./certs/server.key ./certs/httpbin.local.key
-          mv ./certs/client.pem ./rootCA.pem
-          brew install curl
-          brew install docker
-          brew install docker-compose
-          colima start --network-address
-          colima list
-          echo "192.168.106.2   httpbin.local alt.httpbin.local" | sudo tee -a /etc/hosts
-
-      - name: "Traefik: Produce Compose & Config"
-        if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
-        env:
-          TRAEFIK_CERTIFICATE_TOML: |
-            [[tls.certificates]]
-              certFile = "/certs/httpbin.local.pem"
-              keyFile = "/certs/httpbin.local.key"
-          TRAEFIK_COMPOSE_SCHEMA: |
-            services:
-              proxy:
-                image: traefik:v2.10.4
-                restart: unless-stopped
-                healthcheck:
-                  test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
-                  interval: 3s
-                  timeout: 3s
-                  retries: 10
-                ports:
-                  - target: 8888
-                    published: 8888
-                    protocol: tcp
-                    mode: host
-                  - target: 4443
-                    published: 4443
-                    protocol: tcp
-                    mode: host
-                  - target: 4443
-                    published: 4443
-                    protocol: udp
-                    mode: host
-                  - target: 9999
-                    published: 9999
-                    protocol: tcp
-                    mode: host
-                  - target: 8754
-                    published: 8754
-                    protocol: tcp
-                    mode: host
-                volumes:
-                  - /var/run/docker.sock:/var/run/docker.sock
-                  - ./certs:/certs
-                command:
-                  # Enable Docker in Traefik, so that it reads labels from Docker services
-                  - --providers.docker
-                  # TLS providers
-                  - --providers.file.directory=/certs/
-                  # Auto discovery
-                  - --providers.file.watch=true
-                  # Do not expose all Docker services, only the ones explicitly exposed
-                  - --providers.docker.exposedbydefault=false
-                  # Create an entrypoint "http" listening on port 8080
-                  - --entrypoints.http.address=:8888
-                  # Create an entrypoint "https" listening on port 4443
-                  - --entrypoints.https.address=:4443
-                  # Create alt-no-quic entrypoints
-                  - --entrypoints.alt-http.address=:9999
-                  - --entrypoints.alt-https.address=:8754
-                  # QUIC Related Configuration
-                  - --experimental.http3=true
-                  - --entrypoints.https.http3=true
-                  - --entrypoints.alt-https.http3=false
-                  # Enable the access log, with HTTP requests
-                  - --accesslog
-                  # Enable the Traefik log, for configurations and errors
-                  - --log
-                  # Disable the Dashboard and API
-                  - --api.dashboard=false
-                  # Enable healthcheck
-                  - --ping
-                  - --log.level=INFO
-            
-              httpbin:
-                image: mccutchen/go-httpbin:v2.11.1
-                restart: unless-stopped
-                depends_on:
-                  proxy:
-                    condition: service_healthy
-                labels:
-                  - traefik.enable=true
-                  - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
-                  - traefik.http.routers.httpbin-http.entrypoints=http,alt-http
-                  - traefik.http.routers.httpbin-https.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
-                  - traefik.http.routers.httpbin-https.entrypoints=https,alt-https
-                  - traefik.http.routers.httpbin-https.tls=true
-                  - traefik.http.services.httpbin.loadbalancer.server.port=8080
-
-        run: |
-          echo "$TRAEFIK_COMPOSE_SCHEMA" > ./docker-compose.yaml
-          echo "$TRAEFIK_CERTIFICATE_TOML" > ./certs/certificate.toml
-
-      - name: "Traefik: Start stack"
-        if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
-        run: docker compose up -d || docker-compose up -d
-
-      - name: "Traefik: Wait for service"
-        uses: nick-fields/retry@v3
-        if: ${{ matrix.traefik-server && !contains(matrix.os, 'windows') }}
-        with:
-          timeout_minutes: 3
-          max_attempts: 30
-          command: curl --fail http://httpbin.local:8888/get
+        run: ./traefik/macos.sh
 
       - name: "Setup Python ${{ matrix.python-version }}"
         uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"
@@ -252,6 +114,9 @@ jobs:
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
           NOX_SESSION: ${{ matrix.nox-session }}
+          TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
+          # on MacOS, the Colima VM is located at "192.168.106.2" by default.
+          TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && '192.168.106.2' || '127.0.0.1' }}
 
       - name: "Upload artifact"
         uses: "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
@@ -288,8 +153,7 @@ jobs:
           python -m coverage html --skip-covered --skip-empty
           python -m coverage report --ignore-errors --show-missing --fail-under=80
 
-      - if: ${{ failure() }}
-        name: "Upload report if check failed"
+      - name: "Upload report"
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce
         with:
           name: coverage-report

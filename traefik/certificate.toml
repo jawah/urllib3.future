@@ -1,0 +1,3 @@
+[[tls.certificates]]
+  certFile = "/certs/httpbin.local.pem"
+  keyFile = "/certs/httpbin.local.key"

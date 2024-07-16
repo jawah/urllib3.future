@@ -25,7 +25,10 @@ class TestStreamResponse(TraefikTestCase):
     )
     def test_h2n3_stream(self, amt: int | None) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get", preload_content=False)
@@ -53,7 +56,10 @@ class TestStreamResponse(TraefikTestCase):
 
     def test_read_zero(self) -> None:
         with HTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         ) as p:
             resp = p.request("GET", "/get", preload_content=False)
             assert resp.status == 200

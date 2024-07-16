@@ -86,7 +86,10 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
         disabled_svn: HttpVersion | None,
     ) -> None:
         with proxy_from_url(
-            getattr(self, proxy_url), ca_certs=DEFAULT_CA, disabled_svn={disabled_svn}
+            getattr(self, proxy_url),
+            ca_certs=DEFAULT_CA,
+            disabled_svn={disabled_svn},
+            resolver=self.test_resolver,
         ) as http:
             svn_history = []
 

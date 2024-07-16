@@ -12,7 +12,7 @@ from . import TraefikTestCase
 
 class TestConnectionInfo(TraefikTestCase):
     def test_no_tls(self) -> None:
-        p = PoolManager(ca_certs=self.ca_authority)
+        p = PoolManager(ca_certs=self.ca_authority, resolver=self.test_resolver)
 
         conn_info: ConnectionInfo | None = None
 
@@ -30,7 +30,7 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.certificate_dict is None
 
     def test_tls_on_tcp(self) -> None:
-        p = PoolManager(ca_certs=self.ca_authority)
+        p = PoolManager(ca_certs=self.ca_authority, resolver=self.test_resolver)
 
         conn_info: ConnectionInfo | None = None
 
@@ -53,7 +53,9 @@ class TestConnectionInfo(TraefikTestCase):
         reason="unsupported due missing API (3.10+)",
     )
     def test_tls_on_tcp_disabled_cert_reqs(self) -> None:
-        p = PoolManager(ca_certs=self.ca_authority, cert_reqs=0)
+        p = PoolManager(
+            ca_certs=self.ca_authority, cert_reqs=0, resolver=self.test_resolver
+        )
 
         conn_info: ConnectionInfo | None = None
 
@@ -79,6 +81,7 @@ class TestConnectionInfo(TraefikTestCase):
                 (self.host, self.https_port): (self.host, self.https_port)
             },
             ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
         )
 
         conn_info: ConnectionInfo | None = None

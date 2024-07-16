@@ -14,7 +14,10 @@ from .. import TraefikTestCase
 class TestConnection(TraefikTestCase):
     async def test_h3_probe_after_close(self) -> None:
         conn = AsyncHTTPSConnection(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -41,6 +44,7 @@ class TestConnection(TraefikTestCase):
             self.https_port,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -66,6 +70,7 @@ class TestConnection(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.close()
@@ -83,6 +88,7 @@ class TestConnection(TraefikTestCase):
             self.https_port,
             ca_certs=self.ca_authority,
             preemptive_quic_cache=quic_cache_resumption,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -102,6 +108,7 @@ class TestConnection(TraefikTestCase):
             ca_certs=self.ca_authority,
             preemptive_quic_cache=quic_cache_resumption,
             disabled_svn={HttpVersion.h3},
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -120,6 +127,7 @@ class TestConnection(TraefikTestCase):
             self.https_port,
             ca_certs=self.ca_authority,
             preemptive_quic_cache=quic_cache_resumption,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -136,6 +144,7 @@ class TestConnection(TraefikTestCase):
             self.https_port,
             ca_certs=self.ca_authority,
             preemptive_quic_cache=quic_cache_resumption,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")
@@ -160,6 +169,7 @@ class TestConnection(TraefikTestCase):
             self.https_port,
             ssl_context=ctx,
             preemptive_quic_cache=quic_cache_resumption,
+            resolver=self.test_async_resolver.new(),
         )
 
         await conn.request("GET", "/get")

@@ -15,7 +15,10 @@ from .. import TraefikTestCase
 class TestConnectionPoolMultiplexed(TraefikTestCase):
     async def test_multiplexing_fastest_to_slowest(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as pool:
             promises = []
 
@@ -51,7 +54,10 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
     async def test_multiplexing_without_preload(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as pool:
             promises = []
 
@@ -87,7 +93,11 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
     @notMacOS()
     async def test_multiplexing_stream_saturation(self) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority, maxsize=2
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            maxsize=2,
+            resolver=self.test_async_resolver,
         ) as pool:
             promises = []
 
@@ -167,7 +177,10 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
         self, depth: int, max_retries: int | None
     ) -> None:
         async with AsyncHTTPSConnectionPool(
-            self.host, self.https_port, ca_certs=self.ca_authority
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
         ) as pool:
             retry = Retry(redirect=max_retries) if max_retries is not None else None
             promise = await pool.urlopen(
