@@ -129,7 +129,7 @@ less forgiven in case of bugs than the original urllib3. For good~ish reasons, w
 
 The matter is taken with utmost seriousness and everyone can inspect this package at will.
 
-We regularly test this fork against the most used packages (that depend on urllib3).
+We regularly test this fork against the most used packages (that depend on urllib3, especially those who plunged deep into urllib3 internals).
 
 Finally, rare is someone "fully aware" of their transitive dependencies. And "urllib3" is forced
 into your environments regardless of your preferences.
@@ -150,6 +150,17 @@ Here are some of the reasons (not exhaustive) we choose to work this way:
 - C) We don't have to reinvent the wheel.
 - D) Some of our partners started noticing that HTTP/1 started to be disabled by some webservices in favor of HTTP/2+
   So, this fork can unblock them at (almost) zero cost.
+
+**OK... then what do I gain from this?**
+
+- It is faster than its counterpart, we measured gain up to 2X faster in a multithreaded environment using a http2 endpoint.
+- It works well with gevent / does not conflict. We do not use the standard queue class from stdlib as it does not fit http2+ constraints.
+- Leveraging recent protocols like http2 and http3 transparently. Code and behaviors does not change one bit.
+- You do not depend on the standard library to emit http/1 requests, and that is actually a good news. http.client 
+  has numerous known flaws but cannot be fixed as we speak. (e.g. urllib3 is based on http.client)
+- There a ton of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
+  to enable specific capabilities, like but not limited to: "DNS over QUIC, HTTP" / "Happy Eyeballs" / "Native Asyncio" / "Advanced Multiplexing".
+- Non-blocking IO with concurrent streams/requests. And yes, transparently.
 
 - **Is this funded?**
 
