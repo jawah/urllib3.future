@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 
 import h11
+from h11._state import _SWITCH_UPGRADE, ConnectionState
 
 from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
@@ -100,11 +102,35 @@ def headers_from_response(
     ] + response.headers.raw_items()
 
 
+class RelaxConnectionState(ConnectionState):
+    def process_event(  # type: ignore[no-untyped-def]
+        self,
+        role,
+        event_type,
+        server_switch_event=None,
+    ) -> None:
+        if server_switch_event is not None:
+            if server_switch_event not in self.pending_switch_proposals:
+                if server_switch_event is _SWITCH_UPGRADE:
+                    warnings.warn(
+                        f"Received server {server_switch_event} event without a pending proposal. "
+                        "This will raise an exception in a future version. It is temporarily relaxed to match the "
+                        "legacy http.client standard library.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    self.pending_switch_proposals.add(_SWITCH_UPGRADE)
+
+        return super().process_event(role, event_type, server_switch_event)
+
+
 class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     implementation: str = "h11"
 
     def __init__(self) -> None:
         self._connection: h11.Connection = h11.Connection(h11.CLIENT)
+        self._connection._cstate = RelaxConnectionState()
+
         self._data_buffer: list[bytes] = []
         self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
@@ -255,7 +281,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         )
 
     def _data_from_h11(self, h11_event: h11.Data) -> Event:
-        return DataReceived(self._current_stream_id, h11_event.data)
+        return DataReceived(self._current_stream_id, bytes(h11_event.data))
 
     def _connection_terminated(
         self, error_code: int = 0, message: str | None = None

@@ -1,0 +1,35 @@
+diff --git a/tests/unit/api_test.py b/tests/unit/api_test.py
+index 3ce127b3..cea350ee 100644
+--- a/tests/unit/api_test.py
++++ b/tests/unit/api_test.py
+@@ -330,6 +330,7 @@ class DockerApiTest(BaseAPIClientTest):
+         content_str = json.dumps(content)
+         content_str = content_str.encode('utf-8')
+         body = io.BytesIO(content_str)
++        body.close = lambda: None  # necessary because get closed after initial preloading.
+ 
+         # mock a stream interface
+         raw_resp = urllib3.HTTPResponse(body=body)
+@@ -445,7 +446,7 @@ class UnixSocketStreamTest(unittest.TestCase):
+             b'HTTP/1.1 200 OK\r\n'
+             b'Transfer-Encoding: chunked\r\n'
+             b'\r\n'
+-        ) + b'\r\n'.join(lines)
++        ) + b'\r\n'.join(lines) + b'\r\n'  # fix invalid chunked: missing extraneous RC+LF
+ 
+         with APIClient(
+                 base_url=f"http+unix://{self.socket_file}",
+@@ -460,9 +461,11 @@ class UnixSocketStreamTest(unittest.TestCase):
+                     if i == 4:
+                         raise e
+ 
+-            assert list(stream) == [
++            # assert assume that sock will yield on each chunk
++            # but not necessarily true.
++            assert b"".join(list(stream)) == b"".join([
+                 str(i).encode() for i in range(50)
+-            ]
++            ])
+ 
+ 
+ class TCPSocketStreamTest(unittest.TestCase):

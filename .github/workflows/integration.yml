@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        downstream: [botocore, niquests, requests, boto3, sphinx]
+        downstream: [botocore, niquests, requests, boto3, sphinx, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -24,10 +24,16 @@ jobs:
       - name: "Setup Python"
         uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"
         with:
-          python-version: "3.x"
+          python-version: "3.11"
 
       - name: "Install dependencies"
         run: python -m pip install --upgrade nox
+
+      - name: "Undo Docker Config: docker-py"
+        if: matrix.downstream == 'docker'
+        run: | 
+          docker logout
+          rm -rf ~/.docker
 
       - name: "Run downstream tests"
         run: nox -s downstream_${{ matrix.downstream }}

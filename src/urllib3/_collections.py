@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typing
-import warnings
 from collections import OrderedDict
 from enum import Enum, auto
 from functools import lru_cache
@@ -72,7 +71,9 @@ class RecentlyUsedContainer(typing.Generic[_KT, _VT], typing.MutableMapping[_KT,
     """
     Provides a thread-safe dict-like container which maintains up to
     ``maxsize`` keys while throwing away the least-recently-used keys beyond
-    ``maxsize``.
+    ``maxsize``. Caution: RecentlyUsedContainer is deprecated and scheduled for
+    removal in a next major of urllib3.future. It has been replaced by a more
+    suitable implementation in ``urllib3.util.traffic_police``.
 
     :param maxsize:
         Maximum number of recent elements to retain.
@@ -97,13 +98,6 @@ class RecentlyUsedContainer(typing.Generic[_KT, _VT], typing.MutableMapping[_KT,
         self.dispose_func = dispose_func
         self._container = OrderedDict()
         self.lock = RLock()
-
-        warnings.warn(
-            "RecentlyUsedContainer is deprecated and scheduled for removal in urllib3.future v3. "
-            "It has been replaced by a more suitable implementation in urllib3.util.traffic_police.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     def __getitem__(self, key: _KT) -> _VT:
         # Re-insert the item, moving it to the end of the eviction line.

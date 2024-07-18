@@ -1,3 +1,11 @@
+2.8.904 (2024-07-18)
+====================
+
+- Relaxed h11 constraint around "pending proposal" and coming server event about upgrade.
+  This is made to ensure near perfect compatibility against the legacy urllib3 which is based on http.client.
+- Fixed h11 yielding bytearray instead of bytes in rare circumstances.
+- Added ``docker-py`` in our CI/integration pipeline.
+
 2.8.903 (2024-07-17)
 ====================
 

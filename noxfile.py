@@ -282,6 +282,8 @@ def downstream_botocore(session: nox.Session) -> None:
     session.run("python", "scripts/ci/install")
 
     session.cd(root)
+    session.install("setuptools<71")
+
     session.install(".", silent=False)
     session.cd(f"{tmp_dir}/botocore")
 
@@ -398,6 +400,38 @@ def downstream_sphinx(session: nox.Session) -> None:
         "-v",
         f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
         *(session.posargs or ("tests/",)),
+    )
+
+
+@nox.session()
+def downstream_docker(session: nox.Session) -> None:
+    root = os.getcwd()
+    tmp_dir = session.create_tmp()
+
+    session.cd(tmp_dir)
+    git_clone(session, "https://github.com/docker/docker-py")
+    session.chdir("docker-py")
+
+    for patch in [
+        "0005-DockerPy-FixBadChunk.patch",
+    ]:
+        session.run("git", "apply", f"{root}/ci/{patch}", external=True)
+
+    session.run("git", "rev-parse", "HEAD", external=True)
+    session.install(".[ssh,dev]", silent=False)
+
+    session.cd(root)
+    session.install(".", silent=False)
+    session.cd(f"{tmp_dir}/docker-py")
+
+    session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "-v",
+        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
+        *(session.posargs or ("tests/unit",)),
     )
 
 
