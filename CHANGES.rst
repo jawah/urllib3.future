@@ -1,3 +1,17 @@
+2.8.905 (2024-08-04)
+====================
+
+- Fixed wrong upgrade attempt to QUIC when using a SOCKS proxy. Any usage of a proxy disable HTTP/3 over QUIC as per documented.
+  until proper support is implemented in a next minor version.
+- Backported upstream urllib3 #3434: util/ssl: make code resilient to missing hash functions.
+  In certain environments such as in a FIPS enabled system, certain algorithms such as md5 may be unavailable. Due
+  to the importing of such a module on a system where it is unavailable, urllib3(-future) will crash and is unusable.
+  https://github.com/urllib3/urllib3/pull/3434
+- Backported upstream urllib3 GHSA-34jh-p97f-mpxf: Strip Proxy-Authorization header on redirects.
+  Added the ``Proxy-Authorization`` header to the list of headers to strip from requests when redirecting to a different host.
+  As before, different headers can be set via ``Retry.remove_headers_on_redirect``.
+- Fixed state-machine desync on a rare scenario when uploading a body using HTTP/3 over QUIC.
+
 2.8.904 (2024-07-18)
 ====================
 

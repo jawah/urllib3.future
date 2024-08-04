@@ -935,6 +935,11 @@ class ProxyManager(PoolManager):
         connection_pool_kw["_proxy_headers"] = self.proxy_headers
         connection_pool_kw["_proxy_config"] = self.proxy_config
 
+        if "disabled_svn" not in connection_pool_kw:
+            connection_pool_kw["disabled_svn"] = set()
+
+        connection_pool_kw["disabled_svn"].add(HttpVersion.h3)
+
         super().__init__(num_pools, headers, **connection_pool_kw)
 
     def connection_from_host(

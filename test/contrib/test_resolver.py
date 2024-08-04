@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
@@ -65,8 +66,9 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
             "doq://dns.nextdns.io/?timeout=1",
             QUICResolver,
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -87,8 +89,9 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
             "doq://dns.nextdns.io/?implementation=qh3&timeout=1",
             QUICResolver,
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -129,8 +132,9 @@ def test_url_resolver(
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -166,8 +170,9 @@ def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -300,8 +305,9 @@ def test_many_resolver_host_constraint_distribution() -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -388,8 +394,9 @@ def test_doh_rfc8484(dns_url: str) -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -494,8 +501,9 @@ def test_many_resolver_thread_safe() -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -533,8 +541,9 @@ def test_resolver_recycle(dns_url: str) -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -560,8 +569,9 @@ def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),
@@ -601,8 +611,9 @@ def test_ipv6_always_preferred(dns_url: str) -> None:
         pytest.param(
             "doq://dns.nextdns.io/?timeout=1",
             marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None,
-                reason="Github Action CI Unpredictable",
+                os.environ.get("CI", None) is not None
+                and platform.system() != "Darwin",
+                reason="Github Action CI: Network Unreachable UDP/QUIC",
                 strict=False,
             ),
         ),

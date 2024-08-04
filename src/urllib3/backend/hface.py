@@ -891,7 +891,12 @@ class HfaceBackend(BaseBackend):
         # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
         # It may(should) break the connection.
         if not support_te_chunked:
-            if encoded_header in {b"transfer-encoding", b"connection"}:
+            if encoded_header in {
+                b"transfer-encoding",
+                b"connection",
+                b"upgrade",
+                b"keep-alive",
+            }:
                 return
 
         if self.__expected_body_length is None and encoded_header == b"content-length":
@@ -1177,6 +1182,14 @@ class HfaceBackend(BaseBackend):
                         self._promises_per_stream[rp.stream_id] = rp
 
                         raise EarlyResponse(promise=rp)
+
+                    while True:
+                        data_out = self._protocol.bytes_to_send()
+
+                        if not data_out:
+                            break
+
+                        self.sock.sendall(data_out)
 
                 if self.__remaining_body_length:
                     self.__remaining_body_length -= len(data)

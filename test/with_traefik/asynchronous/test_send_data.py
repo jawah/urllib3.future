@@ -61,25 +61,39 @@ class TestPostBody(TraefikTestCase):
             for i in range(3):
                 if isinstance(body, BytesIO):
                     body.seek(0, 0)
-                    # traefik bug with http3, should not happen!
-                    if i > 0:
-                        headers = {"content-length": "-1"}
-                    else:
-                        headers = {}
-                else:
-                    headers = {}
 
-                resp = await p.request(
-                    method, f"/{method.lower()}", body=body, headers=headers
+                # in some cases, urllib3 cannot infer in advance the body full length
+                # it will trigger a stream upload
+                # http1.1 => (Transfer-Encoding: chunked) legacy algorithm
+                # http2+  => send data frames, server aware of the end with the FIN bit.
+                expect_no_content_length = isinstance(body, BytesIO) or hasattr(
+                    body, "__next__"
                 )
+
+                # traefik bug with http3, should not happen!
+                # see https://github.com/traefik/traefik/issues/10185
+                if i > 0 and expect_no_content_length:
+                    pytest.skip(
+                        "traefik bug with http3 forbid stream upload without content-length"
+                    )
+
+                resp = await p.request(method, f"/{method.lower()}", body=body)
 
                 assert resp.status == 200
                 assert resp.version == (20 if i == 0 else 30)
 
+                echo_data_from_httpbin = (await resp.json())["data"]
+                need_b64_decode = echo_data_from_httpbin.startswith(
+                    "data:application/octet-stream;base64,"
+                )
+
+                if need_b64_decode:
+                    echo_data_from_httpbin = b64decode(echo_data_from_httpbin[37:])
+
                 payload_seen_by_server: bytes = (
-                    b64decode((await resp.json())["data"][37:])
-                    if not isinstance(body, str)
-                    else (await resp.json())["data"].encode()
+                    echo_data_from_httpbin
+                    if isinstance(echo_data_from_httpbin, bytes)
+                    else echo_data_from_httpbin.encode()
                 )
 
                 if isinstance(body, str):
