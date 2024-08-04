@@ -141,26 +141,29 @@ We agree that this solution isn't perfect and actually put a lot of pressure on 
 
 Here are some of the reasons (not exhaustive) we choose to work this way:
 
-- A) Some major companies may not be able to touch the production code but can "change/swap" dependencies.
-- B) urllib3-future main purpose is to fuel Niquests, which is itself a drop-in replacement of Requests.
+> A) Some major companies may not be able to touch the production code but can "change/swap" dependencies.
+
+> B) urllib3-future main purpose is to fuel Niquests, which is itself a drop-in replacement of Requests.
   And there's more than 100 packages commonly used that plug into Requests, but the code (of the packages) invoke urllib3
   So... We cannot fork those 100+ projects to patch urllib3 usage, it is impossible at the moment, given our means.
   Requests trapped us, and there should be a way to escape the nonsense "migrate" to another http client that reinvent
   basic things and interactions.
-- C) We don't have to reinvent the wheel.
-- D) Some of our partners started noticing that HTTP/1 started to be disabled by some webservices in favor of HTTP/2+
+
+> C) We don't have to reinvent the wheel.
+
+> D) Some of our partners started noticing that HTTP/1 started to be disabled by some webservices in favor of HTTP/2+
   So, this fork can unblock them at (almost) zero cost.
 
-**OK... then what do I gain from this?**
+- **OK... then what do I gain from this?**
 
-- It is faster than its counterpart, we measured gain up to 2X faster in a multithreaded environment using a http2 endpoint.
-- It works well with gevent / does not conflict. We do not use the standard queue class from stdlib as it does not fit http2+ constraints.
-- Leveraging recent protocols like http2 and http3 transparently. Code and behaviors does not change one bit.
-- You do not depend on the standard library to emit http/1 requests, and that is actually a good news. http.client 
+1. It is faster than its counterpart, we measured gain up to 2X faster in a multithreaded environment using a http2 endpoint.
+2. It works well with gevent / does not conflict. We do not use the standard queue class from stdlib as it does not fit http2+ constraints.
+3. Leveraging recent protocols like http2 and http3 transparently. Code and behaviors does not change one bit.
+4. You do not depend on the standard library to emit http/1 requests, and that is actually a good news. http.client 
   has numerous known flaws but cannot be fixed as we speak. (e.g. urllib3 is based on http.client)
-- There a ton of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
+5. There a ton of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
   to enable specific capabilities, like but not limited to: "DNS over QUIC, HTTP" / "Happy Eyeballs" / "Native Asyncio" / "Advanced Multiplexing".
-- Non-blocking IO with concurrent streams/requests. And yes, transparently.
+6. Non-blocking IO with concurrent streams/requests. And yes, transparently.
 
 - **Is this funded?**
 

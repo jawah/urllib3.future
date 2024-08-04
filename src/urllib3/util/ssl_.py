@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import io
 import os
@@ -9,7 +10,6 @@ import threading
 import typing
 import warnings
 from binascii import unhexlify
-from hashlib import md5, sha1, sha256
 
 from .._constant import MOZ_INTERMEDIATE_CIPHERS
 from ..contrib.imcc import load_cert_chain as _ctx_load_cert_chain
@@ -27,7 +27,14 @@ _TYPE_VERSION_INFO = typing.Tuple[int, int, int, str, int]
 IS_PYOPENSSL = False  # kept for BC reason
 
 # Maps the length of a digest to a possible hash function producing this digest
-HASHFUNC_MAP = {32: md5, 40: sha1, 64: sha256}
+HASHFUNC_MAP = {
+    length: getattr(hashlib, algorithm, None)
+    for length, algorithm in (
+        (32, "md5"),
+        (40, "sha1"),
+        (64, "sha256"),
+    )
+}
 
 
 def _compute_key_ctx_build(
@@ -238,9 +245,16 @@ def assert_fingerprint(cert: bytes | None, fingerprint: str) -> None:
 
     fingerprint = fingerprint.replace(":", "").lower()
     digest_length = len(fingerprint)
-    hashfunc = HASHFUNC_MAP.get(digest_length)
-    if not hashfunc:
+    if digest_length not in HASHFUNC_MAP:
         raise SSLError(f"Fingerprint of invalid length: {fingerprint}")
+
+    hashfunc = HASHFUNC_MAP[digest_length]
+
+    if hashfunc is None:
+        raise SSLError(
+            f"Hash function implementation unavailable for fingerprint length: {digest_length}. "
+            "Hint: your OpenSSL build may not include it for compliance issues."
+        )
 
     # We need encode() here for py32; works on py2 and p33.
     fingerprint_bytes = unhexlify(fingerprint.encode())

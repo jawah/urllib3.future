@@ -126,6 +126,7 @@ filterwarnings = [
     '''ignore:A plugin raised an exception during''',
     '''ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning''',
+    '''ignore:The `hash` argument is deprecated in favor of `unsafe_hash`:DeprecationWarning''',
 ]
 
 [tool.isort]

@@ -1,7 +1,7 @@
 """
 This module contains provisional support for SOCKS proxies from within
 urllib3. This module supports SOCKS4, SOCKS4A (an extension of SOCKS4), and
-SOCKS5. To enable its functionality, either install PySocks or install this
+SOCKS5. To enable its functionality, either install python-socks or install this
 module with the ``socks`` extra.
 
 The SOCKS implementation supports the full range of urllib3 features. It also
@@ -40,14 +40,13 @@ with the proxy:
 
 from __future__ import annotations
 
-from python_socks import (  # type: ignore[import-untyped]
-    ProxyConnectionError,
-    ProxyError,
-    ProxyTimeoutError,
-    ProxyType,
-)
-
 try:
+    from python_socks import (  # type: ignore[import-untyped]
+        ProxyConnectionError,
+        ProxyError,
+        ProxyTimeoutError,
+        ProxyType,
+    )
     from python_socks.sync import Proxy  # type: ignore[import-untyped]
 
     from ._socks_override import AsyncioProxy
@@ -89,6 +88,7 @@ from .._async.connection import AsyncHTTPConnection, AsyncHTTPSConnection
 from .._async.connectionpool import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
 from .._async.poolmanager import AsyncPoolManager
 from .._typing import _TYPE_SOCKS_OPTIONS
+from ..backend import HttpVersion
 
 # synchronous part
 from ..connection import HTTPConnection, HTTPSConnection
@@ -257,6 +257,11 @@ class SOCKSProxyManager(PoolManager):
         }
         connection_pool_kw["_socks_options"] = socks_options
 
+        if "disabled_svn" not in connection_pool_kw:
+            connection_pool_kw["disabled_svn"] = set()
+
+        connection_pool_kw["disabled_svn"].add(HttpVersion.h3)
+
         super().__init__(num_pools, headers, **connection_pool_kw)
 
         self.pool_classes_by_scheme = SOCKSProxyManager.pool_classes_by_scheme
@@ -414,6 +419,11 @@ class AsyncSOCKSProxyManager(AsyncPoolManager):
             "rdns": rdns,
         }
         connection_pool_kw["_socks_options"] = socks_options
+
+        if "disabled_svn" not in connection_pool_kw:
+            connection_pool_kw["disabled_svn"] = set()
+
+        connection_pool_kw["disabled_svn"].add(HttpVersion.h3)
 
         super().__init__(num_pools, headers, **connection_pool_kw)
 
