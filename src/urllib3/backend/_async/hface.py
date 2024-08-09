@@ -281,7 +281,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 if server and server != self.host:
                     continue
 
-                return server, int(port)
+                try:
+                    return server, int(port)
+                except ValueError:
+                    pass
 
         return None
 

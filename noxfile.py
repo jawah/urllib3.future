@@ -196,11 +196,12 @@ def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
 
 def tests_impl(
     session: nox.Session,
-    extras: str = "socks,brotli",
+    extras: str = "socks,brotli,zstd",
     byte_string_comparisons: bool = False,
 ) -> None:
     with traefik_boot(session):
         # Install deps and the package itself.
+        session.install("-U", "pip", "setuptools", silent=False)
         session.install("-r", "dev-requirements.txt", silent=False)
         session.install(f".[{extras}]", silent=False)
 
@@ -209,6 +210,7 @@ def tests_impl(
         # Print the Python version and bytesize.
         session.run("python", "--version")
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
+        session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
 
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step

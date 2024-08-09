@@ -436,7 +436,9 @@ class QUICResolver(PlainResolver):
             return events
 
 
-class AdGuardResolver(QUICResolver):
+class AdGuardResolver(
+    QUICResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "adguard"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any):
@@ -450,7 +452,9 @@ class AdGuardResolver(QUICResolver):
         super().__init__("unfiltered.adguard-dns.com", port, *patterns, **kwargs)
 
 
-class NextDNSResolver(QUICResolver):
+class NextDNSResolver(
+    QUICResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "nextdns"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any):

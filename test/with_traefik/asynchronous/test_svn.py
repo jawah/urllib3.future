@@ -193,6 +193,28 @@ class TestSvnCapability(TraefikTestCase):
                     == f'h3-25=":443"; ma=3600, h3=":{self.https_port}"; ma=3600'
                 )
 
+    async def test_invalid_alt_svc_h3_upgrade(self) -> None:
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_alt_port,
+            timeout=1,
+            retries=False,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+        ) as p:
+            for i in range(2):
+                resp = await p.request(
+                    "GET",
+                    "/response-headers?Alt-Svc=h3-25%3D%22%3A443%22%3B%20ma%3D3600%2C%20h3%3D%22%3Aabc%22%3B%20ma%3D3600",
+                )
+
+                assert resp.version == 20
+                assert "Alt-Svc" in resp.headers
+                assert (
+                    resp.headers.get("Alt-Svc")
+                    == 'h3-25=":443"; ma=3600, h3=":abc"; ma=3600'
+                )
+
     async def test_drop_h3_upgrade(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,

@@ -279,7 +279,7 @@ def run_loop_in_thread() -> Generator[tornado.ioloop.IOLoop, None, None]:
         # run asyncio.run in a thread and collect exceptions from *either*
         # the loop failing to start, or failing to close
         ran = tpe.submit(_run_and_close_tornado, run)
-        for f in concurrent.futures.as_completed((loop_started, ran)):  # type: ignore[misc]
+        for f in concurrent.futures.as_completed((loop_started, ran)):
             if f is loop_started:
                 io_loop, stop_event = loop_started.result()
                 try:

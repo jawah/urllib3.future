@@ -558,7 +558,9 @@ class HTTPSResolver(BaseResolver):
         return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
 
 
-class GoogleResolver(HTTPSResolver):
+class GoogleResolver(
+    HTTPSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "google"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -575,7 +577,9 @@ class GoogleResolver(HTTPSResolver):
         super().__init__("dns.google", port, *patterns, **kwargs)
 
 
-class CloudflareResolver(HTTPSResolver):
+class CloudflareResolver(
+    HTTPSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "cloudflare"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -591,7 +595,9 @@ class CloudflareResolver(HTTPSResolver):
         super().__init__("cloudflare-dns.com", port, *patterns, **kwargs)
 
 
-class AdGuardResolver(HTTPSResolver):
+class AdGuardResolver(
+    HTTPSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "adguard"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -607,7 +613,9 @@ class AdGuardResolver(HTTPSResolver):
         super().__init__("unfiltered.adguard-dns.com", port, *patterns, **kwargs)
 
 
-class OpenDNSResolver(HTTPSResolver):
+class OpenDNSResolver(
+    HTTPSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "opendns"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -623,7 +631,9 @@ class OpenDNSResolver(HTTPSResolver):
         super().__init__("dns.opendns.com", port, *patterns, **kwargs)
 
 
-class Quad9Resolver(HTTPSResolver):
+class Quad9Resolver(
+    HTTPSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "quad9"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -639,7 +649,9 @@ class Quad9Resolver(HTTPSResolver):
         super().__init__("dns11.quad9.net", port, *patterns, **kwargs)
 
 
-class NextDNSResolver(HTTPSResolver):
+class NextDNSResolver(
+    HTTPSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "nextdns"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:

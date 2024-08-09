@@ -7,9 +7,10 @@ pytest-timeout==2.3.1
 trustme==0.9.0
 # We have to install at most cryptography 39.0.2 for PyPy<7.3.10
 # versions of Python 3.7, 3.8, and 3.9.
-cryptography==39.0.2;implementation_name=="pypy" and implementation_version<"7.3.10"
-cryptography==42.0.5;implementation_name!="pypy" or implementation_version>="7.3.10"
-backports.zoneinfo==0.2.1;python_version<"3.9"
+cryptography==39.0.2; implementation_name=="pypy" and implementation_version<"7.3.10"
+cryptography==42.0.5; implementation_name!="pypy" or implementation_version>="7.3.10"
+backports.zoneinfo==0.2.1; python_version<"3.9"
+tzdata==2024.1; python_version<"3.8"
 towncrier==21.9.0
 pytest-asyncio>=0.21.1,<=0.23.5.post1
 # unblock cffi for Python 3.13

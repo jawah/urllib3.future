@@ -20,6 +20,7 @@
 - Thread safety.
 - Happy Eyeballs.
 - Connection pooling.
+- Unopinionated about OpenSSL.
 - Client-side SSL/TLS verification.
 - Highly customizable DNS resolution.
 - File uploads with multipart encoding.
@@ -164,6 +165,7 @@ Here are some of the reasons (not exhaustive) we choose to work this way:
 5. There a ton of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
   to enable specific capabilities, like but not limited to: "DNS over QUIC, HTTP" / "Happy Eyeballs" / "Native Asyncio" / "Advanced Multiplexing".
 6. Non-blocking IO with concurrent streams/requests. And yes, transparently.
+7. It relaxes some constraints established by upstream in their version 2, thus making it easier to upgrade from version 1.
 
 - **Is this funded?**
 

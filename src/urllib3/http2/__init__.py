@@ -13,7 +13,8 @@ import warnings
 def inject_into_urllib3() -> None:
     warnings.warn(
         "urllib3-future do not propose the http2 module as it is useless to us. "
-        "enjoy all three protocols. urllib3-future just works out of the box with all protocols.",
+        "enjoy HTTP/1.1, HTTP/2, and HTTP/3 without hacks. urllib3-future just works out "
+        "of the box with all protocols. No hassles.",
         UserWarning,
     )
 

@@ -714,7 +714,7 @@ class TestHTTPSProxyVerification:
                 https.request("GET", destination_url)
 
             proxy_host = self._get_certificate_formatted_proxy_host(proxy.host)
-            msg = f"hostname \\'{proxy_hostname}\\' doesn\\'t match \\'{proxy_host}\\'"
+            msg = f"hostname \\'{proxy_hostname}\\' doesn\\'t match \\'{proxy_host}"
             assert msg in str(e)
 
     def test_https_proxy_hostname_verification(
@@ -756,6 +756,7 @@ class TestHTTPSProxyVerification:
             r = https.request("GET", destination_url)
             assert r.status == 200
 
+    @pytest.mark.skipif(HAS_IPV6 is False, reason="Only runs on IPv6 systems")
     def test_https_proxy_ipv6_san(
         self, ipv6_san_proxy_with_server: tuple[ServerConfig, ServerConfig]
     ) -> None:

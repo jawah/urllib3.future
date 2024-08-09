@@ -115,7 +115,9 @@ class TLSResolver(PlainResolver):
         )
 
 
-class GoogleResolver(TLSResolver):
+class GoogleResolver(
+    TLSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "google"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -130,7 +132,9 @@ class GoogleResolver(TLSResolver):
         super().__init__("dns.google", port, *patterns, **kwargs)
 
 
-class CloudflareResolver(TLSResolver):
+class CloudflareResolver(
+    TLSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "cloudflare"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -145,7 +149,9 @@ class CloudflareResolver(TLSResolver):
         super().__init__("1.1.1.1", port, *patterns, **kwargs)
 
 
-class AdGuardResolver(TLSResolver):
+class AdGuardResolver(
+    TLSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "adguard"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -160,7 +166,9 @@ class AdGuardResolver(TLSResolver):
         super().__init__("unfiltered.adguard-dns.com", port, *patterns, **kwargs)
 
 
-class OpenDNSResolver(TLSResolver):
+class OpenDNSResolver(
+    TLSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "opendns"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -175,7 +183,9 @@ class OpenDNSResolver(TLSResolver):
         super().__init__("dns.opendns.com", port, *patterns, **kwargs)
 
 
-class Quad9Resolver(TLSResolver):
+class Quad9Resolver(
+    TLSResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "quad9"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:

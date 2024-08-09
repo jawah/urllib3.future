@@ -10,12 +10,12 @@ StandardTimeoutError = socket.timeout
 try:
     from concurrent.futures import TimeoutError as FutureTimeoutError
 except ImportError:
-    FutureTimeoutError = TimeoutError  # type: ignore[misc,assignment]
+    FutureTimeoutError = TimeoutError  # type: ignore[misc]
 
 try:
     AsyncioTimeoutError = asyncio.exceptions.TimeoutError
 except AttributeError:
-    AsyncioTimeoutError = TimeoutError  # type: ignore[misc,assignment]
+    AsyncioTimeoutError = TimeoutError  # type: ignore[misc]
 
 if typing.TYPE_CHECKING:
     import ssl

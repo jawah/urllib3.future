@@ -21,18 +21,23 @@ urllib3.future
 - Async.
 - Task safety.
 - Thread safety.
+- Happy Eyeballs.
 - Connection pooling.
+- Unopinionated about OpenSSL.
 - Client-side SSL/TLS verification.
 - Highly customizable DNS resolution.
 - File uploads with multipart encoding.
 - DNS over UDP, TLS, QUIC, or HTTPS. DNSSEC protected.
 - Helpers for retrying requests and dealing with HTTP redirects.
 - Support for gzip, deflate, brotli, and zstd encoding.
+- Support for Python/PyPy 3.7+, no compromise.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
 - Proxy support for HTTP and SOCKS.
 - Detailed connection inspection.
+- HTTP/2 with prior knowledge.
 - Multiplexed connection.
 - Mirrored Sync & Async.
+- Amazingly Fast.
 
 urllib3 is powerful and easy to use:
 
