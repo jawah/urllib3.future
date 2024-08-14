@@ -427,6 +427,7 @@ class HTTPConnection(HfaceBackend):
         if "user-agent" not in header_keys:
             self.putheader("User-Agent", _get_default_user_agent())
         for header, value in headers.items():
+            value = to_str(value)
             if overrule_content_length and header.lower() == "content-length":
                 value = str(content_length)
             if enforce_charset_transparency and header.lower() == "content-type":
