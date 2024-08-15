@@ -1,0 +1,60 @@
+name: CI for EOL 3rd parties
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions: "read-all"
+
+concurrency:
+  group: ci-dead-things-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+
+  dead-libressl:
+    name: Ensure LibreSSL <2.8
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+
+      - name: "Run against Python 3.7 built with LibreSSL 2.7.4"
+        run: ./ci/run_legacy_libressl.sh
+
+  dead-openssl:
+    name: Ensure OpenSSL <1.1.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+
+      - name: "Run against Python 3.7 built with OpenSSL 1.0.2q"
+        run: ./ci/run_legacy_openssl.sh
+
+  dead-pip:
+    name: Ensure pip <21.2.4
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+
+      - name: "Setup Python"
+        uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"
+        with:
+          python-version: "3.7"
+
+      - name: "Enforce pip 20.x"
+        run: python -m pip install "pip<21"
+
+      - name: "Ensure that urllib3-future can be installed"
+        run: python -m pip install .

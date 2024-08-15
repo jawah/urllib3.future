@@ -16,7 +16,7 @@ urllib3 can be installed with `pip <https://pip.pypa.io>`_
 HTTP/2 and HTTP/3 support
 -------------------------
 
-HTTP/2 support is enabled by default via the ``h2`` dependency, HTTP/3 may or not be
+HTTP/2 support is enabled by default via the ``jh2`` dependency, HTTP/3 may or not be
 automatically available depending on the availability of the wheel on your platform.
 
 .. code-block:: bash
@@ -28,6 +28,8 @@ This may require some external toolchain to be available (compilation).
 .. note:: HTTP/3 is automatically installed and ready-to-use if you fulfill theses requirements: Linux, Windows or MacOS using Python (or PyPy) 3.7 onward with one of the supported architecture (arm64/aarch64/s390x/x86_64/amd64/ppc64/ppc64le).
 
 .. caution:: If the requirements aren't fulfilled for HTTP/3, your package manager won't pick qh3 for installation when installing urllib3-future and it will be silently disabled. We choose not to impose compilation and keep a safe pure Python fallback.
+
+.. note:: Very old ``pip`` versions may not be able to pick the pre-built wheel accordingly. Make sure to have the latest ``pip`` version installed first.
 
 Making Requests
 ---------------

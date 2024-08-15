@@ -23,11 +23,10 @@ What are the important changes?
 Here's a short summary of which changes in urllib3 v2.0 are most important:
 
 - Python version must be **3.7 or later** (previously supported Python 2.7, 3.5, and 3.6).
-- Removed support for OpenSSL versions older than 1.1.1.
 - Removed support for Python implementations that aren't CPython or PyPy3 (previously supported Google App Engine, Jython).
 - Removed the ``urllib3.contrib.ntlmpool`` module.
 - Deprecated the ``urllib3.contrib.pyopenssl`` module, made inoperant in v2.1.0.
-- Deprecated the ``urllib3.contrib.securetransport`` module, will be removed in v2.1.0.
+- Deprecated the ``urllib3.contrib.securetransport`` module, is removed in v2.1.0.
 - Deprecated the ``urllib3[secure]`` extra, made inoperant in v2.1.0.
 - Deprecated the ``HTTPResponse.getheaders()`` method in favor of ``HTTPResponse.headers``, will be removed in v2.1.0.
 - Deprecated the ``HTTPResponse.getheader(name, default)`` method in favor of ``HTTPResponse.headers.get(name, default)``, will be removed in v2.1.0.
@@ -149,34 +148,10 @@ immediately you will `receive security fixes on the 1.26.x release stream <#secu
 **🤔 Common upgrading issues**
 -------------------------------
 
-ssl module is compiled with OpenSSL 1.0.2.k-fips
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-  ImportError: urllib3 v2.0 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'OpenSSL 1.0.2k-fips  26 Jan 2017'.
-  See: https://github.com/urllib3/urllib3/issues/2168
-
-Remediation depends on your system:
-
-- **AWS Lambda**: Upgrade to the Python3.10 runtime as it uses OpenSSL 1.1.1. Alternatively, you can
-  use a `custom Docker image
-  <https://aws.amazon.com/blogs/aws/new-for-aws-lambda-container-image-support/>`_ and ensure you
-  use a Python build that uses OpenSSL 1.1.1 or later.
-- **Amazon Linux 2**: Upgrade to `Amazon Linux 2023
-  <https://aws.amazon.com/linux/amazon-linux-2023/>`_. Alternatively, you can install OpenSSL 1.1.1
-  on Amazon Linux 2 using ``yum install openssl11 openssl11-devel`` and then install Python with a
-  tool like pyenv.
-- **Red Hat Enterpritse Linux 7 (RHEL 7)**: Upgrade to RHEL 8 or RHEL 9.
-- **Read the Docs**: Upgrade your `configuration file to use Ubuntu 22.04
-  <https://docs.readthedocs.io/en/stable/config-file/v2.html>`_ by using ``os: ubuntu-22.04`` in the
-  ``build`` section. Feel free to use the `urllib3 configuration
-  <https://github.com/urllib3/urllib3/blob/2.0.0/.readthedocs.yml>`_ as an inspiration.
-
 docker.errors.dockerexception: error while fetching server api version: request() got an unexpected keyword argument 'chunked'
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Upgrade to ``docker==6.1.0`` that is compatible with urllib3 2.0.
+Upgrade to ``docker==6.1.0`` that is compatible with urllib3(-future) 2+
 
 ImportError: cannot import name 'gaecontrib' from 'requests_toolbelt._compat'
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -186,19 +161,6 @@ Engine Standard Python 2.7 support. Most users that reported this issue were usi
 <https://github.com/thisbejim/Pyrebase>`_ library that provides an API for the Firebase API. This
 library is unmaintained, but `replacements exist
 <https://github.com/thisbejim/Pyrebase/issues/435>`_.
-
-``ImportError: cannot import name 'DEFAULT_CIPHERS' from 'urllib3.util.ssl_'``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-This likely happens because you're using botocore which `does not support urllib3 2.0 yet
-<https://github.com/boto/botocore/issues/2921>`_. The good news is that botocore explicitly declares
-in its dependencies that it only supports ``urllib3<2``. Make sure to use a recent pip. That way, pip
-will install urllib3 1.26.x until botocore starts supporting urllib3 2.0.
-
-If you're deploying to an AWS environment such as Lambda or a host using Amazon Linux 2,
-you'll need to explicitly pin to ``urllib3<2`` in your project to ensure urllib3 2.0 isn't
-brought into your environment. Otherwise, this may result in unintended side effects with
-the default boto3 installation.
 
 AttributeError: module 'urllib3.connectionpool' has no attribute 'VerifiedHTTPSConnection'
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

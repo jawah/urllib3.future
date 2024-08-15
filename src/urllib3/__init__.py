@@ -31,26 +31,6 @@ from .util.request import make_headers
 from .util.retry import Retry
 from .util.timeout import Timeout
 
-# Ensure that Python is compiled with OpenSSL 1.1.1+
-# If the 'ssl' module isn't available at all that's
-# fine, we only care if the module is available.
-try:
-    import ssl
-except ImportError:
-    pass
-else:
-    if ssl.OPENSSL_VERSION.startswith("OpenSSL ") and ssl.OPENSSL_VERSION_INFO < (
-        1,
-        1,
-        1,
-    ):  # Defensive:
-        raise ImportError(
-            "urllib3 v2.0 only supports OpenSSL 1.1.1+, currently "
-            f"the 'ssl' module is compiled with {ssl.OPENSSL_VERSION!r}. "
-            "See: https://github.com/urllib3/urllib3/issues/2168"
-        )
-
-
 __author__ = "Andrey Petrov (andrey.petrov@shazow.net)"
 __license__ = "MIT"
 __version__ = __version__

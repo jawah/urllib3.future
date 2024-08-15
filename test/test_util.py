@@ -1068,6 +1068,7 @@ class TestUtilSSL:
             ("LibreSSL 2.8.3", 0x101010CF, "cpython", (3, 10, 0), False),
             # old OpenSSL and old Python, unreliable
             ("OpenSSL 1.1.0", 0x10101000, "cpython", (3, 9, 2), False),
+            ("OpenSSL 1.0.2", 0x1000211F, "cpython", (3, 7, 2), False),
         ],
     )
     def test_is_has_never_check_common_name_reliable(

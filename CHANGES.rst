@@ -1,3 +1,26 @@
+2.8.906 (2024-08-15)
+====================
+
+- Removed opinionated OpenSSL version constraint that forbid any version lower than 1.1.1.
+  The reasoning behind this is that some companies expressed (to us) the need to upgrade urllib3 to urllib3-future
+  in (very) old Python 3.7 built against patched OpenSSL 1.0.2 or 1.0.8 and collaborative testing showed us
+  that this constraint is overly protective. Those build often lack TLS 1.3 support and may contain
+  major vulnerabilities, but we have to be optimistic on their awareness.
+  TLS 1.3 / QUIC is also an option for them as it works out of the box on those old distributions.
+  Effective immediately, we added a dedicated pipeline in our CI to verify that urllib3-future works
+  with the oldest Python 3.7 build we found out there.
+  Blindly removing support for those libraries when supporting Python 3.7 ... 3.9 is as we "partially"
+  support this range and end-users have no to little clues for why it's rejected when it clearly works.
+  The only issue that can appear is for users that have Python built against a SSL library that does not
+  support either TLS 1.2 or 1.3, they will encounter errors for sure.
+- Changed to submodule http2 to subpackage http2. Purely upstream sync. Still no use for us.
+- Changed minimum (C)Python interpreter version for qh3 automatic pickup to 3.7.11 as it bundle pip 21.2.4 and
+  is the minimum version to pick an appropriate (abi3) pre-built wheel. You may still install ``qh3`` manually
+  by first upgrading your pip installation by running ``python -m pip install -U pip``.
+- Fixed an issue where a server is yielding an invalid/malformed ``Alt-Svc`` header and urllib3-future may crash upon it.
+- Fixed an issue where sending a ``str`` body using a ``bytes`` value for Content-Type would induce a crash.
+  This was due to our unicode transparency policy. See https://github.com/jawah/urllib3.future/pull/142
+
 2.8.905 (2024-08-04)
 ====================
 

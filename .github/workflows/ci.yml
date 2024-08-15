@@ -97,8 +97,12 @@ jobs:
         uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
+        uses: nick-fields/retry@v3
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        run: ./traefik/macos.sh
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: ./traefik/macos.sh
 
       - name: "Setup Python ${{ matrix.python-version }}"
         uses: "actions/setup-python@61a6322f88396a6271a6ee3565807d608ecaddd1"

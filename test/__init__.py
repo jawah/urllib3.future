@@ -75,11 +75,14 @@ if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") == "true":
 DUMMY_POOL = ConnectionPool("dummy")
 
 
-def _can_resolve(host: str) -> bool:
+def _can_resolve(host: str, should_match: str | None = None) -> bool:
     """Returns True if the system can resolve host to an address."""
     try:
-        socket.getaddrinfo(host, None, socket.AF_UNSPEC)
-        return True
+        if should_match:
+            return socket.getaddrinfo(
+                host, None, socket.AF_UNSPEC
+            ) == socket.getaddrinfo(should_match, None, socket.AF_UNSPEC)
+        return 0 != len(socket.getaddrinfo(host, None, socket.AF_UNSPEC))
     except socket.gaierror:
         return False
 
@@ -100,7 +103,7 @@ def has_alpn(ctx_cls: type[ssl.SSLContext] | None = None) -> bool:
 # Some systems might not resolve "localhost." correctly.
 # See https://github.com/urllib3/urllib3/issues/1809 and
 # https://github.com/urllib3/urllib3/pull/1475#issuecomment-440788064.
-RESOLVES_LOCALHOST_FQDN = _can_resolve("localhost.")
+RESOLVES_LOCALHOST_FQDN = _can_resolve("localhost.", "localhost")
 
 
 def clear_warnings(cls: type[Warning] = HTTPWarning) -> None:

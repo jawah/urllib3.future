@@ -220,6 +220,13 @@ try:  # Do we have ssl at all?
             continue
 
     from .ssltransport import SSLTransport  # type: ignore[assignment]
+
+    # Python built against (very) restrictive ssl library may ship with a single TLS version
+    # thus, it seems to make attribute "minimum_version" and "maximum_version" unavailable.
+    # note: it raises an exception! maybe a CPython bug.
+    SUPPORT_MIN_MAX_TLS_VERSION = hasattr(
+        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT), "maximum_version"
+    )
 except ImportError:
     OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]
     OP_NO_TICKET = 0x4000  # type: ignore[assignment]
@@ -228,6 +235,7 @@ except ImportError:
     PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
     PROTOCOL_TLS_CLIENT = 16  # type: ignore[assignment]
     OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
+    SUPPORT_MIN_MAX_TLS_VERSION = False
 
 
 def assert_fingerprint(cert: bytes | None, fingerprint: str) -> None:
@@ -366,13 +374,14 @@ def create_urllib3_context(
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)
 
-    if ssl_minimum_version is not None:
-        context.minimum_version = ssl_minimum_version
-    else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
-        context.minimum_version = TLSVersion.TLSv1_2
+    if SUPPORT_MIN_MAX_TLS_VERSION:
+        if ssl_minimum_version is not None:
+            context.minimum_version = ssl_minimum_version
+        else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
+            context.minimum_version = TLSVersion.TLSv1_2
 
-    if ssl_maximum_version is not None:
-        context.maximum_version = ssl_maximum_version
+        if ssl_maximum_version is not None:
+            context.maximum_version = ssl_maximum_version
 
     # Unless we're given ciphers defer to either system ciphers in
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
@@ -686,7 +695,9 @@ def is_capable_for_quic(
     if ctx is not None:
         if ssl.OP_NO_TLSv1_3 in ctx.options:
             quic_disable = True
-        elif isinstance(ctx.maximum_version, ssl.TLSVersion):
+        elif SUPPORT_MIN_MAX_TLS_VERSION and isinstance(
+            ctx.maximum_version, ssl.TLSVersion
+        ):
             if (
                 ctx.maximum_version != ssl.TLSVersion.MAXIMUM_SUPPORTED
                 and ctx.maximum_version <= ssl.TLSVersion.TLSv1_2

@@ -960,6 +960,10 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert r.status == 200
             assert r.data.decode("utf-8") == util.ALPN_PROTOCOLS[0]
 
+    @pytest.mark.skipif(
+        urllib3.util.ssl_.SUPPORT_MIN_MAX_TLS_VERSION is False,
+        reason="Python built against restricted ssl library with one protocol supported",
+    )
     def test_default_ssl_context_ssl_min_max_versions(self) -> None:
         ctx = urllib3.util.ssl_.create_urllib3_context()
         assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
@@ -968,6 +972,10 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         ).maximum_version
         assert ctx.maximum_version == expected_maximum_version
 
+    @pytest.mark.skipif(
+        urllib3.util.ssl_.SUPPORT_MIN_MAX_TLS_VERSION is False,
+        reason="Python built against restricted ssl library with one protocol supported",
+    )
     def test_ssl_context_ssl_version_uses_ssl_min_max_versions(self) -> None:
         ctx = urllib3.util.ssl_.create_urllib3_context(ssl_version=self.ssl_version())
         assert ctx.minimum_version == self.tls_version()

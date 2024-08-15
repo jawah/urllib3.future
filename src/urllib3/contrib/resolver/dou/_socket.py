@@ -290,7 +290,9 @@ class PlainResolver(BaseResolver):
         return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
 
 
-class CloudflareResolver(PlainResolver):
+class CloudflareResolver(
+    PlainResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "cloudflare"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -305,7 +307,9 @@ class CloudflareResolver(PlainResolver):
         super().__init__("1.1.1.1", port, *patterns, **kwargs)
 
 
-class GoogleResolver(PlainResolver):
+class GoogleResolver(
+    PlainResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "google"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -320,7 +324,9 @@ class GoogleResolver(PlainResolver):
         super().__init__("8.8.8.8", port, *patterns, **kwargs)
 
 
-class Quad9Resolver(PlainResolver):
+class Quad9Resolver(
+    PlainResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "quad9"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
@@ -335,7 +341,9 @@ class Quad9Resolver(PlainResolver):
         super().__init__("9.9.9.9", port, *patterns, **kwargs)
 
 
-class AdGuardResolver(PlainResolver):
+class AdGuardResolver(
+    PlainResolver
+):  # Defensive: we do not cover specific vendors/DNS shortcut
     specifier = "adguard"
 
     def __init__(self, *patterns: str, **kwargs: typing.Any) -> None:
