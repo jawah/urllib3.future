@@ -2435,6 +2435,42 @@ class TestContentFraming(SocketDummyServerTestCase):
 
         assert b"Content-Type: application/json; charset=utf-8\r\n" in sent_bytes
 
+    def test_partial_overrule_bytes_content_type(self) -> None:
+        buffer = bytearray()
+
+        def socket_handler(listener: socket.socket) -> None:
+            nonlocal buffer
+            sock = listener.accept()[0]
+            sock.settimeout(0)
+
+            start = time.time()
+            while time.time() - start < (LONG_TIMEOUT / 2):
+                try:
+                    buffer += sock.recv(65536)
+                except OSError:
+                    continue
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Server: example.com\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            resp = pool.request(
+                "POST", "/", body="{}", headers={"Content-Type": b"application/json"}  # type: ignore[dict-item]
+            )
+            assert resp.status == 200
+
+        sent_bytes = bytes(buffer)
+
+        assert b"Content-Type: application/json; charset=utf-8\r\n" in sent_bytes
+
     def test_no_overrule_str_content_type(self) -> None:
         buffer = bytearray()
 
