@@ -25,6 +25,30 @@ class TestPostBody(TraefikTestCase):
             assert "Content-Length" in resp.json()["headers"]
             assert resp.json()["headers"]["Content-Length"][0] == "4"
 
+    def test_overrule_unicode_content_length_with_bytes_content_type(
+        self,
+    ) -> None:
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+        ) as p:
+            resp = p.request(
+                "POST",
+                "/post",
+                body="🚀",
+                headers={"Content-Length": "1", "Content-Type": b"plain/text"},  # type: ignore[dict-item]
+            )
+
+            assert resp.status == 200
+            assert "Content-Length" in resp.json()["headers"]
+            assert "Content-Type" in resp.json()["headers"]
+            assert (
+                resp.json()["headers"]["Content-Type"][0] == "plain/text; charset=utf-8"
+            )
+            assert resp.json()["headers"]["Content-Length"][0] == "4"
+
     @pytest.mark.parametrize(
         "method",
         [

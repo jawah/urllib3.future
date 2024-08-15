@@ -424,6 +424,13 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
                 value = str(content_length)
             if enforce_charset_transparency and header.lower() == "content-type":
                 value_lower = value.lower()
+                # even if not "officially" supported
+                # some may send values as bytes, and we have to
+                # cast "temporarily" the value
+                # this case is already covered in the parent class.
+                if isinstance(value_lower, bytes):
+                    value_lower = value_lower.decode()
+                    value = value.decode()
                 if "charset" not in value_lower:
                     value = value.strip("; ")
                     value = f"{value}; charset=utf-8"
