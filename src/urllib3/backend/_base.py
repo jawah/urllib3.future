@@ -429,6 +429,10 @@ class BaseBackend:
     def is_multiplexed(self) -> bool:
         raise NotImplementedError
 
+    @property
+    def max_frame_size(self) -> int:
+        raise NotImplementedError
+
     def _upgrade(self) -> None:
         """Upgrade conn from svn ver to max supported."""
         raise NotImplementedError

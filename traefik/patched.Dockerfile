@@ -7,7 +7,7 @@ COPY . .
 RUN mkdir dist
 RUN go build -ldflags="-s" -o dist/go-httpbin.exe ./cmd/go-httpbin
 
-FROM mcr.microsoft.com/windows/nanoserver:ltsc2019
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
 
 COPY --from=build /go/src/github.com/mccutchen/go-httpbin/dist /app
 

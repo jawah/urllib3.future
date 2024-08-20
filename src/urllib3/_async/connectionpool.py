@@ -1087,6 +1087,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 )
             conn.timeout = read_timeout
 
+        http_vsn_str = (
+            conn._http_vsn_str
+        )  # keep vsn here, as conn may be upgraded afterward.
+
         # Receive the response from the server
         try:
             response = await conn.getresponse(police_officer=self.pool)
@@ -1106,7 +1110,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             method,
             url,
             # HTTP version
-            conn._http_vsn_str,
+            http_vsn_str,
             response.status,
             response.length_remaining,
         )

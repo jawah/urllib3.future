@@ -1065,6 +1065,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             conn.timeout = read_timeout
 
         # Receive the response from the server
+        http_vsn_str = (
+            conn._http_vsn_str
+        )  # keep vsn here, as conn may be upgraded afterward.
+
         try:
             response = conn.getresponse(police_officer=self.pool)
         except (BaseSSLError, OSError) as e:
@@ -1083,7 +1087,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             method,
             url,
             # HTTP version
-            conn._http_vsn_str,
+            http_vsn_str,
             response.status,
             response.length_remaining,
         )
