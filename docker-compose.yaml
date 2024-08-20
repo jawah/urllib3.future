@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v2.10.4
+    image: traefik:v3.1
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
@@ -48,7 +48,6 @@ services:
       - --entrypoints.alt-http.address=:9999
       - --entrypoints.alt-https.address=:8754
       # QUIC Related Configuration
-      - --experimental.http3=true
       - --entrypoints.https.http3=true
       - --entrypoints.alt-https.http3=false
       # Enable the access log, with HTTP requests

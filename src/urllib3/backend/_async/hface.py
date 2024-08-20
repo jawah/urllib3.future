@@ -122,6 +122,23 @@ class AsyncHfaceBackend(AsyncBaseBackend):
     def is_multiplexed(self) -> bool:
         return self._protocol is not None and self._protocol.multiplexed
 
+    @property
+    def max_frame_size(self) -> int:
+        """
+        The remote may require us to a lower blocksize
+        than defined. This property will avoid relying
+        too much on defined blocksize.
+        """
+        if self._protocol is None:
+            return self.blocksize
+
+        try:
+            remote_max_size = self._protocol.max_frame_size()
+        except NotImplementedError:
+            return self.blocksize
+
+        return remote_max_size if self.blocksize > remote_max_size else self.blocksize
+
     async def _new_conn(self) -> AsyncSocket | None:  # type: ignore[override]
         # handle if set up, quic cache capability. thus avoiding first TCP request prior to upgrade.
         if (

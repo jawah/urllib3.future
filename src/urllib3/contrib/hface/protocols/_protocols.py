@@ -63,6 +63,12 @@ class BaseProtocol(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def max_frame_size(self) -> int:
+        """
+        Determine if the remote set a limited size for each data frame.
+        """
+        raise NotImplementedError
+
 
 class OverTCPProtocol(BaseProtocol, metaclass=ABCMeta):
     """

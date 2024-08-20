@@ -372,7 +372,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         chunks_and_cl = body_to_chunks(
             body,
             method=method,
-            blocksize=self.blocksize,
+            blocksize=self.max_frame_size,
             force=self._svn != HttpVersion.h11,
         )
         is_sending_string = chunks_and_cl.is_string

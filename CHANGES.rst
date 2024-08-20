@@ -1,3 +1,10 @@
+2.8.907 (2024-08-20)
+====================
+
+- Fixed http2 maximum frame size error when the remote explicitly set a lower value than the default blocksize.
+  This can happen when facing old server like Apache < 2.5 see https://github.com/apache/httpd/commit/ff6b8026acb8610e4faf10ee345141a3da85946e
+  Now we monitor the max_frame setting value to ensure we don't exceed it.
+
 2.8.906 (2024-08-15)
 ====================
 

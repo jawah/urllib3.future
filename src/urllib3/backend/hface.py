@@ -136,6 +136,18 @@ class HfaceBackend(BaseBackend):
     def is_multiplexed(self) -> bool:
         return self._protocol is not None and self._protocol.multiplexed
 
+    @property
+    def max_frame_size(self) -> int:
+        if self._protocol is None:
+            return self.blocksize
+
+        try:
+            remote_max_size = self._protocol.max_frame_size()
+        except NotImplementedError:
+            return self.blocksize
+
+        return remote_max_size if self.blocksize > remote_max_size else self.blocksize
+
     def _new_conn(self) -> socket.socket | None:
         # handle if set up, quic cache capability. thus avoiding first TCP request prior to upgrade.
         if (

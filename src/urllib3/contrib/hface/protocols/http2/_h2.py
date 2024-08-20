@@ -85,6 +85,10 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._terminated: bool = False
         self._goaway_to_honor: bool = False
         self._max_stream_count = self._connection.remote_settings.max_concurrent_streams
+        self._max_frame_size = self._connection.remote_settings.max_frame_size
+
+    def max_frame_size(self) -> int:
+        return self._max_frame_size  # type: ignore[no-any-return]
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
@@ -155,8 +159,10 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
             elif isinstance(e, jh2.events.StreamReset):
                 self._open_stream_count -= 1
-                stream = self._connection.streams.pop(e.stream_id)
-                self._connection._closed_streams[e.stream_id] = stream.closed_by
+                # event StreamEnded may occur before StreamReset
+                if e.stream_id in self._connection.streams:
+                    stream = self._connection.streams.pop(e.stream_id)
+                    self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield StreamResetReceived(e.stream_id, e.error_code)
             elif isinstance(e, jh2.events.ConnectionTerminated):
                 # ConnectionTerminated from h2 means that GOAWAY was received.
@@ -202,6 +208,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             self._max_stream_count = (
                 self._connection.remote_settings.max_concurrent_streams
             )
+            self._max_frame_size = self._connection.remote_settings.max_frame_size
 
     def bytes_to_send(self) -> bytes:
         return self._connection.data_to_send()  # type: ignore[no-any-return]
