@@ -1493,3 +1493,27 @@ Here is a simple example::
     with urllib3.PoolManager(disabled_svn={urllib3.HttpVersion.h11}) as pm:
         r = pm.urlopen("GET", "http://my-internal.svc.local/")
 
+
+HTTP Trailers
+-------------
+
+.. note:: Available since version 2.9+
+
+HTTP response may contain one or several trailer headers. Those special headers are received
+after the reception of the body. Before this, those headers were unreachable and dropped silently.
+
+Quoted from Mozilla MDN: "The Trailer response header allows the sender to include additional fields
+at the end of chunked messages in order to supply metadata that might be dynamically generated while the
+message body is sent, such as a message integrity check, digital signature, or post-processing status."
+
+Here is a simple example::
+
+    import urllib3
+
+    with urllib3.PoolManager() as pm:
+        r = pm.urlopen("GET", "https://example.test")
+        print(r.trailers)
+
+.. note:: The property ``trailers`` return either ``None`` or a fully constructed ``HTTPHeaderDict``.
+
+.. warning:: ``None`` means we did not receive trailer headers (yet). If ``preload_content`` is set to False, you will need to consume the entire body before reaching the ``trailers`` property.

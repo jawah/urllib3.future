@@ -126,3 +126,57 @@ class TestProtocolLevel(TraefikTestCase):
 
             assert resp.status == 200
             assert resp.version == 20
+
+    @pytest.mark.parametrize(
+        "expected_trailers",
+        (
+                {"test-trailer-1": "v1"},
+                {"test-trailer-1": "v1", "foobar": "baz", "x-proto-winner": "woops"},
+                {"hello": "world", "this": "shall work", "every": "single time!"},
+                {}
+        )
+    )
+    @pytest.mark.parametrize(
+        "disabled_svn",
+        (
+            {HttpVersion.h2, HttpVersion.h3},  # Force HTTP/1
+            {HttpVersion.h11, HttpVersion.h3}, # ...   HTTP/2
+            {HttpVersion.h11, HttpVersion.h2}, # ...   HTTP/3
+        )
+    )
+    def test_http_trailers(self, expected_trailers: dict[str, str], disabled_svn: set[HttpVersion]) -> None:
+        with HTTPSConnectionPool(
+                self.host,
+                self.https_port,
+                ca_certs=self.ca_authority,
+                resolver=self.test_resolver,
+                disabled_svn=disabled_svn,
+        ) as p:
+            resp = p.request_encode_url(
+                "GET",
+                f"{self.https_url}/trailers",
+                fields=expected_trailers,
+                retries=False,
+            )
+
+            assert resp.status == 200
+
+            if HttpVersion.h11 not in disabled_svn:
+                expected_http_version = 11
+            elif HttpVersion.h2 not in disabled_svn:
+                expected_http_version = 20
+            elif HttpVersion.h3 not in disabled_svn:
+                expected_http_version = 30
+            else:
+                assert False, "unable to asses expected protocol"
+
+            assert resp.version == expected_http_version
+
+            if expected_trailers:
+                assert resp.trailers is not None
+
+                for k, v in expected_trailers.items():
+                    assert k in resp.trailers
+                    assert resp.trailers[k] == v
+            else:
+                assert resp.trailers is None

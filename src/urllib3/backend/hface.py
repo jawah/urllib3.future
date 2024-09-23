@@ -813,7 +813,10 @@ class HfaceBackend(BaseBackend):
                         events.append(event)
 
                         if data_in_len_from is not None:
-                            data_in_len += data_in_len_from(event)
+                            try:
+                                data_in_len += data_in_len_from(event)
+                            except AttributeError:
+                                pass
                     else:
                         reshelve_events.append(event)
 
@@ -836,6 +839,10 @@ class HfaceBackend(BaseBackend):
                             return events
                         continue
 
+                    if reshelve_events:
+                        self._protocol.reshelve(*reshelve_events)
+                    return events
+                elif stream_related_event and event.end_stream is True and respect_end_stream_signal is True:
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
@@ -1024,15 +1031,14 @@ class HfaceBackend(BaseBackend):
 
     def __read_st(
         self, __amt: int | None, __stream_id: int | None
-    ) -> tuple[bytes, bool]:
+    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
         """Allows us to defer the body loading after constructing the response object."""
         eot = False
 
-        events: list[DataReceived] = self.__exchange_until(  # type: ignore[assignment]
+        events: list[DataReceived | HeadersReceived] = self.__exchange_until(  # type: ignore[assignment]
             DataReceived,
             receive_first=True,
-            # we ignore Trailers even if provided in response.
-            event_type_collectable=(DataReceived,),
+            event_type_collectable=(DataReceived, HeadersReceived),
             maximal_data_in_read=__amt,
             data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
             stream_id=__stream_id,
@@ -1053,9 +1059,29 @@ class HfaceBackend(BaseBackend):
                 # probe for h3/quic if available, and remember it.
                 self._upgrade()
 
+        trailers = None
+
+        if eot:
+            # http-trailers SHOULD be received LAST!
+            if isinstance(events[-1], HeadersReceived):
+                trailers = HTTPHeaderDict()
+
+                for raw_header, raw_value in events[-1].headers:
+                    # ignore...them? special headers. aka. starting with semicolon
+                    if raw_header[0] == 0x3A:
+                        continue
+                    else:
+                        trailers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
+
+                events.pop()
+
+                if not events:
+                    return b"", True, trailers
+
         return (
             b"".join(e.data for e in events) if len(events) > 1 else events[0].data,
             eot,
+            trailers,
         )
 
     def getresponse(

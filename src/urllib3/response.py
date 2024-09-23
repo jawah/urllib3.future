@@ -440,6 +440,20 @@ class HTTPResponse(io.IOBase):
             return self.headers.get("location")
         return False
 
+    @property
+    def trailers(self) -> HTTPHeaderDict | None:
+        """
+        Retrieve post-response (trailing headers) if any.
+        This WILL return None if no HTTP Trailer Headers have been received.
+        """
+        if self._fp is None:
+            return None
+
+        if hasattr(self._fp, "trailers"):
+            return self._fp.trailers
+
+        return None
+
     def json(self) -> typing.Any:
         """
         Parses the body of the HTTP response as JSON.
