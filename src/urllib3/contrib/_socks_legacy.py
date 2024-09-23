@@ -61,12 +61,12 @@ import typing
 from socket import timeout as SocketTimeout
 
 from .._typing import _TYPE_SOCKS_OPTIONS
+from ..backend import HttpVersion
 from ..connection import HTTPConnection, HTTPSConnection
 from ..connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from ..exceptions import ConnectTimeoutError, NewConnectionError
 from ..poolmanager import PoolManager
 from ..util.url import parse_url
-from ..backend import HttpVersion
 
 try:
     import ssl
@@ -103,7 +103,7 @@ class SOCKSConnection(HTTPConnection):
                 if len(opt) == 3:
                     only_tcp_options.append(opt)
                 elif len(opt) == 4:
-                    protocol: str = opt[3].lower()  # type: ignore[misc]
+                    protocol: str = opt[3].lower()
                     if protocol == "udp":
                         continue
                     only_tcp_options.append(opt[:3])

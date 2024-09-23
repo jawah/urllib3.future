@@ -266,11 +266,13 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                 # HTTP/2 and HTTP/3 send END_STREAM flag with HEADERS and DATA frames.
                 # We emulate similar behavior for HTTP/1.
                 if h11_event.headers:
-                    last_event: HeadersReceived = HeadersReceived(
-                        self._current_stream_id, h11_event.headers, self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL
+                    last_event: HeadersReceived | DataReceived = HeadersReceived(
+                        self._current_stream_id,
+                        h11_event.headers,
+                        self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
                     )
                 else:
-                    last_event: DataReceived = DataReceived(
+                    last_event = DataReceived(
                         self._current_stream_id, b"", self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL  # type: ignore[attr-defined]
                     )
                 a(last_event)

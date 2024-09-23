@@ -314,7 +314,4 @@ class TestSvnCapability(TraefikTestCase):
                 assert resp.version == 11 if i == 0 else 20
 
                 assert "Alt-Svc" in resp.headers
-                assert (
-                    resp.headers.get("Alt-Svc")
-                    == f'h2c=":{self.http_alt_port}"'
-                )
+                assert resp.headers.get("Alt-Svc") == f'h2c=":{self.http_alt_port}"'

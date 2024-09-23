@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import typing
 import socket
+import typing
 from enum import IntEnum
 
 

@@ -81,11 +81,11 @@ except ImportError:
         )
 
         from ._socks_legacy import (
-            SOCKSProxyManager,
             SOCKSConnection,
-            SOCKSHTTPSConnection,
             SOCKSHTTPConnectionPool,
+            SOCKSHTTPSConnection,
             SOCKSHTTPSConnectionPool,
+            SOCKSProxyManager,
         )
 
         BYPASS_SOCKS_LEGACY = True
@@ -100,7 +100,10 @@ if not BYPASS_SOCKS_LEGACY:
 
     # asynchronous part
     from .._async.connection import AsyncHTTPConnection, AsyncHTTPSConnection
-    from .._async.connectionpool import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
+    from .._async.connectionpool import (
+        AsyncHTTPConnectionPool,
+        AsyncHTTPSConnectionPool,
+    )
     from .._async.poolmanager import AsyncPoolManager
     from .._typing import _TYPE_SOCKS_OPTIONS
     from ..backend import HttpVersion
@@ -118,8 +121,7 @@ if not BYPASS_SOCKS_LEGACY:
     except ImportError:
         ssl = None  # type: ignore[assignment]
 
-
-    class SOCKSConnection(HTTPConnection):
+    class SOCKSConnection(HTTPConnection):  # type: ignore[no-redef]
         """
         A plain-text HTTP connection that connects via a SOCKS proxy.
         """
@@ -202,24 +204,20 @@ if not BYPASS_SOCKS_LEGACY:
                     self, f"Failed to establish a new connection: {e}"
                 ) from e
 
-
     # We don't need to duplicate the Verified/Unverified distinction from
     # urllib3/connection.py here because the HTTPSConnection will already have been
     # correctly set to either the Verified or Unverified form by that module. This
     # means the SOCKSHTTPSConnection will automatically be the correct type.
-    class SOCKSHTTPSConnection(SOCKSConnection, HTTPSConnection):
+    class SOCKSHTTPSConnection(SOCKSConnection, HTTPSConnection):  # type: ignore[no-redef]
         pass
 
-
-    class SOCKSHTTPConnectionPool(HTTPConnectionPool):
+    class SOCKSHTTPConnectionPool(HTTPConnectionPool):  # type: ignore[no-redef]
         ConnectionCls = SOCKSConnection
 
-
-    class SOCKSHTTPSConnectionPool(HTTPSConnectionPool):
+    class SOCKSHTTPSConnectionPool(HTTPSConnectionPool):  # type: ignore[no-redef]
         ConnectionCls = SOCKSHTTPSConnection
 
-
-    class SOCKSProxyManager(PoolManager):
+    class SOCKSProxyManager(PoolManager):  # type: ignore[no-redef]
         """
         A version of the urllib3 ProxyManager that routes connections via the
         defined SOCKS proxy.
@@ -280,7 +278,6 @@ if not BYPASS_SOCKS_LEGACY:
             super().__init__(num_pools, headers, **connection_pool_kw)
 
             self.pool_classes_by_scheme = SOCKSProxyManager.pool_classes_by_scheme
-
 
     class AsyncSOCKSConnection(AsyncHTTPConnection):
         """
@@ -365,7 +362,6 @@ if not BYPASS_SOCKS_LEGACY:
                     self, f"Failed to establish a new connection: {e}"
                 ) from e
 
-
     # We don't need to duplicate the Verified/Unverified distinction from
     # urllib3/connection.py here because the HTTPSConnection will already have been
     # correctly set to either the Verified or Unverified form by that module. This
@@ -373,14 +369,11 @@ if not BYPASS_SOCKS_LEGACY:
     class AsyncSOCKSHTTPSConnection(AsyncSOCKSConnection, AsyncHTTPSConnection):
         pass
 
-
     class AsyncSOCKSHTTPConnectionPool(AsyncHTTPConnectionPool):
         ConnectionCls = AsyncSOCKSConnection
 
-
     class AsyncSOCKSHTTPSConnectionPool(AsyncHTTPSConnectionPool):
         ConnectionCls = AsyncSOCKSHTTPSConnection
-
 
     class AsyncSOCKSProxyManager(AsyncPoolManager):
         """
@@ -443,3 +436,21 @@ if not BYPASS_SOCKS_LEGACY:
             super().__init__(num_pools, headers, **connection_pool_kw)
 
             self.pool_classes_by_scheme = AsyncSOCKSProxyManager.pool_classes_by_scheme
+
+
+__all__ = [
+    "SOCKSConnection",
+    "SOCKSProxyManager",
+    "SOCKSHTTPSConnection",
+    "SOCKSHTTPSConnectionPool",
+    "SOCKSHTTPConnectionPool",
+]
+
+if not BYPASS_SOCKS_LEGACY:
+    __all__ += [
+        "AsyncSOCKSConnection",
+        "AsyncSOCKSHTTPSConnection",
+        "AsyncSOCKSHTTPConnectionPool",
+        "AsyncSOCKSHTTPSConnectionPool",
+        "AsyncSOCKSProxyManager",
+    ]

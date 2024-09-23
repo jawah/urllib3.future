@@ -17,7 +17,7 @@ except (ImportError, AttributeError):
     Certificate = None
 
 from ..._collections import HTTPHeaderDict
-from ..._constant import DEFAULT_BLOCKSIZE, responses, UDP_DEFAULT_BLOCKSIZE
+from ..._constant import DEFAULT_BLOCKSIZE, UDP_DEFAULT_BLOCKSIZE, responses
 from ...contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -193,7 +193,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         has_h3_support = _HAS_HTTP3_SUPPORT()
 
         #: are we on a plain conn? unencrypted?
-        is_plain_socket = type(self.sock) is socket.socket
+        is_plain_socket = type(self.sock) is AsyncSocket
 
         #: did the user purposely killed h3/h2 support?
         is_h3_disabled = HttpVersion.h3 in self._disabled_svn
@@ -204,10 +204,17 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 return
             upgradable_svn = HttpVersion.h2
 
-            self.__alt_authority = self.__altsvc_probe(svc="h2c")  # h2c = http2 over cleartext
+            self.__alt_authority = self.__altsvc_probe(
+                svc="h2c"
+            )  # h2c = http2 over cleartext
         else:
             # do not upgrade if not coming from TLS already.
-            if is_plain_socket or not has_h3_support or is_h3_disabled or self._svn == HttpVersion.h3:
+            if (
+                is_plain_socket
+                or not has_h3_support
+                or is_h3_disabled
+                or self._svn == HttpVersion.h3
+            ):
                 return
             upgradable_svn = HttpVersion.h3
             self.__alt_authority = self.__altsvc_probe(svc="h3")
@@ -794,7 +801,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
-                elif stream_related_event and event.end_stream is True and respect_end_stream_signal is True:
+                elif (
+                    stream_related_event
+                    and event.end_stream is True  # type: ignore[attr-defined]
+                    and respect_end_stream_signal is True
+                ):
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
@@ -991,7 +1002,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         events: list[DataReceived] = await self.__exchange_until(  # type: ignore[assignment]
             DataReceived,
             receive_first=True,
-            event_type_collectable=(DataReceived, HeadersReceived,),
+            event_type_collectable=(
+                DataReceived,
+                HeadersReceived,
+            ),
             maximal_data_in_read=__amt,
             data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
             stream_id=__stream_id,
@@ -1024,7 +1038,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if raw_header[0] == 0x3A:
                         continue
                     else:
-                        trailers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
+                        trailers.add(
+                            raw_header.decode("ascii"), raw_value.decode("iso-8859-1")
+                        )
 
                 events.pop()
 

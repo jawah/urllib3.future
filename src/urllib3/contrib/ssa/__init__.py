@@ -76,10 +76,13 @@ class AsyncSocket:
         if self._writer is not None:
             self._writer.close()
 
-        if hasattr(self._sock, "shutdown"):
-            self._sock.shutdown(SHUT_RD)
-        elif hasattr(self._sock, "close"):
-            self._sock.close()
+        try:
+            if hasattr(self._sock, "shutdown"):
+                self._sock.shutdown(SHUT_RD)
+            elif hasattr(self._sock, "close"):
+                self._sock.close()
+        except OSError:
+            pass
 
         self._connect_called = False
         self._established.clear()

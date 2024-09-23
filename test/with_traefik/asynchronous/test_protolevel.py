@@ -115,27 +115,29 @@ class TestProtocolLevel(TraefikTestCase):
     @pytest.mark.parametrize(
         "expected_trailers",
         (
-                {"test-trailer-1": "v1"},
-                {"test-trailer-1": "v1", "foobar": "baz", "x-proto-winner": "woops"},
-                {"hello": "world", "this": "shall work", "every": "single time!"},
-                {}
-        )
+            {"test-trailer-1": "v1"},
+            {"test-trailer-1": "v1", "foobar": "baz", "x-proto-winner": "woops"},
+            {"hello": "world", "this": "shall work", "every": "single time!"},
+            {},
+        ),
     )
     @pytest.mark.parametrize(
         "disabled_svn",
         (
-                {HttpVersion.h2, HttpVersion.h3},  # Force HTTP/1
-                {HttpVersion.h11, HttpVersion.h3},  # ...   HTTP/2
-                {HttpVersion.h11, HttpVersion.h2},  # ...   HTTP/3
-        )
+            {HttpVersion.h2, HttpVersion.h3},  # Force HTTP/1
+            {HttpVersion.h11, HttpVersion.h3},  # ...   HTTP/2
+            {HttpVersion.h11, HttpVersion.h2},  # ...   HTTP/3
+        ),
     )
-    async def test_http_trailers(self, expected_trailers: dict[str, str], disabled_svn: set[HttpVersion]) -> None:
+    async def test_http_trailers(
+        self, expected_trailers: dict[str, str], disabled_svn: set[HttpVersion]
+    ) -> None:
         async with AsyncHTTPSConnectionPool(
-                self.host,
-                self.https_port,
-                ca_certs=self.ca_authority,
-                resolver=self.test_async_resolver,
-                disabled_svn=disabled_svn,
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            disabled_svn=disabled_svn,
         ) as p:
             resp = await p.request_encode_url(
                 "GET",

@@ -96,7 +96,10 @@ class LowLevelResponse:
         version: int,
         reason: str,
         headers: HTTPHeaderDict,
-        body: typing.Callable[[int | None, int | None], tuple[bytes, bool, HTTPHeaderDict | None]] | None,
+        body: typing.Callable[
+            [int | None, int | None], tuple[bytes, bool, HTTPHeaderDict | None]
+        ]
+        | None,
         *,
         authority: str | None = None,
         port: int | None = None,
@@ -211,7 +214,9 @@ class LowLevelResponse:
             return b""  # Defensive: This is unreachable, this case is already covered higher in the stack.
 
         if self._eot is False:
-            data, self._eot, self.trailers = self.__internal_read_st(__size, self._stream_id)
+            data, self._eot, self.trailers = self.__internal_read_st(
+                __size, self._stream_id
+            )
 
             # that's awkward, but rather no choice. the state machine
             # consume and render event regardless of your amt !

@@ -916,8 +916,10 @@ class TestResponse:
         assert ctx.value.expected == content_length
 
     def test_chunked_head_response(self) -> None:
-        def mock_sock(amt: int | None, stream_id: int | None) -> tuple[bytes, bool]:
-            return b"", True
+        def mock_sock(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+            return b"", True, None
 
         r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
         resp = HTTPResponse(
@@ -1013,13 +1015,15 @@ class TestResponse:
         chunks = list(stream())
         idx = 0
 
-        def mock_sock(amt: int | None, stream_id: int | None) -> tuple[bytes, bool]:
+        def mock_sock(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
             nonlocal chunks, idx
             if idx >= len(chunks):
-                return b"", True
+                return b"", True, None
             d = chunks[idx]
             idx += 1
-            return d, False
+            return d, False, None
 
         r = LowLevelResponse("GET", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
 

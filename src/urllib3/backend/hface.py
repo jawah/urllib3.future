@@ -22,7 +22,7 @@ except (ImportError, AttributeError):
     Certificate = None
 
 from .._collections import HTTPHeaderDict
-from .._constant import DEFAULT_BLOCKSIZE, responses, UDP_DEFAULT_BLOCKSIZE
+from .._constant import DEFAULT_BLOCKSIZE, UDP_DEFAULT_BLOCKSIZE, responses
 from ..contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -213,10 +213,17 @@ class HfaceBackend(BaseBackend):
                 return
             upgradable_svn = HttpVersion.h2
 
-            self.__alt_authority = self.__altsvc_probe(svc="h2c")  # h2c = http2 over cleartext
+            self.__alt_authority = self.__altsvc_probe(
+                svc="h2c"
+            )  # h2c = http2 over cleartext
         else:
             # do not upgrade if not coming from TLS already.
-            if is_plain_socket or not has_h3_support or is_h3_disabled or self._svn == HttpVersion.h3:
+            if (
+                is_plain_socket
+                or not has_h3_support
+                or is_h3_disabled
+                or self._svn == HttpVersion.h3
+            ):
                 return
             upgradable_svn = HttpVersion.h3
             self.__alt_authority = self.__altsvc_probe(svc="h3")
@@ -854,7 +861,11 @@ class HfaceBackend(BaseBackend):
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
-                elif stream_related_event and event.end_stream is True and respect_end_stream_signal is True:
+                elif (
+                    stream_related_event
+                    and event.end_stream is True  # type: ignore[attr-defined]
+                    and respect_end_stream_signal is True
+                ):
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
@@ -1083,7 +1094,9 @@ class HfaceBackend(BaseBackend):
                     if raw_header[0] == 0x3A:
                         continue
                     else:
-                        trailers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
+                        trailers.add(
+                            raw_header.decode("ascii"), raw_value.decode("iso-8859-1")
+                        )
 
                 events.pop()
 
@@ -1091,7 +1104,7 @@ class HfaceBackend(BaseBackend):
                     return b"", True, trailers
 
         return (
-            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,
+            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,  # type: ignore[union-attr]
             eot,
             trailers,
         )
