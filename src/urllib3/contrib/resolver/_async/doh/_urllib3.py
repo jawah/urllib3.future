@@ -403,7 +403,7 @@ class HTTPSResolver(AsyncBaseResolver):
                         rr: str = answer["data"]
 
                         if rr.startswith("\\#"):  # it means, raw, bytes.
-                            rr = rr[2:].replace(" ", "")
+                            rr = "".join(rr[2:].split(" ")[2:])
 
                             try:
                                 raw_record = bytes.fromhex(rr)
