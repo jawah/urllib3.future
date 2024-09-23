@@ -86,21 +86,6 @@ class TestPostBody(TraefikTestCase):
                 if isinstance(body, BytesIO):
                     body.seek(0, 0)
 
-                # in some cases, urllib3 cannot infer in advance the body full length
-                # it will trigger a stream upload
-                # http1.1 => (Transfer-Encoding: chunked) legacy algorithm
-                # http2+  => send data frames, server aware of the end with the FIN bit.
-                expect_no_content_length = isinstance(body, BytesIO) or hasattr(
-                    body, "__next__"
-                )
-
-                # traefik bug with http3, should not happen!
-                # see https://github.com/traefik/traefik/issues/10185
-                if i > 0 and expect_no_content_length:
-                    pytest.skip(
-                        "traefik bug with http3 forbid stream upload without content-length"
-                    )
-
                 resp = await p.request(method, f"/{method.lower()}", body=body)
 
                 assert resp.status == 200
