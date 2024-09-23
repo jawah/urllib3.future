@@ -22,7 +22,7 @@ except (ImportError, AttributeError):
     Certificate = None
 
 from .._collections import HTTPHeaderDict
-from .._constant import DEFAULT_BLOCKSIZE, responses
+from .._constant import DEFAULT_BLOCKSIZE, responses, UDP_DEFAULT_BLOCKSIZE
 from ..contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -175,6 +175,8 @@ class HfaceBackend(BaseBackend):
                 self.port = self.__alt_authority[1]
 
         if self._svn == HttpVersion.h3:
+            if self.blocksize == DEFAULT_BLOCKSIZE:
+                self.blocksize = UDP_DEFAULT_BLOCKSIZE
             self.socket_kind = SOCK_DGRAM
 
             # undo local memory on whether conn supposedly support quic/h3
@@ -183,6 +185,8 @@ class HfaceBackend(BaseBackend):
                 self._svn = None
                 self._new_conn()  # restore socket defaults
         else:
+            if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
+                self.blocksize = DEFAULT_BLOCKSIZE
             self.socket_kind = SOCK_STREAM
 
         return None
@@ -194,31 +198,40 @@ class HfaceBackend(BaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        if not _HAS_HTTP3_SUPPORT():
-            return
+        #: determine if http/3 support is present in environment
+        has_h3_support = _HAS_HTTP3_SUPPORT()
 
-        # do not upgrade if not coming from TLS already.
-        # we exclude SSLTransport, HTTP/3 is not supported in that condition anyway.
-        if type(self.sock) is socket.socket:
-            return
+        #: are we on a plain conn? unencrypted?
+        is_plain_socket = type(self.sock) is socket.socket
 
-        if self._svn == HttpVersion.h3:
-            return
-        if HttpVersion.h3 in self._disabled_svn:
-            return
+        #: did the user purposely killed h3/h2 support?
+        is_h3_disabled = HttpVersion.h3 in self._disabled_svn
+        is_h2_disabled = HttpVersion.h2 in self._disabled_svn
 
-        self.__alt_authority = self.__h3_probe()
+        if is_plain_socket:
+            if is_h2_disabled or self._svn == HttpVersion.h2:
+                return
+            upgradable_svn = HttpVersion.h2
+
+            self.__alt_authority = self.__altsvc_probe(svc="h2c")  # h2c = http2 over cleartext
+        else:
+            # do not upgrade if not coming from TLS already.
+            if is_plain_socket or not has_h3_support or is_h3_disabled or self._svn == HttpVersion.h3:
+                return
+            upgradable_svn = HttpVersion.h3
+            self.__alt_authority = self.__altsvc_probe(svc="h3")
 
         if self.__alt_authority:
-            if self._preemptive_quic_cache is not None:
-                self._preemptive_quic_cache[
-                    (self.host, self.port or 443)
-                ] = self.__alt_authority
+            if upgradable_svn == HttpVersion.h3:
+                if self._preemptive_quic_cache is not None:
+                    self._preemptive_quic_cache[
+                        (self.host, self.port or 443)
+                    ] = self.__alt_authority
 
-                if (self.host, self.port or 443) not in self._preemptive_quic_cache:
-                    return
+                    if (self.host, self.port or 443) not in self._preemptive_quic_cache:
+                        return
 
-            self._svn = HttpVersion.h3
+            self._svn = upgradable_svn
             # We purposely ignore setting the Hostname. Avoid MITM attack from local cache attack.
             self.port = self.__alt_authority[1]
             self.close()
@@ -299,15 +312,14 @@ class HfaceBackend(BaseBackend):
 
         return True
 
-    def __h3_probe(self) -> tuple[str, int] | None:
-        """Determine if remote is capable of operating through the http/3 protocol over QUIC."""
+    def __altsvc_probe(self, svc: str = "h3") -> tuple[str, int] | None:
+        """Determine if remote yield support for an alternative service protocol."""
         # need at least first request being made
         assert self._response is not None
 
         for alt_svc in self._response.msg.getlist("alt-svc"):
             for protocol, alt_authority in parse_alt_svc(alt_svc):
-                # Looking for final specification of HTTP/3 over QUIC.
-                if protocol != "h3":
+                if protocol != svc:
                     continue
 
                 server, port = alt_authority.split(":")

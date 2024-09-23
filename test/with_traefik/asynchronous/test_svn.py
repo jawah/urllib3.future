@@ -320,3 +320,25 @@ class TestSvnCapability(TraefikTestCase):
 
             assert resp.status == 200
             assert resp.version == 20
+
+    async def test_can_upgrade_h2c_via_altsvc(self) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host,
+            self.http_alt_port,
+            timeout=1,
+            retries=False,
+            resolver=self.test_async_resolver,
+        ) as p:
+            for i in range(3):
+                resp = await p.request(
+                    "GET",
+                    f"/response-headers?Alt-Svc=h2c%3D%22%3A{self.http_alt_port}%22",
+                )
+
+                assert resp.version == 11 if i == 0 else 20
+
+                assert "Alt-Svc" in resp.headers
+                assert (
+                    resp.headers.get("Alt-Svc")
+                    == f'h2c=":{self.http_alt_port}"'
+                )
