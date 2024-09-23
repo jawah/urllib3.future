@@ -7,6 +7,7 @@ from io import BytesIO
 import pytest
 
 from urllib3 import AsyncHTTPSConnectionPool
+from urllib3.backend._async.hface import _HAS_HTTP3_SUPPORT  # type: ignore
 
 from .. import TraefikTestCase
 
@@ -89,7 +90,11 @@ class TestPostBody(TraefikTestCase):
                 resp = await p.request(method, f"/{method.lower()}", body=body)
 
                 assert resp.status == 200
-                assert resp.version == (20 if i == 0 else 30)
+
+                if _HAS_HTTP3_SUPPORT():
+                    assert resp.version == (20 if i == 0 else 30)
+                else:
+                    assert resp.version == 20
 
                 echo_data_from_httpbin = (await resp.json())["data"]
                 need_b64_decode = echo_data_from_httpbin.startswith(
@@ -146,7 +151,10 @@ class TestPostBody(TraefikTestCase):
                 resp = await p.request(method, f"/{method.lower()}", fields=fields)
 
                 assert resp.status == 200
-                assert resp.version == (20 if i == 0 else 30)
+                if _HAS_HTTP3_SUPPORT():
+                    assert resp.version == (20 if i == 0 else 30)
+                else:
+                    assert resp.version == 20
 
                 payload = await resp.json()
 

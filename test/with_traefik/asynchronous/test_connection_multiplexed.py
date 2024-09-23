@@ -99,6 +99,7 @@ class TestConnectionMultiplexed(TraefikTestCase):
 
         assert len(conn._promises) == 0
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_multiplexing_upgrade_h3(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,

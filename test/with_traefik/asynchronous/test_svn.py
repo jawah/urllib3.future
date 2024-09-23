@@ -42,6 +42,7 @@ class TestSvnCapability(TraefikTestCase):
 
             assert resp.version == 20
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_upgrade_h3(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,
@@ -171,6 +172,7 @@ class TestSvnCapability(TraefikTestCase):
                     == 'h3-25=":443"; ma=3600, h3="evil.httpbin.local:443"; ma=3600'
                 )
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_other_port_upgrade_h3(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,
@@ -240,6 +242,7 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_drop_post_established_h3(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,
@@ -272,6 +275,7 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_pool_manager_quic_cache(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
         pm = AsyncPoolManager(

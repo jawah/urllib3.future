@@ -5,6 +5,7 @@ from json import JSONDecodeError, loads
 import pytest
 
 from urllib3 import AsyncHTTPSConnectionPool
+from urllib3.backend._async.hface import _HAS_HTTP3_SUPPORT  # type: ignore
 
 from .. import TraefikTestCase
 
@@ -35,7 +36,10 @@ class TestStreamResponse(TraefikTestCase):
                 resp = await p.request("GET", "/get", preload_content=False)
 
                 assert resp.status == 200
-                assert resp.version == (20 if i == 0 else 30)
+                if _HAS_HTTP3_SUPPORT():
+                    assert resp.version == (20 if i == 0 else 30)
+                else:
+                    assert resp.version == 20
 
                 chunks = []
 

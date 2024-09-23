@@ -5,6 +5,7 @@ import socket
 import pytest
 
 from urllib3 import AsyncHTTPSConnectionPool, HTTPHeaderDict, HttpVersion
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.exceptions import InsecureRequestWarning, ProtocolError
 from urllib3.util import parse_url
 from urllib3.util.request import SKIP_HEADER
@@ -110,7 +111,7 @@ class TestProtocolLevel(TraefikTestCase):
                 )
 
                 assert resp.status == 200
-                assert resp.version == 30
+                assert resp.version == 30 if _HAS_HTTP3_SUPPORT() else 20
 
     @pytest.mark.parametrize(
         "expected_trailers",

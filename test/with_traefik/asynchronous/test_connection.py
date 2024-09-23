@@ -12,6 +12,7 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestConnection(TraefikTestCase):
+    @pytest.mark.usefixtures("requires_http3")
     async def test_h3_probe_after_close(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,
@@ -78,6 +79,7 @@ class TestConnection(TraefikTestCase):
         with pytest.raises(ResponseNotReady):
             await conn.getresponse()
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_capable(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
             (self.host, self.https_port): ("", self.https_port)
@@ -156,6 +158,7 @@ class TestConnection(TraefikTestCase):
         assert len(quic_cache_resumption.keys()) == 1
         assert (self.host, self.https_port) in quic_cache_resumption
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_quic_extract_ssl_ctx_ca_root(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
             (self.host, self.https_port): ("", self.https_port)
