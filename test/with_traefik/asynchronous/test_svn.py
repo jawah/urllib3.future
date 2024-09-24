@@ -87,7 +87,7 @@ class TestSvnCapability(TraefikTestCase):
                 if _HAS_HTTP3_SUPPORT():
                     assert resp.version == (11 if i == 0 else 30)
                 else:
-                    assert resp.version == (11 if i == 0 else 20)
+                    assert resp.version == 11
 
     async def test_can_disable_h11(self) -> None:
         p = AsyncHTTPSConnectionPool(

@@ -171,7 +171,7 @@ def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
                     ),
                     timeout=1.0,
                 )
-            except (HTTPError, URLError, RemoteDisconnected) as e:
+            except (HTTPError, URLError, RemoteDisconnected, TimeoutError) as e:
                 i += 1
                 time.sleep(1)
                 session.log(f"Waiting for the Traefik server: {e}...")
