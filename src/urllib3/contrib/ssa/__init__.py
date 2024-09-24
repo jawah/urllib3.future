@@ -81,6 +81,10 @@ class AsyncSocket:
                 self._sock.shutdown(SHUT_RD)
             elif hasattr(self._sock, "close"):
                 self._sock.close()
+            # we have to force call close() on our sock object in UDP ctx. (even after shutdown)
+            # or we'll get a resource warning for sure!
+            if self.type == socket.SOCK_DGRAM and hasattr(self._sock, "close"):
+                self._sock.close()
         except OSError:
             pass
 
