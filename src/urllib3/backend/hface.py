@@ -198,6 +198,10 @@ class HfaceBackend(BaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
+        #: Don't search for alt-svc again if already done once.
+        if self.__alt_authority is not None:
+            return
+
         #: determine if http/3 support is present in environment
         has_h3_support = _HAS_HTTP3_SUPPORT()
 
@@ -207,6 +211,8 @@ class HfaceBackend(BaseBackend):
         #: did the user purposely killed h3/h2 support?
         is_h3_disabled = HttpVersion.h3 in self._disabled_svn
         is_h2_disabled = HttpVersion.h2 in self._disabled_svn
+
+        upgradable_svn: HttpVersion | None = None
 
         if is_plain_socket:
             if is_h2_disabled or self._svn == HttpVersion.h2:
@@ -218,15 +224,19 @@ class HfaceBackend(BaseBackend):
             )  # h2c = http2 over cleartext
         else:
             # do not upgrade if not coming from TLS already.
-            if (
-                is_plain_socket
-                or not has_h3_support
-                or is_h3_disabled
-                or self._svn == HttpVersion.h3
-            ):
+
+            # already maxed out!
+            if self._svn == HttpVersion.h3:
                 return
-            upgradable_svn = HttpVersion.h3
-            self.__alt_authority = self.__altsvc_probe(svc="h3")
+
+            if is_h3_disabled is False and has_h3_support is True:
+                upgradable_svn = HttpVersion.h3
+                self.__alt_authority = self.__altsvc_probe(svc="h3")
+
+            # no h3 target found[...] try to locate h2 support if appropriated!
+            if not self.__alt_authority and self._svn != HttpVersion.h2:
+                upgradable_svn = HttpVersion.h2
+                self.__alt_authority = self.__altsvc_probe(svc="h2")
 
         if self.__alt_authority:
             if upgradable_svn == HttpVersion.h3:
@@ -553,9 +563,12 @@ class HfaceBackend(BaseBackend):
                 receive_first=False,
             )
         except ProtocolError as e:
-            if isinstance(self._protocol, HTTPOverQUICProtocol):
+            if (
+                isinstance(self._protocol, HTTPOverQUICProtocol)
+                and self.__alt_authority is not None
+            ):
                 raise ProtocolError(
-                    "It is likely that the server yielded its support for HTTP/3 through the Alt-Svc header while unable to do so. "
+                    "The server yielded its support for HTTP/3 through the Alt-Svc header while unable to do so. "
                     "To remediate that issue, either disable http3 or reach out to the server admin."
                 ) from e
             raise
