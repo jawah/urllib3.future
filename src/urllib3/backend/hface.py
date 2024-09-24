@@ -1098,11 +1098,19 @@ class HfaceBackend(BaseBackend):
         trailers = None
 
         if eot:
-            # http-trailers SHOULD be received LAST!
+            idx = None
+
             if isinstance(events[-1], HeadersReceived):
+                idx = -1
+            elif len(events) >= 2 and isinstance(events[-2], HeadersReceived):
+                idx = -2
+
+            # http-trailers SHOULD be received LAST!
+            # but we should tolerate a DataReceived of len=0 last, just in case.
+            if idx is not None:
                 trailers = HTTPHeaderDict()
 
-                for raw_header, raw_value in events[-1].headers:
+                for raw_header, raw_value in events[idx].headers:  # type: ignore[union-attr]
                     # ignore...them? special headers. aka. starting with semicolon
                     if raw_header[0] == 0x3A:
                         continue
@@ -1111,7 +1119,7 @@ class HfaceBackend(BaseBackend):
                             raw_header.decode("ascii"), raw_value.decode("iso-8859-1")
                         )
 
-                events.pop()
+                events.pop(idx)
 
                 if not events:
                     return b"", True, trailers
