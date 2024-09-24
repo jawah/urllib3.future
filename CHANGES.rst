@@ -1,4 +1,4 @@
-2.9.900 (2024-09-23)
+2.9.900 (2024-09-24)
 ====================
 
 - Fixed a rare issue where HTTPS record is misinterpreted, thus leading to a missed preemptive HTTP/3 negotiation.
