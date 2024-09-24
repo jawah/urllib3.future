@@ -22,7 +22,7 @@ except (ImportError, AttributeError):
     Certificate = None
 
 from .._collections import HTTPHeaderDict
-from .._constant import DEFAULT_BLOCKSIZE, responses
+from .._constant import DEFAULT_BLOCKSIZE, UDP_DEFAULT_BLOCKSIZE, responses
 from ..contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -175,6 +175,8 @@ class HfaceBackend(BaseBackend):
                 self.port = self.__alt_authority[1]
 
         if self._svn == HttpVersion.h3:
+            if self.blocksize == DEFAULT_BLOCKSIZE:
+                self.blocksize = UDP_DEFAULT_BLOCKSIZE
             self.socket_kind = SOCK_DGRAM
 
             # undo local memory on whether conn supposedly support quic/h3
@@ -183,6 +185,8 @@ class HfaceBackend(BaseBackend):
                 self._svn = None
                 self._new_conn()  # restore socket defaults
         else:
+            if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
+                self.blocksize = DEFAULT_BLOCKSIZE
             self.socket_kind = SOCK_STREAM
 
         return None
@@ -194,31 +198,57 @@ class HfaceBackend(BaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        if not _HAS_HTTP3_SUPPORT():
+        #: Don't search for alt-svc again if already done once.
+        if self.__alt_authority is not None:
             return
 
-        # do not upgrade if not coming from TLS already.
-        # we exclude SSLTransport, HTTP/3 is not supported in that condition anyway.
-        if type(self.sock) is socket.socket:
-            return
+        #: determine if http/3 support is present in environment
+        has_h3_support = _HAS_HTTP3_SUPPORT()
 
-        if self._svn == HttpVersion.h3:
-            return
-        if HttpVersion.h3 in self._disabled_svn:
-            return
+        #: are we on a plain conn? unencrypted?
+        is_plain_socket = type(self.sock) is socket.socket
 
-        self.__alt_authority = self.__h3_probe()
+        #: did the user purposely killed h3/h2 support?
+        is_h3_disabled = HttpVersion.h3 in self._disabled_svn
+        is_h2_disabled = HttpVersion.h2 in self._disabled_svn
+
+        upgradable_svn: HttpVersion | None = None
+
+        if is_plain_socket:
+            if is_h2_disabled or self._svn == HttpVersion.h2:
+                return
+            upgradable_svn = HttpVersion.h2
+
+            self.__alt_authority = self.__altsvc_probe(
+                svc="h2c"
+            )  # h2c = http2 over cleartext
+        else:
+            # do not upgrade if not coming from TLS already.
+
+            # already maxed out!
+            if self._svn == HttpVersion.h3:
+                return
+
+            if is_h3_disabled is False and has_h3_support is True:
+                upgradable_svn = HttpVersion.h3
+                self.__alt_authority = self.__altsvc_probe(svc="h3")
+
+            # no h3 target found[...] try to locate h2 support if appropriated!
+            if not self.__alt_authority and self._svn != HttpVersion.h2:
+                upgradable_svn = HttpVersion.h2
+                self.__alt_authority = self.__altsvc_probe(svc="h2")
 
         if self.__alt_authority:
-            if self._preemptive_quic_cache is not None:
-                self._preemptive_quic_cache[
-                    (self.host, self.port or 443)
-                ] = self.__alt_authority
+            if upgradable_svn == HttpVersion.h3:
+                if self._preemptive_quic_cache is not None:
+                    self._preemptive_quic_cache[
+                        (self.host, self.port or 443)
+                    ] = self.__alt_authority
 
-                if (self.host, self.port or 443) not in self._preemptive_quic_cache:
-                    return
+                    if (self.host, self.port or 443) not in self._preemptive_quic_cache:
+                        return
 
-            self._svn = HttpVersion.h3
+            self._svn = upgradable_svn
             # We purposely ignore setting the Hostname. Avoid MITM attack from local cache attack.
             self.port = self.__alt_authority[1]
             self.close()
@@ -299,15 +329,14 @@ class HfaceBackend(BaseBackend):
 
         return True
 
-    def __h3_probe(self) -> tuple[str, int] | None:
-        """Determine if remote is capable of operating through the http/3 protocol over QUIC."""
+    def __altsvc_probe(self, svc: str = "h3") -> tuple[str, int] | None:
+        """Determine if remote yield support for an alternative service protocol."""
         # need at least first request being made
         assert self._response is not None
 
         for alt_svc in self._response.msg.getlist("alt-svc"):
             for protocol, alt_authority in parse_alt_svc(alt_svc):
-                # Looking for final specification of HTTP/3 over QUIC.
-                if protocol != "h3":
+                if protocol != svc:
                     continue
 
                 server, port = alt_authority.split(":")
@@ -534,9 +563,12 @@ class HfaceBackend(BaseBackend):
                 receive_first=False,
             )
         except ProtocolError as e:
-            if isinstance(self._protocol, HTTPOverQUICProtocol):
+            if (
+                isinstance(self._protocol, HTTPOverQUICProtocol)
+                and self.__alt_authority is not None
+            ):
                 raise ProtocolError(
-                    "It is likely that the server yielded its support for HTTP/3 through the Alt-Svc header while unable to do so. "
+                    "The server yielded its support for HTTP/3 through the Alt-Svc header while unable to do so. "
                     "To remediate that issue, either disable http3 or reach out to the server admin."
                 ) from e
             raise
@@ -813,7 +845,10 @@ class HfaceBackend(BaseBackend):
                         events.append(event)
 
                         if data_in_len_from is not None:
-                            data_in_len += data_in_len_from(event)
+                            try:
+                                data_in_len += data_in_len_from(event)
+                            except AttributeError:
+                                pass
                     else:
                         reshelve_events.append(event)
 
@@ -836,6 +871,14 @@ class HfaceBackend(BaseBackend):
                             return events
                         continue
 
+                    if reshelve_events:
+                        self._protocol.reshelve(*reshelve_events)
+                    return events
+                elif (
+                    stream_related_event
+                    and event.end_stream is True  # type: ignore[attr-defined]
+                    and respect_end_stream_signal is True
+                ):
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
@@ -1024,15 +1067,14 @@ class HfaceBackend(BaseBackend):
 
     def __read_st(
         self, __amt: int | None, __stream_id: int | None
-    ) -> tuple[bytes, bool]:
+    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
         """Allows us to defer the body loading after constructing the response object."""
         eot = False
 
-        events: list[DataReceived] = self.__exchange_until(  # type: ignore[assignment]
+        events: list[DataReceived | HeadersReceived] = self.__exchange_until(  # type: ignore[assignment]
             DataReceived,
             receive_first=True,
-            # we ignore Trailers even if provided in response.
-            event_type_collectable=(DataReceived,),
+            event_type_collectable=(DataReceived, HeadersReceived),
             maximal_data_in_read=__amt,
             data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
             stream_id=__stream_id,
@@ -1053,9 +1095,39 @@ class HfaceBackend(BaseBackend):
                 # probe for h3/quic if available, and remember it.
                 self._upgrade()
 
+        trailers = None
+
+        if eot:
+            idx = None
+
+            if isinstance(events[-1], HeadersReceived):
+                idx = -1
+            elif len(events) >= 2 and isinstance(events[-2], HeadersReceived):
+                idx = -2
+
+            # http-trailers SHOULD be received LAST!
+            # but we should tolerate a DataReceived of len=0 last, just in case.
+            if idx is not None:
+                trailers = HTTPHeaderDict()
+
+                for raw_header, raw_value in events[idx].headers:  # type: ignore[union-attr]
+                    # ignore...them? special headers. aka. starting with semicolon
+                    if raw_header[0] == 0x3A:
+                        continue
+                    else:
+                        trailers.add(
+                            raw_header.decode("ascii"), raw_value.decode("iso-8859-1")
+                        )
+
+                events.pop(idx)
+
+                if not events:
+                    return b"", True, trailers
+
         return (
-            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,
+            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,  # type: ignore[union-attr]
             eot,
+            trailers,
         )
 
     def getresponse(

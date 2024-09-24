@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v3.1
+    image: traefik:v3.1.4
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
@@ -61,7 +61,7 @@ services:
       - --log.level=INFO
 
   httpbin:
-    image: mccutchen/go-httpbin:v2.14.0
+    image: mccutchen/go-httpbin:v2.15.0
     restart: unless-stopped
     depends_on:
       proxy:

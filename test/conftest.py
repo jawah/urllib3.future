@@ -1,3 +1,4 @@
+# mypy: disable-error-code="attr-defined"
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +17,8 @@ from dummyserver.handlers import TestingApp
 from dummyserver.proxy import ProxyHandler
 from dummyserver.server import HAS_IPV6, run_loop_in_thread, run_tornado_app
 from dummyserver.testcase import HTTPSDummyServerTestCase
+from urllib3.backend._async.hface import _HAS_HTTP3_SUPPORT as _ASYNC_HAS_HTTP3_SUPPORT
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT as _SYNC_HAS_HTTP3_SUPPORT
 from urllib3.util import ssl_
 
 from .tz_stub import stub_timezone_ctx
@@ -376,3 +379,13 @@ def requires_traefik() -> None:
     else:
         _TRAEFIK_AVAILABLE = True
         sock.close()
+
+
+@pytest.fixture(scope="function")
+def requires_http3(for_async: bool = False) -> None:
+    _TARGET_METHOD = (
+        _SYNC_HAS_HTTP3_SUPPORT if not for_async else _ASYNC_HAS_HTTP3_SUPPORT
+    )
+
+    if _TARGET_METHOD() is False:
+        pytest.skip("Test requires HTTP/3 support")

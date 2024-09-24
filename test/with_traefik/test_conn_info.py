@@ -75,6 +75,7 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.tls_version is not None
         assert conn_info.cipher is not None
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_tls_on_udp(self) -> None:
         p = PoolManager(
             preemptive_quic_cache={

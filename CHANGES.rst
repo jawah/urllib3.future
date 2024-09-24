@@ -1,3 +1,14 @@
+2.9.900 (2024-09-24)
+====================
+
+- Fixed a rare issue where HTTPS record is misinterpreted, thus leading to a missed preemptive HTTP/3 negotiation.
+- Restored support for older-and-deprecated ``PySocks`` if installed and ``python-socks`` is absent for synchronous support of SOCKS proxies.
+- Added support for HTTP Trailers across HTTP/1, HTTP/2 and HTTP/3 responses. We added the property ``trailers`` in ``HTTPResponse`` to reflect that.
+- Fixed unclosed resource warning for socket created in asynchronous mode.
+- Added support for Upgrading to HTTP/2 (If coming from HTTP/1) via Alt-Svc. Whether it's h2c (http/2 over cleartext) or h2.
+- Largely improve download speed on the QUIC layer by increasing automatically the blocksize to the largest value allowed on UDP (value taken from sysconf).
+- Fixed the test suite outcome if no support for HTTP/3 exist in current environment.
+
 2.8.907 (2024-08-20)
 ====================
 

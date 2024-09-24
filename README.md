@@ -30,10 +30,12 @@
 - Support for Python/PyPy 3.7+, no compromise.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
 - Proxy support for HTTP and SOCKS.
+- Post-Quantum Security with QUIC.
 - Detailed connection inspection.
 - HTTP/2 with prior knowledge.
 - Multiplexed connection.
 - Mirrored Sync & Async.
+- Trailer Headers.
 - Amazingly Fast.
 
 urllib3.future is powerful and easy to use:
@@ -209,6 +211,9 @@ This being said, rest assured, we kept all the tests from urllib3 to ensure that
 guaranteed by upstream is also carefully watched down there. See the CI/pipeline for yourself.
 
 In addition to that, we enforced key integration tests to watch how urllib3-future act with some critical projects.
+
+Top-priorities issues are those impacting users with the "shadowing" part. Meaning, if a user is suffering
+an error or something that ends up causing an undesirable outcome from a third-party library that leverage urllib3.
 
 - **OS Package Managers**
 

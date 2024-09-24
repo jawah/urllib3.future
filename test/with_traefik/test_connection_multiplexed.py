@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from time import time
 
+import pytest
+
 from urllib3.connection import HTTPSConnection
 
 from . import TraefikTestCase
@@ -96,6 +98,7 @@ class TestConnectionMultiplexed(TraefikTestCase):
 
         assert len(conn._promises) == 0
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_multiplexing_upgrade_h3(self) -> None:
         conn = HTTPSConnection(
             self.host,

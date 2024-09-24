@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, HttpVersion, PoolManager
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.connection import HTTPSConnection
 
 from . import TraefikTestCase
@@ -36,6 +37,7 @@ class TestSvnCapability(TraefikTestCase):
 
             assert resp.version == 20
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_upgrade_h3(self) -> None:
         with HTTPSConnectionPool(
             self.host,
@@ -49,6 +51,7 @@ class TestSvnCapability(TraefikTestCase):
                 resp = p.request("GET", "/get")
                 assert resp.version == (20 if i == 0 else 30)
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_explicitly_disable_h3(self) -> None:
         with HTTPSConnectionPool(
             self.host,
@@ -75,7 +78,10 @@ class TestSvnCapability(TraefikTestCase):
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get")
-                assert resp.version == (11 if i == 0 else 30)
+                if _HAS_HTTP3_SUPPORT():
+                    assert resp.version == (11 if i == 0 else 30)
+                else:
+                    assert resp.version == 11
 
     def test_can_disable_h11(self) -> None:
         p = HTTPSConnectionPool(
@@ -163,6 +169,7 @@ class TestSvnCapability(TraefikTestCase):
                     == 'h3-25=":443"; ma=3600, h3="evil.httpbin.local:443"; ma=3600'
                 )
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_other_port_upgrade_h3(self) -> None:
         with HTTPSConnectionPool(
             self.host,
@@ -232,6 +239,7 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_drop_post_established_h3(self) -> None:
         conn = HTTPSConnection(
             self.host,
@@ -264,6 +272,7 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_pool_manager_quic_cache(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
         pm = PoolManager(
@@ -296,3 +305,22 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 30
 
         assert len(dumb_cache.keys()) == 1
+
+    def test_can_upgrade_h2c_via_altsvc(self) -> None:
+        with HTTPConnectionPool(
+            self.host,
+            self.http_alt_port,
+            timeout=1,
+            retries=False,
+            resolver=self.test_resolver,
+        ) as p:
+            for i in range(3):
+                resp = p.request(
+                    "GET",
+                    f"/response-headers?Alt-Svc=h2c%3D%22%3A{self.http_alt_port}%22",
+                )
+
+                assert resp.version == 11 if i == 0 else 20
+
+                assert "Alt-Svc" in resp.headers
+                assert resp.headers.get("Alt-Svc") == f'h2c=":{self.http_alt_port}"'

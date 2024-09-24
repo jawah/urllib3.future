@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import typing
 from enum import IntEnum
 
@@ -219,9 +220,25 @@ responses: typing.Mapping[int, str] = {
 
 # Default value for `blocksize` - a new parameter introduced to
 # http.client.HTTPConnection & http.client.HTTPSConnection in Python 3.7
-# The maximum TCP packet size is 65535 octets. But Python seems to buffer packets, so
-# passing a "very-high" value does improve responsiveness.
-DEFAULT_BLOCKSIZE: int = 65535 * 2
+# The maximum TCP packet size is 65535 octets. But OSes can have a recv buffer greater than 65k, so
+# passing the highest value does improve responsiveness.
+# udp usually is set to 212992
+# and tcp usually is set to 131072 (16384 * 8) or (65535 * 2)
+try:
+    # dynamically retrieve the kernel rcvbuf size.
+    stream = socket.socket(type=socket.SOCK_STREAM)
+    dgram = socket.socket(type=socket.SOCK_DGRAM)
+
+    DEFAULT_BLOCKSIZE: int = stream.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+    UDP_DEFAULT_BLOCKSIZE: int = dgram.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+
+    stream.close()
+    dgram.close()
+except OSError:
+    DEFAULT_BLOCKSIZE = 131072
+    UDP_DEFAULT_BLOCKSIZE = 212992
+
+TCP_DEFAULT_BLOCKSIZE: int = DEFAULT_BLOCKSIZE
 
 # Mozilla TLS recommendations for ciphers
 # General-purpose servers with a variety of clients, recommended for almost all systems.

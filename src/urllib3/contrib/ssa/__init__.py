@@ -5,6 +5,7 @@ import platform
 import socket
 import typing
 
+SHUT_RD = 0  # taken from the "_socket" module
 StandardTimeoutError = socket.timeout
 
 try:
@@ -74,11 +75,21 @@ class AsyncSocket:
     def close(self) -> None:
         if self._writer is not None:
             self._writer.close()
+
+        try:
+            if hasattr(self._sock, "shutdown"):
+                self._sock.shutdown(SHUT_RD)
+            elif hasattr(self._sock, "close"):
+                self._sock.close()
+            # we have to force call close() on our sock object in UDP ctx. (even after shutdown)
+            # or we'll get a resource warning for sure!
+            if self.type == socket.SOCK_DGRAM and hasattr(self._sock, "close"):
+                self._sock.close()
+        except OSError:
+            pass
+
         self._connect_called = False
         self._established.clear()
-        # elif self._sock is not None:
-        #     if hasattr(self._sock, "close"):
-        #         self._sock.close()
 
     async def wait_for_readiness(self) -> None:
         await self._established.wait()

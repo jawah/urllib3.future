@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v3.1-windowsservercore-ltsc2022
+    image: traefik:v3.1.4-windowsservercore-ltsc2022
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
