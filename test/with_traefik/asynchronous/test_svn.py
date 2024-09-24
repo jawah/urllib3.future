@@ -9,6 +9,7 @@ from urllib3 import (
     HttpVersion,
 )
 from urllib3._async.connection import AsyncHTTPSConnection
+from urllib3.backend._async.hface import _HAS_HTTP3_SUPPORT  # type: ignore
 
 from .. import TraefikTestCase
 
@@ -56,6 +57,7 @@ class TestSvnCapability(TraefikTestCase):
                 resp = await p.request("GET", "/get")
                 assert resp.version == (20 if i == 0 else 30)
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_explicitly_disable_h3(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,
@@ -82,7 +84,10 @@ class TestSvnCapability(TraefikTestCase):
         ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get")
-                assert resp.version == (11 if i == 0 else 30)
+                if _HAS_HTTP3_SUPPORT():
+                    assert resp.version == (11 if i == 0 else 30)
+                else:
+                    assert resp.version == (11 if i == 0 else 20)
 
     async def test_can_disable_h11(self) -> None:
         p = AsyncHTTPSConnectionPool(

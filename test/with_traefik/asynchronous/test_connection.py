@@ -99,6 +99,7 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 30
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_capable_but_disabled(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
             (self.host, self.https_port): ("", self.https_port)
@@ -119,6 +120,7 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 20
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_explicit_not_capable(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
             (self.host, self.https_port): None
@@ -138,6 +140,7 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 20
 
+    @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_implicit_not_capable(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = dict()
 

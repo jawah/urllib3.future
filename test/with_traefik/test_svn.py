@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, HttpVersion, PoolManager
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.connection import HTTPSConnection
 
 from . import TraefikTestCase
@@ -50,6 +51,7 @@ class TestSvnCapability(TraefikTestCase):
                 resp = p.request("GET", "/get")
                 assert resp.version == (20 if i == 0 else 30)
 
+    @pytest.mark.usefixtures("requires_http3")
     def test_explicitly_disable_h3(self) -> None:
         with HTTPSConnectionPool(
             self.host,
@@ -76,7 +78,10 @@ class TestSvnCapability(TraefikTestCase):
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get")
-                assert resp.version == (11 if i == 0 else 30)
+                if _HAS_HTTP3_SUPPORT():
+                    assert resp.version == (11 if i == 0 else 30)
+                else:
+                    assert resp.version == (11 if i == 0 else 20)
 
     def test_can_disable_h11(self) -> None:
         p = HTTPSConnectionPool(

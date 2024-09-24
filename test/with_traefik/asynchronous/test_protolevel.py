@@ -133,6 +133,18 @@ class TestProtocolLevel(TraefikTestCase):
     async def test_http_trailers(
         self, expected_trailers: dict[str, str], disabled_svn: set[HttpVersion]
     ) -> None:
+        if HttpVersion.h11 not in disabled_svn:
+            expected_http_version = 11
+        elif HttpVersion.h2 not in disabled_svn:
+            expected_http_version = 20
+        elif HttpVersion.h3 not in disabled_svn:
+            expected_http_version = 30
+        else:
+            assert False, "unable to asses expected protocol"
+
+        if _HAS_HTTP3_SUPPORT() is False and expected_http_version == 30:
+            pytest.skip("Test requires http3")
+
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_port,
@@ -148,15 +160,6 @@ class TestProtocolLevel(TraefikTestCase):
             )
 
             assert resp.status == 200
-
-            if HttpVersion.h11 not in disabled_svn:
-                expected_http_version = 11
-            elif HttpVersion.h2 not in disabled_svn:
-                expected_http_version = 20
-            elif HttpVersion.h3 not in disabled_svn:
-                expected_http_version = 30
-            else:
-                assert False, "unable to asses expected protocol"
 
             assert resp.version == expected_http_version
 
