@@ -898,6 +898,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
         | None = None,
+        on_early_response: typing.Callable[[HTTPResponse], None] | None = None,
         multiplexed: Literal[False] | Literal[True] = False,
     ) -> HTTPResponse | ResponsePromise:
         """
@@ -1050,6 +1051,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             if rp is None:
                 raise OSError
             rp.set_parameter("read_timeout", read_timeout)
+            rp.set_parameter("on_early_response", on_early_response)
             return rp
 
         if not conn.is_closed:
@@ -1070,7 +1072,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         )  # keep vsn here, as conn may be upgraded afterward.
 
         try:
-            response = conn.getresponse(police_officer=self.pool)
+            response = conn.getresponse(
+                police_officer=self.pool, early_response_callback=on_early_response
+            )
         except (BaseSSLError, OSError) as e:
             self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
             raise
@@ -1151,7 +1155,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = ...,
         decode_content: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
-        on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
+        | None = ...,
+        on_early_response: typing.Callable[[HTTPResponse], None] | None = ...,
         *,
         multiplexed: Literal[False] = ...,
         **response_kw: typing.Any,
@@ -1176,7 +1182,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         preload_content: bool = ...,
         decode_content: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
-        on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
+        on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
+        | None = ...,
+        on_early_response: typing.Callable[[HTTPResponse], None] | None = ...,
         *,
         multiplexed: Literal[True],
         **response_kw: typing.Any,
@@ -1202,6 +1210,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = None,
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
         | None = None,
+        on_early_response: typing.Callable[[HTTPResponse], None] | None = None,
         multiplexed: bool = False,
         **response_kw: typing.Any,
     ) -> HTTPResponse | ResponsePromise:
@@ -1310,6 +1319,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             available, thus set to None. In order, arguments are:
             (total_sent, total_to_be_sent, completed, any_error)
 
+        :param on_early_response:
+            Callable that will be invoked upon early responses, can be invoked one or several times.
+            All informational responses except HTTP/102 (Switching Protocol) are concerned here.
+            The callback takes only one positional argument, the fully constructed HTTPResponse.
+            Those responses never have bodies, only headers.
+
         :param multiplexed:
             Dispatch the request in a non-blocking way, this means that the
             response will be retrieved in the future with the get_response()
@@ -1412,6 +1427,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 enforce_content_length=True,
                 on_post_connection=on_post_connection,
                 on_upload_body=on_upload_body,
+                on_early_response=on_early_response,
                 multiplexed=multiplexed,
             )
 

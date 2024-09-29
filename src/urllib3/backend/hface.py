@@ -35,6 +35,7 @@ from ..contrib.hface import (
 from ..contrib.hface.events import (
     ConnectionTerminated,
     DataReceived,
+    EarlyHeadersReceived,
     Event,
     HandshakeCompleted,
     HeadersReceived,
@@ -1131,7 +1132,11 @@ class HfaceBackend(BaseBackend):
         )
 
     def getresponse(
-        self, *, promise: ResponsePromise | None = None
+        self,
+        *,
+        promise: ResponsePromise | None = None,
+        early_response_callback: typing.Callable[[LowLevelResponse], None]
+        | None = None,
     ) -> LowLevelResponse:
         if (
             self.sock is None  # Didn't we establish a connection?
@@ -1141,11 +1146,17 @@ class HfaceBackend(BaseBackend):
             raise ResponseNotReady()  # Defensive: Comply with http.client behavior.
 
         # Usually, will be a single event in array. We should be able to handle the case >1 too, but we actually don't.
-        head_event: HeadersReceived = self.__exchange_until(  # type: ignore[assignment]
-            HeadersReceived,
+        head_event: HeadersReceived | EarlyHeadersReceived = self.__exchange_until(  # type: ignore[assignment]
+            (
+                HeadersReceived,
+                EarlyHeadersReceived,
+            ),
             receive_first=True,
-            event_type_collectable=(HeadersReceived,),
-            respect_end_stream_signal=False,
+            event_type_collectable=(
+                HeadersReceived,
+                EarlyHeadersReceived,
+            ),
+            respect_end_stream_signal=False,  # Stop as soon as we get either (collectable) event.
             stream_id=promise.stream_id if promise else None,
         ).pop()
 
@@ -1160,23 +1171,31 @@ class HfaceBackend(BaseBackend):
             else:
                 headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
 
-        if promise is None:
-            try:
-                promise = self._promises_per_stream.pop(head_event.stream_id)
-            except KeyError as e:
-                raise ProtocolError(
-                    f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
-                ) from e
-        else:
-            del self._promises_per_stream[promise.stream_id]
-
         # this should be unreachable
         if status is None:
             raise ProtocolError(  # Defensive: This is unreachable, all three implementations crash before.
                 "Got an HTTP response without a status code. This is a violation."
             )
 
-        eot = head_event.end_stream is True
+        # 101 = Switching Protocol! It's our final HTTP response, but the stream remains open!
+        is_early_response = (
+            isinstance(head_event, EarlyHeadersReceived) and status != 101
+        )
+
+        if promise is None:
+            try:
+                if is_early_response:
+                    promise = self._promises_per_stream[head_event.stream_id]
+                else:
+                    promise = self._promises_per_stream.pop(head_event.stream_id)
+            except KeyError as e:
+                raise ProtocolError(
+                    f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
+                ) from e
+        else:
+            if not is_early_response:
+                del self._promises_per_stream[promise.stream_id]
+
         http_verb = b""
 
         for raw_header, raw_value in promise.request_headers:
@@ -1188,6 +1207,29 @@ class HfaceBackend(BaseBackend):
             reason: str = responses[status]
         except KeyError:
             reason = "Unknown"
+
+        if is_early_response:
+            if early_response_callback is not None:
+                early_response = LowLevelResponse(
+                    http_verb.decode("ascii"),
+                    status,
+                    self._http_vsn,
+                    reason,
+                    headers,
+                    body=None,
+                    authority=self.host,
+                    port=self.port,
+                    stream_id=promise.stream_id,
+                )
+                early_response.from_promise = promise
+
+                early_response_callback(early_response)
+
+            return HfaceBackend.getresponse(
+                self, promise=promise, early_response_callback=early_response_callback
+            )
+
+        eot = head_event.end_stream is True
 
         self._response: LowLevelResponse = LowLevelResponse(
             http_verb.decode("ascii"),
@@ -1203,7 +1245,6 @@ class HfaceBackend(BaseBackend):
             if self._http_vsn == 11
             else None,  # kept for BC purposes[...] one should not try to read from it.
         )
-
         promise.response = self._response
         self._response.from_promise = promise
 
@@ -1258,7 +1299,10 @@ class HfaceBackend(BaseBackend):
                     self._protocol.bytes_received(self.sock.recv(self.blocksize))
 
                     # this is a bad sign. we should stop sending and instead retrieve the response.
-                    if self._protocol.has_pending_event(stream_id=self._stream_id):
+                    # we exclude 'EarlyHeadersReceived' event because it is simply expected. e.g. 100-continue!
+                    if self._protocol.has_pending_event(
+                        stream_id=self._stream_id, excl_event=(EarlyHeadersReceived,)
+                    ):
                         if self._start_last_request and self.conn_info:
                             self.conn_info.request_sent_latency = (
                                 datetime.now(tz=timezone.utc) - self._start_last_request

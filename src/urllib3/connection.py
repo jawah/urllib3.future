@@ -21,6 +21,7 @@ if typing.TYPE_CHECKING:
         ProxyConfig,
     )
     from .util.traffic_police import TrafficPolice
+    from .backend._base import LowLevelResponse
 
 from ._constant import DEFAULT_BLOCKSIZE
 from .response import HTTPResponse
@@ -526,6 +527,7 @@ class HTTPConnection(HfaceBackend):
         *,
         promise: ResponsePromise | None = None,
         police_officer: TrafficPolice[HTTPConnection] | None = None,
+        early_response_callback: typing.Callable[[HTTPResponse], None] | None = None,
     ) -> HTTPResponse:
         """
         Get the response from the server.
@@ -542,8 +544,51 @@ class HTTPConnection(HfaceBackend):
         # we need to set the timeout on the socket.
         self.sock.settimeout(self.timeout)
 
+        def early_response_handler(early_low_response: LowLevelResponse) -> None:
+            """Handle unexpected early response. Notify the upper stack!"""
+            nonlocal promise, early_response_callback
+
+            _promise = None
+
+            if promise is None:
+                _promise = early_low_response.from_promise
+            else:
+                _promise = promise
+
+            if _promise is None:
+                raise OSError
+
+            if early_response_callback is None:
+                early_response_callback = _promise.get_parameter("on_early_response")
+
+            if early_response_callback is None:
+                return
+
+            early_resp_options: _ResponseOptions = _promise.get_parameter("response_options")  # type: ignore[assignment]
+
+            early_response = HTTPResponse(
+                body=b"",
+                headers=early_low_response.msg,
+                status=early_low_response.status,
+                version=early_low_response.version,
+                reason=early_low_response.reason,
+                preload_content=False,
+                decode_content=early_resp_options.decode_content,
+                original_response=early_low_response,
+                enforce_content_length=False,
+                request_method=early_resp_options.request_method,
+                request_url=early_resp_options.request_url,
+                connection=None,
+                police_officer=None,
+            )
+
+            early_response_callback(early_response)
+
         # Get the response from backend._base.BaseBackend
-        low_response = super().getresponse(promise=promise)
+        low_response = super().getresponse(
+            promise=promise,
+            early_response_callback=early_response_handler,
+        )
 
         if promise is None:
             promise = low_response.from_promise

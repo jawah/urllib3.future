@@ -286,7 +286,12 @@ class HTTPProtocol(metaclass=ABCMeta):
             yield ev
 
     @abstractmethod
-    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
+    def has_pending_event(
+        self,
+        *,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> bool:
         """Verify if there is queued event waiting to be consumed."""
         raise NotImplementedError
 

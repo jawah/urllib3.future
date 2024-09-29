@@ -19,6 +19,7 @@ from __future__ import annotations
 from ._events import (
     ConnectionTerminated,
     DataReceived,
+    EarlyHeadersReceived,
     Event,
     GoawayReceived,
     HandshakeCompleted,
@@ -40,4 +41,5 @@ __all__ = (
     "HeadersReceived",
     "DataReceived",
     "HandshakeCompleted",
+    "EarlyHeadersReceived",
 )

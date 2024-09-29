@@ -38,7 +38,13 @@ from dummyserver.server import (
     get_unreachable_address,
 )
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
-from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, ProxyManager, util
+from urllib3 import (
+    HTTPConnectionPool,
+    HTTPResponse,
+    HTTPSConnectionPool,
+    ProxyManager,
+    util,
+)
 from urllib3._collections import HTTPHeaderDict
 from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.connectionpool import _url_from_pool
@@ -1672,6 +1678,177 @@ class TestErrorWrapping(SocketDummyServerTestCase):
         with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
             with pytest.raises(ProtocolError):
                 pool.request("GET", "/")
+
+
+class TestInformationalResponse(SocketDummyServerTestCase):
+    """
+    HTTP/1.1 tests for Informational Responses!
+    """
+
+    def test_early_hint_catch(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+
+            sock.send(
+                b"HTTP/1.1 103 Early Hints\r\n"
+                + b"\r\n".join(
+                    [
+                        (k.encode("utf8") + b": " + v.encode("utf8"))
+                        for (k, v) in [
+                            (
+                                "link",
+                                "<https://cdn.example.com>; rel=preconnect, <https://cdn.example.com>; rel=preconnect; crossorigin",
+                            ),
+                        ]
+                    ]
+                )
+                + b"\r\n\r\n"
+            )
+
+            sock.send(
+                b"HTTP/1.1 200 OK\r\n"
+                + b"\r\n".join(
+                    [
+                        (k.encode("utf8") + b": " + v.encode("utf8"))
+                        for (k, v) in [("hello", "bar"), ("x-testing", "p")]
+                    ]
+                )
+                + b"\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        early_hint_received = False
+
+        def my_dumb_callback(early_response: HTTPResponse) -> None:
+            nonlocal early_hint_received
+
+            assert early_response.status == 103
+            assert "link" in early_response.headers
+
+            early_hint_received = True
+
+        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            r = pool.request("GET", "/", on_early_response=my_dumb_callback)
+
+            assert r.status == 200
+            assert r.headers
+            assert "x-testing" in r.headers
+
+        assert early_hint_received is True
+
+    def test_processing_many_ping_deprecated(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+
+            sock.send(
+                b"HTTP/1.1 102 Processing\r\n"
+                + b"\r\n".join(
+                    [
+                        (k.encode("utf8") + b": " + v.encode("utf8"))
+                        for (k, v) in [
+                            ("x-progress", "10"),
+                        ]
+                    ]
+                )
+                + b"\r\n\r\n"
+            )
+
+            sock.send(
+                b"HTTP/1.1 102 Processing\r\n"
+                + b"\r\n".join(
+                    [
+                        (k.encode("utf8") + b": " + v.encode("utf8"))
+                        for (k, v) in [
+                            ("x-progress", "88"),
+                        ]
+                    ]
+                )
+                + b"\r\n\r\n"
+            )
+
+            sock.send(
+                b"HTTP/1.1 102 Processing\r\n"
+                + b"\r\n".join(
+                    [
+                        (k.encode("utf8") + b": " + v.encode("utf8"))
+                        for (k, v) in [
+                            ("x-progress", "99"),
+                        ]
+                    ]
+                )
+                + b"\r\n\r\n"
+            )
+
+            sock.send(
+                b"HTTP/1.1 200 OK\r\n"
+                + b"\r\n".join(
+                    [
+                        (k.encode("utf8") + b": " + v.encode("utf8"))
+                        for (k, v) in [("hello", "bar"), ("x-testing", "p")]
+                    ]
+                )
+                + b"\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        early_response_count = 0
+
+        def my_dumb_callback(early_response: HTTPResponse) -> None:
+            nonlocal early_response_count
+
+            assert early_response.status == 102
+            early_response_count += 1
+
+        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            r = pool.request("GET", "/", on_early_response=my_dumb_callback)
+
+            assert r.status == 200
+            assert r.headers
+            assert "x-testing" in r.headers
+
+        assert early_response_count == 3
+
+    def test_switching_protocol_is_not_early_response(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+
+            sock.send(b"HTTP/1.1 101 Switching Protocols\r\n" + b"\r\n\r\n")
+
+        self._start_server(socket_handler)
+
+        early_response_received = False
+
+        def my_dumb_callback(early_response: HTTPResponse) -> None:
+            nonlocal early_response_received
+            early_response_received = True
+
+        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            r = pool.request(
+                "GET",
+                "/",
+                headers={"Upgrade": "websocket"},
+                on_early_response=my_dumb_callback,
+            )
+
+            assert r.status == 101
+
+        assert early_response_received is False
 
 
 class TestHeaders(SocketDummyServerTestCase):

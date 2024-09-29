@@ -353,6 +353,11 @@ class HTTPResponse(io.IOBase):
             self.status = int(status)
         except ValueError:
             self.status = 0  # merely for tests, was supported due to broken httplib.
+
+        # Mind this case for later on!
+        if preload_content and status == 101:
+            preload_content = False
+
         self.version = version
         self.reason = reason
         self.decode_content = decode_content

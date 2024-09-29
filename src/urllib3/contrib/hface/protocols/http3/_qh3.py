@@ -44,7 +44,7 @@ from qh3 import (
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
 from ..._typing import AddressType, HeadersType
-from ...events import ConnectionTerminated, DataReceived, Event
+from ...events import ConnectionTerminated, DataReceived, EarlyHeadersReceived, Event
 from ...events import HandshakeCompleted as _HandshakeCompleted
 from ...events import HeadersReceived, StreamResetReceived
 from .._protocols import HTTP3Protocol
@@ -176,8 +176,13 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id=stream_id)
 
-    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        return self._events.count(stream_id=stream_id) > 0
+    def has_pending_event(
+        self,
+        *,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> bool:
+        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
 
     @property
     def connection_ids(self) -> Sequence[bytes]:
@@ -241,6 +246,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             if h3_event.stream_ended:
                 self._open_stream_count -= 1
             yield DataReceived(h3_event.stream_id, h3_event.data, h3_event.stream_ended)
+        elif isinstance(h3_event, h3_events.InformationalHeadersReceived):
+            yield EarlyHeadersReceived(
+                h3_event.stream_id,
+                h3_event.headers,
+            )
 
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
