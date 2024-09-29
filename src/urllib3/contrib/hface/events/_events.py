@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import typing
 from dataclasses import dataclass, field
 
 from .._typing import HeadersType
@@ -193,3 +194,20 @@ class DataReceived(StreamEvent):
             f"{cls}(stream_id={self.stream_id!r}, "
             f"len(data)={len(self.data)}, end_stream={self.end_stream!r})"
         )
+
+
+@dataclass
+class EarlyHeadersReceived(StreamEvent):
+    #: The received HTTP headers
+    headers: HeadersType
+
+    def __repr__(self) -> str:
+        cls = type(self).__name__
+        return (
+            f"{cls}(stream_id={self.stream_id!r}, "
+            f"len(headers)={len(self.headers)}, end_stream=False)"
+        )
+
+    @property
+    def end_stream(self) -> typing.Literal[False]:
+        return False

@@ -1517,3 +1517,42 @@ Here is a simple example::
 .. note:: The property ``trailers`` return either ``None`` or a fully constructed ``HTTPHeaderDict``.
 
 .. warning:: ``None`` means we did not receive trailer headers (yet). If ``preload_content`` is set to False, you will need to consume the entire body before reaching the ``trailers`` property.
+
+Informational / Early Responses
+-------------------------------
+
+.. note:: Available since version 2.10+
+
+Sometimes, thanks to HTTP standards, a webserver may send intermediary responses before the main one for
+a particular request.
+
+All others HTTP client swallow them silently and you cannot see them. Thanks to urllib3-future, that
+issue is a thing of the past.
+
+You may now inspect early responses like https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/100 (Continue) or
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/103 (Early Hint) with a mere callback.
+
+Fastly provide a test server that can helps you see that feature in action::
+
+    from urllib3 import PoolManager, HTTPResponse
+
+    early_response: HTTPResponse | None = None
+
+    def my_callback(caught_response: HTTPResponse) -> None:
+        nonlocal early_response
+        early_response = caught_response
+
+    with PoolManager() as pm:
+        response = pm.urlopen("GET", "https://early-hints.fastlylabs.com/", on_early_response=my_callback)
+
+    print(early_response.status)  # 103
+    print(early_response.headers) # HTTPHeaderDict({"Link": "...
+    print(response.status)  # 200
+
+This example works whether you enable manual multiplexing or using asyncio.
+
+.. warning:: Some webservers may enable that feature on HTTP/2+ and disable it in HTTP/1.1. In urllib3-future case, that feature is available no matter the used protocol.
+
+.. note:: The status 101 (Switching Protocol) is never considered "early", therefor "response" will be the 101 one and "early_response" will be worth "None".
+
+.. note:: Any responses yielded through the "on_early_response" callback will never have a body per standards.

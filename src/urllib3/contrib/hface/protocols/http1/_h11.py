@@ -24,7 +24,13 @@ from h11._state import _SWITCH_UPGRADE, ConnectionState
 
 from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
-from ...events import ConnectionTerminated, DataReceived, Event, HeadersReceived
+from ...events import (
+    ConnectionTerminated,
+    DataReceived,
+    EarlyHeadersReceived,
+    Event,
+    HeadersReceived,
+)
 from .._protocols import HTTP1Protocol
 
 
@@ -233,8 +239,13 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id=stream_id)
 
-    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        return self._events.count(stream_id=stream_id) > 0
+    def has_pending_event(
+        self,
+        *,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> bool:
+        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
 
     def _h11_submit(self, h11_event: h11.Event) -> None:
         chunks = self._connection.send_with_data_passthrough(h11_event)
@@ -258,8 +269,19 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     a(self._connection_terminated())
                 else:
                     break
-            elif isinstance(h11_event, (h11.Response, h11.InformationalResponse)):
-                a(self._headers_from_h11_response(h11_event))
+            elif isinstance(h11_event, h11.Response):
+                a(
+                    HeadersReceived(
+                        self._current_stream_id, headers_from_response(h11_event)
+                    )
+                )
+            elif isinstance(h11_event, h11.InformationalResponse):
+                a(
+                    EarlyHeadersReceived(
+                        stream_id=self._current_stream_id,
+                        headers=headers_from_response(h11_event),
+                    )
+                )
             elif isinstance(h11_event, h11.Data):
                 a(self._data_from_h11(h11_event))
             elif isinstance(h11_event, h11.EndOfMessage):

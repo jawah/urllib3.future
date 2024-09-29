@@ -30,6 +30,7 @@ from ...contrib.hface import (
 from ...contrib.hface.events import (
     ConnectionTerminated,
     DataReceived,
+    EarlyHeadersReceived,
     Event,
     HandshakeCompleted,
     HeadersReceived,
@@ -1075,7 +1076,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         )
 
     async def getresponse(  # type: ignore[override]
-        self, *, promise: ResponsePromise | None = None
+        self,
+        *,
+        promise: ResponsePromise | None = None,
+        early_response_callback: typing.Callable[
+            [AsyncLowLevelResponse], typing.Awaitable[None]
+        ]
+        | None = None,
     ) -> AsyncLowLevelResponse:
         if self.sock is None or self._protocol is None or not self._promises:
             raise ResponseNotReady()  # Defensive: Comply with http.client, actually tested but not reported?
@@ -1083,11 +1090,17 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         headers = HTTPHeaderDict()
         status: int | None = None
 
-        head_event: HeadersReceived = (
+        head_event: HeadersReceived | EarlyHeadersReceived = (
             await self.__exchange_until(  # type: ignore[assignment]
-                HeadersReceived,
+                (
+                    HeadersReceived,
+                    EarlyHeadersReceived,
+                ),
                 receive_first=True,
-                event_type_collectable=(HeadersReceived,),
+                event_type_collectable=(
+                    HeadersReceived,
+                    EarlyHeadersReceived,
+                ),
                 respect_end_stream_signal=False,
                 stream_id=promise.stream_id if promise else None,
             )
@@ -1101,15 +1114,24 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             else:
                 headers.add(raw_header.decode("ascii"), raw_value.decode("iso-8859-1"))
 
+        # 101 = Switching Protocol! It's our final HTTP response, but the stream remains open!
+        is_early_response = (
+            isinstance(head_event, EarlyHeadersReceived) and status != 101
+        )
+
         if promise is None:
             try:
-                promise = self._promises_per_stream.pop(head_event.stream_id)
-            except KeyError:
+                if is_early_response:
+                    promise = self._promises_per_stream[head_event.stream_id]
+                else:
+                    promise = self._promises_per_stream.pop(head_event.stream_id)
+            except KeyError as e:
                 raise ProtocolError(
                     f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
-                )
+                ) from e
         else:
-            del self._promises_per_stream[promise.stream_id]
+            if not is_early_response:
+                del self._promises_per_stream[promise.stream_id]
 
         # this should be unreachable
         if status is None:
@@ -1129,6 +1151,27 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             reason: str = responses[status]
         except KeyError:
             reason = "Unknown"
+
+        if is_early_response:
+            if early_response_callback is not None:
+                early_response = AsyncLowLevelResponse(
+                    http_verb.decode("ascii"),
+                    status,
+                    self._http_vsn,
+                    reason,
+                    headers,
+                    body=None,
+                    authority=self.host,
+                    port=self.port,
+                    stream_id=promise.stream_id,
+                )
+                early_response.from_promise = promise
+
+                await early_response_callback(early_response)
+
+            return await AsyncHfaceBackend.getresponse(
+                self, promise=promise, early_response_callback=early_response_callback
+            )
 
         self._response = AsyncLowLevelResponse(
             http_verb.decode("ascii"),
@@ -1196,7 +1239,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     self._protocol.bytes_received(await self.sock.recv(self.blocksize))
 
                     # this is a bad sign. we should stop sending and instead retrieve the response.
-                    if self._protocol.has_pending_event(stream_id=self._stream_id):
+                    if self._protocol.has_pending_event(
+                        stream_id=self._stream_id, excl_event=(EarlyHeadersReceived,)
+                    ):
                         if self._start_last_request and self.conn_info:
                             self.conn_info.request_sent_latency = (
                                 datetime.now(tz=timezone.utc) - self._start_last_request

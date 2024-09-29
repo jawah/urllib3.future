@@ -28,6 +28,7 @@ from ..._typing import HeadersType
 from ...events import (
     ConnectionTerminated,
     DataReceived,
+    EarlyHeadersReceived,
     Event,
     GoawayReceived,
     HandshakeCompleted,
@@ -129,8 +130,13 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id=stream_id)
 
-    def has_pending_event(self, *, stream_id: int | None = None) -> bool:
-        return self._events.count(stream_id=stream_id) > 0
+    def has_pending_event(
+        self,
+        *,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> bool:
+        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
 
     def _map_events(self, h2_events: list[jh2.events.Event]) -> Iterator[Event]:
         for e in h2_events:
@@ -157,6 +163,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     e.flow_controlled_length, e.stream_id
                 )
                 yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
+            elif isinstance(e, jh2.events.InformationalResponseReceived):
+                yield EarlyHeadersReceived(
+                    e.stream_id,
+                    e.headers,
+                )
             elif isinstance(e, jh2.events.StreamReset):
                 self._open_stream_count -= 1
                 # event StreamEnded may occur before StreamReset

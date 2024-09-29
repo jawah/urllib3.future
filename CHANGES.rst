@@ -1,3 +1,11 @@
+2.10.900 (2024-09-??)
+=====================
+
+- Added complete support for Informational Response whether it's an early response or not. We introduced a callback named
+  ``on_early_response`` that takes exactly one parameter, namely a ``HTTPResponse``. You may start leveraging Early Hints!
+  This works regardless of the negotiated protocol: HTTP/1.1, HTTP/2 or HTTP/3! As always, you may use that feature
+  in a synchronous or asynchronous context.
+
 2.9.900 (2024-09-24)
 ====================
 

@@ -119,10 +119,18 @@ class StreamMatrix:
 
         return ev
 
-    def count(self, stream_id: int | None = None) -> int:
+    def count(
+        self,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> int:
         if stream_id is None:
             return self._count
         if stream_id not in self._matrix:
             return 0
 
-        return len(self._matrix[stream_id])
+        return len(
+            self._matrix[stream_id]
+            if excl_event is None
+            else [e for e in self._matrix[stream_id] if not isinstance(e, excl_event)]
+        )
