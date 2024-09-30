@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+        uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Run against Python 3.7 built with LibreSSL 2.7.4"
         run: ./ci/run_legacy_libressl.sh
@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+        uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Run against Python 3.7 built with OpenSSL 1.0.2q"
         run: ./ci/run_legacy_openssl.sh
@@ -46,7 +46,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+        uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Setup Python"
         uses: "actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3"
