@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+        uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Setup Python"
         uses: "actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3"
@@ -94,7 +94,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+        uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
         uses: nick-fields/retry@v3
@@ -136,7 +136,7 @@ jobs:
     needs: test
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608"
+        uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Setup Python"
         uses: "actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3"
