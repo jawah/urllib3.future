@@ -472,3 +472,9 @@ def parse_url(url: str) -> Url:
         query=query,
         fragment=fragment,
     )
+
+
+def parse_extension(scheme: str) -> tuple[str, str | None]:
+    if "+" in scheme:
+        return tuple(scheme.split("+", maxsplit=1))  # type: ignore[return-value]
+    return scheme, None

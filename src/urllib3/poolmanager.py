@@ -26,6 +26,7 @@ from .contrib.resolver import (
     ProtocolResolver,
     ResolverDescription,
 )
+from .contrib.webextensions import load_extension
 from .exceptions import (
     LocationValueError,
     MaxRetryError,
@@ -38,7 +39,7 @@ from .util.request import NOT_FORWARDABLE_HEADERS
 from .util.retry import Retry
 from .util.timeout import Timeout
 from .util.traffic_police import TrafficPolice, UnavailableTraffic
-from .util.url import Url, parse_url
+from .util.url import Url, parse_extension, parse_url
 
 if typing.TYPE_CHECKING:
     import ssl
@@ -419,7 +420,41 @@ class PoolManager(RequestMethods):
             request_context.pop("strict")
 
         scheme = request_context["scheme"].lower()
+
         pool_key_constructor = self.key_fn_by_scheme.get(scheme)
+
+        if pool_key_constructor is None:
+            try:
+                extension = load_extension(*parse_extension(scheme))
+            except ImportError:
+                pass
+            else:
+                scheme = extension.scheme_to_http_scheme(scheme)
+
+                pool_key_constructor = self.key_fn_by_scheme.get(scheme)
+
+                request_context["scheme"] = scheme
+
+                supported_svn = extension.supported_svn()
+
+                disabled_svn = (
+                    request_context["disabled_svn"]
+                    if "disabled_svn" in request_context
+                    else set()
+                )
+
+                if len(extension.supported_svn()) != 3:
+                    if HttpVersion.h11 not in supported_svn:
+                        disabled_svn.add(HttpVersion.h11)
+
+                    if HttpVersion.h2 not in supported_svn:
+                        disabled_svn.add(HttpVersion.h2)
+
+                    if HttpVersion.h3 not in supported_svn:
+                        disabled_svn.add(HttpVersion.h3)
+
+                request_context["disabled_svn"] = disabled_svn
+
         if not pool_key_constructor:
             raise URLSchemeUnknown(scheme)
         pool_key = pool_key_constructor(request_context)
@@ -715,6 +750,16 @@ class PoolManager(RequestMethods):
 
             return self.get_response(promise=new_promise if promise else None)
 
+        extension = from_promise.get_parameter("extension")
+
+        if extension is not None:
+            if response.status == 101 or (
+                200 <= response.status < 300 and method == "CONNECT"
+            ):
+                if extension is None:
+                    extension = load_extension(None)()
+                response.start_extension(extension)
+
         return response
 
     @typing.overload  # type: ignore[override]
@@ -764,7 +809,33 @@ class PoolManager(RequestMethods):
                 stacklevel=2,
             )
 
-        conn = self.connection_from_host(u.host, port=u.port, scheme=u.scheme)
+        # if we passed manually an extension to urlopen, we want to manually
+        # disable svn if they are incompatible with said extension.
+        pool_kwargs = None
+
+        if "extension" in kw and kw["extension"] is not None:
+            extension = kw["extension"]
+            disabled_svn = set()
+
+            pool_kwargs = {}
+
+            if len(extension.supported_svn()) != 3:
+                if HttpVersion.h11 not in extension.supported_svn():
+                    disabled_svn.add(HttpVersion.h11)
+                if HttpVersion.h2 not in extension.supported_svn():
+                    disabled_svn.add(HttpVersion.h2)
+                if HttpVersion.h3 not in extension.supported_svn():
+                    disabled_svn.add(HttpVersion.h3)
+
+            pool_kwargs["disabled_svn"] = disabled_svn
+
+        conn = self.connection_from_host(
+            u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
+        )
+
+        if u.scheme is not None and u.scheme.lower() not in ("http", "https"):
+            extension = load_extension(*parse_extension(u.scheme))
+            kw["extension"] = extension()
 
         kw["assert_same_host"] = False
         kw["redirect"] = False

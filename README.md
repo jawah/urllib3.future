@@ -30,6 +30,7 @@
 - Support for Python/PyPy 3.7+, no compromise.
 - Early (Informational) Responses / Hints.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
+- WebSocket over HTTP/2+ (RFC8441).
 - Proxy support for HTTP and SOCKS.
 - Post-Quantum Security with QUIC.
 - Detailed connection inspection.
@@ -38,6 +39,7 @@
 - Mirrored Sync & Async.
 - Trailer Headers.
 - Amazingly Fast.
+- WebSocket.
 
 urllib3.future is powerful and easy to use:
 

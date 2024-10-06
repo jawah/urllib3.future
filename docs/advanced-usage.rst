@@ -1556,3 +1556,33 @@ This example works whether you enable manual multiplexing or using asyncio.
 .. note:: The status 101 (Switching Protocol) is never considered "early", therefor "response" will be the 101 one and "early_response" will be worth "None".
 
 .. note:: Any responses yielded through the "on_early_response" callback will never have a body per standards.
+
+Switching Protocol
+------------------
+
+.. note:: Available since urllib3-future version 2.10 or greater.
+
+Manually passing from HTTP to a sub protocol can be achieved easily thanks to our ``DirectStreamAccess`` policy.
+If, for any reason, you wanted to negotiate ``WebSocket`` manually or any other proprietary protocol after receiving
+a ``101 Switching Protocol`` response or alike; you may access the RawExtensionFromHTTP that is available on your
+response object.
+
+.. code-block:: python
+
+    import urllib3
+
+    with urllib3.PoolManager() as pm:
+        resp = pm.urlopen("GET", "https://example.tld", headers={...})
+
+        print(resp.status)  # output '101' for 'Switching Protocol' response status
+
+        print(resp.extension)  # output <class 'urllib3.contrib.webextensions.RawExtensionFromHTTP'>
+
+        print(resp.extension.next_payload())  # read from the stream
+        resp.extension.send_payload(b"..")  # write in the stream
+
+        # gracefully close the sub protocol.
+        resp.extension.close()
+
+
+.. note:: The important thing here, is that, when the server agrees to stop speaking HTTP in favor of something else, the ``response.extension`` is set and you will be able to exchange raw data at will.

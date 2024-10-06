@@ -53,7 +53,7 @@ from .._base import (
     ResponsePromise,
 )
 from ..hface import _HAS_HTTP3_SUPPORT, _HAS_SYS_AUDIT
-from ._base import AsyncBaseBackend, AsyncLowLevelResponse
+from ._base import AsyncBaseBackend, AsyncDirectStreamAccess, AsyncLowLevelResponse
 
 if typing.TYPE_CHECKING:
     from ..._typing import _TYPE_SOCKET_OPTIONS
@@ -861,7 +861,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 (
                     b":authority",
                     authority
-                    if port == self.default_port  # type: ignore[attr-defined]
+                    if port == self.default_port or port is None  # type: ignore[attr-defined]
                     else authority + f":{port}".encode(),
                 ),
             )
@@ -917,12 +917,33 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 value.encode("iso-8859-1") if isinstance(value, str) else value
             )
 
-            self.__headers.append(
-                (
-                    encoded_header,
-                    encoded_value,
+            if encoded_header.startswith(b":"):
+                item_to_remove = None
+
+                for _k, _v in self.__headers:
+                    if not _k.startswith(b":"):
+                        break
+                    if _k == encoded_header:
+                        item_to_remove = (_k, _v)
+                        break
+
+                if item_to_remove is not None:
+                    self.__headers.remove(item_to_remove)
+
+                self.__headers.insert(
+                    0,
+                    (
+                        encoded_header,
+                        encoded_value,
+                    ),
                 )
-            )
+            else:
+                self.__headers.append(
+                    (
+                        encoded_header,
+                        encoded_value,
+                    )
+                )
 
     async def endheaders(  # type: ignore[override]
         self,
@@ -1007,8 +1028,45 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         return None
 
+    async def __write_st(
+        self, __buf: bytes, __stream_id: int, __close_stream: bool = False
+    ) -> None:
+        assert self._protocol is not None
+        assert self.sock is not None
+
+        while (
+            self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
+            is True
+        ):
+            self._protocol.bytes_received(await self.sock.recv(self.blocksize))
+
+            while True:
+                data_out = self._protocol.bytes_to_send()
+
+                if not data_out:
+                    break
+
+                await self.sock.sendall(data_out)
+
+        self._protocol.submit_data(
+            __stream_id,
+            __buf,
+            end_stream=__close_stream,
+        )
+
+        while True:
+            data_out = self._protocol.bytes_to_send()
+
+            if not data_out:
+                break
+
+            await self.sock.sendall(data_out)
+
     async def __read_st(
-        self, __amt: int | None, __stream_id: int | None
+        self,
+        __amt: int | None,
+        __stream_id: int | None,
+        __respect_end_signal: bool = True,
     ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
         """Allows us to defer the body loading after constructing the response object."""
         eot = False
@@ -1023,6 +1081,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             maximal_data_in_read=__amt,
             data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
             stream_id=__stream_id,
+            respect_end_stream_signal=__respect_end_signal,
         )
 
         if events and events[-1].end_stream:
@@ -1147,6 +1206,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 http_verb = raw_value
                 break
 
+        if status == 101 or (http_verb == b"CONNECT" and (200 <= status < 300)):
+            dsa: AsyncDirectStreamAccess | None = AsyncDirectStreamAccess(
+                promise.stream_id,
+                self.__read_st,
+                self.__write_st,
+            )
+        else:
+            dsa = None
+
         try:
             reason: str = responses[status]
         except KeyError:
@@ -1183,6 +1251,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             authority=self.host,
             port=self.port,
             stream_id=promise.stream_id,
+            dsa=dsa,
         )
 
         promise.response = self._response

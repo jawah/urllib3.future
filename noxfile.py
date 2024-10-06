@@ -196,7 +196,7 @@ def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
 
 def tests_impl(
     session: nox.Session,
-    extras: str = "socks,brotli,zstd",
+    extras: str = "socks,brotli,zstd,ws",
     byte_string_comparisons: bool = False,
 ) -> None:
     with traefik_boot(session):
@@ -468,7 +468,7 @@ def mypy(session: nox.Session) -> None:
 @nox.session
 def docs(session: nox.Session) -> None:
     session.install("-r", "docs/requirements.txt")
-    session.install(".[socks,brotli,zstd]")
+    session.install(".[socks,brotli,zstd,ws]")
 
     session.chdir("docs")
     if os.path.exists("_build"):

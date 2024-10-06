@@ -85,6 +85,104 @@ class ConnectionInfo:
         return self.certificate_der is not None
 
 
+class DirectStreamAccess:
+    def __init__(
+        self,
+        stream_id: int,
+        read: typing.Callable[
+            [int | None, int | None, bool], tuple[bytes, bool, HTTPHeaderDict | None]
+        ]
+        | None = None,
+        write: typing.Callable[[bytes, int, bool], None] | None = None,
+    ) -> None:
+        self._stream_id = stream_id
+
+        if read is not None:
+            self._read: typing.Callable[
+                [int | None], tuple[bytes, bool, HTTPHeaderDict | None]
+            ] | None = lambda amt: read(amt, self._stream_id, amt is not None)
+        else:
+            self._read = None
+
+        if write is not None:
+            self._write: typing.Callable[
+                [bytes, bool], None
+            ] | None = lambda buf, eot: write(buf, self._stream_id, eot)
+        else:
+            self._write = None
+
+    def readinto(self, b: bytearray) -> int:
+        if self._read is None:
+            raise OSError("read operation on a closed stream")
+
+        temp = self.recv(len(b))
+
+        if len(temp) == 0:
+            return 0
+        else:
+            b[: len(temp)] = temp
+            return len(temp)
+
+    def readable(self) -> bool:
+        return self._read is not None
+
+    def writable(self) -> bool:
+        return self._write is not None
+
+    def seekable(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        return -1
+
+    def name(self) -> int:
+        return -1
+
+    def recv(self, __bufsize: int, __flags: int = 0) -> bytes:
+        data, _, _ = self.recv_extended(__bufsize)
+        return data
+
+    def recv_extended(
+        self, __bufsize: int | None
+    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        if self._read is None:
+            raise OSError("stream closed error")
+
+        data, eot, trailers = self._read(__bufsize)
+
+        if eot:
+            self._read = None
+
+        return data, eot, trailers
+
+    def sendall(self, __data: bytes, __flags: int = 0) -> None:
+        if self._write is None:
+            raise OSError("stream write not permitted")
+
+        self._write(__data, False)
+
+    def write(self, __data: bytes) -> int:
+        if self._write is None:
+            raise OSError("stream write not permitted")
+
+        self._write(__data, False)
+
+        return len(__data)
+
+    def sendall_extended(self, __data: bytes, __close_stream: bool = False) -> None:
+        if self._write is None:
+            raise OSError("stream write not permitted")
+
+        self._write(__data, __close_stream)
+
+    def close(self) -> None:
+        if self._write is not None:
+            self._write(b"", True)
+            self._write = None
+        if self._read is not None:
+            self._read = None
+
+
 class LowLevelResponse:
     """Implemented for backward compatibility purposes. It is there to impose http.client like
     basic response object. So that we don't have to change urllib3 tested behaviors."""
@@ -105,6 +203,8 @@ class LowLevelResponse:
         port: int | None = None,
         stream_id: int | None = None,
         sock: socket.socket | None = None,
+        # this obj should not be always available[...]
+        dsa: DirectStreamAccess | None = None,
     ):
         self.status = status
         self.version = version
@@ -149,6 +249,7 @@ class LowLevelResponse:
         # they want a direct socket access.
         self._sock = sock
         self._fp: socket.SocketIO | None = None
+        self._dsa = dsa
 
         self._stream_id = stream_id
 
@@ -158,7 +259,7 @@ class LowLevelResponse:
         self.trailers: HTTPHeaderDict | None = None
 
     @property
-    def fp(self) -> socket.SocketIO | None:
+    def fp(self) -> socket.SocketIO | DirectStreamAccess | None:
         warnings.warn(
             (
                 "This is a rather awkward situation. A program (probably) tried to access the socket object "
@@ -175,6 +276,10 @@ class LowLevelResponse:
         )
 
         if self._sock is None:
+            if self.status == 101 or (
+                self._method == "CONNECT" and 200 <= self.status < 300
+            ):
+                return self._dsa
             return None
 
         if self._fp is None:
@@ -258,6 +363,7 @@ class LowLevelResponse:
         self.__internal_read_st = None
         self.closed = True
         self._sock = None
+        self._dsa = None
 
 
 class ResponsePromise:

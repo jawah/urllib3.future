@@ -1,10 +1,25 @@
-2.10.900 (2024-09-??)
+2.10.900 (2024-10-06)
 =====================
 
 - Added complete support for Informational Response whether it's an early response or not. We introduced a callback named
   ``on_early_response`` that takes exactly one parameter, namely a ``HTTPResponse``. You may start leveraging Early Hints!
   This works regardless of the negotiated protocol: HTTP/1.1, HTTP/2 or HTTP/3! As always, you may use that feature
   in a synchronous or asynchronous context.
+- Changed ``qh3`` lower bound version to v1.2 in order to support Informational Response in HTTP/3 also.
+- Added full automated support for WebSocket through HTTP/1.1, HTTP/2 or HTTP/3.
+  In order to leverage this feature, urllib3-future now recognize url scheme ``ws://`` (insecure) and ``wss://`` (secure).
+  The response will be of status 101 (Switching Protocol) and the body will be None.
+  Most servers out there only support WebSocket through HTTP/1.1, and using HTTP/2 or HTTP/3 usually ends up in stream (reset) error.
+  By default, connecting to ``wss://`` or ``ws://`` use HTTP/1.1, but if you desire to leverage the WebSocket through a multiplexed connection,
+  use ``wss+rfc8441://`` or ``ws+rfc8441://``.
+  A new property has been introduced in ``HTTPResponse``, namely ``extension`` to be able to interact with the websocket
+  server. Everything is handled automatically, from thread safety to all the protocol logic. See the documentation for more.
+  This will require the installation of an optional dependency ``wsproto``, to do so, please install urllib3-future with
+  ``pip install urllib3-future[ws]``.
+- Fixed a rare issue where the ``:authority`` (special header) value might be malformed.
+- Fixed an issue where passing ``Upgrade: websocket`` would be discarded without effect, thus smuggling the original user
+  intent. This is an issue due to our strict backward compatibility with our predecessor. Now, passing this header
+  will automatically disable HTTP/2 and HTTP/3 support for the given request.
 
 2.9.900 (2024-09-24)
 ====================
