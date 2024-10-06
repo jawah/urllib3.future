@@ -423,6 +423,70 @@ recommended to set the ``Content-Type`` header:
 
 .. _ssl:
 
+WebSocket
+---------
+
+Using non-multiplexed mode
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. note:: Available since urllib3-future version 2.10 or greater by installing urllib3-future with the ``ws`` extra. Like this: ``pip install urllib3-future[ws]`` or by installing ``wsproto`` by itself.
+
+The WebSocket protocol is an extremely popular extension of HTTP nowadays, and thanks to
+latest achievements in urllib3-future, we're able to serve that capability without even
+breaking a sweat!
+
+In the following example, we will explore how to interact with a basic, but well known echo server.
+
+.. code-block:: python
+
+    import urllib3
+
+    with urllib3.PoolManager() as pm:
+        resp = pm.urlopen("GET", "wss://echo.websocket.org")  # be sure to have installed the required extra prior to this.
+
+        print(resp.status)  # output '101' for 'Switching Protocol' response status
+
+        print(resp.extension)  # output <class 'urllib3.contrib.webextensions.WebSocketExtensionFromHTTP'>
+
+        print(resp.extension.next_payload())  # output a greeting message from the echo webserver.
+
+        # send two example payloads, one of type string, one of type bytes.
+        resp.extension.send_payload("Hello World!")
+        resp.extension.send_payload(b"Foo Bar Baz!")
+
+        # they should be echoed in order.
+        assert resp.extension.next_payload() == "Hello World!"
+        assert resp.extension.next_payload() == b"Foo Bar Baz!"
+
+        resp.extension.ping()  # send a ping to server
+
+        # gracefully close the sub protocol.
+        resp.extension.close()
+
+That is it! That easy.
+
+.. note:: Historically, urllib3 only accepted ``http://`` and ``https://`` as schemes. But now, you may use ``wss://`` for WebSocket Secure or ``ws://`` for WebSocket over PlainText.
+
+.. warning:: In case anything goes wrong (e.g. server denies us access), ``resp.extension`` will be worth ``None``! Be careful.
+
+Using multiplexed mode
+~~~~~~~~~~~~~~~~~~~~~~
+
+urllib3-future can leverage a multiplexed connection using HTTP/2 or HTTP/3, but often enough, server aren't quite ready
+to bootstrap WebSocket over HTTP/2 or HTTP/3.
+
+For this exact reason, we won't try to negotiate WebSocket over HTTP/2 or HTTP/3 by default. But if you were
+aware of a particular server capable of it, you would simply do as follow:
+
+.. code-block:: python
+
+    import urllib3
+
+    with urllib3.PoolManager() as pm:
+        resp = pm.urlopen("GET", "wss+rfc8441://example.test")
+
+The rest of the code is identical to the previous subsection. You may also append ``multiplexed=True`` to urlopen.
+
 Certificate Verification
 ------------------------
 

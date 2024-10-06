@@ -17,6 +17,7 @@ from ..exceptions import (
     IncompleteRead,
     ProtocolError,
     ReadTimeoutError,
+    ResponseNotReady,
     SSLError,
 )
 from ..response import BytesQueueBuffer, ContentDecoder, HTTPResponse
@@ -28,6 +29,7 @@ if typing.TYPE_CHECKING:
     from email.message import Message
 
     from .._async.connectionpool import AsyncHTTPConnectionPool
+    from ..contrib.webextensions._async import AsyncExtensionFromHTTP
     from ..util._async.traffic_police import AsyncTrafficPolice
 
 
@@ -111,7 +113,8 @@ class AsyncHTTPResponse(HTTPResponse):
         self.chunk_left: int | None = None
 
         # Determine length of response
-        self.length_remaining: int | None = self._init_length(request_method)
+        self._request_method: str | None = request_method
+        self.length_remaining: int | None = self._init_length(self._request_method)
 
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
@@ -120,6 +123,8 @@ class AsyncHTTPResponse(HTTPResponse):
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
+
+        self._extension: AsyncExtensionFromHTTP | None = None  # type: ignore[assignment]
 
     async def readinto(self, b: bytearray) -> int:  # type: ignore[override]
         temp = await self.read(len(b))
@@ -210,6 +215,21 @@ class AsyncHTTPResponse(HTTPResponse):
 
         return None
 
+    @property
+    def extension(self) -> AsyncExtensionFromHTTP | None:  # type: ignore[override]
+        return self._extension
+
+    async def start_extension(self, item: AsyncExtensionFromHTTP) -> None:  # type: ignore[override]
+        if self._extension is not None:
+            raise OSError("extension already plugged in")
+
+        if not hasattr(self._fp, "_dsa"):
+            raise ResponseNotReady()
+
+        await item.start(self)
+
+        self._extension = item
+
     async def json(self) -> typing.Any:
         """
         Parses the body of the HTTP response as JSON.
@@ -294,6 +314,14 @@ class AsyncHTTPResponse(HTTPResponse):
         Reads `amt` of bytes from the socket.
         """
         if self._fp is None:
+            return None  # type: ignore[return-value]
+
+        # Safe-Guard against response that does not provide bodies.
+        # Calling read will most likely block the program forever!
+        if self.length_remaining == 0 and (
+            self.status == 101
+            or (self._request_method == "CONNECT" and 200 <= self.status < 300)
+        ):
             return None  # type: ignore[return-value]
 
         fp_closed = getattr(self._fp, "closed", False)

@@ -47,6 +47,7 @@ from .exceptions import (
     InvalidHeader,
     ProtocolError,
     ReadTimeoutError,
+    ResponseNotReady,
     SSLError,
 )
 from .util.response import is_fp_closed
@@ -59,6 +60,7 @@ if typing.TYPE_CHECKING:
 
     from .connection import HTTPConnection
     from .connectionpool import HTTPConnectionPool
+    from .contrib.webextensions import ExtensionFromHTTP
     from .util.traffic_police import TrafficPolice
 
 log = logging.getLogger(__name__)
@@ -409,7 +411,8 @@ class HTTPResponse(io.IOBase):
         self.chunk_left: int | None = None
 
         # Determine length of response
-        self.length_remaining: int | None = self._init_length(request_method)
+        self._request_method: str | None = request_method
+        self.length_remaining: int | None = self._init_length(self._request_method)
 
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
@@ -422,6 +425,8 @@ class HTTPResponse(io.IOBase):
         # If requested, preload the body.
         if preload_content and not self._body:
             self._body = self.read(decode_content=decode_content)
+
+        self._extension: ExtensionFromHTTP | None = None
 
     def is_from_promise(self, promise: ResponsePromise) -> bool:
         """
@@ -458,6 +463,21 @@ class HTTPResponse(io.IOBase):
             return self._fp.trailers
 
         return None
+
+    @property
+    def extension(self) -> ExtensionFromHTTP | None:
+        return self._extension
+
+    def start_extension(self, item: ExtensionFromHTTP) -> None:
+        if self._extension is not None:
+            raise OSError("extension already plugged in")
+
+        if not hasattr(self._fp, "_dsa"):
+            raise ResponseNotReady()
+
+        item.start(self)
+
+        self._extension = item
 
     def json(self) -> typing.Any:
         """
@@ -773,6 +793,14 @@ class HTTPResponse(io.IOBase):
         Reads `amt` of bytes from the socket.
         """
         if self._fp is None:
+            return None  # type: ignore[return-value]
+
+        # Safe-Guard against response that does not provide bodies.
+        # Calling read will most likely block the program forever!
+        if self.length_remaining == 0 and (
+            self.status == 101
+            or (self._request_method == "CONNECT" and 200 <= self.status < 300)
+        ):
             return None  # type: ignore[return-value]
 
         fp_closed = getattr(self._fp, "closed", False)

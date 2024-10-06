@@ -7,6 +7,98 @@ from ...contrib.ssa import AsyncSocket, SSLAsyncSocket
 from .._base import BaseBackend, ResponsePromise
 
 
+class AsyncDirectStreamAccess:
+    def __init__(
+        self,
+        stream_id: int,
+        read: typing.Callable[
+            [int | None, int | None, bool],
+            typing.Awaitable[tuple[bytes, bool, HTTPHeaderDict | None]],
+        ]
+        | None = None,
+        write: typing.Callable[[bytes, int, bool], typing.Awaitable[None]]
+        | None = None,
+    ) -> None:
+        self._stream_id = stream_id
+        self._read = read
+        self._write = write
+
+    async def readinto(self, b: bytearray) -> int:
+        if self._read is None:
+            raise OSError("read operation on a closed stream")
+
+        temp = await self.recv(len(b))
+
+        if len(temp) == 0:
+            return 0
+        else:
+            b[: len(temp)] = temp
+            return len(temp)
+
+    def readable(self) -> bool:
+        return self._read is not None
+
+    def writable(self) -> bool:
+        return self._write is not None
+
+    def seekable(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        return -1
+
+    def name(self) -> int:
+        return -1
+
+    async def recv(self, __bufsize: int, __flags: int = 0) -> bytes:
+        data, _, _ = await self.recv_extended(__bufsize)
+        return data
+
+    async def recv_extended(
+        self, __bufsize: int | None
+    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        if self._read is None:
+            raise OSError("stream closed error")
+
+        data, eot, trailers = await self._read(
+            __bufsize, self._stream_id, __bufsize is not None
+        )
+
+        if eot:
+            self._read = None
+
+        return data, eot, trailers
+
+    async def sendall(self, __data: bytes, __flags: int = 0) -> None:
+        if self._write is None:
+            raise OSError("stream write not permitted")
+
+        await self._write(__data, self._stream_id, False)
+
+    async def write(self, __data: bytes) -> int:
+        if self._write is None:
+            raise OSError("stream write not permitted")
+
+        await self._write(__data, self._stream_id, False)
+
+        return len(__data)
+
+    async def sendall_extended(
+        self, __data: bytes, __close_stream: bool = False
+    ) -> None:
+        if self._write is None:
+            raise OSError("stream write not permitted")
+
+        await self._write(__data, self._stream_id, __close_stream)
+
+    async def close(self) -> None:
+        if self._write is not None:
+            await self._write(b"", self._stream_id, True)
+            self._write = None
+        if self._read is not None:
+            self._read = None
+
+
 class AsyncLowLevelResponse:
     """Implemented for backward compatibility purposes. It is there to impose http.client like
     basic response object. So that we don't have to change urllib3 tested behaviors."""
@@ -32,6 +124,8 @@ class AsyncLowLevelResponse:
         authority: str | None = None,
         port: int | None = None,
         stream_id: int | None = None,
+        # this obj should not be always available[...]
+        dsa: AsyncDirectStreamAccess | None = None,
     ) -> None:
         self.status = status
         self.version = version
@@ -72,6 +166,7 @@ class AsyncLowLevelResponse:
 
         self.__buffer_excess: bytes = b""
         self.__promise: ResponsePromise | None = None
+        self._dsa = dsa
 
         self.trailers: HTTPHeaderDict | None = None
 
@@ -156,6 +251,7 @@ class AsyncLowLevelResponse:
     def close(self) -> None:
         self.__internal_read_st = None
         self.closed = True
+        self._dsa = None
 
 
 class AsyncBaseBackend(BaseBackend):

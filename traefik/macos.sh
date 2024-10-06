@@ -5,5 +5,6 @@ set -e
 sudo security authorizationdb write com.apple.trust-settings.admin allow
 brew install docker
 brew install docker-compose
+brew install colima
 colima start --network-address
 colima list

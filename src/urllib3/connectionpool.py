@@ -32,6 +32,7 @@ from .contrib.resolver import (
     ProtocolResolver,
     ResolverDescription,
 )
+from .contrib.webextensions import load_extension
 from .exceptions import (
     BaseSSLError,
     ClosedPoolError,
@@ -65,6 +66,8 @@ if typing.TYPE_CHECKING:
     import ssl
 
     from typing_extensions import Literal
+
+    from .contrib.webextensions import ExtensionFromHTTP
 
 log = logging.getLogger(__name__)
 
@@ -835,6 +838,16 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
             return self.get_response(promise=new_promise if promise else None)
 
+        extension = from_promise.get_parameter("extension")
+
+        if extension is not None:
+            if response.status == 101 or (
+                200 <= response.status < 300 and method == "CONNECT"
+            ):
+                if extension is None:
+                    extension = load_extension(None)()
+                response.start_extension(extension)
+
         return response
 
     @typing.overload
@@ -854,6 +867,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         enforce_content_length: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
+        on_early_response: typing.Callable[[HTTPResponse], None] | None = ...,
+        extension: ExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[True],
     ) -> ResponsePromise:
@@ -876,6 +891,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         enforce_content_length: bool = ...,
         on_post_connection: typing.Callable[[ConnectionInfo], None] | None = ...,
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None] = ...,
+        on_early_response: typing.Callable[[HTTPResponse], None] | None = ...,
+        extension: ExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[False] = ...,
     ) -> HTTPResponse:
@@ -899,6 +916,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
         | None = None,
         on_early_response: typing.Callable[[HTTPResponse], None] | None = None,
+        extension: ExtensionFromHTTP | None = None,
         multiplexed: Literal[False] | Literal[True] = False,
     ) -> HTTPResponse | ResponsePromise:
         """
@@ -1019,6 +1037,31 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             # overruling
             multiplexed = False
 
+        if (
+            extension is not None
+            and conn.conn_info is not None
+            and conn.conn_info.http_version is not None
+        ):
+            extension_headers = extension.headers(conn.conn_info.http_version)
+
+            if extension_headers:
+                if headers is None:
+                    headers = extension_headers
+                elif hasattr(headers, "copy"):
+                    headers = headers.copy()
+                    headers.update(extension_headers)  # type: ignore[union-attr]
+                else:
+                    merged_headers = HTTPHeaderDict()
+
+                    for k, v in headers.items():
+                        merged_headers.add(k, v)
+                    for k, v in extension_headers.items():
+                        merged_headers.add(k, v)
+
+                    headers = merged_headers
+        else:
+            extension = None
+
         try:
             rp = conn.request(
                 method,
@@ -1052,6 +1095,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 raise OSError
             rp.set_parameter("read_timeout", read_timeout)
             rp.set_parameter("on_early_response", on_early_response)
+            rp.set_parameter("extension", extension)
             return rp
 
         if not conn.is_closed:
@@ -1082,6 +1126,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # Set properties that are used by the pooling layer.
         response.retries = retries
         response._pool = self
+
+        if response.status == 101 or (
+            200 <= response.status < 300 and method == "CONNECT"
+        ):
+            if extension is None:
+                extension = load_extension(None)()
+            response.start_extension(extension)
 
         log.debug(
             '%s://%s:%s "%s %s %s" %s %s',
@@ -1158,6 +1209,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
         | None = ...,
         on_early_response: typing.Callable[[HTTPResponse], None] | None = ...,
+        extension: ExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[False] = ...,
         **response_kw: typing.Any,
@@ -1185,6 +1237,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
         | None = ...,
         on_early_response: typing.Callable[[HTTPResponse], None] | None = ...,
+        extension: ExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[True],
         **response_kw: typing.Any,
@@ -1211,6 +1264,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         on_upload_body: typing.Callable[[int, int | None, bool, bool], None]
         | None = None,
         on_early_response: typing.Callable[[HTTPResponse], None] | None = None,
+        extension: ExtensionFromHTTP | None = None,
         multiplexed: bool = False,
         **response_kw: typing.Any,
     ) -> HTTPResponse | ResponsePromise:
@@ -1429,6 +1483,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 on_upload_body=on_upload_body,
                 on_early_response=on_early_response,
                 multiplexed=multiplexed,
+                extension=extension,
             )
 
             # it was established a non-multiplexed connection. fallback to original behavior.
