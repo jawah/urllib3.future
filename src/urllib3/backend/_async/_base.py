@@ -12,7 +12,7 @@ class AsyncDirectStreamAccess:
         self,
         stream_id: int,
         read: typing.Callable[
-            [int | None, int | None, bool],
+            [int | None, int | None, bool, bool],
             typing.Awaitable[tuple[bytes, bool, HTTPHeaderDict | None]],
         ]
         | None = None,
@@ -22,6 +22,10 @@ class AsyncDirectStreamAccess:
         self._stream_id = stream_id
         self._read = read
         self._write = write
+
+    @property
+    def closed(self) -> bool:
+        return self._read is None and self._write is None
 
     async def readinto(self, b: bytearray) -> int:
         if self._read is None:
@@ -61,7 +65,10 @@ class AsyncDirectStreamAccess:
             raise OSError("stream closed error")
 
         data, eot, trailers = await self._read(
-            __bufsize, self._stream_id, __bufsize is not None
+            __bufsize,
+            self._stream_id,
+            __bufsize is not None,
+            False,
         )
 
         if eot:
@@ -96,6 +103,7 @@ class AsyncDirectStreamAccess:
             await self._write(b"", self._stream_id, True)
             self._write = None
         if self._read is not None:
+            await self._read(None, self._stream_id, False, True)
             self._read = None
 
 

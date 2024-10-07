@@ -39,14 +39,14 @@ class AsyncRawExtensionFromHTTP(AsyncExtensionFromHTTP):
 
     async def next_payload(self) -> bytes | None:
         if self._police_officer is None or self._dsa is None:
-            raise OSError
+            raise OSError("The HTTP extension is closed or uninitialized")
         async with self._police_officer.borrow(self._response):
             data, eot, _ = await self._dsa.recv_extended(None)
             return data
 
     async def send_payload(self, buf: str | bytes) -> None:
         if self._police_officer is None or self._dsa is None:
-            raise OSError
+            raise OSError("The HTTP extension is closed or uninitialized")
 
         async with self._police_officer.borrow(self._response):
             if isinstance(buf, str):

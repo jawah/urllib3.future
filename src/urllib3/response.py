@@ -795,14 +795,6 @@ class HTTPResponse(io.IOBase):
         if self._fp is None:
             return None  # type: ignore[return-value]
 
-        # Safe-Guard against response that does not provide bodies.
-        # Calling read will most likely block the program forever!
-        if self.length_remaining == 0 and (
-            self.status == 101
-            or (self._request_method == "CONNECT" and 200 <= self.status < 300)
-        ):
-            return None  # type: ignore[return-value]
-
         fp_closed = getattr(self._fp, "closed", False)
 
         with self._error_catcher():
@@ -947,10 +939,16 @@ class HTTPResponse(io.IOBase):
                 and self._fp._eot  # type: ignore[union-attr]
                 and self._police_officer is not None
             ):
-                self._police_officer.forget(self)
-                if self._police_officer.busy:
-                    self._police_officer.release()
-                self._police_officer = None
+                # an HTTP extension could be live, we don't want to accidentally kill it!
+                if (
+                    not hasattr(self._fp, "_dsa")
+                    or self._fp._dsa is None  # type: ignore[union-attr]
+                    or self._fp._dsa.closed is True  # type: ignore[union-attr]
+                ):
+                    self._police_officer.forget(self)
+                    if self._police_officer.busy:
+                        self._police_officer.release()
+                    self._police_officer = None
 
     def stream(
         self, amt: int | None = 2**16, decode_content: bool | None = None
@@ -982,6 +980,9 @@ class HTTPResponse(io.IOBase):
         return True
 
     def close(self) -> None:
+        if self.extension is not None and self.extension.closed is False:
+            self.extension.close()
+
         if not self.closed and self._fp:
             self._fp.close()
 

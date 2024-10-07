@@ -17,9 +17,6 @@
   This will require the installation of an optional dependency ``wsproto``, to do so, please install urllib3-future with
   ``pip install urllib3-future[ws]``.
 - Fixed a rare issue where the ``:authority`` (special header) value might be malformed.
-- Fixed an issue where passing ``Upgrade: websocket`` would be discarded without effect, thus smuggling the original user
-  intent. This is an issue due to our strict backward compatibility with our predecessor. Now, passing this header
-  will automatically disable HTTP/2 and HTTP/3 support for the given request.
 
 2.9.900 (2024-09-24)
 ====================
