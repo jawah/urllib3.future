@@ -22,11 +22,17 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
     def start(self, response: HTTPResponse) -> None:
         """The HTTP server gave us the go-to start negotiating another protocol."""
         if response._fp is None or not hasattr(response._fp, "_dsa"):
-            raise OSError()
+            raise RuntimeError(
+                "Attempt to start an HTTP extension without direct I/O access to the stream"
+            )
 
         self._dsa = response._fp._dsa
         self._police_officer = response._police_officer
         self._response = response
+
+    @property
+    def closed(self) -> bool:
+        return self._dsa is None
 
     @staticmethod
     def supported_svn() -> set[HttpVersion]:

@@ -1067,8 +1067,24 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         __amt: int | None,
         __stream_id: int | None,
         __respect_end_signal: bool = True,
+        __dummy_operation: bool = False,
     ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
         """Allows us to defer the body loading after constructing the response object."""
+
+        # we may want to just remove the response as "pending"
+        # e.g. HTTP Extension; making reads on sub protocol close may
+        # ends up in a blocking situation (forever).
+        if __dummy_operation:
+            try:
+                del self._pending_responses[__stream_id]  # type: ignore[arg-type]
+            except KeyError:
+                pass  # Hmm... this should be impossible.
+
+            # remote can refuse future inquiries, so no need to go further with this conn.
+            if self._protocol.has_expired():  # type: ignore[union-attr]
+                await self.close()
+            return b"", True, None
+
         eot = False
 
         events: list[DataReceived | HeadersReceived] = await self.__exchange_until(  # type: ignore[assignment]
@@ -1247,7 +1263,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self._http_vsn,
             reason,
             headers,
-            self.__read_st if not eot else None,
+            self.__read_st if eot is False and dsa is None else None,
             authority=self.host,
             port=self.port,
             stream_id=promise.stream_id,

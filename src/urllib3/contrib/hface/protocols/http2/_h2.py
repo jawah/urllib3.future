@@ -22,6 +22,7 @@ import jh2.config  # type: ignore
 import jh2.connection  # type: ignore
 import jh2.events  # type: ignore
 import jh2.exceptions  # type: ignore
+import jh2.settings  # type: ignore
 
 from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
@@ -51,6 +52,16 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
         observable_impl: HTTP2ProtocolHyperImpl | None = None,
     ) -> None:
         super().__init__(config=config)
+        # by default CONNECT is disabled
+        # we need it to support natively WebSocket over HTTP/2 for example.
+        self.local_settings = jh2.settings.Settings(
+            client=True,
+            initial_values={
+                jh2.settings.SettingCodes.MAX_CONCURRENT_STREAMS: 100,
+                jh2.settings.SettingCodes.MAX_HEADER_LIST_SIZE: self.DEFAULT_MAX_HEADER_LIST_SIZE,
+                jh2.settings.SettingCodes.ENABLE_CONNECT_PROTOCOL: 1,
+            },
+        )
         self._observable_impl = observable_impl
 
     def _open_streams(self, *args, **kwargs) -> int:  # type: ignore[no-untyped-def]

@@ -90,7 +90,8 @@ class DirectStreamAccess:
         self,
         stream_id: int,
         read: typing.Callable[
-            [int | None, int | None, bool], tuple[bytes, bool, HTTPHeaderDict | None]
+            [int | None, int | None, bool, bool],
+            tuple[bytes, bool, HTTPHeaderDict | None],
         ]
         | None = None,
         write: typing.Callable[[bytes, int, bool], None] | None = None,
@@ -99,8 +100,8 @@ class DirectStreamAccess:
 
         if read is not None:
             self._read: typing.Callable[
-                [int | None], tuple[bytes, bool, HTTPHeaderDict | None]
-            ] | None = lambda amt: read(amt, self._stream_id, amt is not None)
+                [int | None, bool], tuple[bytes, bool, HTTPHeaderDict | None]
+            ] | None = lambda amt, fo: read(amt, self._stream_id, amt is not None, fo)
         else:
             self._read = None
 
@@ -110,6 +111,10 @@ class DirectStreamAccess:
             ] | None = lambda buf, eot: write(buf, self._stream_id, eot)
         else:
             self._write = None
+
+    @property
+    def closed(self) -> bool:
+        return self._read is None and self._write is None
 
     def readinto(self, b: bytearray) -> int:
         if self._read is None:
@@ -148,7 +153,7 @@ class DirectStreamAccess:
         if self._read is None:
             raise OSError("stream closed error")
 
-        data, eot, trailers = self._read(__bufsize)
+        data, eot, trailers = self._read(__bufsize, False)
 
         if eot:
             self._read = None
@@ -180,6 +185,7 @@ class DirectStreamAccess:
             self._write(b"", True)
             self._write = None
         if self._read is not None:
+            self._read(None, True)
             self._read = None
 
 

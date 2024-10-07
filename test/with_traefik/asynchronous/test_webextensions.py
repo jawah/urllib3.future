@@ -48,8 +48,8 @@ class TestWebExtensions(TraefikTestCase):
 
             # This response should not have a body, therefor don't try to read from
             # socket in there!
-            assert (await resp.data) is None
-            assert (await resp.read()) is None
+            assert (await resp.data) == b""
+            assert (await resp.read()) == b""
 
             # the extension here should be WebSocketExtensionFromHTTP
             assert isinstance(resp.extension, AsyncWebSocketExtensionFromHTTP)
@@ -117,8 +117,8 @@ class TestWebExtensions(TraefikTestCase):
 
             # This response should not have a body, therefor don't try to read from
             # socket in there!
-            assert (await resp.data) is None
-            assert (await resp.read()) is None
+            assert (await resp.data) == b""
+            assert (await resp.read()) == b""
 
             # the extension here should be RawExtensionFromHTTP
             assert isinstance(resp.extension, AsyncRawExtensionFromHTTP)
@@ -204,8 +204,8 @@ class TestWebExtensions(TraefikTestCase):
 
             # This response should not have a body, therefor don't try to read from
             # socket in there!
-            assert (await resp.data) is None
-            assert (await resp.read()) is None
+            assert (await resp.data) == b""
+            assert (await resp.read()) == b""
 
             # the extension here should be WebSocketExtensionFromHTTP
             assert isinstance(resp.extension, AsyncWebSocketExtensionFromHTTP)

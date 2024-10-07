@@ -45,7 +45,9 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         accept_token: str | None = response.headers.get("Sec-Websocket-Accept")
 
         if accept_token is None:
-            raise OSError
+            raise RuntimeError(
+                "The WebSocket HTTP extension requires 'Sec-Websocket-Accept' header in the server response but was not present."
+            )
 
         fake_http_response += accept_token.encode() + b"\r\n\r\n"
 
@@ -54,7 +56,9 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         event = next(self._protocol.events())
 
         if not isinstance(event, AcceptConnection):
-            raise OSError
+            raise RuntimeError(
+                "The WebSocket state-machine did not pass the handshake phase when expected."
+            )
 
     def headers(self, http_version: HttpVersion) -> dict[str, str]:
         """Specific HTTP headers required (request) before the 101 status response."""
@@ -90,7 +94,12 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
             self._dsa.close()
             self._dsa = None
         if self._response is not None:
-            self._response.close()
+            if self._police_officer is not None:
+                self._police_officer.forget(self._response)
+                if self._police_officer.busy:
+                    self._police_officer.release()
+            else:
+                self._response.close()
             self._response = None
 
         self._police_officer = None
@@ -98,7 +107,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
     def next_payload(self) -> str | bytes | None:
         """Unpack the next received message/payload from remote."""
         if self._dsa is None or self._response is None or self._police_officer is None:
-            raise OSError("Missing call to start(...) for the HTTP extension")
+            raise OSError("The HTTP extension is closed or uninitialized")
 
         for event in self._protocol.events():
             if isinstance(event, TextMessage):
@@ -130,7 +139,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
     def send_payload(self, buf: str | bytes) -> None:
         """Dispatch a buffer to remote."""
         if self._dsa is None or self._response is None or self._police_officer is None:
-            raise OSError("Missing call to start(...) for the HTTP extension")
+            raise OSError("The HTTP extension is closed or uninitialized")
 
         if isinstance(buf, str):
             data_to_send: bytes = self._protocol.send(TextMessage(buf))
@@ -142,7 +151,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
 
     def ping(self) -> None:
         if self._dsa is None or self._response is None or self._police_officer is None:
-            raise OSError("Missing call to start(...) for the HTTP extension")
+            raise OSError("The HTTP extension is closed or uninitialized")
 
         data_to_send: bytes = self._protocol.send(Ping())
         self._dsa.sendall(data_to_send)
