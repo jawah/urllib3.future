@@ -6,7 +6,7 @@ from base64 import b64encode
 from collections import deque
 
 from ...._collections import HTTPHeaderDict
-from ....backend import ConnectionInfo, HttpVersion
+from ....backend import ConnectionInfo, HttpVersion, ResponsePromise
 from ....connectionpool import HTTPSConnectionPool
 from ....response import HTTPResponse
 from ....util.url import parse_url
@@ -117,7 +117,9 @@ class HTTPSResolver(BaseResolver):
             for svn in kwargs["disabled_svn"]:
                 svn = svn.lower()
 
-                if svn == "h2":
+                if svn == "h11":
+                    disabled_svn.add(HttpVersion.h11)
+                elif svn == "h2":
                     disabled_svn.add(HttpVersion.h2)
                 elif svn == "h3":
                     disabled_svn.add(HttpVersion.h3)
@@ -208,7 +210,7 @@ class HTTPSResolver(BaseResolver):
 
         validate_length_of(host)
 
-        promises = []
+        promises: list[HTTPResponse | ResponsePromise] = []
         remote_preemptive_quic_rr = False
 
         if quic_upgrade_via_dns_rr and type == socket.SOCK_DGRAM:
@@ -308,6 +310,23 @@ class HTTPSResolver(BaseResolver):
 
         no_multiplexing: bool = isinstance(promises[0], HTTPResponse)
 
+        # This edge case can happen when the initial request is emitted through HTTP/1.1
+        # and a connection upgrade happen just after that (no multiplexing to multiplexing...)
+        if (
+            no_multiplexing
+            and len(promises) > 1
+            and isinstance(promises[1], HTTPResponse) is False
+        ):
+            force_resolve: list[HTTPResponse] = []
+
+            for promise in promises:
+                if isinstance(promise, HTTPResponse):
+                    force_resolve.append(promise)
+                    continue
+                force_resolve.append(self._pool.get_response(promise=promise))  # type: ignore[arg-type]
+
+            promises = force_resolve  # type: ignore[assignment]
+
         results: list[
             tuple[
                 socket.AddressFamily,
@@ -326,7 +345,7 @@ class HTTPSResolver(BaseResolver):
                     if self._unconsumed:
                         for unconsumed in self._unconsumed:
                             for pending_promise in promises:
-                                if unconsumed.is_from_promise(pending_promise):
+                                if unconsumed.is_from_promise(pending_promise):  # type: ignore[arg-type]
                                     response = unconsumed
                                     break
                             if response:
@@ -345,7 +364,7 @@ class HTTPSResolver(BaseResolver):
                 p = None
 
                 for p in promises:
-                    if response.is_from_promise(p):
+                    if response.is_from_promise(p):  # type: ignore[arg-type]
                         break
 
                 if p is None:

@@ -1,3 +1,12 @@
+2.10.901 (2024-10-08)
+=====================
+
+- Fixed closed state on a WebSocketExtensionFromHTTP when the remote send a CloseConnection event.
+- Fixed an edge case where a DNS-over-HTTPS would start of a non-multiplexed connection but immediately upgrade to a
+  multiplexed capable connection would induce an error.
+- Allow to disable HTTP/1.1 in a DNS-over-HTTPS resolver.
+- Extra "qh3" lower bound aligned with the main constraint ``>=1.2,<2``.
+
 2.10.900 (2024-10-06)
 =====================
 

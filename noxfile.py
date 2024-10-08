@@ -8,6 +8,7 @@ import subprocess
 import time
 import typing
 from http.client import RemoteDisconnected
+from socket import timeout as SocketTimeout
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -171,7 +172,13 @@ def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
                     ),
                     timeout=1.0,
                 )
-            except (HTTPError, URLError, RemoteDisconnected, TimeoutError) as e:
+            except (
+                HTTPError,
+                URLError,
+                RemoteDisconnected,
+                TimeoutError,
+                SocketTimeout,
+            ) as e:
                 i += 1
                 time.sleep(1)
                 session.log(f"Waiting for the Traefik server: {e}...")

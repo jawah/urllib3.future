@@ -100,7 +100,9 @@ jobs:
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        run: ./traefik/macos.sh
+        uses: douglascamata/setup-docker-macos-action@8d5fa43892aed7eee4effcdea113fd53e4d4bf83
+        with:
+          colima-network-address: true
 
       - name: "Setup Python ${{ matrix.python-version }}"
         uses: "actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3"
