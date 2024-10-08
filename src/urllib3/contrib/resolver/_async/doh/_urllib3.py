@@ -117,7 +117,9 @@ class HTTPSResolver(AsyncBaseResolver):
             for svn in kwargs["disabled_svn"]:
                 svn = svn.lower()
 
-                if svn == "h2":
+                if svn == "h11":
+                    disabled_svn.add(HttpVersion.h11)
+                elif svn == "h2":
                     disabled_svn.add(HttpVersion.h2)
                 elif svn == "h3":
                     disabled_svn.add(HttpVersion.h3)
@@ -307,6 +309,23 @@ class HTTPSResolver(AsyncBaseResolver):
                 )
 
         no_multiplexing: bool = isinstance(promises[0], AsyncHTTPResponse)
+
+        # This edge case can happen when the initial request is emitted through HTTP/1.1
+        # and a connection upgrade happen just after that (no multiplexing to multiplexing...)
+        if (
+            no_multiplexing
+            and len(promises) > 1
+            and isinstance(promises[1], AsyncHTTPResponse) is False
+        ):
+            force_resolve = []
+
+            for promise in promises:
+                if isinstance(promise, AsyncHTTPResponse):
+                    force_resolve.append(promise)
+                    continue
+                force_resolve.append(await self._pool.get_response(promise=promise))  # type: ignore[arg-type]
+
+            promises = force_resolve  # type: ignore[assignment]
 
         results: list[
             tuple[

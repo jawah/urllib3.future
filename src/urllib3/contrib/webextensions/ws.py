@@ -26,6 +26,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         super().__init__()
         self._protocol = WSConnection(ConnectionType.CLIENT)
         self._request_headers: dict[str, str] | None = None
+        self._remote_shutdown: bool = False
 
     @staticmethod
     def supported_svn() -> set[HttpVersion]:
@@ -89,8 +90,9 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
     def close(self) -> None:
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
-            data_to_send: bytes = self._protocol.send(CloseConnection(0))
-            self._dsa.sendall(data_to_send)
+            if self._remote_shutdown is False:
+                data_to_send: bytes = self._protocol.send(CloseConnection(0))
+                self._dsa.sendall(data_to_send)
             self._dsa.close()
             self._dsa = None
         if self._response is not None:
@@ -109,12 +111,15 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
+        # we may have pending event to unpack!
         for event in self._protocol.events():
             if isinstance(event, TextMessage):
                 return event.data
             elif isinstance(event, BytesMessage):
                 return event.data
             elif isinstance(event, CloseConnection):
+                self._remote_shutdown = True
+                self.close()
                 return None
 
         while True:
@@ -129,6 +134,8 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                 elif isinstance(event, BytesMessage):
                     return event.data
                 elif isinstance(event, CloseConnection):
+                    self._remote_shutdown = True
+                    self.close()
                     return None
                 elif isinstance(event, Ping):
                     data_to_send: bytes = self._protocol.send(Pong())

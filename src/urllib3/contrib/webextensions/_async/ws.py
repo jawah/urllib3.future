@@ -26,6 +26,7 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         super().__init__()
         self._protocol = WSConnection(ConnectionType.CLIENT)
         self._request_headers: dict[str, str] | None = None
+        self._remote_shutdown: bool = False
 
     @staticmethod
     def supported_svn() -> set[HttpVersion]:
@@ -89,8 +90,9 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
     async def close(self) -> None:
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
-            data_to_send: bytes = self._protocol.send(CloseConnection(0))
-            await self._dsa.sendall(data_to_send)
+            if self._remote_shutdown is False:
+                data_to_send: bytes = self._protocol.send(CloseConnection(0))
+                await self._dsa.sendall(data_to_send)
             await self._dsa.close()
             self._dsa = None
         if self._response is not None:
@@ -115,6 +117,8 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
             elif isinstance(event, BytesMessage):
                 return event.data
             elif isinstance(event, CloseConnection):
+                self._remote_shutdown = True
+                await self.close()
                 return None
 
         while True:
@@ -129,6 +133,8 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                 elif isinstance(event, BytesMessage):
                     return event.data
                 elif isinstance(event, CloseConnection):
+                    self._remote_shutdown = True
+                    await self.close()
                     return None
                 elif isinstance(event, Ping):
                     data_to_send: bytes = self._protocol.send(Pong())

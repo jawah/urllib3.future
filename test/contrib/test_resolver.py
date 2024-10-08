@@ -745,6 +745,28 @@ def test_doh_http11() -> None:
 
 
 @requires_network()
+@pytest.mark.xfail(
+    os.environ.get("CI", None) is not None and platform.system() != "Darwin",
+    reason="Github Action CI: Network Unreachable UDP/QUIC",
+    strict=False,
+)
+def test_doh_http11_upgradable() -> None:
+    """Ensure we can do DoH over HTTP/1.1 that can upgrade to HTTP/3"""
+    resolver = ResolverDescription.from_url(
+        "doh+google://default/?disabled_svn=h2"
+    ).new()
+
+    res = resolver.getaddrinfo(
+        "www.cloudflare.com",
+        80,
+        socket.AF_UNSPEC,
+        socket.SOCK_STREAM,
+    )
+
+    assert len(res)
+
+
+@requires_network()
 def test_doh_on_connection_callback() -> None:
     """Ensure we can inspect the resolver connection with a callback."""
     resolver_description = ResolverDescription.from_url("doh+google://")
