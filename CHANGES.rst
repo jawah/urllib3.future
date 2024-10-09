@@ -1,3 +1,10 @@
+2.10.902 (2024-10-09)
+=====================
+
+- Fixed call to ``stream(..)`` on (early) informational responses. The inner ``fp`` was set to ``None`` and the function
+  ``is_fp_closed`` is not meant to handle this case. Through you should never expect a body in those responses.
+- Fixed ``read()``, and ``data`` returns None for (early) informational responses.
+
 2.10.901 (2024-10-08)
 =====================
 
