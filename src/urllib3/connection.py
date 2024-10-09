@@ -567,7 +567,7 @@ class HTTPConnection(HfaceBackend):
             early_resp_options: _ResponseOptions = _promise.get_parameter("response_options")  # type: ignore[assignment]
 
             early_response = HTTPResponse(
-                body=b"",
+                body=early_low_response,
                 headers=early_low_response.msg,
                 status=early_low_response.status,
                 version=early_low_response.version,

@@ -456,6 +456,8 @@ class AsyncHTTPResponse(HTTPResponse):
     async def stream(  # type: ignore[override]
         self, amt: int | None = 2**16, decode_content: bool | None = None
     ) -> typing.AsyncGenerator[bytes, None]:
+        if self._fp is None:
+            return
         while not is_fp_closed(self._fp) or len(self._decoded_buffer) > 0:
             data = await self.read(amt=amt, decode_content=decode_content)
 

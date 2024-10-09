@@ -578,7 +578,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             )
 
             early_response = AsyncHTTPResponse(
-                body=b"",
+                body=early_low_response,
                 headers=early_low_response.msg,
                 status=early_low_response.status,
                 version=early_low_response.version,
