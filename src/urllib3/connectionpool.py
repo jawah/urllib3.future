@@ -42,10 +42,12 @@ from .exceptions import (
     InsecureRequestWarning,
     LocationValueError,
     MaxRetryError,
+    MustDowngradeError,
     NewConnectionError,
     ProtocolError,
     ProxyError,
     ReadTimeoutError,
+    RecoverableError,
     SSLError,
     TimeoutError,
 )
@@ -1524,6 +1526,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             SSLError,
             CertificateError,
             ProxyError,
+            RecoverableError,
         ) as e:
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
@@ -1548,6 +1551,16 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
             )
             retries.sleep()
+
+            # todo: allow the conn to be reusable.
+            #       the MustDowngradeError only means that a single request cannot be
+            #       served over the current svn. does not means all requests to endpoint
+            #       are concerned.
+            if isinstance(new_e, MustDowngradeError) and conn is not None:
+                if "disabled_svn" not in self.conn_kw:
+                    self.conn_kw["disabled_svn"] = set()
+
+                self.conn_kw["disabled_svn"].add(conn._svn)
 
             # Keep track of the error for the retry warning.
             err = e

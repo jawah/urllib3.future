@@ -4,6 +4,7 @@ import sys
 import typing
 from datetime import datetime, timezone
 from socket import SOCK_DGRAM, SOCK_STREAM
+from socket import timeout as SocketTimeout
 
 try:  # Compiled with SSL?
     import ssl
@@ -41,6 +42,7 @@ from ...exceptions import (
     EarlyResponse,
     IncompleteRead,
     InvalidHeader,
+    MustDowngradeError,
     ProtocolError,
     ResponseNotReady,
     SSLError,
@@ -111,7 +113,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         # h3 specifics
         self.__custom_tls_settings: QuicTLSConfig | None = None
         self.__alt_authority: tuple[str, int] | None = None
+        self.__origin_port: int | None = None
         self.__session_ticket: typing.Any | None = None
+
+        # automatic upgrade shield against errors!
+        self._max_tolerable_delay_for_upgrade: float | None = None
 
     @property
     def is_saturated(self) -> bool:
@@ -231,6 +237,24 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 self.__alt_authority = self.__altsvc_probe(svc="h2")
 
         if self.__alt_authority:
+            # we want to infer a "best delay" to wait for silent upgrade.
+            # for that we use the previous known delay for handshake or establishment.
+            # and apply a "safe" margin of 50%.
+            if (
+                self.conn_info is not None
+                and self.conn_info.established_latency is not None
+            ):
+                self._max_tolerable_delay_for_upgrade = (
+                    self.conn_info.established_latency.total_seconds()
+                )
+                if self.conn_info.tls_handshake_latency is not None:
+                    self._max_tolerable_delay_for_upgrade += (
+                        self.conn_info.tls_handshake_latency.total_seconds()
+                    )
+                self._max_tolerable_delay_for_upgrade *= 1.5
+            else:  # by default (fallback) to 1000ms
+                self._max_tolerable_delay_for_upgrade = 1.0
+
             if upgradable_svn == HttpVersion.h3:
                 if self._preemptive_quic_cache is not None:
                     self._preemptive_quic_cache[
@@ -241,6 +265,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         return
 
             self._svn = upgradable_svn
+            self.__origin_port = self.port or 443
             # We purposely ignore setting the Hostname. Avoid MITM attack from local cache attack.
             self.port = self.__alt_authority[1]
             await self.close()
@@ -504,22 +529,51 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             return
 
+        # we want to purposely mitigate the following scenario:
+        #   "A server yield its support for HTTP/2 or HTTP/3 through Alt-Svc, but
+        #    it cannot connect to the alt-svc, thus confusing the end-user on why it
+        #    waits forever for the 2nd request."
+        if self._max_tolerable_delay_for_upgrade is not None:
+            self.sock.settimeout(self._max_tolerable_delay_for_upgrade)
+
         # it may be required to send some initial data, aka. magic header (PRI * HTTP/2..)
         try:
             await self.__exchange_until(
                 HandshakeCompleted,
                 receive_first=False,
             )
-        except ProtocolError as e:
+        except (
+            ProtocolError,
+            TimeoutError,
+            SocketTimeout,
+            ConnectionRefusedError,
+        ) as e:
             if (
                 isinstance(self._protocol, HTTPOverQUICProtocol)
                 and self.__alt_authority is not None
             ):
-                raise ProtocolError(
-                    "The server yielded its support for HTTP/3 through the Alt-Svc header while unable to do so. "
-                    "To remediate that issue, either disable http3 or reach out to the server admin."
+                # we want to remove invalid quic cache capability
+                # because the alt-svc was probably bogus...
+                if (
+                    self._svn == HttpVersion.h3
+                    and self._preemptive_quic_cache is not None
+                ):
+                    alt_key = (self.host, self.__origin_port or 443)
+                    if alt_key in self._preemptive_quic_cache:
+                        del self._preemptive_quic_cache[alt_key]
+
+                raise MustDowngradeError(
+                    f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
+                    f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
                 ) from e
             raise
+
+        if self._max_tolerable_delay_for_upgrade is not None:
+            self.sock.settimeout(self.timeout)
+
+        self._max_tolerable_delay_for_upgrade = (
+            None  # upgrade went fine. discard the value!
+        )
 
         if isinstance(self._protocol, HTTPOverQUICProtocol):
             self.conn_info.certificate_der = self._protocol.getpeercert(
@@ -775,6 +829,16 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                     raise ProtocolError(event.message)
                 elif stream_related_event and isinstance(event, StreamResetReceived):
+                    # we want to catch MUST_USE_HTTP_1_1 or H3_VERSION_FALLBACK
+                    # HTTP/2 https://www.rfc-editor.org/rfc/rfc9113.html#name-error-codes
+                    # HTTP/3 https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-error-codes
+                    if (self._svn == HttpVersion.h2 and event.error_code == 0xD) or (
+                        self._svn == HttpVersion.h3 and event.error_code == 0x0110
+                    ):
+                        raise MustDowngradeError(
+                            f"The remote server is unable to serve this resource over {self._svn}"
+                        )
+
                     raise ProtocolError(
                         f"Stream {event.stream_id} was reset by remote peer. Reason: {hex(event.error_code)}."
                     )

@@ -28,6 +28,7 @@
 - Helpers for retrying requests and dealing with HTTP redirects.
 - Support for gzip, deflate, brotli, and zstd encoding.
 - Support for Python/PyPy 3.7+, no compromise.
+- Automatic Connection Upgrade / Downgrade.
 - Early (Informational) Responses / Hints.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
 - WebSocket over HTTP/2+ (RFC8441).

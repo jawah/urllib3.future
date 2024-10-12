@@ -343,3 +343,11 @@ class EarlyResponse(HTTPError):
 
 class ResponseNotReady(HTTPError):
     """Kept for BC"""
+
+
+class RecoverableError(HTTPError):
+    """This error is never leaked in the upper stack, it serves only an internal purpose."""
+
+
+class MustDowngradeError(RecoverableError):
+    """An error occurred with a protocol and can be circumvented using an older protocol."""
