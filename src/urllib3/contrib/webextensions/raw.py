@@ -18,7 +18,8 @@ class RawExtensionFromHTTP(ExtensionFromHTTP):
     def close(self) -> None:
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
-            self._dsa.close()
+            with self._write_error_catcher():
+                self._dsa.close()
             self._dsa = None
         if self._response is not None:
             self._response.close()
@@ -41,7 +42,8 @@ class RawExtensionFromHTTP(ExtensionFromHTTP):
         if self._police_officer is None or self._dsa is None:
             raise OSError("The HTTP extension is closed or uninitialized")
         with self._police_officer.borrow(self._response):
-            data, eot, _ = self._dsa.recv_extended(None)
+            with self._read_error_catcher():
+                data, eot, _ = self._dsa.recv_extended(None)
             return data
 
     def send_payload(self, buf: str | bytes) -> None:
@@ -52,4 +54,5 @@ class RawExtensionFromHTTP(ExtensionFromHTTP):
             if isinstance(buf, str):
                 buf = buf.encode()
 
-            self._dsa.sendall(buf)
+            with self._write_error_catcher():
+                self._dsa.sendall(buf)

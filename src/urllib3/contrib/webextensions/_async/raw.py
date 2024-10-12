@@ -41,7 +41,8 @@ class AsyncRawExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._police_officer is None or self._dsa is None:
             raise OSError("The HTTP extension is closed or uninitialized")
         async with self._police_officer.borrow(self._response):
-            data, eot, _ = await self._dsa.recv_extended(None)
+            async with self._read_error_catcher():
+                data, eot, _ = await self._dsa.recv_extended(None)
             return data
 
     async def send_payload(self, buf: str | bytes) -> None:
@@ -52,4 +53,5 @@ class AsyncRawExtensionFromHTTP(AsyncExtensionFromHTTP):
             if isinstance(buf, str):
                 buf = buf.encode()
 
-            await self._dsa.sendall(buf)
+            async with self._write_error_catcher():
+                await self._dsa.sendall(buf)

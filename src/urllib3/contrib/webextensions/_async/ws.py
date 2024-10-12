@@ -16,8 +16,10 @@ from wsproto.events import (
     TextMessage,
 )
 from wsproto.extensions import PerMessageDeflate
+from wsproto.utilities import ProtocolError as WebSocketProtocolError
 
 from ....backend import HttpVersion
+from ....exceptions import ProtocolError
 from .protocol import AsyncExtensionFromHTTP
 
 
@@ -52,7 +54,10 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
 
         fake_http_response += accept_token.encode() + b"\r\n\r\n"
 
-        self._protocol.receive_data(fake_http_response)
+        try:
+            self._protocol.receive_data(fake_http_response)
+        except WebSocketProtocolError as e:
+            raise ProtocolError from e  # Defensive: should never occur!
 
         event = next(self._protocol.events())
 
@@ -66,9 +71,14 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._request_headers is not None:
             return self._request_headers
 
-        raw_data_to_socket = self._protocol.send(
-            Request(host="example.com", target="/", extensions=(PerMessageDeflate(),))
-        )
+        try:
+            raw_data_to_socket = self._protocol.send(
+                Request(
+                    host="example.com", target="/", extensions=(PerMessageDeflate(),)
+                )
+            )
+        except WebSocketProtocolError as e:
+            raise ProtocolError from e  # Defensive: should never occur!
 
         raw_headers = raw_data_to_socket.split(b"\r\n")[2:-2]
         request_headers: dict[str, str] = {}
@@ -91,8 +101,13 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
             if self._remote_shutdown is False:
-                data_to_send: bytes = self._protocol.send(CloseConnection(0))
-                await self._dsa.sendall(data_to_send)
+                try:
+                    data_to_send: bytes = self._protocol.send(CloseConnection(0))
+                except WebSocketProtocolError as e:
+                    await self.close()
+                    raise ProtocolError from e
+                async with self._write_error_catcher():
+                    await self._dsa.sendall(data_to_send)
             await self._dsa.close()
             self._dsa = None
         if self._response is not None:
@@ -120,12 +135,25 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                 self._remote_shutdown = True
                 await self.close()
                 return None
+            elif isinstance(event, Ping):
+                try:
+                    data_to_send: bytes = self._protocol.send(event.response())
+                except WebSocketProtocolError as e:
+                    await self.close()
+                    raise ProtocolError from e
+
+                async with self._write_error_catcher():
+                    await self._dsa.sendall(data_to_send)
 
         while True:
             async with self._police_officer.borrow(self._response):
-                data, eot, _ = await self._dsa.recv_extended(None)
+                async with self._read_error_catcher():
+                    data, eot, _ = await self._dsa.recv_extended(None)
 
-            self._protocol.receive_data(data)
+            try:
+                self._protocol.receive_data(data)
+            except WebSocketProtocolError as e:
+                raise ProtocolError from e
 
             for event in self._protocol.events():
                 if isinstance(event, TextMessage):
@@ -137,8 +165,9 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                     await self.close()
                     return None
                 elif isinstance(event, Ping):
-                    data_to_send: bytes = self._protocol.send(Pong())
-                    await self._dsa.sendall(data_to_send)
+                    data_to_send = self._protocol.send(event.response())
+                    async with self._write_error_catcher():
+                        await self._dsa.sendall(data_to_send)
                 elif isinstance(event, Pong):
                     continue
 
@@ -147,20 +176,29 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        if isinstance(buf, str):
-            data_to_send: bytes = self._protocol.send(TextMessage(buf))
-        else:
-            data_to_send = self._protocol.send(BytesMessage(buf))
+        try:
+            if isinstance(buf, str):
+                data_to_send: bytes = self._protocol.send(TextMessage(buf))
+            else:
+                data_to_send = self._protocol.send(BytesMessage(buf))
+        except WebSocketProtocolError as e:
+            raise ProtocolError from e
 
         async with self._police_officer.borrow(self._response):
-            await self._dsa.sendall(data_to_send)
+            async with self._write_error_catcher():
+                await self._dsa.sendall(data_to_send)
 
     async def ping(self) -> None:
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        data_to_send: bytes = self._protocol.send(Ping())
-        await self._dsa.sendall(data_to_send)
+        try:
+            data_to_send: bytes = self._protocol.send(Ping())
+        except WebSocketProtocolError as e:
+            raise ProtocolError from e
+
+        async with self._write_error_catcher():
+            await self._dsa.sendall(data_to_send)
 
     @staticmethod
     def supported_schemes() -> set[str]:
