@@ -1,3 +1,9 @@
+2.10.904 (2024-10-13)
+=====================
+
+- Fixed thread/task safety with WebSocket R/W operations.
+- Fixed missing propagation of callbacks (e.g. ``on_post_connection``) in retries of failed requests.
+
 2.10.903 (2024-10-12)
 =====================
 
