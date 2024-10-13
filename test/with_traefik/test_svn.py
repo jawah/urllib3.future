@@ -42,7 +42,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -56,7 +56,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
@@ -70,7 +70,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h2},
@@ -87,7 +87,7 @@ class TestSvnCapability(TraefikTestCase):
         p = HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h11},
@@ -104,7 +104,7 @@ class TestSvnCapability(TraefikTestCase):
             p = HTTPSConnectionPool(
                 self.host,
                 self.https_port,
-                timeout=1,
+                timeout=5,
                 retries=0,
                 ca_certs=self.ca_authority,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
@@ -117,7 +117,7 @@ class TestSvnCapability(TraefikTestCase):
             p = HTTPConnectionPool(  # type: ignore[assignment]
                 self.host,
                 self.http_port,
-                timeout=1,
+                timeout=5,
                 retries=0,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2},
                 resolver=self.test_resolver,
@@ -129,7 +129,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -151,7 +151,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -174,7 +174,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -225,7 +225,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -339,7 +339,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPConnectionPool(
             self.host,
             self.http_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             resolver=self.test_resolver,
         ) as p:

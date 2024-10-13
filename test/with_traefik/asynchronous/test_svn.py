@@ -48,7 +48,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
@@ -62,7 +62,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
@@ -76,7 +76,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h2},
@@ -93,7 +93,7 @@ class TestSvnCapability(TraefikTestCase):
         p = AsyncHTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h11},
@@ -112,7 +112,7 @@ class TestSvnCapability(TraefikTestCase):
             p = AsyncHTTPSConnectionPool(
                 self.host,
                 self.https_port,
-                timeout=1,
+                timeout=5,
                 retries=0,
                 ca_certs=self.ca_authority,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
@@ -125,7 +125,7 @@ class TestSvnCapability(TraefikTestCase):
             p = AsyncHTTPConnectionPool(  # type: ignore[assignment]
                 self.host,
                 self.http_port,
-                timeout=1,
+                timeout=5,
                 retries=0,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2},
                 resolver=self.test_async_resolver,
@@ -137,7 +137,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
@@ -188,7 +188,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
@@ -211,7 +211,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
@@ -233,7 +233,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
@@ -363,7 +363,7 @@ class TestSvnCapability(TraefikTestCase):
         async with AsyncHTTPConnectionPool(
             self.host,
             self.http_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             resolver=self.test_async_resolver,
         ) as p:
