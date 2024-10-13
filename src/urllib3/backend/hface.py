@@ -261,9 +261,9 @@ class HfaceBackend(BaseBackend):
                     self._max_tolerable_delay_for_upgrade += (
                         self.conn_info.tls_handshake_latency.total_seconds()
                     )
-                self._max_tolerable_delay_for_upgrade *= 1.5
-            else:  # by default (fallback) to 1000ms
-                self._max_tolerable_delay_for_upgrade = 1.0
+                self._max_tolerable_delay_for_upgrade *= 10.0
+            else:  # by default (safe/conservative fallback) to 3000ms
+                self._max_tolerable_delay_for_upgrade = 3.0
 
             if upgradable_svn == HttpVersion.h3:
                 if self._preemptive_quic_cache is not None:
@@ -612,6 +612,9 @@ class HfaceBackend(BaseBackend):
                     alt_key = (self.host, self.__origin_port or 443)
                     if alt_key in self._preemptive_quic_cache:
                         del self._preemptive_quic_cache[alt_key]
+
+                # this avoid the close() to attempt re-use the (dead) sock
+                self._protocol = None
 
                 raise MustDowngradeError(
                     f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
