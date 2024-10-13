@@ -1613,6 +1613,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 body_pos=body_pos,
                 preload_content=preload_content,
                 decode_content=decode_content,
+                on_early_response=on_early_response,
+                on_upload_body=on_upload_body,
+                on_post_connection=on_post_connection,
                 multiplexed=multiplexed,
                 **response_kw,
             )
