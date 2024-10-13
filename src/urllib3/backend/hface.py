@@ -600,6 +600,7 @@ class HfaceBackend(BaseBackend):
             TimeoutError,
             SocketTimeout,
             ConnectionRefusedError,
+            ConnectionResetError,
         ) as e:
             if self.__alt_authority is not None:
                 # we want to remove invalid quic cache capability

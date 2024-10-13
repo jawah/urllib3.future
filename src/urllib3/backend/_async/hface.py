@@ -547,6 +547,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             TimeoutError,
             SocketTimeout,
             ConnectionRefusedError,
+            ConnectionResetError,
         ) as e:
             if (
                 isinstance(self._protocol, HTTPOverQUICProtocol)
