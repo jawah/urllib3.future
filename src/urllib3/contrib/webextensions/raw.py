@@ -50,9 +50,9 @@ class RawExtensionFromHTTP(ExtensionFromHTTP):
         if self._police_officer is None or self._dsa is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        with self._police_officer.borrow(self._response):
-            if isinstance(buf, str):
-                buf = buf.encode()
+        if isinstance(buf, str):
+            buf = buf.encode()
 
+        with self._police_officer.borrow(self._response):
             with self._write_error_catcher():
                 self._dsa.sendall(buf)
