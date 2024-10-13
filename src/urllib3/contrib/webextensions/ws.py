@@ -100,16 +100,22 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
     def close(self) -> None:
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
-            if self._remote_shutdown is False:
-                try:
-                    data_to_send: bytes = self._protocol.send(CloseConnection(0))
-                except WebSocketProtocolError as e:
-                    raise ProtocolError from e
+            if self._police_officer is not None:
+                with self._police_officer.borrow(self._response):
+                    if self._remote_shutdown is False:
+                        try:
+                            data_to_send: bytes = self._protocol.send(
+                                CloseConnection(0)
+                            )
+                        except WebSocketProtocolError as e:
+                            raise ProtocolError from e
 
-                with self._write_error_catcher():
-                    self._dsa.sendall(data_to_send)
-            self._dsa.close()
-            self._dsa = None
+                        with self._write_error_catcher():
+                            self._dsa.sendall(data_to_send)
+                    self._dsa.close()
+                    self._dsa = None
+            else:
+                self._dsa = None
         if self._response is not None:
             if self._police_officer is not None:
                 self._police_officer.forget(self._response)
@@ -126,37 +132,8 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        # we may have pending event to unpack!
-        for event in self._protocol.events():
-            if isinstance(event, TextMessage):
-                return event.data
-            elif isinstance(event, BytesMessage):
-                return event.data
-            elif isinstance(event, CloseConnection):
-                self._remote_shutdown = True
-                self.close()
-                return None
-            elif isinstance(event, Ping):
-                try:
-                    data_to_send: bytes = self._protocol.send(event.response())
-                except WebSocketProtocolError as e:
-                    self.close()
-                    raise ProtocolError from e
-
-                with self._write_error_catcher():
-                    self._dsa.sendall(data_to_send)
-
-        while True:
-            with self._police_officer.borrow(self._response):
-                with self._read_error_catcher():
-                    data, eot, _ = self._dsa.recv_extended(None)
-
-            try:
-                self._protocol.receive_data(data)
-            except WebSocketProtocolError as e:
-                self.close()
-                raise ProtocolError from e
-
+        with self._police_officer.borrow(self._response):
+            # we may have pending event to unpack!
             for event in self._protocol.events():
                 if isinstance(event, TextMessage):
                     return event.data
@@ -168,45 +145,76 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                     return None
                 elif isinstance(event, Ping):
                     try:
-                        data_to_send = self._protocol.send(event.response())
+                        data_to_send: bytes = self._protocol.send(event.response())
                     except WebSocketProtocolError as e:
                         self.close()
                         raise ProtocolError from e
+
                     with self._write_error_catcher():
                         self._dsa.sendall(data_to_send)
-                elif isinstance(event, Pong):
-                    continue
+
+            while True:
+                with self._read_error_catcher():
+                    data, eot, _ = self._dsa.recv_extended(None)
+
+                try:
+                    self._protocol.receive_data(data)
+                except WebSocketProtocolError as e:
+                    self.close()
+                    raise ProtocolError from e
+
+                for event in self._protocol.events():
+                    if isinstance(event, TextMessage):
+                        return event.data
+                    elif isinstance(event, BytesMessage):
+                        return event.data
+                    elif isinstance(event, CloseConnection):
+                        self._remote_shutdown = True
+                        self.close()
+                        return None
+                    elif isinstance(event, Ping):
+                        try:
+                            data_to_send = self._protocol.send(event.response())
+                        except WebSocketProtocolError as e:
+                            self.close()
+                            raise ProtocolError from e
+                        with self._write_error_catcher():
+                            self._dsa.sendall(data_to_send)
+                    elif isinstance(event, Pong):
+                        continue
 
     def send_payload(self, buf: str | bytes) -> None:
         """Dispatch a buffer to remote."""
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        try:
-            if isinstance(buf, str):
-                data_to_send: bytes = self._protocol.send(TextMessage(buf))
-            else:
-                data_to_send = self._protocol.send(BytesMessage(buf))
-        except WebSocketProtocolError as e:
-            self.close()
-            raise ProtocolError from e
-
         with self._police_officer.borrow(self._response):
-            with self._write_error_catcher():
-                self._dsa.sendall(data_to_send)
-
-    def ping(self) -> None:
-        if self._dsa is None or self._response is None or self._police_officer is None:
-            raise OSError("The HTTP extension is closed or uninitialized")
-        if self._remote_shutdown is False:
             try:
-                data_to_send: bytes = self._protocol.send(Ping())
+                if isinstance(buf, str):
+                    data_to_send: bytes = self._protocol.send(TextMessage(buf))
+                else:
+                    data_to_send = self._protocol.send(BytesMessage(buf))
             except WebSocketProtocolError as e:
                 self.close()
                 raise ProtocolError from e
 
             with self._write_error_catcher():
                 self._dsa.sendall(data_to_send)
+
+    def ping(self) -> None:
+        if self._dsa is None or self._response is None or self._police_officer is None:
+            raise OSError("The HTTP extension is closed or uninitialized")
+
+        with self._police_officer.borrow(self._response):
+            if self._remote_shutdown is False:
+                try:
+                    data_to_send: bytes = self._protocol.send(Ping())
+                except WebSocketProtocolError as e:
+                    self.close()
+                    raise ProtocolError from e
+
+                with self._write_error_catcher():
+                    self._dsa.sendall(data_to_send)
 
     @staticmethod
     def supported_schemes() -> set[str]:
