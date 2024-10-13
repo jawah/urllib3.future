@@ -42,7 +42,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -56,7 +56,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
@@ -70,7 +70,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h2},
@@ -87,7 +87,7 @@ class TestSvnCapability(TraefikTestCase):
         p = HTTPSConnectionPool(
             self.host,
             self.https_port,
-            timeout=1,
+            timeout=5,
             retries=0,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h11},
@@ -104,7 +104,7 @@ class TestSvnCapability(TraefikTestCase):
             p = HTTPSConnectionPool(
                 self.host,
                 self.https_port,
-                timeout=1,
+                timeout=5,
                 retries=0,
                 ca_certs=self.ca_authority,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3},
@@ -117,7 +117,7 @@ class TestSvnCapability(TraefikTestCase):
             p = HTTPConnectionPool(  # type: ignore[assignment]
                 self.host,
                 self.http_port,
-                timeout=1,
+                timeout=5,
                 retries=0,
                 disabled_svn={HttpVersion.h11, HttpVersion.h2},
                 resolver=self.test_resolver,
@@ -129,7 +129,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -151,7 +151,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -174,7 +174,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -192,11 +192,40 @@ class TestSvnCapability(TraefikTestCase):
                     == f'h3-25=":443"; ma=3600, h3=":{self.https_port}"; ma=3600'
                 )
 
+    @pytest.mark.usefixtures("requires_http3")
+    def test_misleading_upgrade_h3(self) -> None:
+        dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
+
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_alt_port,
+            retries=False,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+            preemptive_quic_cache=dumb_cache,
+        ) as p:
+            for i in range(2):
+                resp = p.request(
+                    "GET",
+                    "/response-headers?Alt-Svc=h3-25%3D%22%3A443%22%3B%20ma%3D3600%2C%20h3%3D%22%3A6547%22%3B%20ma%3D3600",
+                )
+
+                assert resp.version == 20
+                assert "Alt-Svc" in resp.headers
+                assert (
+                    resp.headers.get("Alt-Svc")
+                    == 'h3-25=":443"; ma=3600, h3=":6547"; ma=3600'
+                )
+
+        # this asserts tell us that we correctly unset the entry from "preemptive_quic_cache"
+        # because the alt-svc entry was misleading, thus invalid.
+        assert len(dumb_cache) == 0
+
     def test_invalid_alt_svc_h3_upgrade(self) -> None:
         with HTTPSConnectionPool(
             self.host,
             self.https_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
@@ -310,7 +339,7 @@ class TestSvnCapability(TraefikTestCase):
         with HTTPConnectionPool(
             self.host,
             self.http_alt_port,
-            timeout=1,
+            timeout=5,
             retries=False,
             resolver=self.test_resolver,
         ) as p:

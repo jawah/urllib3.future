@@ -17,6 +17,7 @@ from ..exceptions import (
     ProtocolError,
     ProxyError,
     ReadTimeoutError,
+    RecoverableError,
     ResponseError,
 )
 from .util import reraise
@@ -468,11 +469,12 @@ class Retry:
         :return: A new ``Retry`` object.
         """
         if self.total is False and error:
-            # Disabled, indicate to re-raise the error.
-            raise reraise(type(error), error, _stacktrace)
+            if not isinstance(error, RecoverableError):
+                # Disabled, indicate to re-raise the error.
+                raise reraise(type(error), error, _stacktrace)
 
         total = self.total
-        if total is not None:
+        if total is not None and isinstance(error, RecoverableError) is False:
             total -= 1
 
         connect = self.connect
@@ -537,7 +539,7 @@ class Retry:
             history=history,
         )
 
-        if new_retry.is_exhausted():
+        if isinstance(error, RecoverableError) is False and new_retry.is_exhausted():
             reason = error or ResponseError(cause)
             raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
 

@@ -15,7 +15,7 @@ urllib3.future
 
 - ⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.
 - ⚡ urllib3.future goes beyond supported features while remaining compatible.
-- ⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries and **urllib3**:
+- ⚡ urllib3.future brings many critical features that are missing from both the Python standard libraries and **urllib3**!
 
 
 - Async.
@@ -31,13 +31,19 @@ urllib3.future
 - Helpers for retrying requests and dealing with HTTP redirects.
 - Support for gzip, deflate, brotli, and zstd encoding.
 - Support for Python/PyPy 3.7+, no compromise.
+- Automatic Connection Upgrade / Downgrade.
+- Early (Informational) Responses / Hints.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
+- WebSocket over HTTP/2+ (RFC8441).
 - Proxy support for HTTP and SOCKS.
+- Post-Quantum Security with QUIC.
 - Detailed connection inspection.
 - HTTP/2 with prior knowledge.
 - Multiplexed connection.
 - Mirrored Sync & Async.
+- Trailer Headers.
 - Amazingly Fast.
+- WebSocket.
 
 urllib3 is powerful and easy to use:
 
@@ -49,6 +55,8 @@ urllib3 is powerful and easy to use:
    200
    >>> resp.data
    b"User-agent: *\nDisallow: /deny\n"
+   >>> resp.version
+   20
 
 Installing
 ----------

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import typing
 from abc import ABCMeta
+from contextlib import asynccontextmanager
+from socket import timeout as SocketTimeout
 
 if typing.TYPE_CHECKING:
     from ...._async.response import AsyncHTTPResponse
     from ....backend import HttpVersion
     from ....backend._async._base import AsyncDirectStreamAccess
     from ....util._async.traffic_police import AsyncTrafficPolice
+
+from ....exceptions import BaseSSLError, ProtocolError, ReadTimeoutError, SSLError
 
 
 class AsyncExtensionFromHTTP(metaclass=ABCMeta):
@@ -18,6 +22,103 @@ class AsyncExtensionFromHTTP(metaclass=ABCMeta):
         self._dsa: AsyncDirectStreamAccess | None = None
         self._response: AsyncHTTPResponse | None = None
         self._police_officer: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
+
+    @asynccontextmanager
+    async def _read_error_catcher(self) -> typing.AsyncGenerator[None, None]:
+        """
+        Catch low-level python exceptions, instead re-raising urllib3
+        variants, so that low-level exceptions are not leaked in the
+        high-level api.
+
+        On unrecoverable issues, release the connection back to the pool.
+        """
+        clean_exit = False
+
+        try:
+            try:
+                yield
+
+            except SocketTimeout as e:
+                clean_exit = True
+                pool = (
+                    self._response._pool
+                    if self._response and hasattr(self._response, "_pool")
+                    else None
+                )
+                raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
+
+            except BaseSSLError as e:
+                # FIXME: Is there a better way to differentiate between SSLErrors?
+                if "read operation timed out" not in str(e):
+                    # SSL errors related to framing/MAC get wrapped and reraised here
+                    raise SSLError(e) from e
+                clean_exit = True  # ws algorithms based on timeouts can expect this without being harmful!
+                pool = (
+                    self._response._pool
+                    if self._response and hasattr(self._response, "_pool")
+                    else None
+                )
+                raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
+
+            except OSError as e:
+                # This includes IncompleteRead.
+                raise ProtocolError(f"Connection broken: {e!r}", e) from e
+
+            # If no exception is thrown, we should avoid cleaning up
+            # unnecessarily.
+            clean_exit = True
+        finally:
+            # If we didn't terminate cleanly, we need to throw away our
+            # connection.
+            if not clean_exit:
+                # The response may not be closed but we're not going to use it
+                # anymore so close it now to ensure that the connection is
+                # released back to the pool.
+                if self._response:
+                    await self.close()
+
+    @asynccontextmanager
+    async def _write_error_catcher(self) -> typing.AsyncGenerator[None, None]:
+        """
+        Catch low-level python exceptions, instead re-raising urllib3
+        variants, so that low-level exceptions are not leaked in the
+        high-level api.
+
+        On unrecoverable issues, release the connection back to the pool.
+        """
+        clean_exit = False
+
+        try:
+            try:
+                yield
+
+            except SocketTimeout as e:
+                pool = (
+                    self._response._pool
+                    if self._response and hasattr(self._response, "_pool")
+                    else None
+                )
+                raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
+
+            except BaseSSLError as e:
+                raise SSLError(e) from e
+
+            except OSError as e:
+                # This includes IncompleteRead.
+                raise ProtocolError(f"Connection broken: {e!r}", e) from e
+
+            # If no exception is thrown, we should avoid cleaning up
+            # unnecessarily.
+            clean_exit = True
+        finally:
+            # If we didn't terminate cleanly, we need to throw away our
+            # connection.
+            if not clean_exit:
+                # The response may not be closed but we're not going to use it
+                # anymore so close it now to ensure that the connection is
+                # released back to the pool.
+                if self._response:
+                    await self.close()
 
     async def start(self, response: AsyncHTTPResponse) -> None:
         """The HTTP server gave us the go-to start negotiating another protocol."""
@@ -67,4 +168,11 @@ class AsyncExtensionFromHTTP(metaclass=ABCMeta):
 
     async def send_payload(self, buf: str | bytes) -> None:
         """Dispatch a buffer to remote."""
+        raise NotImplementedError
+
+    async def on_payload(
+        self, callback: typing.Callable[[str | bytes | None], typing.Awaitable[None]]
+    ) -> None:
+        """Set up a callback that will be invoked automatically once a payload is received.
+        Meaning that you stop calling manually next_payload()."""
         raise NotImplementedError

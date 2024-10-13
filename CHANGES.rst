@@ -1,3 +1,10 @@
+2.10.903 (2024-10-12)
+=====================
+
+- Fixed exception leaks in ExtensionFromHTTP plugins. Now every extension behave and raise urllib3 own exceptions.
+- Added automatic connection downgrade HTTP/2 -> HTTP/1.1 or HTTP/3 -> (HTTP/2 or HTTP/1.1) in case of known recoverable issues.
+- Fixed a rare issue where the write semaphore (async context) for a datagram socket would be locked forever in case of an error.
+
 2.10.902 (2024-10-09)
 =====================
 

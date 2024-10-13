@@ -41,7 +41,7 @@ jobs:
 
   dead-pip:
     name: Ensure pip <21.2.4
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     timeout-minutes: 5
 
     steps:

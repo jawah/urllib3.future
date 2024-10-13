@@ -249,12 +249,16 @@ class AsyncSocket:
     async def sendall(self, data: bytes | bytearray | memoryview) -> None:
         await self._established.wait()
         await self._writer_semaphore.acquire()
-        if self._writer is not None:
-            self._writer.write(data)
-            await self._writer.drain()
-        else:
-            await asyncio.get_running_loop().sock_sendall(self._sock, data=data)
-        self._writer_semaphore.release()
+        try:
+            if self._writer is not None:
+                self._writer.write(data)
+                await self._writer.drain()
+            else:
+                await asyncio.get_running_loop().sock_sendall(self._sock, data=data)
+        except Exception:
+            raise
+        finally:
+            self._writer_semaphore.release()
 
     async def write_all(self, data: bytes | bytearray | memoryview) -> None:
         """Just an alias for sendall(), it is needed due to our custom AsyncSocks override."""

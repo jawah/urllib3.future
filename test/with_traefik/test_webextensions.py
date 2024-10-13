@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from urllib3 import HttpVersion, PoolManager
+from urllib3 import HttpVersion, PoolManager, Timeout
 from urllib3.contrib.webextensions import (
     RawExtensionFromHTTP,
     WebSocketExtensionFromHTTP,
 )
+from urllib3.exceptions import ReadTimeoutError
 
 from . import TraefikTestCase
 
@@ -212,4 +213,50 @@ class TestWebExtensions(TraefikTestCase):
             assert resp.extension.next_payload() == b"Foo Bar Baz!"
 
             # gracefully close the sub protocol.
+            resp.extension.close()
+
+    @pytest.mark.skipif(
+        WebSocketExtensionFromHTTP is None, reason="test requires wsproto"
+    )
+    @pytest.mark.parametrize(
+        "target_protocol",
+        [
+            "wss",
+            "ws",
+        ],
+    )
+    def test_exception_leak_read_timeout(self, target_protocol: str) -> None:
+        """Here we test both wss and ws because the low-level exception differ, we must
+        check that both lead to our unified ReadTimeoutError."""
+        target_url = self.https_url if target_protocol == "wss" else self.http_url
+        target_url = (
+            target_url.replace("https://", "wss://")
+            if target_protocol == "wss"
+            else target_url.replace("http://", "ws://")
+        )
+
+        with PoolManager(
+            resolver=self.test_resolver,
+            ca_certs=self.ca_authority,
+            timeout=Timeout(read=1),
+        ) as pm:
+            resp = pm.urlopen("GET", target_url + "/websocket/echo")
+
+            # The response ends with a "101 Switching Protocol"!
+            assert resp.status == 101
+
+            # The HTTP extension should be automatically loaded!
+            assert resp.extension is not None
+
+            # This response should not have a body, therefor don't try to read from
+            # socket in there!
+            assert resp.data == b""
+            assert resp.read() == b""
+
+            # the extension here should be WebSocketExtensionFromHTTP
+            assert isinstance(resp.extension, WebSocketExtensionFromHTTP)
+
+            with pytest.raises(ReadTimeoutError):
+                resp.extension.next_payload()
+
             resp.extension.close()

@@ -195,6 +195,16 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         """
         await super()._new_conn()
 
+        backup_timeout: float | None = -1.0
+
+        # we want to purposely mitigate the following scenario:
+        #   "A server yield its support for HTTP/2 or HTTP/3 through Alt-Svc, but
+        #    it cannot connect to the alt-svc, thus confusing the end-user on why it
+        #    waits forever for the 2nd request."
+        if self._max_tolerable_delay_for_upgrade is not None:
+            backup_timeout = self.timeout
+            self.timeout = self._max_tolerable_delay_for_upgrade
+
         try:
             sock = await self._resolver.create_connection(
                 (self._dns_host, self.port or self.default_port),
@@ -220,6 +230,9 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             raise NewConnectionError(
                 self, f"Failed to establish a new connection: {e}"
             ) from e
+        finally:
+            if backup_timeout != -1:
+                self.timeout = backup_timeout
 
         # We can, migrate to a DGRAM socket if DNS HTTPS/RR record exist and yield HTTP/3+QUIC support.
         if sock.type == socket.SOCK_DGRAM and self.socket_kind == socket.SOCK_STREAM:
