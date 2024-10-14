@@ -123,7 +123,7 @@ jobs:
           TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && '192.168.106.2' || '127.0.0.1' }}
 
       - name: "Upload artifact"
-        uses: "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
+        uses: "actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882"
         with:
           name: coverage-data
           path: ".coverage.*"
@@ -158,7 +158,7 @@ jobs:
           python -m coverage report --ignore-errors --show-missing --fail-under=80
 
       - name: "Upload report"
-        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
           name: coverage-report
           path: htmlcov
