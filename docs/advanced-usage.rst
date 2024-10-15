@@ -1442,7 +1442,7 @@ Happy Eyeballs requires to do concurrent tasks.
 
 .. note:: The asynchronous algorithm is more efficient than its synchronous counterpart.
 
-.. warning:: A particularity exist in the synchronous context, a timeout is mandatory due its nature (threads: cannot kill them if pending I/O). By default we expect a max delay of 400ms at most.
+.. warning:: A particularity exist in the synchronous context, a timeout is mandatory due its nature (threads: cannot kill them if pending I/O). By default we expect a max delay of 5000ms at most if no connect timeout is specified.
 
 In what scenario do I gain using this?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

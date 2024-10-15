@@ -1894,7 +1894,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                     heb_timeout.connect_timeout
                     if heb_timeout.connect_timeout is not None
                     and isinstance(heb_timeout.connect_timeout, (float, int))
-                    else 0.4
+                    else 5.0
                 )
 
                 for ip_address in ip_addresses[:max_task]:
@@ -1966,10 +1966,27 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                     if task == winning_task:
                         continue
 
+                    associated_conn = challengers[tasks.index(task)]
+
                     if task.running():
+                        # dangling TCP conn
+                        try:
+                            if associated_conn._resolver._sock_cursor:
+                                associated_conn._resolver._sock_cursor.shutdown(0)
+                                associated_conn._resolver._sock_cursor.close()
+                            # dangling UDP conn (they usually stuck later in the process)
+                            elif associated_conn.sock:
+                                associated_conn.sock.shutdown(0)
+                                associated_conn.sock.close()
+                                associated_conn.sock = (
+                                    None  # ensure it's not used to send close frames
+                                )
+                        except OSError:
+                            pass  # ignore any error
+                        associated_conn.close()
                         task.cancel()
                     else:
-                        challengers[tasks.index(task)].close()
+                        associated_conn.close()
 
                 if winning_task is None:
                     within_delay_msg: str = (

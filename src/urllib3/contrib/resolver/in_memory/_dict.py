@@ -30,6 +30,10 @@ class InMemoryResolver(BaseResolver):
                 self.register(hostname, addr)
             self._host_patterns = tuple([])
 
+        # probably about our happy eyeballs impl (sync only)
+        if len(self._hosts) == 1 and len(self._hosts[list(self._hosts.keys())[0]]) == 1:
+            self._unsafe_expose = True
+
     def recycle(self) -> BaseResolver:
         return self
 
