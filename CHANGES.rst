@@ -1,3 +1,8 @@
+2.10.905 (2024-10-15)
+=====================
+
+- Fixed dangling task waiting for timeout when using Happy Eyeballs in a synchronous context.
+
 2.10.904 (2024-10-13)
 =====================
 

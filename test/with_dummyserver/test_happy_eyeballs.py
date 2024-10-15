@@ -111,7 +111,8 @@ class TestHappyEyeballs:
 
     def test_with_all_tarpit_implicit_timeout(self) -> None:
         """In the synchronous context, using HEB algorithm, we cannot set the infinite wait.
-        We have to make sure it fails after a short period of time (by default 400ms)"""
+        We have to make sure it fails after a short period of time (by default 5000ms)
+        """
         with PoolManager(
             happy_eyeballs=True,
             resolver="in-memory://default?hosts=dummy.io:240.0.0.0,dummy.io:240.0.0.1",
@@ -125,7 +126,7 @@ class TestHappyEyeballs:
                 "No suitable address to connect to using Happy Eyeballs"
                 in exc.value.args[0]
             )
-            assert "within 0.4s" in exc.value.args[0]
+            assert "within 5.0s" in exc.value.args[0]
 
     def test_with_all_tarpit_explicit_timeout_global(self) -> None:
         with PoolManager(

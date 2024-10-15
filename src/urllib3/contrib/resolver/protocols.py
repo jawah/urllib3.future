@@ -64,6 +64,11 @@ class BaseResolver(metaclass=ABCMeta):
         if not self._host_patterns and "patterns" in kwargs:
             self._host_patterns = kwargs["patterns"]
 
+        # allow to temporarily expose a sock that is "being" created
+        # this helps with our Happy Eyeballs implementation in sync.
+        self._unsafe_expose: bool = False
+        self._sock_cursor: socket.socket | None = None
+
     def recycle(self) -> BaseResolver:
         if self.is_available():
             raise RuntimeError("Attempting to recycle a Resolver that was not closed")
@@ -221,7 +226,14 @@ class BaseResolver(metaclass=ABCMeta):
                     sock.settimeout(timeout)
                 if source_address:
                     sock.bind(source_address)
+
+                if self._unsafe_expose:
+                    self._sock_cursor = sock
+
                 sock.connect(sa)
+
+                if self._unsafe_expose:
+                    self._sock_cursor = None
                 # Break explicitly a reference cycle
                 err = None
 
