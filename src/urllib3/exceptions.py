@@ -351,3 +351,7 @@ class RecoverableError(HTTPError):
 
 class MustDowngradeError(RecoverableError):
     """An error occurred with a protocol and can be circumvented using an older protocol."""
+
+
+class MustRedialError(RecoverableError):
+    """The remote peer closed the connection without error, but expected it to be still open."""

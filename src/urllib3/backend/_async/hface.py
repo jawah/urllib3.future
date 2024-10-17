@@ -43,6 +43,7 @@ from ...exceptions import (
     IncompleteRead,
     InvalidHeader,
     MustDowngradeError,
+    MustRedialError,
     ProtocolError,
     ResponseNotReady,
     SSLError,
@@ -793,6 +794,20 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
+                    # some server implementation may be aggressive toward "idle" session
+                    # this is especially true when using QUIC.
+                    # For example, google/quiche expect regular ACKs, otherwise will
+                    # deduct that network conn is dead.
+                    # todo: we will need some kind of background watch constrained by TrafficPolice
+                    # see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
+                    #      https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
+                    if event.error_code == 0:
+                        self._protocol = None
+                        await self.close()
+                        raise MustRedialError(
+                            f"Remote peer just closed our connection, probably for not answering to unsolicited packet. ({event.message})"
+                        )
+
                     if (
                         event.error_code == 400
                         and event.message

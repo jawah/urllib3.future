@@ -1,3 +1,9 @@
+2.10.906 (2024-10-17)
+=====================
+
+- Fixed handling aggressive ACKs watcher in some QUIC server implementation leading to a ``ProtocolError``.
+  We're actively working toward a solution that will avoid to recycle the QUIC connection.
+
 2.10.905 (2024-10-15)
 =====================
 
