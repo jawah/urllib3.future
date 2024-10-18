@@ -747,6 +747,45 @@ class HfaceBackend(BaseBackend):
         self._protocol = None
         self._protocol_factory = None
 
+    def peek_and_react(self) -> bool:
+        """This method should be called by a thread using TrafficPolice when it is idle.
+        Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
+        or when reaching a WebSocket.
+        This method return True if there is any event ready to unpack for the connection.
+        """
+        if self.sock is None or self._protocol is None:
+            return False
+
+        self.sock.setblocking(False)
+
+        try:
+            peek_data = self.sock.recv(self.blocksize, socket.MSG_PEEK)
+        except OSError:
+            return False
+        finally:
+            self.sock.setblocking(True)
+
+        if not peek_data:
+            return False
+
+        try:
+            self._protocol.bytes_received(self.sock.recv(self.blocksize))
+        except self._protocol.exceptions():
+            return False
+
+        while True:
+            data_out = self._protocol.bytes_to_send()
+
+            if not data_out:
+                break
+
+            try:
+                self.sock.sendall(data_out)
+            except OSError:
+                return False
+
+        return self._protocol.has_pending_event()
+
     def __exchange_until(
         self,
         event_type: type[Event] | tuple[type[Event], ...],

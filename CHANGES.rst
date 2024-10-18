@@ -1,3 +1,11 @@
+2.10.907 (2024-10-18)
+=====================
+
+- Added a discrete task for each instantiated ``ConnectionPool`` to watch for unsolicited incoming data.
+  This improves the fix shipped in v2.10.906 and avoid having to recycle your multiplexed connection in idle moments.
+  A new keyword argument is supported in your PoolManager configuration, namely ``background_watch_delay``.
+  This parameter takes a int or float as the delay between checks. Set it to None to void this background task.
+
 2.10.906 (2024-10-17)
 =====================
 

@@ -264,6 +264,39 @@ class TrafficPolice(typing.Generic[T]):
             for indicator in traffic_indicators:
                 self.memorize(indicator, conn_or_pool)
 
+    def iter_idle(self) -> typing.Generator[T, None, None]:
+        with self._lock:
+            if self.busy:
+                raise AtomicTraffic(
+                    "One connection/pool active per thread at a given time. "
+                    "Call release prior to calling this method."
+                )
+
+            if len(self._container) > 0:
+                obj_id, conn_or_pool = None, None
+
+                for cur_obj_id, cur_conn_or_pool in self._container.items():
+                    if traffic_state_of(cur_conn_or_pool) != TrafficState.IDLE:
+                        continue
+
+                    obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
+                    break
+
+                if obj_id is not None:
+                    self._container.pop(obj_id)
+
+                if obj_id is not None and conn_or_pool is not None:
+                    self._local.cursor = (obj_id, conn_or_pool)
+
+                    if self.concurrency is True:
+                        new_container = {obj_id: conn_or_pool}
+                        new_container.update(self._container)
+                        self._container = new_container
+
+                    yield conn_or_pool
+
+                    self.release()
+
     def get_nowait(
         self, non_saturated_only: bool = False, not_idle_only: bool = False
     ) -> T | None:

@@ -12,6 +12,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from socket import timeout as SocketTimeout
+from time import sleep
 from types import TracebackType
 
 from ._collections import HTTPHeaderDict
@@ -134,6 +135,28 @@ class ConnectionPool:
 _blocking_errnos = {errno.EAGAIN, errno.EWOULDBLOCK}
 
 
+def idle_conn_watch_task(pool: HTTPConnectionPool, waiting_delay: float = 5.0) -> None:
+    """Discrete background task that monitor incoming data
+    and dispatch message to registered callbacks."""
+
+    while pool.pool is not None:
+        slept_period: float = 0.
+
+        while slept_period < waiting_delay:
+            sleep(0.05)
+            slept_period += 0.05
+            if pool.pool is None:
+                return
+
+        if pool.pool is None:
+            return
+        try:
+            for conn in pool.pool.iter_idle():
+                conn.peek_and_react()
+        except AttributeError:
+            return
+
+
 class HTTPConnectionPool(ConnectionPool, RequestMethods):
     """
     Thread-safe connection pool for one host.
@@ -208,6 +231,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         | BaseResolver
         | None = None,
         happy_eyeballs: bool | int = False,
+        background_watch_delay: int | float | None = 5.0,
         **conn_kw: typing.Any,
     ):
         ConnectionPool.__init__(self, host, port)
@@ -311,6 +335,18 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         )
 
         self.conn_kw["resolver"] = self._resolver
+
+        if background_watch_delay is not None:
+            self._background_monitoring: threading.Thread | None = threading.Thread(
+                target=idle_conn_watch_task,
+                args=(
+                    self,
+                    background_watch_delay,
+                ),
+            )
+            self._background_monitoring.start()
+        else:
+            self._background_monitoring = None
 
     @property
     def is_idle(self) -> bool:
@@ -1164,6 +1200,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # Close all the HTTPConnections in the pool.
         old_pool.clear()
 
+        if self._background_monitoring is not None:
+            self._background_monitoring = None
+
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
             self._resolver.close()
@@ -1573,6 +1612,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 # we put the None back in the pool to avoid leaking it.
                 if conn:
                     conn.close()
+                    self.pool.kill_cursor()  # type: ignore[union-attr]
                     conn = None
                 release_this_conn = True
             elif conn and conn.is_multiplexed is True:

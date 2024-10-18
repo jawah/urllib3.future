@@ -140,6 +140,23 @@ class AsyncConnectionPool:
 _blocking_errnos = {errno.EAGAIN, errno.EWOULDBLOCK}
 
 
+async def idle_conn_watch_task(
+    pool: AsyncHTTPConnectionPool, waiting_delay: float = 5.0
+) -> None:
+    """Discrete background task that monitor incoming data
+    and dispatch message to registered callbacks."""
+
+    while pool.pool is not None:
+        await asyncio.sleep(waiting_delay)
+        if pool.pool is None:
+            return
+        try:
+            async for conn in pool.pool.iter_idle():
+                await conn.peek_and_react()
+        except AttributeError:
+            return
+
+
 class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
     """
     Task-safe async connection pool for one host.
@@ -216,6 +233,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         | AsyncBaseResolver
         | None = None,
         happy_eyeballs: bool | int = False,
+        background_watch_delay: int | float | None = 5.0,
         **conn_kw: typing.Any,
     ):
         AsyncConnectionPool.__init__(self, host, port)
@@ -324,6 +342,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         self.conn_kw["resolver"] = self._resolver
 
+        self._background_watch_delay = background_watch_delay
+        self._background_monitoring: asyncio.Task | None = None  # type: ignore[type-arg]
+
     @property
     def is_idle(self) -> bool:
         return self.pool is None or self.pool.bag_only_idle
@@ -336,6 +357,14 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         """
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
+
+        if (
+            self._background_monitoring is None
+            and self._background_watch_delay is not None
+        ):
+            self._background_monitoring = asyncio.create_task(
+                idle_conn_watch_task(self, self._background_watch_delay)
+            )
 
         self.num_connections += 1
         log.debug(
@@ -1191,6 +1220,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         # Close all the HTTPConnections in the pool.
         await old_pool.clear()
 
+        if self._background_monitoring is not None:
+            self._background_monitoring.cancel()
+            self._background_monitoring = None
+
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
             await self._resolver.close()
@@ -1846,6 +1879,10 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         """
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
+        if self._background_monitoring is None:
+            self._background_monitoring = asyncio.create_task(
+                idle_conn_watch_task(self)
+            )
         self.num_connections += 1
         log.debug(
             "Starting new HTTPS connection (%d): %s:%s",
