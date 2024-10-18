@@ -257,6 +257,39 @@ class AsyncTrafficPolice(typing.Generic[T]):
             "Cannot select a disposable connection to ease the charge"
         )
 
+    async def iter_idle(self) -> typing.AsyncGenerator[T, None]:
+        """Iterate over idle conn contained in the container bag."""
+        if self.busy:
+            raise AtomicTraffic(
+                "One connection/pool active per thread at a given time. "
+                "Call release prior to calling this method."
+            )
+
+        if len(self._container) > 0:
+            obj_id, conn_or_pool = None, None
+
+            for cur_obj_id, cur_conn_or_pool in self._container.items():
+                if traffic_state_of(cur_conn_or_pool) != TrafficState.IDLE:  # type: ignore[arg-type]
+                    continue
+
+                obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
+                break
+
+            if obj_id is not None:
+                self._container.pop(obj_id)
+
+            if obj_id is not None and conn_or_pool is not None:
+                self._set_cursor((obj_id, conn_or_pool))
+
+                if self.concurrency is True:
+                    new_container = {obj_id: conn_or_pool}
+                    new_container.update(self._container)
+                    self._container = new_container
+
+                yield conn_or_pool
+
+                self.release()
+
     async def put(
         self,
         conn_or_pool: T,

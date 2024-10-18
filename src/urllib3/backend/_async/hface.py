@@ -696,6 +696,38 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._protocol = None
         self._protocol_factory = None
 
+    async def peek_and_react(self) -> bool:
+        """This method should be called by a thread using TrafficPolice when it is idle.
+        Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
+        or when reaching a WebSocket.
+        This method return True if there is any event ready to unpack for the connection.
+        """
+        if self.sock is None or self._protocol is None:
+            return False
+
+        peek_data = await self.sock.peek(self.blocksize)
+
+        if not peek_data:
+            return False
+
+        try:
+            self._protocol.bytes_received(await self.sock.recv(self.blocksize))
+        except self._protocol.exceptions():
+            return False
+
+        while True:
+            data_out = self._protocol.bytes_to_send()
+
+            if not data_out:
+                break
+
+            try:
+                await self.sock.sendall(data_out)
+            except OSError:
+                return False
+
+        return self._protocol.has_pending_event()
+
     async def __exchange_until(
         self,
         event_type: type[Event] | tuple[type[Event], ...],
@@ -802,6 +834,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     # see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
                     #      https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
                     if event.error_code == 0:
+                        print("killed!")
                         self._protocol = None
                         await self.close()
                         raise MustRedialError(
