@@ -233,8 +233,6 @@ class TestProtocolLevel(TraefikTestCase):
 
             await asyncio.sleep(sleep_delay)
 
-            print(f"{background_watch_delay=} {sleep_delay=} {disabled_svn=}")
-
             if (
                 background_watch_delay is not None
                 and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
