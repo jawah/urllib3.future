@@ -776,7 +776,11 @@ class HfaceBackend(BaseBackend):
         # SSLSocket can't support non-zero flag for read.
         # so, we'll improvise!
         if isinstance(self.sock, ssl.SSLSocket):
-            sock = socket.socket(fileno=self.sock.fileno())
+            try:
+                sock = socket.socket(fileno=self.sock.fileno())
+            except (OSError, AttributeError):
+                # Defensive: that means we can't go further, sock is not standard or don't implement fileno
+                return False
 
             try:
                 peek_data = sock.recv(self.blocksize, socket.MSG_PEEK)
