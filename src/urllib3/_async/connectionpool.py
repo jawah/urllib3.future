@@ -180,19 +180,7 @@ async def idle_conn_watch_task(
 
                     if connected_at is not None:
                         since_connection_delay = now - connected_at
-                        print(
-                            "Y",
-                            since_connection_delay <= keepalive_delay,
-                            since_connection_delay,
-                            keepalive_delay,
-                        )
                         if since_connection_delay <= keepalive_delay:
-                            print(
-                                "X",
-                                idle_delay >= keepalive_idle_window,
-                                idle_delay,
-                                keepalive_idle_window,
-                            )
                             if idle_delay >= keepalive_idle_window:
                                 await conn.ping()
                                 pool.num_pings += 1
