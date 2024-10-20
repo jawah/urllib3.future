@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import sys
+import time
 import typing
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -23,7 +24,12 @@ except (ImportError, AttributeError):
     Certificate = None
 
 from .._collections import HTTPHeaderDict
-from .._constant import DEFAULT_BLOCKSIZE, UDP_DEFAULT_BLOCKSIZE, responses
+from .._constant import (
+    DEFAULT_BLOCKSIZE,
+    DEFAULT_KEEPALIVE_DELAY,
+    UDP_DEFAULT_BLOCKSIZE,
+    responses,
+)
 from ..contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -94,6 +100,7 @@ class HfaceBackend(BaseBackend):
         | None = BaseBackend.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
     ):
         if not _HAS_HTTP3_SUPPORT():
             if disabled_svn is None:
@@ -109,6 +116,7 @@ class HfaceBackend(BaseBackend):
             socket_options=socket_options,
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
+            keepalive_delay=keepalive_delay,
         )
 
         self._proxy_protocol: HTTPOverTCPProtocol | None = None
@@ -351,6 +359,7 @@ class HfaceBackend(BaseBackend):
             assert_hostname=assert_hostname
             if isinstance(assert_hostname, str)
             else None,
+            idle_timeout=self._keepalive_delay or 300.0,
         )
 
         self.is_verified = not self.__custom_tls_settings.insecure
@@ -582,6 +591,7 @@ class HfaceBackend(BaseBackend):
                     datetime.now(tz=timezone.utc) - self._connect_timings[-1]
                 )
 
+            self._connected_at = time.monotonic()
             return
 
         # we want to purposely mitigate the following scenario:
@@ -622,6 +632,8 @@ class HfaceBackend(BaseBackend):
                     f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
                 ) from e
             raise
+
+        self._connected_at = time.monotonic()
 
         if self._max_tolerable_delay_for_upgrade is not None:
             self.sock.settimeout(self.timeout)
@@ -756,14 +768,29 @@ class HfaceBackend(BaseBackend):
         if self.sock is None or self._protocol is None:
             return False
 
-        self.sock.setblocking(False)
-
         try:
-            peek_data = self.sock.recv(self.blocksize, socket.MSG_PEEK)
-        except OSError:
+            self.sock.setblocking(False)
+        except OSError:  # disconnected!
             return False
-        finally:
-            self.sock.setblocking(True)
+
+        # SSLSocket can't support non-zero flag for read.
+        # so, we'll improvise!
+        if isinstance(self.sock, ssl.SSLSocket):
+            sock = socket.socket(fileno=self.sock.fileno())
+
+            try:
+                peek_data = sock.recv(self.blocksize, socket.MSG_PEEK)
+            except OSError:
+                return False
+            finally:
+                self.sock.setblocking(True)
+        else:
+            try:
+                peek_data = self.sock.recv(self.blocksize, socket.MSG_PEEK)
+            except OSError:
+                return False
+            finally:
+                self.sock.setblocking(True)
 
         if not peek_data:
             return False
@@ -783,6 +810,8 @@ class HfaceBackend(BaseBackend):
                 self.sock.sendall(data_out)
             except OSError:
                 return False
+
+        self._last_used_at = time.monotonic()
 
         return self._protocol.has_pending_event()
 
@@ -1191,6 +1220,8 @@ class HfaceBackend(BaseBackend):
             e.promise = rp  # type: ignore[attr-defined]
 
             raise e
+        else:
+            self._last_used_at = time.monotonic()
 
         if should_end_stream:
             if self._start_last_request and self.conn_info:
@@ -1239,6 +1270,8 @@ class HfaceBackend(BaseBackend):
 
             self.sock.sendall(data_out)
 
+        self._last_used_at = time.monotonic()
+
     def __read_st(
         self,
         __amt: int | None,
@@ -1273,6 +1306,8 @@ class HfaceBackend(BaseBackend):
             stream_id=__stream_id,
             respect_end_stream_signal=__respect_end_signal,
         )
+
+        self._last_used_at = time.monotonic()
 
         if events and events[-1].end_stream:
             eot = True
@@ -1352,6 +1387,10 @@ class HfaceBackend(BaseBackend):
             respect_end_stream_signal=False,  # Stop as soon as we get either (collectable) event.
             stream_id=promise.stream_id if promise else None,
         ).pop()
+
+        # we want to have a view on last conn was used
+        # ...in the sense that we spoke with the remote peer.
+        self._last_used_at = time.monotonic()
 
         headers = HTTPHeaderDict()
         status: int | None = None
@@ -1579,6 +1618,32 @@ class HfaceBackend(BaseBackend):
 
         return None
 
+    def ping(self) -> None:
+        """Send a ping frame if possible. Otherwise, fail silently."""
+        if self.sock is None or self._protocol is None:
+            return
+
+        try:
+            self._protocol.ping()
+        except NotImplementedError:  # http/1 case.
+            return
+
+        while True:
+            ping_frame = self._protocol.bytes_to_send()
+
+            if not ping_frame:
+                break
+
+            try:
+                self.sock.sendall(ping_frame)
+            except (
+                OSError,
+                ssl.SSLError,
+            ):
+                break
+
+        self._last_used_at = time.monotonic()
+
     def close(self) -> None:
         if self.sock:
             if self._protocol is not None:
@@ -1592,7 +1657,13 @@ class HfaceBackend(BaseBackend):
                         goodbye_frame = self._protocol.bytes_to_send()
                         if not goodbye_frame:
                             break
-                        self.sock.sendall(goodbye_frame)
+                        try:
+                            self.sock.sendall(goodbye_frame)
+                        except (
+                            OSError,
+                            ssl.SSLEOFError,
+                        ):  # don't want our goodbye, never mind then!
+                            break
 
             self.sock.close()
 
@@ -1607,3 +1678,5 @@ class HfaceBackend(BaseBackend):
         self.__remaining_body_length = None
         self._start_last_request = None
         self._cached_http_vsn = None
+        self._connected_at = None
+        self._last_used_at = time.monotonic()

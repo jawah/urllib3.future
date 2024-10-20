@@ -6,6 +6,7 @@ import queue
 import socket
 import sys
 import threading
+import time
 import typing
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -16,6 +17,13 @@ from time import sleep
 from types import TracebackType
 
 from ._collections import HTTPHeaderDict
+from ._constant import (
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_KEEPALIVE_DELAY,
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
+    MINIMAL_BACKGROUND_WATCH_WINDOW,
+    MINIMAL_KEEPALIVE_IDLE_WINDOW,
+)
 from ._request_methods import RequestMethods
 from ._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
 from .backend import ConnectionInfo, ResponsePromise
@@ -135,24 +143,55 @@ class ConnectionPool:
 _blocking_errnos = {errno.EAGAIN, errno.EWOULDBLOCK}
 
 
-def idle_conn_watch_task(pool: HTTPConnectionPool, waiting_delay: float = 5.0) -> None:
+def idle_conn_watch_task(
+    pool: HTTPConnectionPool,
+    waiting_delay: float = DEFAULT_BACKGROUND_WATCH_WINDOW,
+    keepalive_delay: int | float | None = DEFAULT_KEEPALIVE_DELAY,
+    keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
+) -> None:
     """Discrete background task that monitor incoming data
-    and dispatch message to registered callbacks."""
-
-    while pool.pool is not None:
-        slept_period: float = 0.
+    and manage automated keep-alive."""
+    while not pool._background_monitoring_stop.is_set():
+        pool.num_background_watch_iter += 1
+        slept_period: float = 0.0
 
         while slept_period < waiting_delay:
-            sleep(0.05)
-            slept_period += 0.05
-            if pool.pool is None:
+            sleep(MINIMAL_BACKGROUND_WATCH_WINDOW)
+            slept_period += MINIMAL_BACKGROUND_WATCH_WINDOW
+            if pool._background_monitoring_stop.is_set():
                 return
+
+        if pool._background_monitoring_stop.is_set():
+            return
 
         if pool.pool is None:
             return
+
         try:
             for conn in pool.pool.iter_idle():
+                now = time.monotonic()
+                last_used = conn.last_used_at
+
+                idle_delay = now - last_used
+
+                # don't peek into conn that just became idle
+                # waste of resource.
+                if idle_delay <= 1.0:
+                    continue
+
                 conn.peek_and_react()
+
+                if keepalive_delay is not None and keepalive_idle_window is not None:
+                    connected_at = conn.connected_at
+
+                    if connected_at is not None:
+                        since_connection_delay = now - connected_at
+
+                        if since_connection_delay <= keepalive_delay:
+                            if idle_delay >= keepalive_idle_window:
+                                pool.num_pings += 1
+                                conn.ping()
+                                pool.num_pings += 1
         except AttributeError:
             return
 
@@ -204,6 +243,35 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         A dictionary with proxy headers, should not be used directly,
         instead, see :class:`urllib3.ProxyManager`
 
+    :param resolver:
+        A manual configuration to use for DNS resolution.
+        Can be a support DSN/str (e.g. "doh+cloudflare://") or a
+        :class:`urllib3.AsyncResolverDescription` or a list of DSN/str or
+        :class:`urllib3.AsyncResolverDescription`
+
+    :param happy_eyeballs:
+        Enable IETF Happy Eyeballs algorithm when trying to
+        connect by concurrently try multiple IPv4/IPv6 endpoints.
+        By default, tries at most 4 endpoints simultaneously.
+        You may specify an int that override this default.
+        Default, set to False.
+
+    :param background_watch_delay:
+        The window delay used by our discrete scheduler that run in
+        dedicated thread to collect unsolicited incoming data and react
+        if necessary.
+
+    :param keepalive_delay:
+        The delay expressed in seconds on how long we should make sure
+        the connection is kept alive by sending pings to the remote peer.
+        Set it to None to void this feature.
+
+    :param keepalive_idle_window:
+        Immediately related to the parameter keepalive_delay.
+        This one, expressed in seconds, specify how long after
+        a connection is marked as idle we should send out a
+        ping to the remote peer.
+
     :param \\**conn_kw:
         Additional parameters are used to create fresh :class:`urllib3.connection.HTTPConnection`,
         :class:`urllib3.connection.HTTPSConnection` instances.
@@ -231,7 +299,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         | BaseResolver
         | None = None,
         happy_eyeballs: bool | int = False,
-        background_watch_delay: int | float | None = 5.0,
+        background_watch_delay: int | float | None = DEFAULT_BACKGROUND_WATCH_WINDOW,
+        keepalive_delay: int | float | None = DEFAULT_KEEPALIVE_DELAY,
+        keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
         **conn_kw: typing.Any,
     ):
         ConnectionPool.__init__(self, host, port)
@@ -271,6 +341,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # These are mostly for testing and debugging purposes.
         self.num_connections = 0
         self.num_requests = 0
+        self.num_pings = 0
+        self.num_background_watch_iter = 0
+
         self.conn_kw = conn_kw
 
         if self.proxy:
@@ -335,15 +408,39 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         )
 
         self.conn_kw["resolver"] = self._resolver
+        self.conn_kw["keepalive_delay"] = keepalive_delay
 
-        if background_watch_delay is not None:
+        self._background_monitoring_stop = threading.Event()
+
+        if (
+            background_watch_delay is not None
+            and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+        ):
+            # forbid any keepalive idle window <1s
+            if (
+                keepalive_idle_window is not None
+                and keepalive_idle_window < MINIMAL_KEEPALIVE_IDLE_WINDOW
+            ):
+                keepalive_idle_window = MINIMAL_KEEPALIVE_IDLE_WINDOW
+
+            # if keepalive_idle_window < background_watch_delay
+            # then we will not be able to match the target window
+            if (
+                keepalive_idle_window is not None
+                and background_watch_delay > keepalive_idle_window
+            ):
+                background_watch_delay = keepalive_idle_window
+
             self._background_monitoring: threading.Thread | None = threading.Thread(
                 target=idle_conn_watch_task,
                 args=(
                     self,
                     background_watch_delay,
+                    keepalive_delay,
+                    keepalive_idle_window,
                 ),
             )
+            self._background_monitoring.daemon = True  # don't hang on exit.
             self._background_monitoring.start()
         else:
             self._background_monitoring = None
@@ -1200,7 +1297,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # Close all the HTTPConnections in the pool.
         old_pool.clear()
 
+        # kill the background monitoring task that watch
+        # for unsolicited incoming data
         if self._background_monitoring is not None:
+            self._background_monitoring_stop.set()
             self._background_monitoring = None
 
         # Close allocated resolver if we own it. (aka. not shared)

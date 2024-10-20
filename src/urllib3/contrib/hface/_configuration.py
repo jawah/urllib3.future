@@ -45,7 +45,7 @@ class QuicTLSConfig:
 
     keypassword: str | bytes | None = None
 
-    #: The DTLS session ticket which should be used for session resumption
+    #: The QUIC session ticket which should be used for session resumption
     session_ticket: Any | None = None
 
     cert_fingerprint: str | None = None
@@ -55,3 +55,5 @@ class QuicTLSConfig:
     assert_hostname: str | None = None
 
     ciphers: list[Mapping[str, Any]] | None = None
+
+    idle_timeout: float = 300.0

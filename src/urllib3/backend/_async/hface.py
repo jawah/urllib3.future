@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import typing
 from datetime import datetime, timezone
 from socket import SOCK_DGRAM, SOCK_STREAM
@@ -18,7 +19,12 @@ except (ImportError, AttributeError):
     Certificate = None
 
 from ..._collections import HTTPHeaderDict
-from ..._constant import DEFAULT_BLOCKSIZE, UDP_DEFAULT_BLOCKSIZE, responses
+from ..._constant import (
+    DEFAULT_BLOCKSIZE,
+    DEFAULT_KEEPALIVE_DELAY,
+    UDP_DEFAULT_BLOCKSIZE,
+    responses,
+)
 from ...contrib.hface import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -79,6 +85,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         | None = AsyncBaseBackend.default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
     ):
         if not _HAS_HTTP3_SUPPORT() or not _HAS_DGRAM_SUPPORT:
             if disabled_svn is None:
@@ -94,6 +101,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             socket_options=socket_options,
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
+            keepalive_delay=keepalive_delay,
         )
 
         self._proxy_protocol: HTTPOverTCPProtocol | None = None
@@ -334,6 +342,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             assert_hostname=assert_hostname
             if isinstance(assert_hostname, str)
             else None,
+            idle_timeout=self._keepalive_delay or 300.0,
         )
 
         self.is_verified = not self.__custom_tls_settings.insecure
@@ -528,6 +537,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     datetime.now(tz=timezone.utc) - self._connect_timings[-1]
                 )
 
+            self._connected_at = time.monotonic()
             return
 
         # we want to purposely mitigate the following scenario:
@@ -572,6 +582,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
                 ) from e
             raise
+
+        self._connected_at = time.monotonic()
 
         if self._max_tolerable_delay_for_upgrade is not None:
             self.sock.settimeout(self.timeout)
@@ -705,13 +717,24 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if self.sock is None or self._protocol is None:
             return False
 
-        peek_data = await self.sock.peek(self.blocksize)
+        bck_timeout = self.sock.gettimeout()
+        # either there is data ready for us, or there's nothing and we stop waiting
+        # almost instantaneously.
+        # we can't use socket.MSG_PEEK in asyncio socket wrapper, it is non-functional.
+        self.sock.settimeout(0.001)
+
+        try:
+            peek_data = await self.sock.recv(self.blocksize)
+        except SocketTimeout:
+            return False
+        finally:
+            self.sock.settimeout(bck_timeout)
 
         if not peek_data:
             return False
 
         try:
-            self._protocol.bytes_received(await self.sock.recv(self.blocksize))
+            self._protocol.bytes_received(peek_data)
         except self._protocol.exceptions():
             return False
 
@@ -725,6 +748,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 await self.sock.sendall(data_out)
             except OSError:
                 return False
+
+        self._last_used_at = time.monotonic()
 
         return self._protocol.has_pending_event()
 
@@ -834,7 +859,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     # see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
                     #      https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
                     if event.error_code == 0:
-                        print("killed!")
                         self._protocol = None
                         await self.close()
                         raise MustRedialError(
@@ -1130,6 +1154,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             e.promise = rp  # type: ignore[attr-defined]
 
             raise e
+        else:
+            self._last_used_at = time.monotonic()
 
         if should_end_stream:
             if self._start_last_request and self.conn_info:
@@ -1178,6 +1204,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             await self.sock.sendall(data_out)
 
+        self._last_used_at = time.monotonic()
+
     async def __read_st(
         self,
         __amt: int | None,
@@ -1215,6 +1243,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             stream_id=__stream_id,
             respect_end_stream_signal=__respect_end_signal,
         )
+
+        self._last_used_at = time.monotonic()
 
         if events and events[-1].end_stream:
             eot = True
@@ -1296,6 +1326,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 stream_id=promise.stream_id if promise else None,
             )
         ).pop()
+
+        # we want to have a view on last conn was used
+        # ...in the sense that we spoke with the remote peer.
+        self._last_used_at = time.monotonic()
 
         for raw_header, raw_value in head_event.headers:
             # special headers that represent (usually) the HTTP response status, version and reason.
@@ -1516,6 +1550,32 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         return None
 
+    async def ping(self) -> None:  # type: ignore[override]
+        """Send a ping frame if possible. Otherwise, fail silently."""
+        if self.sock is None or self._protocol is None:
+            return
+
+        try:
+            self._protocol.ping()
+        except NotImplementedError:  # http/1 case.
+            return
+
+        while True:
+            ping_frame = self._protocol.bytes_to_send()
+
+            if not ping_frame:
+                break
+
+            try:
+                await self.sock.sendall(ping_frame)
+            except (
+                OSError,
+                ssl.SSLError,
+            ):
+                break
+
+        self._last_used_at = time.monotonic()
+
     async def close(self) -> None:  # type: ignore[override]
         if self.sock:
             if self._protocol is not None:
@@ -1529,7 +1589,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         goodbye_frame = self._protocol.bytes_to_send()
                         if not goodbye_frame:
                             break
-                        await self.sock.sendall(goodbye_frame)
+                        try:
+                            await self.sock.sendall(goodbye_frame)
+                        except (
+                            OSError,
+                            ssl.SSLEOFError,
+                        ):  # don't want our goodbye, never mind then!
+                            break
 
             self.sock.close()
 
@@ -1544,3 +1610,5 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__remaining_body_length = None
         self._start_last_request = None
         self._cached_http_vsn = None
+        self._connected_at = None
+        self._last_used_at = time.monotonic()

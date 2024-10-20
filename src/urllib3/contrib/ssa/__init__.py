@@ -204,23 +204,6 @@ class AsyncSocket:
 
         return self  # type: ignore[return-value]
 
-    async def peek(self, size: int = -1) -> bytes:
-        if size == -1:
-            size = 65536
-
-        await self._established.wait()
-        await self._reader_semaphore.acquire()
-
-        self._sock.setblocking(False)
-
-        try:
-            return self._sock.recv(size, socket.MSG_PEEK)
-        except OSError:
-            return b""
-        finally:
-            self._sock.setblocking(True)
-            self._reader_semaphore.release()
-
     async def recv(self, size: int = -1) -> bytes:
         if size == -1:
             size = 65536
@@ -286,6 +269,9 @@ class AsyncSocket:
 
     def settimeout(self, __value: float | None = None) -> None:
         self._external_timeout = __value
+
+    def gettimeout(self) -> float | None:
+        return self._external_timeout
 
     def getpeername(self) -> tuple[str, int]:
         return self._sock.getpeername()  # type: ignore[no-any-return]

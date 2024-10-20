@@ -1,10 +1,17 @@
-2.10.907 (2024-10-18)
+2.11.900 (2024-10-20)
 =====================
 
 - Added a discrete task for each instantiated ``ConnectionPool`` to watch for unsolicited incoming data.
   This improves the fix shipped in v2.10.906 and avoid having to recycle your multiplexed connection in idle moments.
   A new keyword argument is supported in your PoolManager configuration, namely ``background_watch_delay``.
   This parameter takes a int or float as the delay between checks. Set it to None to void this background task.
+  Anything lower than ``0.01`` will be interpreted as None, therefor disabling the discrete watch.
+- Added managed keepalive for HTTP/2 and HTTP/3 over QUIC. A new keyword argument, named ``keepalive_delay`` that
+  takes a value expressed in seconds for how long urllib3-future should automatically keep the connection alive.
+  This is done in direct extension to our "discrete task" mentioned just before. We will send ``PING`` frame
+  automatically to the remote peer every 60s by default (after idle for 60s to be clear). The window delay for
+  sending a ``PING`` is configurable via the ``keepalive_idle_window`` parameter. Learn more about this in our
+  documentation.
 
 2.10.906 (2024-10-17)
 =====================

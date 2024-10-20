@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from secrets import token_bytes
 from typing import Iterator
 
 import jh2.config  # type: ignore
@@ -259,3 +260,6 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
             self._events.appendleft(ev)
+
+    def ping(self) -> None:
+        self._connection.ping(token_bytes(8))

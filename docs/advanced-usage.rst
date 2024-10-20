@@ -1592,7 +1592,7 @@ response object.
 Background unsolicited data
 ----------------------------
 
-.. note:: Upgrade urllib3-future to 2.10.907 or later to benefit from this.
+.. note:: Upgrade urllib3-future to 2.11+ or later to benefit from this.
 
 Since HTTP/2 or later, you may receive unsolicited incoming data that can be a challenge to verify whether the
 connection is still up or not. We added a discrete task that carefully check for incoming data in idle connections.
@@ -1603,3 +1603,5 @@ instance constructor.
 Setting it to ``None`` makes it disabled.
 
 .. note:: By default, it checks for incoming data and react to it every 5000ms.
+
+.. warning:: Disabling this will void the effect of our automated keepalive.
