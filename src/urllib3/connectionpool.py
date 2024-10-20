@@ -176,7 +176,7 @@ def idle_conn_watch_task(
 
                 # don't peek into conn that just became idle
                 # waste of resource.
-                if idle_delay <= 1.0:
+                if idle_delay < 1.0:
                     continue
 
                 conn.peek_and_react()
