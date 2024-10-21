@@ -158,12 +158,22 @@ def idle_conn_watch_task(
         while slept_period < waiting_delay:
             sleep(MINIMAL_BACKGROUND_WATCH_WINDOW)
             slept_period += MINIMAL_BACKGROUND_WATCH_WINDOW
+            # was closed properly
             if pool._background_monitoring_stop.is_set():
                 return
+            # this safety is critical.
+            # rational: many people just don't close the pool
+            #           they just forget about it, and this can
+            #           cause massive amount of dangling thread
+            #           holding reference to the pool.
+            if sys.getrefcount(pool) <= 3:
+                return
 
+        # check again[...] due to mutable state
         if pool._background_monitoring_stop.is_set():
             return
 
+        # pool might be closed.
         if pool.pool is None:
             return
 
