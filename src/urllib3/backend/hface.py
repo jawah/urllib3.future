@@ -768,39 +768,22 @@ class HfaceBackend(BaseBackend):
         if self.sock is None or self._protocol is None:
             return False
 
+        bck_timeout = self.sock.gettimeout()
+
+        self.sock.settimeout(0.001)
+
         try:
-            self.sock.setblocking(False)
-        except OSError:  # disconnected!
+            peek_data = self.sock.recv(self.blocksize)
+        except (OSError, TimeoutError, socket.timeout):
             return False
-
-        # SSLSocket can't support non-zero flag for read.
-        # so, we'll improvise!
-        if isinstance(self.sock, ssl.SSLSocket):
-            try:
-                sock = socket.socket(fileno=self.sock.fileno())
-            except (OSError, AttributeError):
-                # Defensive: that means we can't go further, sock is not standard or don't implement fileno
-                return False
-
-            try:
-                peek_data = sock.recv(self.blocksize, socket.MSG_PEEK)
-            except OSError:
-                return False
-            finally:
-                self.sock.setblocking(True)
-        else:
-            try:
-                peek_data = self.sock.recv(self.blocksize, socket.MSG_PEEK)
-            except OSError:
-                return False
-            finally:
-                self.sock.setblocking(True)
+        finally:
+            self.sock.settimeout(bck_timeout)
 
         if not peek_data:
             return False
 
         try:
-            self._protocol.bytes_received(self.sock.recv(self.blocksize))
+            self._protocol.bytes_received(peek_data)
         except self._protocol.exceptions():
             return False
 
@@ -1669,7 +1652,10 @@ class HfaceBackend(BaseBackend):
                         ):  # don't want our goodbye, never mind then!
                             break
 
-            self.sock.close()
+            try:
+                self.sock.close()
+            except OSError:
+                pass
 
         self._protocol = None
         self._stream_id = None

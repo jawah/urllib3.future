@@ -281,7 +281,6 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
     def is_connected(self) -> bool:
         if self.sock is None:
             return False
-        # wait_for_read: not functional with multiplexed connection!
         if self._promises or self._pending_responses:
             return True
         return self._protocol is not None and self._protocol.has_expired() is False

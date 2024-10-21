@@ -27,7 +27,6 @@ from ._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
 from .response import HTTPResponse
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
-from .util.wait import wait_for_read
 
 try:  # Compiled with SSL?
     import ssl
@@ -291,15 +290,9 @@ class HTTPConnection(HfaceBackend):
     def is_connected(self) -> bool:
         if self.sock is None:
             return False
-        # wait_for_read: not functional with multiplexed connection!
         if self._promises or self._pending_responses:
             return True
-        # wait_for_read: not functional w/ UDP!
-        if self._svn == HttpVersion.h3:
-            return self._protocol is not None and self._protocol.has_expired() is False
-        if self._protocol is not None and self._protocol.has_expired() is True:
-            return False
-        return not wait_for_read(self.sock, timeout=0.0)
+        return self._protocol is not None and self._protocol.has_expired() is False
 
     @property
     def has_connected_to_proxy(self) -> bool:
