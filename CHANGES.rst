@@ -1,4 +1,4 @@
-2.11.900 (2024-10-20)
+2.11.900 (2024-10-21)
 =====================
 
 - Added a discrete task for each instantiated ``ConnectionPool`` to watch for unsolicited incoming data.
