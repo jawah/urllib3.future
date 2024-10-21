@@ -210,6 +210,9 @@ class TestProtocolLevel(TraefikTestCase):
         sleep_delay: float,
         disabled_svn: set[HttpVersion],
     ) -> None:
+        if HttpVersion.h3 not in disabled_svn and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3")
+
         async with AsyncHTTPSConnectionPool(
             self.host,
             self.https_port,
