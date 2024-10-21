@@ -634,6 +634,8 @@ making the ping only 60s after zero activity. If the connection receive unsolici
 
 .. warning:: We do not recommend setting anything lower than 30s for keepalive_idle_window. Anything lower than 1s is considered to be 1s. High frequency ping will lower the performance of your connection pool.
 
+Once the ``keepalive_delay`` passed, we do not close the connection, we simply cease to ensure it is alive. This is purely for backward compatibility with our predecessor, as some host may retain the connection for hours.
+
 Retrying Requests
 -----------------
 
