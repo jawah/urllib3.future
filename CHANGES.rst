@@ -1,3 +1,10 @@
+2.11.91 (2024-10-21)
+=====================
+
+- Fixed error in ``is_connected`` for a Connection. The logic is no longer applicable due to how urllib3-future grows.
+  We no longer use the function ``wait_for_read``. Also we stopped using MSG_PEEK for our discrete incoming data watcher
+  due to suspicious behavior noticed. Finally we shielded any exception from attempting to close a broken socket.
+
 2.11.900 (2024-10-21)
 =====================
 

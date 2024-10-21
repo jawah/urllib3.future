@@ -720,7 +720,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         bck_timeout = self.sock.gettimeout()
         # either there is data ready for us, or there's nothing and we stop waiting
         # almost instantaneously.
-        # we can't use socket.MSG_PEEK in asyncio socket wrapper, it is non-functional.
         self.sock.settimeout(0.001)
 
         try:
@@ -1597,7 +1596,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         ):  # don't want our goodbye, never mind then!
                             break
 
-            self.sock.close()
+            try:
+                self.sock.close()
+            except OSError:
+                pass
 
         self._protocol = None
         self._stream_id = None
