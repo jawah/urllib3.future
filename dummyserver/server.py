@@ -258,7 +258,10 @@ def _run_and_close_tornado(
     try:
         return asyncio.run(inner_fn())
     finally:
-        tornado_loop.close(all_fds=True)  # type: ignore[union-attr]
+        try:
+            tornado_loop.close(all_fds=True)  # type: ignore[union-attr]
+        except (ValueError, OSError):
+            pass  # can fail needlessly with "Invalid file descriptor". Ignore!
 
 
 @contextlib.contextmanager

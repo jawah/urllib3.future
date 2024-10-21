@@ -6,6 +6,7 @@ import logging
 import queue
 import socket
 import sys
+import time
 import typing
 import warnings
 from asyncio import Task
@@ -13,8 +14,16 @@ from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from socket import timeout as SocketTimeout
 from types import TracebackType
+from weakref import proxy
 
 from .._collections import HTTPHeaderDict
+from .._constant import (
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_KEEPALIVE_DELAY,
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
+    MINIMAL_BACKGROUND_WATCH_WINDOW,
+    MINIMAL_KEEPALIVE_IDLE_WINDOW,
+)
 from .._request_methods import AsyncRequestMethods
 from .._typing import (
     _TYPE_ASYNC_BODY,
@@ -140,6 +149,52 @@ class AsyncConnectionPool:
 _blocking_errnos = {errno.EAGAIN, errno.EWOULDBLOCK}
 
 
+async def idle_conn_watch_task(
+    pool: AsyncHTTPConnectionPool,
+    waiting_delay: float | int = 5.0,
+    keepalive_delay: int | float | None = DEFAULT_KEEPALIVE_DELAY,
+    keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
+) -> None:
+    """Discrete background task that monitor incoming data
+    and dispatch message to registered callbacks."""
+
+    try:
+        while pool.pool is not None:
+            pool.num_background_watch_iter += 1
+            await asyncio.sleep(waiting_delay)
+            if pool.pool is None:
+                return
+            try:
+                async for conn in pool.pool.iter_idle():
+                    now = time.monotonic()
+                    last_used = conn.last_used_at
+                    idle_delay = now - last_used
+
+                    # don't peek into conn that just became idle
+                    # waste of resource.
+                    if idle_delay < 1.0:
+                        continue
+
+                    await conn.peek_and_react()
+
+                    if (
+                        keepalive_delay is not None
+                        and keepalive_idle_window is not None
+                    ):
+                        connected_at = conn.connected_at
+
+                        if connected_at is not None:
+                            since_connection_delay = now - connected_at
+                            if since_connection_delay <= keepalive_delay:
+                                if idle_delay >= keepalive_idle_window:
+                                    pool.num_pings += 1
+                                    await conn.ping()
+            except AttributeError:
+                return
+    except ReferenceError:
+        return
+
+
 class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
     """
     Task-safe async connection pool for one host.
@@ -187,6 +242,35 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         A dictionary with proxy headers, should not be used directly,
         instead, see :class:`urllib3.AsyncProxyManager`
 
+    :param resolver:
+        A manual configuration to use for DNS resolution.
+        Can be a support DSN/str (e.g. "doh+cloudflare://") or a
+        :class:`urllib3.AsyncResolverDescription` or a list of DSN/str or
+        :class:`urllib3.AsyncResolverDescription`
+
+    :param happy_eyeballs:
+        Enable IETF Happy Eyeballs algorithm when trying to
+        connect by concurrently try multiple IPv4/IPv6 endpoints.
+        By default, tries at most 4 endpoints simultaneously.
+        You may specify an int that override this default.
+        Default, set to False.
+
+    :param background_watch_delay:
+        The window delay used by our discrete scheduler that run in
+        dedicated task to collect unsolicited incoming data and react
+        if necessary.
+
+    :param keepalive_delay:
+        The delay expressed in seconds on how long we should make sure
+        the connection is kept alive by sending pings to the remote peer.
+        Set it to None to void this feature.
+
+    :param keepalive_idle_window:
+        Immediately related to the parameter keepalive_delay.
+        This one, expressed in seconds, specify how long after
+        a connection is marked as idle we should send out a
+        ping to the remote peer.
+
     :param \\**conn_kw:
         Additional parameters are used to create fresh :class:`urllib3._async.connection.AsyncHTTPConnection`,
         :class:`urllib3._async.connection.AsyncHTTPSConnection` instances.
@@ -216,6 +300,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         | AsyncBaseResolver
         | None = None,
         happy_eyeballs: bool | int = False,
+        background_watch_delay: int | float | None = DEFAULT_BACKGROUND_WATCH_WINDOW,
+        keepalive_delay: int | float | None = DEFAULT_KEEPALIVE_DELAY,
+        keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
         **conn_kw: typing.Any,
     ):
         AsyncConnectionPool.__init__(self, host, port)
@@ -257,6 +344,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         # These are mostly for testing and debugging purposes.
         self.num_connections = 0
         self.num_requests = 0
+        self.num_pings = 0
+        self.num_background_watch_iter = 0
+
         self.conn_kw = conn_kw
 
         if self.proxy:
@@ -323,6 +413,17 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         )
 
         self.conn_kw["resolver"] = self._resolver
+        self.conn_kw["keepalive_delay"] = keepalive_delay
+
+        self._background_watch_delay = background_watch_delay
+        self._keepalive_delay = keepalive_delay
+        self._keepalive_idle_window = keepalive_idle_window
+        if (
+            self._keepalive_idle_window is not None
+            and self._keepalive_idle_window < MINIMAL_KEEPALIVE_IDLE_WINDOW
+        ):
+            self._keepalive_idle_window = MINIMAL_KEEPALIVE_IDLE_WINDOW
+        self._background_monitoring: asyncio.Task | None = None  # type: ignore[type-arg]
 
     @property
     def is_idle(self) -> bool:
@@ -336,6 +437,20 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         """
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
+
+        if (
+            self._background_monitoring is None
+            and self._background_watch_delay is not None
+            and self._background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+        ):
+            self._background_monitoring = asyncio.create_task(
+                idle_conn_watch_task(
+                    proxy(self),
+                    self._background_watch_delay,
+                    self._keepalive_delay,
+                    self._keepalive_idle_window,
+                )
+            )
 
         self.num_connections += 1
         log.debug(
@@ -1191,6 +1306,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         # Close all the HTTPConnections in the pool.
         await old_pool.clear()
 
+        if self._background_monitoring is not None:
+            self._background_monitoring.cancel()
+            self._background_monitoring = None
+
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
             await self._resolver.close()
@@ -1846,6 +1965,19 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         """
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
+        if (
+            self._background_monitoring is None
+            and self._background_watch_delay is not None
+            and self._background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+        ):
+            self._background_monitoring = asyncio.create_task(
+                idle_conn_watch_task(
+                    self,
+                    self._background_watch_delay,
+                    self._keepalive_delay,
+                    self._keepalive_idle_window,
+                )
+            )
         self.num_connections += 1
         log.debug(
             "Starting new HTTPS connection (%d): %s:%s",

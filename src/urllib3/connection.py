@@ -23,7 +23,7 @@ if typing.TYPE_CHECKING:
     from .util.traffic_police import TrafficPolice
     from .backend._base import LowLevelResponse
 
-from ._constant import DEFAULT_BLOCKSIZE
+from ._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
 from .response import HTTPResponse
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
@@ -137,6 +137,7 @@ class HTTPConnection(HfaceBackend):
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         resolver: BaseResolver | None = None,
         socket_family: socket.AddressFamily = socket.AF_UNSPEC,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
     ) -> None:
         super().__init__(
             host=host,
@@ -147,6 +148,7 @@ class HTTPConnection(HfaceBackend):
             socket_options=socket_options,
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
+            keepalive_delay=keepalive_delay,
         )
         self.proxy = proxy
         self.proxy_config = proxy_config
@@ -666,6 +668,7 @@ class HTTPSConnection(HTTPConnection):
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         resolver: BaseResolver | None = None,
         socket_family: socket.AddressFamily = socket.AF_UNSPEC,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
         proxy: Url | None = None,
         proxy_config: ProxyConfig | None = None,
         cert_reqs: int | str | None = None,
@@ -704,6 +707,7 @@ class HTTPSConnection(HTTPConnection):
             preemptive_quic_cache=preemptive_quic_cache,
             resolver=resolver,
             socket_family=socket_family,
+            keepalive_delay=keepalive_delay,
         )
 
         self.key_file = key_file

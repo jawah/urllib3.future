@@ -300,6 +300,11 @@ class HTTPProtocol(metaclass=ABCMeta):
         """Put back events into the deque."""
         raise NotImplementedError
 
+    @abstractmethod
+    def ping(self) -> None:
+        """Send a PING frame to the remote peer. Thus keeping the connection alive."""
+        raise NotImplementedError
+
 
 class HTTPOverTCPProtocol(HTTPProtocol, OverTCPProtocol, metaclass=ABCMeta):
     """

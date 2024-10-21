@@ -12,11 +12,14 @@ import warnings
 
 def inject_into_urllib3() -> None:
     warnings.warn(
-        "urllib3-future do not have a emscripten module as it is irrelevant to urllib3 nature. "
-        "wasm support will be brought in Niquests (replacement for Requests). "
-        "One does not simply ship an addon that essentially kills 90% of its other features and alter the 10 "
-        "remaining percents.",
-        UserWarning,
+        (
+            "urllib3-future does not support WASM / Emscripten platform. "
+            "Please reinstall legacy urllib3 in the meantime. "
+            "Run `pip install uninstall -y urllib3 urllib3-future` then "
+            "`pip install install urllib3-future`, finally `pip install install urllib3`. "
+            "Sorry for the inconvenience."
+        ),
+        DeprecationWarning,
     )
 
 

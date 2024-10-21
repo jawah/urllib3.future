@@ -26,6 +26,7 @@
 - File uploads with multipart encoding.
 - DNS over UDP, TLS, QUIC, or HTTPS. DNSSEC protected.
 - Helpers for retrying requests and dealing with HTTP redirects.
+- Automatic Keep-Alive for HTTP/1.1, HTTP/2, and HTTP/3.
 - Support for gzip, deflate, brotli, and zstd encoding.
 - Support for Python/PyPy 3.7+, no compromise.
 - Automatic Connection Upgrade / Downgrade.

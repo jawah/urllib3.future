@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import socket
+import time
 import typing
 import warnings
 from base64 import b64encode
@@ -14,7 +15,7 @@ if typing.TYPE_CHECKING:
     from ._async import AsyncLowLevelResponse
 
 from .._collections import HTTPHeaderDict
-from .._constant import DEFAULT_BLOCKSIZE
+from .._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
 
 
 class HttpVersion(str, enum.Enum):
@@ -286,7 +287,9 @@ class LowLevelResponse:
                 self._method == "CONNECT" and 200 <= self.status < 300
             ):
                 return self._dsa
-            return None
+
+            # well, there's nothing we can do more :'(
+            raise AttributeError
 
         if self._fp is None:
             self._fp = self._sock.makefile("rb")  # type: ignore[assignment]
@@ -474,6 +477,7 @@ class BaseBackend:
         socket_options: _TYPE_SOCKET_OPTIONS | None = default_socket_options,
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
     ):
         self.host = host
         self.port = port
@@ -515,8 +519,22 @@ class BaseBackend:
 
         self._cached_http_vsn: int | None = None
 
+        self._keepalive_delay: float | None = (
+            keepalive_delay  # just forwarded for qh3 idle_timeout conf.
+        )
+        self._connected_at: float | None = None
+        self._last_used_at: float = time.monotonic()
+
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises
+
+    @property
+    def last_used_at(self) -> float:
+        return self._last_used_at
+
+    @property
+    def connected_at(self) -> float | None:
+        return self._connected_at
 
     @property
     def disabled_svn(self) -> set[HttpVersion]:
@@ -643,4 +661,8 @@ class BaseBackend:
     ) -> ResponsePromise | None:
         """The send() method SHOULD be invoked after calling endheaders() if and only if the request
         context specify explicitly that a body is going to be sent."""
+        raise NotImplementedError
+
+    def ping(self) -> None:
+        """Send a PING to the remote peer."""
         raise NotImplementedError

@@ -270,6 +270,9 @@ class AsyncSocket:
     def settimeout(self, __value: float | None = None) -> None:
         self._external_timeout = __value
 
+    def gettimeout(self) -> float | None:
+        return self._external_timeout
+
     def getpeername(self) -> tuple[str, int]:
         return self._sock.getpeername()  # type: ignore[no-any-return]
 

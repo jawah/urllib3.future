@@ -21,6 +21,7 @@ import ssl
 import typing
 from collections import deque
 from os import environ
+from random import randint
 from time import time as monotonic
 from typing import Any, Iterable, Sequence
 
@@ -77,7 +78,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             verify_hostname=tls_config.verify_hostname,
             secrets_log_file=open(keylogfile_path, "w") if keylogfile_path else None,  # type: ignore[arg-type]
             quic_logger=QuicFileLogger(qlogdir_path) if qlogdir_path else None,
-            idle_timeout=300.0,
+            idle_timeout=tls_config.idle_timeout,
         )
 
         if tls_config.ciphers:
@@ -463,3 +464,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
             self._events.appendleft(ev)
+
+    def ping(self) -> None:
+        self._quic.send_ping(randint(0, 65535))

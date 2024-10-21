@@ -331,3 +331,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
             self._events.appendleft(ev)
+
+    def ping(self) -> None:
+        raise NotImplementedError("http1 does not support PING")

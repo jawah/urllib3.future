@@ -1588,3 +1588,20 @@ response object.
 .. note:: The important thing here, is that, when the server agrees to stop speaking HTTP in favor of something else, the ``response.extension`` is set and you will be able to exchange raw data at will.
 
 .. warning:: In HTTP/2 or HTTP/3 you want to replace ``"GET"`` by ``"CONNECT"`` and add a header named ``:protocol`` to issue a proper "Upgrade".
+
+Background unsolicited data
+----------------------------
+
+.. note:: Upgrade urllib3-future to 2.11+ or later to benefit from this.
+
+Since HTTP/2 or later, you may receive unsolicited incoming data that can be a challenge to verify whether the
+connection is still up or not. We added a discrete task that carefully check for incoming data in idle connections.
+
+To customize the behavior you may add the parameter ``background_watch_delay`` to your PoolManager or ConnectionPool
+instance constructor.
+
+Setting it to ``None`` makes it disabled.
+
+.. note:: By default, it checks for incoming data and react to it every 5000ms.
+
+.. warning:: Disabling this will void the effect of our automated keepalive.

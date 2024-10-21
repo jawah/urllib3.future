@@ -23,7 +23,7 @@ if typing.TYPE_CHECKING:
     from ..util._async.traffic_police import AsyncTrafficPolice
     from ..backend._async._base import AsyncLowLevelResponse
 
-from .._constant import DEFAULT_BLOCKSIZE
+from .._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
 from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
 from ..util.util import to_str
 
@@ -127,6 +127,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         resolver: AsyncBaseResolver | None = None,
         socket_family: socket.AddressFamily = socket.AF_UNSPEC,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
     ) -> None:
         super().__init__(
             host=host,
@@ -137,6 +138,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             socket_options=socket_options,
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
+            keepalive_delay=keepalive_delay,
         )
         self.proxy = proxy
         self.proxy_config = proxy_config
@@ -687,6 +689,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         resolver: AsyncBaseResolver | None = None,
         socket_family: socket.AddressFamily = socket.AF_UNSPEC,
+        keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
         proxy: Url | None = None,
         proxy_config: ProxyConfig | None = None,
         cert_reqs: int | str | None = None,
@@ -725,6 +728,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
             preemptive_quic_cache=preemptive_quic_cache,
             resolver=resolver,
             socket_family=socket_family,
+            keepalive_delay=keepalive_delay,
         )
 
         self.key_file = key_file

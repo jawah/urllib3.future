@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 
 import pytest
 
-from urllib3 import AsyncHTTPSConnectionPool, HTTPHeaderDict, HttpVersion
+from urllib3 import (
+    AsyncHTTPConnectionPool,
+    AsyncHTTPSConnectionPool,
+    HTTPHeaderDict,
+    HttpVersion,
+)
+from urllib3._constant import MINIMAL_BACKGROUND_WATCH_WINDOW
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.exceptions import InsecureRequestWarning, ProtocolError
 from urllib3.util import parse_url
@@ -171,3 +178,200 @@ class TestProtocolLevel(TraefikTestCase):
                     assert resp.trailers[k] == v
             else:
                 assert resp.trailers is None
+
+    @pytest.mark.parametrize("background_watch_delay", [2.0, 0.5, None, 0.0])
+    @pytest.mark.parametrize(
+        "sleep_delay",
+        [
+            2.5,
+            0.5,
+        ],
+    )
+    @pytest.mark.parametrize(
+        "disabled_svn",
+        [
+            {
+                HttpVersion.h11,
+                HttpVersion.h2,
+            },
+            {
+                HttpVersion.h11,
+                HttpVersion.h3,
+            },
+            {
+                HttpVersion.h2,
+                HttpVersion.h3,
+            },
+        ],
+    )
+    async def test_discrete_watcher_https(
+        self,
+        background_watch_delay: float | None,
+        sleep_delay: float,
+        disabled_svn: set[HttpVersion],
+    ) -> None:
+        if HttpVersion.h3 not in disabled_svn and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3")
+
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            background_watch_delay=background_watch_delay,
+            disabled_svn=disabled_svn,
+        ) as p:
+            assert p._background_monitoring is None
+
+            resp = await p.urlopen("GET", f"{self.https_url}/get")
+
+            assert resp.status == 200
+
+            if (
+                background_watch_delay is not None
+                and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            ):
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+            await asyncio.sleep(sleep_delay)
+
+            if (
+                background_watch_delay is not None
+                and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            ):
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+            resp = await p.urlopen("GET", f"{self.https_url}/get")
+            assert resp.status == 200
+
+            if (
+                background_watch_delay is not None
+                and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            ):
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+        assert p._background_monitoring is None
+
+    @pytest.mark.parametrize("background_watch_delay", [2.0, 0.5, None, 0.0])
+    @pytest.mark.parametrize(
+        "sleep_delay",
+        [
+            2.5,
+            0.5,
+        ],
+    )
+    @pytest.mark.parametrize(
+        "disabled_svn",
+        [
+            {
+                HttpVersion.h11,
+            },
+            {
+                HttpVersion.h2,
+            },
+        ],
+    )
+    async def test_discrete_watcher_http(
+        self,
+        background_watch_delay: float | None,
+        sleep_delay: float,
+        disabled_svn: set[HttpVersion],
+    ) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host,
+            self.http_port,
+            resolver=self.test_async_resolver,
+            background_watch_delay=background_watch_delay,
+            disabled_svn=disabled_svn,
+        ) as p:
+            assert p._background_monitoring is None
+
+            resp = await p.urlopen("GET", f"{self.http_url}/get")
+
+            assert resp.status == 200
+
+            if (
+                background_watch_delay is not None
+                and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            ):
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+            await asyncio.sleep(sleep_delay)
+
+            if (
+                background_watch_delay is not None
+                and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            ):
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+            resp = await p.urlopen("GET", f"{self.http_url}/get")
+            assert resp.status == 200
+
+            if (
+                background_watch_delay is not None
+                and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            ):
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+        assert p._background_monitoring is None
+
+    @pytest.mark.parametrize(
+        "disabled_svn",
+        [
+            {
+                HttpVersion.h11,
+                HttpVersion.h2,
+            },
+            {
+                HttpVersion.h11,
+                HttpVersion.h3,
+            },
+            {
+                HttpVersion.h2,
+                HttpVersion.h3,
+            },
+        ],
+    )
+    async def test_automated_ping(self, disabled_svn: set[HttpVersion]) -> None:
+        if HttpVersion.h3 not in disabled_svn and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3")
+
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            background_watch_delay=1.0,
+            keepalive_idle_window=1.0,
+            disabled_svn=disabled_svn,
+        ) as p:
+            assert p._background_monitoring is None
+
+            resp = await p.urlopen("GET", f"{self.https_url}/get")
+
+            assert resp.status == 200
+
+            assert p._background_monitoring is not None
+            assert p._background_monitoring.cancelled() is False
+            assert p.num_pings == 0
+
+            for _ in range(4):
+                await asyncio.sleep(1.2)
+
+                assert p._background_monitoring is not None
+                assert p._background_monitoring.cancelled() is False
+
+            # brief explanation on why we expect >= 1
+            # and not == 4
+            # multiplexed connection can receive unsolicited data
+            # from remote peer. so, in that case we expect reasonably
+            # that at least one ping frame will be sent in the given test.
+            assert p.num_pings >= 1
+
+        assert p._background_monitoring is None

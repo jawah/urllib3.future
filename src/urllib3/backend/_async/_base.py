@@ -314,3 +314,6 @@ class AsyncBaseBackend(BaseBackend):
         """The send() method SHOULD be invoked after calling endheaders() if and only if the request
         context specify explicitly that a body is going to be sent."""
         raise NotImplementedError
+
+    async def ping(self) -> None:  # type: ignore[override]
+        raise NotImplementedError

@@ -113,6 +113,9 @@ class PoolKey(typing.NamedTuple):
     key_cert_data: str | bytes | None
     key_key_data: str | bytes | None
     key_happy_eyeballs: bool | int | None
+    key_background_watch_delay: float | int | None
+    key_keepalive_delay: float | int | None
+    key_keepalive_idle_window: float | int | None
 
 
 @functools.lru_cache(maxsize=8)
