@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from socket import timeout as SocketTimeout
 from types import TracebackType
+from weakref import proxy
 
 from .._collections import HTTPHeaderDict
 from .._constant import (
@@ -157,35 +158,41 @@ async def idle_conn_watch_task(
     """Discrete background task that monitor incoming data
     and dispatch message to registered callbacks."""
 
-    while pool.pool is not None:
-        pool.num_background_watch_iter += 1
-        await asyncio.sleep(waiting_delay)
-        if pool.pool is None:
-            return
-        try:
-            async for conn in pool.pool.iter_idle():
-                now = time.monotonic()
-                last_used = conn.last_used_at
-                idle_delay = now - last_used
+    try:
+        while pool.pool is not None:
+            pool.num_background_watch_iter += 1
+            await asyncio.sleep(waiting_delay)
+            if pool.pool is None:
+                return
+            try:
+                async for conn in pool.pool.iter_idle():
+                    now = time.monotonic()
+                    last_used = conn.last_used_at
+                    idle_delay = now - last_used
 
-                # don't peek into conn that just became idle
-                # waste of resource.
-                if idle_delay < 1.0:
-                    continue
+                    # don't peek into conn that just became idle
+                    # waste of resource.
+                    if idle_delay < 1.0:
+                        continue
 
-                await conn.peek_and_react()
+                    await conn.peek_and_react()
 
-                if keepalive_delay is not None and keepalive_idle_window is not None:
-                    connected_at = conn.connected_at
+                    if (
+                        keepalive_delay is not None
+                        and keepalive_idle_window is not None
+                    ):
+                        connected_at = conn.connected_at
 
-                    if connected_at is not None:
-                        since_connection_delay = now - connected_at
-                        if since_connection_delay <= keepalive_delay:
-                            if idle_delay >= keepalive_idle_window:
-                                await conn.ping()
-                                pool.num_pings += 1
-        except AttributeError:
-            return
+                        if connected_at is not None:
+                            since_connection_delay = now - connected_at
+                            if since_connection_delay <= keepalive_delay:
+                                if idle_delay >= keepalive_idle_window:
+                                    pool.num_pings += 1
+                                    await conn.ping()
+            except AttributeError:
+                return
+    except ReferenceError:
+        return
 
 
 class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
@@ -438,7 +445,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         ):
             self._background_monitoring = asyncio.create_task(
                 idle_conn_watch_task(
-                    self,
+                    proxy(self),
                     self._background_watch_delay,
                     self._keepalive_delay,
                     self._keepalive_idle_window,
