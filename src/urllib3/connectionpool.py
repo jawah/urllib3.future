@@ -166,14 +166,17 @@ def idle_conn_watch_task(
             #           they just forget about it, and this can
             #           cause massive amount of dangling thread
             #           holding reference to the pool.
-            if sys.getrefcount(pool) <= 3:
-                return
+            try:
+                if sys.getrefcount(pool) <= 3:
+                    return
+            except AttributeError:
+                pass  # pypy case[...]
 
         # check again[...] due to mutable state
         if pool._background_monitoring_stop.is_set():
             return
 
-        # pool might be closed.
+        # pool could be closed.
         if pool.pool is None:
             return
 
@@ -201,7 +204,6 @@ def idle_conn_watch_task(
                             if idle_delay >= keepalive_idle_window:
                                 pool.num_pings += 1
                                 conn.ping()
-                                pool.num_pings += 1
         except AttributeError:
             return
 
