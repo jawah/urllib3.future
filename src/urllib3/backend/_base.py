@@ -287,7 +287,9 @@ class LowLevelResponse:
                 self._method == "CONNECT" and 200 <= self.status < 300
             ):
                 return self._dsa
-            return None
+
+            # well, there's nothing we can do more :'(
+            raise AttributeError
 
         if self._fp is None:
             self._fp = self._sock.makefile("rb")  # type: ignore[assignment]

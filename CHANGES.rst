@@ -12,6 +12,8 @@
   automatically to the remote peer every 60s by default (after idle for 60s to be clear). The window delay for
   sending a ``PING`` is configurable via the ``keepalive_idle_window`` parameter. Learn more about this in our
   documentation.
+- Fixed evaluation of ``fp`` in our ``LowLevelResponse`` instance to raise ``AttributeError`` when it cannot be
+  accessed. This will help with ``cachecontrol[filecache]`` way of determining if response was consumed entirely.
 
 2.10.906 (2024-10-17)
 =====================
