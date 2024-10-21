@@ -366,6 +366,9 @@ class TestProtocolLevel(TraefikTestCase):
         ],
     )
     def test_automated_ping(self, disabled_svn: set[HttpVersion]) -> None:
+        if HttpVersion.h3 not in disabled_svn and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3")
+
         with HTTPSConnectionPool(
             self.host,
             self.https_port,
