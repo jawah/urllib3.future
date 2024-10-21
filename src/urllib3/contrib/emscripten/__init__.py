@@ -15,8 +15,8 @@ def inject_into_urllib3() -> None:
         (
             "urllib3-future does not support WASM / Emscripten platform. "
             "Please reinstall legacy urllib3 in the meantime. "
-            "Run `pip install uninstall -y urllib3 urllib3-future` then "
-            "`pip install install urllib3-future`, finally `pip install install urllib3`. "
+            "Run `pip uninstall -y urllib3 urllib3-future` then "
+            "`pip install urllib3-future`, finally `pip install urllib3`. "
             "Sorry for the inconvenience."
         ),
         DeprecationWarning,
