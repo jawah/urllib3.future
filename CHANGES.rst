@@ -1,4 +1,4 @@
-2.11.91 (2024-10-21)
+2.11.901 (2024-10-21)
 =====================
 
 - Fixed error in ``is_connected`` for a Connection. The logic is no longer applicable due to how urllib3-future grows.
