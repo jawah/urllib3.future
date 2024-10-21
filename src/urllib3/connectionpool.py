@@ -15,6 +15,7 @@ from itertools import zip_longest
 from socket import timeout as SocketTimeout
 from time import sleep
 from types import TracebackType
+from weakref import proxy
 
 from ._collections import HTTPHeaderDict
 from ._constant import (
@@ -151,61 +152,57 @@ def idle_conn_watch_task(
 ) -> None:
     """Discrete background task that monitor incoming data
     and manage automated keep-alive."""
-    while not pool._background_monitoring_stop.is_set():
-        pool.num_background_watch_iter += 1
-        slept_period: float = 0.0
+    try:
+        while not pool._background_monitoring_stop.is_set():
+            pool.num_background_watch_iter += 1
+            slept_period: float = 0.0
 
-        while slept_period < waiting_delay:
-            sleep(MINIMAL_BACKGROUND_WATCH_WINDOW)
-            slept_period += MINIMAL_BACKGROUND_WATCH_WINDOW
-            # was closed properly
+            while slept_period < waiting_delay:
+                sleep(MINIMAL_BACKGROUND_WATCH_WINDOW)
+                slept_period += MINIMAL_BACKGROUND_WATCH_WINDOW
+                # was closed properly
+                if pool._background_monitoring_stop.is_set():
+                    return
+
+            # check again[...] due to mutable state
             if pool._background_monitoring_stop.is_set():
                 return
-            # this safety is critical.
-            # rational: many people just don't close the pool
-            #           they just forget about it, and this can
-            #           cause massive amount of dangling thread
-            #           holding reference to the pool.
+
+            # pool could be closed.
+            if pool.pool is None:
+                return
+
             try:
-                if sys.getrefcount(pool) <= 3:
-                    return
+                for conn in pool.pool.iter_idle():
+                    now = time.monotonic()
+                    last_used = conn.last_used_at
+
+                    idle_delay = now - last_used
+
+                    # don't peek into conn that just became idle
+                    # waste of resource.
+                    if idle_delay < 1.0:
+                        continue
+
+                    conn.peek_and_react()
+
+                    if (
+                        keepalive_delay is not None
+                        and keepalive_idle_window is not None
+                    ):
+                        connected_at = conn.connected_at
+
+                        if connected_at is not None:
+                            since_connection_delay = now - connected_at
+
+                            if since_connection_delay <= keepalive_delay:
+                                if idle_delay >= keepalive_idle_window:
+                                    pool.num_pings += 1
+                                    conn.ping()
             except AttributeError:
-                pass  # pypy case[...]
-
-        # check again[...] due to mutable state
-        if pool._background_monitoring_stop.is_set():
-            return
-
-        # pool could be closed.
-        if pool.pool is None:
-            return
-
-        try:
-            for conn in pool.pool.iter_idle():
-                now = time.monotonic()
-                last_used = conn.last_used_at
-
-                idle_delay = now - last_used
-
-                # don't peek into conn that just became idle
-                # waste of resource.
-                if idle_delay < 1.0:
-                    continue
-
-                conn.peek_and_react()
-
-                if keepalive_delay is not None and keepalive_idle_window is not None:
-                    connected_at = conn.connected_at
-
-                    if connected_at is not None:
-                        since_connection_delay = now - connected_at
-
-                        if since_connection_delay <= keepalive_delay:
-                            if idle_delay >= keepalive_idle_window:
-                                pool.num_pings += 1
-                                conn.ping()
-        except AttributeError:
-            return
+                return
+    except ReferenceError:
+        return
 
 
 class HTTPConnectionPool(ConnectionPool, RequestMethods):
@@ -446,7 +443,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             self._background_monitoring: threading.Thread | None = threading.Thread(
                 target=idle_conn_watch_task,
                 args=(
-                    self,
+                    proxy(self),
                     background_watch_delay,
                     keepalive_delay,
                     keepalive_idle_window,
