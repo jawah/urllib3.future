@@ -736,10 +736,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             peek_data = await self.sock.recv(self.blocksize)
         except SocketTimeout:
             return False
-        except (
-            ConnectionAbortedError,
-            ConnectionResetError,
-        ):
+        except ConnectionAbortedError:
             peek_data = b""
         finally:
             self.sock.settimeout(bck_timeout)
@@ -818,10 +815,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                 try:
                     data_in = await self.sock.recv(self.blocksize)
-                except (
-                    ConnectionAbortedError,
-                    ConnectionResetError,
-                ):
+                except ConnectionAbortedError:
                     data_in = b""
 
                 reach_socket = True
