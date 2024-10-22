@@ -1032,6 +1032,8 @@ You can pass the following options to the DNS url:
    - ``doh://dns.google/?disabled_svn=h3`` -> Disable HTTP/3
 - proxy _(url)_
 - proxy_headers
+- keepalive_delay
+- keepalive_idle_window
 
 .. warning:: DNS over HTTPS support HTTP/1.1, HTTP/2 and HTTP/3. By default it tries to negotiate HTTP/2, then if available negotiate HTTP/3. The server must provide a valid ``Alt-Svc`` in responses.
 

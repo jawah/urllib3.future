@@ -202,6 +202,16 @@ python -m pip install urllib3
 
 The order is (actually) important.
 
+Super! But how can I do that when installing something that requires somewhere urllib3-future?
+
+Let's say you want to install Niquests and keep BOTH urllib3 and urllib3-future, do:
+
+```
+URLLIB3_NO_OVERRIDE=true pip install niquests --no-binary urllib3-future
+```
+
+This applies to every package you wish to install and brings indirectly urllib3-future.
+
 - **Can you guarantee us that everything will go smooth?**
 
 Guarantee is a strong word with a lot of (legal) implication. We cannot offer a "guarantee".

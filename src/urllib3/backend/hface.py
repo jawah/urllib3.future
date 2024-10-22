@@ -271,6 +271,10 @@ class HfaceBackend(BaseBackend):
                         self.conn_info.tls_handshake_latency.total_seconds()
                     )
                 self._max_tolerable_delay_for_upgrade *= 10.0
+                # we can, in rare case get self._max_tolerable_delay_for_upgrade == 0.0
+                # we want to avoid this at all cost.
+                if self._max_tolerable_delay_for_upgrade <= 0.01:
+                    self._max_tolerable_delay_for_upgrade = 3.0
             else:  # by default (safe/conservative fallback) to 3000ms
                 self._max_tolerable_delay_for_upgrade = 3.0
 

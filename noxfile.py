@@ -347,7 +347,7 @@ def downstream_requests(session: nox.Session) -> None:
     session.install("-r", "requirements-dev.txt", silent=False)
 
     session.cd(root)
-    session.install(".[socks]", silent=False)
+    session.install(".", silent=False)
     session.cd(f"{tmp_dir}/requests")
 
     session.run("python", "-c", "import urllib3; print(urllib3.__version__)")

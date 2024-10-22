@@ -1,3 +1,9 @@
+2.11.903 (2024-10-22)
+=====================
+
+- Fixed (low-level) exception leak when using ``get_response(...)`` after ``urlopen(..., multiplexed=True)``.
+- Fixed erroneous calculated maximal wait when starting a connection upgrade to a higher protocol version in rare cases (async+windows only).
+
 2.11.902 (2024-10-22)
 =====================
 
