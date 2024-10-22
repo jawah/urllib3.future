@@ -220,7 +220,7 @@ class AsyncResolverDescription(ResolverDescription):
                     value if value_converted is None else value_converted
                 )
 
-        host_patterns = []
+        host_patterns: list[str] = []
 
         if "hosts" in kwargs:
             host_patterns = (
