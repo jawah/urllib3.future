@@ -786,7 +786,7 @@ class HfaceBackend(BaseBackend):
             peek_data = self.sock.recv(self.blocksize)
         except (OSError, TimeoutError, socket.timeout):
             return False
-        except ConnectionAbortedError:
+        except (ConnectionAbortedError, ConnectionResetError):
             peek_data = b""
         finally:
             self.sock.settimeout(bck_timeout)
@@ -866,7 +866,10 @@ class HfaceBackend(BaseBackend):
 
                 try:
                     data_in = self.sock.recv(self.blocksize)
-                except ConnectionAbortedError:  # on Windows, mostly.
+                except (
+                    ConnectionAbortedError,
+                    ConnectionResetError,
+                ):  # on Windows, mostly.
                     data_in = b""
 
                 reach_socket = True
