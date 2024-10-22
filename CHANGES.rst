@@ -1,3 +1,10 @@
+2.11.902 (2024-10-22)
+=====================
+
+- Added viable replacement for connection close detection since we stopped using the function ``wait_for_read``
+  in property ``is_connected`` of a ``HTTPConnection`` object. And we harmonized the behavior whether you use async
+  or sync.
+
 2.11.901 (2024-10-21)
 =====================
 

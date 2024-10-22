@@ -764,6 +764,12 @@ class HfaceBackend(BaseBackend):
         Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
         or when reaching a WebSocket.
         This method return True if there is any event ready to unpack for the connection.
+        Some server implementation may be aggressive toward "idle" session
+        this is especially true when using QUIC.
+        For example, google/quiche expect regular ACKs, otherwise will
+        deduct that network conn is dead.
+        see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
+             https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
         """
         if self.sock is None or self._protocol is None:
             return False
@@ -776,10 +782,14 @@ class HfaceBackend(BaseBackend):
             peek_data = self.sock.recv(self.blocksize)
         except (OSError, TimeoutError, socket.timeout):
             return False
+        except ConnectionAbortedError:
+            peek_data = b""
         finally:
             self.sock.settimeout(bck_timeout)
 
         if not peek_data:
+            # connection loss...
+            self._protocol.connection_lost()
             return False
 
         try:
@@ -839,6 +849,7 @@ class HfaceBackend(BaseBackend):
             data_in_len_from = None
 
         while True:
+            reach_socket: bool = False
             if not self._protocol.has_pending_event(stream_id=stream_id):
                 if receive_first is False:
                     while True:
@@ -849,7 +860,12 @@ class HfaceBackend(BaseBackend):
 
                         self.sock.sendall(data_out)
 
-                data_in = self.sock.recv(self.blocksize)
+                try:
+                    data_in = self.sock.recv(self.blocksize)
+                except ConnectionAbortedError:  # on Windows, mostly.
+                    data_in = b""
+
+                reach_socket = True
 
                 if not data_in:
                     # in some cases (merely http/1 legacy)
@@ -867,9 +883,7 @@ class HfaceBackend(BaseBackend):
                             # should not happen, but one truly never known.
                             raise ProtocolError(e) from e  # Defensive:
                     else:
-                        raise ProtocolError(
-                            "server unexpectedly closed the connection in-flight (prior-to-response)"
-                        )
+                        self._protocol.connection_lost()
                 else:
                     if data_in_len_from is None:
                         data_in_len += len(data_in)
@@ -900,18 +914,34 @@ class HfaceBackend(BaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
-                    # some server implementation may be aggressive toward "idle" session
-                    # this is especially true when using QUIC.
-                    # For example, google/quiche expect regular ACKs, otherwise will
-                    # deduct that network conn is dead.
-                    # todo: we will need some kind of background watch constrained by TrafficPolice
-                    # see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
-                    #      https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
-                    if event.error_code == 0:
+                    if event.error_code == 0 and self._response is not None:
                         self._protocol = None
                         self.close()
                         raise MustRedialError(
                             f"Remote peer just closed our connection, probably for not answering to unsolicited packet. ({event.message})"
+                        )
+
+                    # we can receive a zero-length payload, that usually means the remote closed the socket.
+                    # but we should be able to redial. we only attempt this when we've just sent a request.
+                    # this cond. requires to have one successful response out of this conn, that demonstrate
+                    # the connection is usable. (avoid loop in retries)
+                    if (
+                        reach_socket is True
+                        and data_in == b""
+                        and self._response is not None
+                        and (
+                            (
+                                isinstance(event_type, tuple)
+                                and HeadersReceived in event_type
+                            )
+                            or (event_type is HeadersReceived)
+                        )
+                        and all(isinstance(e, HeadersReceived) is False for e in events)
+                    ):
+                        self._protocol = None
+                        self.close()
+                        raise MustRedialError(
+                            "Server unexpectedly closed the connection in-flight (connection dropped)"
                         )
 
                     if (
