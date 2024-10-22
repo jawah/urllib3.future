@@ -403,7 +403,6 @@ class TestClientCerts(SocketDummyServerTestCase):
 
 
 class TestSocketClosing(SocketDummyServerTestCase):
-    @pytest.mark.xfail(reason="since we removed wait_for socket", strict=False)
     def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
         # connection pool gets hung up on by the server, then reaches
@@ -1110,7 +1109,6 @@ class TestProxyManager(SocketDummyServerTestCase):
             # OrderedDict/MultiDict).
             assert b"For-The-Proxy: YEAH!\r\n" in r.data
 
-    @pytest.mark.xfail(reason="since we removed wait_for sock", strict=False)
     def test_retries(self) -> None:
         close_event = Event()
 

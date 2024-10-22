@@ -161,7 +161,10 @@ async def idle_conn_watch_task(
     try:
         while pool.pool is not None:
             pool.num_background_watch_iter += 1
-            await asyncio.sleep(waiting_delay)
+            try:
+                await asyncio.sleep(waiting_delay)
+            except asyncio.CancelledError:
+                return
             if pool.pool is None:
                 return
             try:

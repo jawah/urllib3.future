@@ -608,7 +608,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     )
                     raise NewConnectionError(
                         challengers[0],
-                        f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs for {self.host}:{self.port}{within_delay_msg}",
+                        f"Failed to establish a new connection: No suitable endpoint to connect to using Happy Eyeballs for {self.host}:{self.port}{within_delay_msg}",
                     ) from tasks[0].exception()
 
                 conn = challengers[tasks.index(winning_task)]
