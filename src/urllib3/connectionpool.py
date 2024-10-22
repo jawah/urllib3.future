@@ -806,15 +806,78 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 f"This may occur if you expected the remote peer to support multiplexing but did not."
             )
 
+        clean_exit = True
+
         try:
             with self.pool.borrow(
                 promise or ResponsePromise,
                 block=promise is not None,
                 not_idle_only=promise is None,
             ) as conn:
-                response = conn.getresponse(promise=promise, police_officer=self.pool)
+                try:
+                    response = conn.getresponse(
+                        promise=promise, police_officer=self.pool
+                    )
+                except (BaseSSLError, OSError) as e:
+                    if promise is not None:
+                        url = typing.cast(str, promise.get_parameter("url"))
+                    else:
+                        url = ""
+                    self._raise_timeout(err=e, url=url, timeout_value=conn.timeout)
+                    raise
         except UnavailableTraffic:
             return None
+        except (
+            TimeoutError,
+            OSError,
+            ProtocolError,
+            BaseSSLError,
+            SSLError,
+            CertificateError,
+            ProxyError,
+            RecoverableError,
+        ) as e:
+            # Discard the connection for these exceptions. It will be
+            # replaced during the next _get_conn() call.
+            clean_exit = False
+            new_e: Exception = e
+            if isinstance(e, (BaseSSLError, CertificateError)):
+                new_e = SSLError(e)
+            if isinstance(
+                new_e,
+                (
+                    OSError,
+                    NewConnectionError,
+                    TimeoutError,
+                    SSLError,
+                ),
+            ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
+                new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
+            elif isinstance(new_e, OSError):
+                new_e = ProtocolError("Connection aborted.", new_e)
+
+            if promise is not None:
+                retries = typing.cast(Retry, promise.get_parameter("retries"))
+
+                method = typing.cast(str, promise.get_parameter("method"))
+                url = typing.cast(str, promise.get_parameter("url"))
+
+                retries = retries.increment(
+                    method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
+                )
+                retries.sleep()
+            else:
+                raise e
+
+            # Keep track of the error for the retry warning.
+            err = e
+
+        if not clean_exit:
+            log.warning(
+                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+            )
+
+            return self.get_response(promise=promise)
 
         if promise is not None and response is None:
             raise ValueError(
