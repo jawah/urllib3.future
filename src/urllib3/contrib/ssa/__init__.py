@@ -78,7 +78,11 @@ class AsyncSocket:
 
         try:
             if hasattr(self._sock, "shutdown"):
-                self._sock.shutdown(SHUT_RD)
+                try:
+                    self._sock.shutdown(SHUT_RD)
+                except TypeError:  # uvloop don't support shutdown!
+                    if hasattr(self._sock, "close"):
+                        self._sock.close()
             elif hasattr(self._sock, "close"):
                 self._sock.close()
             # we have to force call close() on our sock object in UDP ctx. (even after shutdown)
