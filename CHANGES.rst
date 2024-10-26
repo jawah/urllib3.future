@@ -1,3 +1,9 @@
+2.11.905 (2024-10-26)
+=====================
+
+- Fixed custom loop like uvloop needing advanced error handling on transport close.
+- Fixed MacOS connection reset by peer handling to detect connection close (continuation of fix in 2.11.902)
+
 2.11.904 (2024-10-25)
 =====================
 

@@ -4,6 +4,7 @@ import asyncio
 import platform
 import socket
 import typing
+import warnings
 
 SHUT_RD = 0  # taken from the "_socket" module
 StandardTimeoutError = socket.timeout
@@ -77,18 +78,48 @@ class AsyncSocket:
             self._writer.close()
 
         try:
+            # see https://github.com/MagicStack/uvloop/issues/241
+            # and https://github.com/jawah/niquests/issues/166
+            # probably not just uvloop.
+            uvloop_edge_case_bug = False
+
             if hasattr(self._sock, "shutdown"):
                 try:
                     self._sock.shutdown(SHUT_RD)
-                except TypeError:  # uvloop don't support shutdown!
-                    if hasattr(self._sock, "close"):
+                except TypeError:
+                    uvloop_edge_case_bug = True
+                    # uvloop don't support shutdown! and sometime does not support close()...
+                    # see https://github.com/jawah/niquests/issues/166 for ctx.
+                    try:
                         self._sock.close()
+                    except TypeError:
+                        # last chance of releasing properly the underlying fd!
+                        try:
+                            direct_sock = socket.socket(fileno=self._sock.fileno())
+                        except OSError:
+                            pass
+                        else:
+                            try:
+                                direct_sock.shutdown(SHUT_RD)
+                            except OSError:
+                                warnings.warn(
+                                    (
+                                        "urllib3-future is unable to properly close your async socket. "
+                                        "This mean that you are probably using an asyncio implementation like uvloop "
+                                        "that does not support shutdown() or/and close() on the socket transport. "
+                                        "This will lead to unclosed socket (fd)."
+                                    ),
+                                    ResourceWarning,
+                                )
+                            finally:
+                                direct_sock.detach()
             elif hasattr(self._sock, "close"):
                 self._sock.close()
             # we have to force call close() on our sock object in UDP ctx. (even after shutdown)
             # or we'll get a resource warning for sure!
             if self.type == socket.SOCK_DGRAM and hasattr(self._sock, "close"):
-                self._sock.close()
+                if not uvloop_edge_case_bug:
+                    self._sock.close()
         except OSError:
             pass
 

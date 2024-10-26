@@ -736,7 +736,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             peek_data = await self.sock.recv(self.blocksize)
         except SocketTimeout:
             return False
-        except ConnectionAbortedError:
+        except (ConnectionAbortedError, ConnectionResetError):
             peek_data = b""
         finally:
             self.sock.settimeout(bck_timeout)
@@ -815,7 +815,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                 try:
                     data_in = await self.sock.recv(self.blocksize)
-                except ConnectionAbortedError:
+                except (ConnectionAbortedError, ConnectionResetError) as e:
+                    if isinstance(e, ConnectionResetError) and (
+                        event_type is HandshakeCompleted
+                        or (
+                            isinstance(event_type, tuple)
+                            and HandshakeCompleted in event_type
+                        )
+                    ):
+                        raise e
                     data_in = b""
 
                 reach_socket = True
