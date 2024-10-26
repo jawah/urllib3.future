@@ -191,3 +191,23 @@ class TestConnection(TraefikTestCase):
 
         assert resp.status == 200
         assert resp.version == 30
+
+    @pytest.mark.xfail(
+        reason="experimental support for reusable outgoing port", strict=False
+    )
+    def test_fast_reuse_outgoing_port(self) -> None:
+        for _ in range(4):
+            conn = HTTPSConnection(
+                self.host,
+                self.https_port,
+                ca_certs=self.ca_authority,
+                resolver=self.test_resolver.new(),
+                source_address=("0.0.0.0", 8845),
+            )
+
+            conn.request("GET", "/get")
+            resp = conn.getresponse()
+
+            assert resp.status == 200
+
+            conn.close()

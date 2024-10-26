@@ -1,3 +1,10 @@
+2.11.906 (2024-10-26)
+=====================
+
+- Fixed unexpected exception when recreating a connection using the same outgoing port.
+  Add ``SO_REUSEPORT`` if available, fallback to ``SO_REUSEADDR``. This socket option
+  is not bullet proof against reusability errors. Some OS differs in behaviors.
+
 2.11.905 (2024-10-26)
 =====================
 

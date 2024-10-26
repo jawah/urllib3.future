@@ -1695,6 +1695,11 @@ class HfaceBackend(BaseBackend):
                             break
 
             try:
+                self.sock.shutdown(0)
+            except (OSError, AttributeError):
+                pass
+
+            try:
                 self.sock.close()
             except OSError:
                 pass
