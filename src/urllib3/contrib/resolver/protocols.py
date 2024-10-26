@@ -219,6 +219,20 @@ class BaseResolver(metaclass=ABCMeta):
             try:
                 sock = socket.socket(af, socktype, proto)
 
+                # we need to add this or reusing the same origin port will likely fail within
+                # short period of time. kernel put port on wait shut.
+                if source_address is not None:
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    except (OSError, AttributeError):  # Defensive: very old OS?
+                        try:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        except (
+                            OSError,
+                            AttributeError,
+                        ):  # Defensive: we can't do anything better than this.
+                            pass
+
                 # If provided, set socket level options before connecting.
                 _set_socket_options(sock, socket_options)
 
