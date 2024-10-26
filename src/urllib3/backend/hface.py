@@ -770,7 +770,7 @@ class HfaceBackend(BaseBackend):
         This method return True if there is any event ready to unpack for the connection.
         Some server implementation may be aggressive toward "idle" session
         this is especially true when using QUIC.
-        For example, google/quiche expect regular ACKs, otherwise will
+        For example, google/quiche send regular unsolicited data and expect regular ACKs, otherwise will
         deduct that network conn is dead.
         see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
              https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
@@ -786,7 +786,7 @@ class HfaceBackend(BaseBackend):
             peek_data = self.sock.recv(self.blocksize)
         except (OSError, TimeoutError, socket.timeout):
             return False
-        except ConnectionAbortedError:
+        except (ConnectionAbortedError, ConnectionResetError):
             peek_data = b""
         finally:
             self.sock.settimeout(bck_timeout)
@@ -866,7 +866,15 @@ class HfaceBackend(BaseBackend):
 
                 try:
                     data_in = self.sock.recv(self.blocksize)
-                except ConnectionAbortedError:  # on Windows, mostly.
+                except (ConnectionAbortedError, ConnectionResetError) as e:
+                    if isinstance(e, ConnectionResetError) and (
+                        event_type is HandshakeCompleted
+                        or (
+                            isinstance(event_type, tuple)
+                            and HandshakeCompleted in event_type
+                        )
+                    ):
+                        raise e
                     data_in = b""
 
                 reach_socket = True
