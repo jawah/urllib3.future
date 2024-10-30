@@ -238,7 +238,10 @@ def tests_impl(
             "--strict-config",
             "--strict-markers",
             *(session.posargs or ("test/",)),
-            env={"PYTHONWARNINGS": "always::DeprecationWarning"},
+            env={
+                "PYTHONWARNINGS": "always::DeprecationWarning",
+                "COVERAGE_CORE": "sysmon",
+            },
         )
 
 
