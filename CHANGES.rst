@@ -1,3 +1,8 @@
+2.11.907 (2024-10-30)
+=====================
+
+- Fixed attempt to send ping frame in our discrete background idle watcher when the connection has just been closed.
+
 2.11.906 (2024-10-26)
 =====================
 
