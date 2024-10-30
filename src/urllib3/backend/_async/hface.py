@@ -1595,9 +1595,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if self.sock is None or self._protocol is None:
             return
 
+        if self._protocol.has_expired():
+            return
+
         try:
             self._protocol.ping()
         except NotImplementedError:  # http/1 case.
+            return
+        except self._protocol.exceptions():
             return
 
         while True:

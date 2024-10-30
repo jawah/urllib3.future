@@ -174,6 +174,9 @@ def idle_conn_watch_task(
 
             try:
                 for conn in pool.pool.iter_idle():
+                    if conn.is_connected is False:
+                        continue
+
                     now = time.monotonic()
                     last_used = conn.last_used_at
 
