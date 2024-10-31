@@ -90,7 +90,7 @@ def _can_resolve(host: str, should_match: str | None = None) -> bool:
 def has_alpn(ctx_cls: type[ssl.SSLContext] | None = None) -> bool:
     """Detect if ALPN support is enabled."""
     ctx_cls = ctx_cls or util.SSLContext
-    ctx = ctx_cls(protocol=ssl_.PROTOCOL_TLS)  # type: ignore[misc, attr-defined]
+    ctx = ctx_cls(protocol=ssl_.PROTOCOL_TLS_CLIENT)  # type: ignore[misc, attr-defined]
     try:
         if hasattr(ctx, "set_alpn_protocols"):
             ctx.set_alpn_protocols(ssl_.ALPN_PROTOCOLS)

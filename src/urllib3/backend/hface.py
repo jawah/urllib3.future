@@ -200,7 +200,10 @@ class HfaceBackend(BaseBackend):
             # if conn target another host.
             if self._response and self._response.authority != self.host:
                 self._svn = None
-                self._new_conn()  # restore socket defaults
+                self._response = None  # type: ignore[assignment]
+                if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
+                    self.blocksize = DEFAULT_BLOCKSIZE
+                self.socket_kind = SOCK_STREAM
         else:
             if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
                 self.blocksize = DEFAULT_BLOCKSIZE

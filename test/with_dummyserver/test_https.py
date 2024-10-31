@@ -173,19 +173,21 @@ class TestHTTPS(HTTPSDummyServerTestCase):
     @notWindows()
     @notMacOS()
     def test_in_memory_client_intermediate(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.port,
-            key_data=open(os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_KEY)).read(),
-            cert_data=open(
+        with open(os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_KEY)) as fp_key_data:
+            with open(
                 os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_PEM)
-            ).read(),
-            ca_certs=DEFAULT_CA,
-            ssl_minimum_version=self.tls_version(),
-        ) as https_pool:
-            r = https_pool.request("GET", "/certificate")
-            subject = r.json()
-            assert subject["organizationalUnitName"].startswith("Testing cert")
+            ) as fp_cert_data:
+                with HTTPSConnectionPool(
+                    self.host,
+                    self.port,
+                    key_data=fp_key_data.read(),
+                    cert_data=fp_cert_data.read(),
+                    ca_certs=DEFAULT_CA,
+                    ssl_minimum_version=self.tls_version(),
+                ) as https_pool:
+                    r = https_pool.request("GET", "/certificate")
+                    subject = r.json()
+                    assert subject["organizationalUnitName"].startswith("Testing cert")
 
     def test_client_no_intermediate(self) -> None:
         """Check that missing links in certificate chains indeed break
@@ -221,18 +223,20 @@ class TestHTTPS(HTTPSDummyServerTestCase):
     @notWindows()
     @notMacOS()
     def test_in_memory_client_key_password(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.port,
-            ca_certs=DEFAULT_CA,
-            key_data=open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)).read(),
-            cert_data=open(os.path.join(self.certs_dir, CLIENT_CERT)).read(),
-            key_password="letmein",
-            ssl_minimum_version=self.tls_version(),
-        ) as https_pool:
-            r = https_pool.request("GET", "/certificate")
-            subject = r.json()
-            assert subject["organizationalUnitName"].startswith("Testing cert")
+        with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)) as fp_key_data:
+            with open(os.path.join(self.certs_dir, CLIENT_CERT)) as fp_cert_data:
+                with HTTPSConnectionPool(
+                    self.host,
+                    self.port,
+                    ca_certs=DEFAULT_CA,
+                    key_data=fp_key_data.read(),
+                    cert_data=fp_cert_data.read(),
+                    key_password="letmein",
+                    ssl_minimum_version=self.tls_version(),
+                ) as https_pool:
+                    r = https_pool.request("GET", "/certificate")
+                    subject = r.json()
+                    assert subject["organizationalUnitName"].startswith("Testing cert")
 
     def test_client_encrypted_key_requires_password(self) -> None:
         with HTTPSConnectionPool(

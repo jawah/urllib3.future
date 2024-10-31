@@ -120,3 +120,5 @@ class TestConnectionMultiplexed(TraefikTestCase):
         for i in range(3):
             r = conn.getresponse()
             assert r.version == 30
+
+        conn.close()

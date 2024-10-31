@@ -104,6 +104,7 @@ class QUICResolver(PlainResolver):
                     await self._socket.sendall(data)
 
             self._socket.close()
+            await self._socket.wait_for_close()
             self._terminated = True
         if self._socket.should_connect():
             self._terminated = True

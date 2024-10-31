@@ -1091,6 +1091,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             else:
                 conn = await pool._get_conn()
                 await conn.request("GET", "/headers", chunked=chunked)
+                await pool._put_conn(conn)
 
             assert pool.headers == {"key": "val"}
             assert isinstance(pool.headers, header_type)
@@ -1101,6 +1102,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             else:
                 conn = await pool._get_conn()
                 await conn.request("GET", "/headers", headers=headers, chunked=chunked)
+                await pool._put_conn(conn)
 
             assert headers == {"key": "val"}
 

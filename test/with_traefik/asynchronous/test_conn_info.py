@@ -29,6 +29,8 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.http_version == HttpVersion.h11
         assert conn_info.certificate_dict is None
 
+        await p.clear()
+
     async def test_tls_on_tcp(self) -> None:
         p = AsyncPoolManager(
             ca_certs=self.ca_authority, resolver=self.test_async_resolver
@@ -49,6 +51,8 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.http_version == HttpVersion.h2
         assert conn_info.tls_version is not None
         assert conn_info.cipher is not None
+
+        await p.clear()
 
     @pytest.mark.usefixtures("requires_http3")
     async def test_tls_on_udp(self) -> None:
@@ -75,3 +79,5 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.tls_version is not None
         assert conn_info.cipher is not None
         assert conn_info.http_version == HttpVersion.h3
+
+        await p.clear()

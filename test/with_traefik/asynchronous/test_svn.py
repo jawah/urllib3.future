@@ -276,6 +276,8 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+        await conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     async def test_drop_post_established_h3(self) -> None:
         conn = AsyncHTTPSConnection(
@@ -309,6 +311,8 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+        await conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     async def test_pool_manager_quic_cache(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
@@ -329,6 +333,8 @@ class TestSvnCapability(TraefikTestCase):
 
         await conn.close()
 
+        await pm.clear()
+
         pm = AsyncPoolManager(
             ca_certs=self.ca_authority,
             preemptive_quic_cache=dumb_cache,
@@ -342,6 +348,9 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 30
 
         assert len(dumb_cache.keys()) == 1
+
+        await conn.close()
+        await pm.clear()
 
     async def test_http2_with_prior_knowledge(self) -> None:
         async with AsyncHTTPConnectionPool(

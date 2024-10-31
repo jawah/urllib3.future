@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import typing
 from abc import ABCMeta, abstractmethod
@@ -131,7 +132,11 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                 if source_address:
                     sock.bind(source_address)
 
-                await sock.connect(sa)
+                try:
+                    await sock.connect(sa)
+                except asyncio.CancelledError:
+                    sock.close()
+                    raise
 
                 # Break explicitly a reference cycle
                 err = None

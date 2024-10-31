@@ -1,3 +1,9 @@
+2.11.908 (2024-11-03)
+=====================
+
+- Fixed async connection shutdown in HTTP/1.1 and HTTP/2 leaving a ``asyncio.TransportSocket`` and ``_SelectorSocketTransport`` partially closed.
+- Added automatic mitigation of using deprecated ``PROTOCOL_TLS_*`` constants in ``ssl_version`` parameter.
+
 2.11.907 (2024-10-30)
 =====================
 

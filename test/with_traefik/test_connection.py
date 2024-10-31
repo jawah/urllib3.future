@@ -65,6 +65,8 @@ class TestConnection(TraefikTestCase):
 
         assert resp.version == 20
 
+        conn.close()
+
     def test_getresponse_not_ready(self) -> None:
         conn = HTTPSConnection(
             self.host,
@@ -97,6 +99,8 @@ class TestConnection(TraefikTestCase):
 
         assert resp.status == 200
         assert resp.version == 30
+
+        conn.close()
 
     def test_quic_cache_capable_but_disabled(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
@@ -192,6 +196,8 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 30
 
+        conn.close()
+
     @pytest.mark.xfail(
         reason="experimental support for reusable outgoing port", strict=False
     )
@@ -204,6 +210,8 @@ class TestConnection(TraefikTestCase):
                 resolver=self.test_resolver.new(),
                 source_address=("0.0.0.0", 8845),
             )
+
+            conn.connect()
 
             conn.request("GET", "/get")
             resp = conn.getresponse()

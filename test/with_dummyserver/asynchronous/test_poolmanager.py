@@ -286,6 +286,7 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             assert r._pool.num_requests == 2
             assert r._pool.num_connections == 1
             assert len(http.pools) == 1
+            await r.data  # consume content, avoid resource warning
 
     async def test_303_redirect_makes_request_lose_body(self) -> None:
         async with AsyncPoolManager() as http:
@@ -300,6 +301,7 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             data = await response.json()
             assert data["params"] == {}
             assert "Content-Type" not in HTTPHeaderDict(data["headers"])
+            await response.data  # consume content, avoid resource warning
 
     async def test_unknown_scheme(self) -> None:
         async with AsyncPoolManager() as http:

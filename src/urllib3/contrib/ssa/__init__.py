@@ -27,6 +27,26 @@ if typing.TYPE_CHECKING:
     from ..._typing import _TYPE_PEER_CERT_RET, _TYPE_PEER_CERT_RET_DICT
 
 
+def _can_shutdown_and_close_selector_loop_bug() -> bool:
+    import platform
+
+    if platform.system() == "Windows" and platform.python_version_tuple()[:2] == (
+        "3",
+        "7",
+    ):
+        return int(platform.python_version_tuple()[-1]) >= 17
+
+    return True
+
+
+# Windows + asyncio bug where doing our shutdown procedure induce a crash
+# in SelectorLoop
+# File "C:\hostedtoolcache\windows\Python\3.7.9\x64\lib\selectors.py", line 314, in _select
+#     r, w, x = select.select(r, w, w, timeout)
+# [WinError 10038] An operation was attempted on something that is not a socket
+_CPYTHON_SELECTOR_CLOSE_BUG_EXIST = _can_shutdown_and_close_selector_loop_bug() is False
+
+
 class AsyncSocket:
     """
     This class is brought to add a level of abstraction to an asyncio transport (reader, or writer)
@@ -73,6 +93,23 @@ class AsyncSocket:
     def fileno(self) -> int:
         return self._fileno if self._fileno is not None else self._sock.fileno()
 
+    async def wait_for_close(self) -> None:
+        if self._connect_called:
+            return
+
+        if self._writer is None:
+            return
+
+        is_ssl = self._writer.get_extra_info("ssl_object") is not None
+
+        if is_ssl:
+            # Give the connection a chance to write any data in the buffer,
+            # and then forcibly tear down the SSL connection.
+            await asyncio.sleep(0)
+            self._writer.transport.abort()
+
+        await self._writer.wait_closed()
+
     def close(self) -> None:
         if self._writer is not None:
             self._writer.close()
@@ -83,15 +120,21 @@ class AsyncSocket:
             # probably not just uvloop.
             uvloop_edge_case_bug = False
 
+            # keep track of our clean exit procedure
+            shutdown_called = False
+            close_called = False
+
             if hasattr(self._sock, "shutdown"):
                 try:
                     self._sock.shutdown(SHUT_RD)
+                    shutdown_called = True
                 except TypeError:
                     uvloop_edge_case_bug = True
                     # uvloop don't support shutdown! and sometime does not support close()...
                     # see https://github.com/jawah/niquests/issues/166 for ctx.
                     try:
                         self._sock.close()
+                        close_called = True
                     except TypeError:
                         # last chance of releasing properly the underlying fd!
                         try:
@@ -101,6 +144,7 @@ class AsyncSocket:
                         else:
                             try:
                                 direct_sock.shutdown(SHUT_RD)
+                                shutdown_called = True
                             except OSError:
                                 warnings.warn(
                                     (
@@ -113,15 +157,34 @@ class AsyncSocket:
                                 )
                             finally:
                                 direct_sock.detach()
-            elif hasattr(self._sock, "close"):
-                self._sock.close()
-            # we have to force call close() on our sock object in UDP ctx. (even after shutdown)
+            # we have to force call close() on our sock object (even after shutdown).
             # or we'll get a resource warning for sure!
-            if self.type == socket.SOCK_DGRAM and hasattr(self._sock, "close"):
-                if not uvloop_edge_case_bug:
-                    self._sock.close()
-        except OSError:
-            pass
+            if isinstance(self._sock, socket.socket) and hasattr(self._sock, "close"):
+                if not uvloop_edge_case_bug and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST:
+                    try:
+                        self._sock.close()
+                        close_called = True
+                    except OSError:
+                        pass
+
+            if not close_called or not shutdown_called:
+                # this branch detect whether we have an asyncio.TransportSocket instead of socket.socket.
+                if (
+                    hasattr(self._sock, "_sock")
+                    and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST
+                ):
+                    try:
+                        self._sock._sock.detach()
+                    except (AttributeError, OSError):
+                        pass
+
+        except (
+            OSError
+        ):  # branch where we failed to connect and still try to release resource
+            try:
+                self._sock.close()
+            except (OSError, TypeError, AttributeError):
+                pass
 
         self._connect_called = False
         self._established.clear()

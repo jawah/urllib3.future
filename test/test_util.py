@@ -982,6 +982,27 @@ class TestUtilSSL:
     def test_resolve_ssl_version(self, candidate: int | str, version: int) -> None:
         assert resolve_ssl_version(candidate) == version
 
+    @pytest.mark.parametrize(
+        "candidate, version",
+        [
+            (ssl.PROTOCOL_TLSv1, "TLSv1"),
+            ("PROTOCOL_TLSv1", "TLSv1"),
+            ("TLSv1", "TLSv1"),
+        ],
+    )
+    @pytest.mark.skipif(
+        hasattr(ssl, "TLSVersion") is False, reason="test requires ssl.TLSVersion"
+    )
+    def test_resolve_ssl_version_mitigated(
+        self, candidate: int | str, version: str
+    ) -> None:
+        version_ = getattr(ssl.TLSVersion, version, None)
+
+        if version_ is None:
+            pytest.skip(f"unsupported TLSVersion.{version}")
+
+        assert resolve_ssl_version(candidate, mitigate_tls_version=True) == version_
+
     def test_ssl_wrap_socket_loads_the_cert_chain(self) -> None:
         socket = Mock()
         mock_context = Mock()

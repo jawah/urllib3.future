@@ -29,6 +29,8 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.http_version == HttpVersion.h11
         assert conn_info.certificate_dict is None
 
+        p.clear()
+
     def test_tls_on_tcp(self) -> None:
         p = PoolManager(ca_certs=self.ca_authority, resolver=self.test_resolver)
 
@@ -47,6 +49,8 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.http_version == HttpVersion.h2
         assert conn_info.tls_version is not None
         assert conn_info.cipher is not None
+
+        p.clear()
 
     @pytest.mark.skipif(
         sys.version_info < (3, 10),
@@ -75,6 +79,8 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.tls_version is not None
         assert conn_info.cipher is not None
 
+        p.clear()
+
     @pytest.mark.usefixtures("requires_http3")
     def test_tls_on_udp(self) -> None:
         p = PoolManager(
@@ -100,3 +106,5 @@ class TestConnectionInfo(TraefikTestCase):
         assert conn_info.tls_version is not None
         assert conn_info.cipher is not None
         assert conn_info.http_version == HttpVersion.h3
+
+        p.clear()

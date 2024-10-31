@@ -224,7 +224,10 @@ class BaseResolver(metaclass=ABCMeta):
                 if source_address is not None:
                     try:
                         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                    except (OSError, AttributeError):  # Defensive: very old OS?
+                    except (
+                        OSError,
+                        AttributeError,
+                    ):  # Defensive: Windows or very old OS?
                         try:
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                         except (
