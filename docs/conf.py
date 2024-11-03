@@ -160,4 +160,5 @@ nitpick_ignore = [
     ("py:class", "_TYPE_ASYNC_BODY"),
     ("py:class", "ExtensionFromHTTP"),
     ("py:class", "AsyncExtensionFromHTTP"),
+    ("py:class", "urllib3.AsyncResolverDescription"),
 ]
