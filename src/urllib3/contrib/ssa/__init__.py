@@ -181,10 +181,16 @@ class AsyncSocket:
         except (
             OSError
         ):  # branch where we failed to connect and still try to release resource
-            try:
-                self._sock.close()
-            except (OSError, TypeError, AttributeError):
-                pass
+            if isinstance(self._sock, socket.socket):
+                try:
+                    self._sock.close()  # don't call close on asyncio.TransportSocket
+                except (OSError, TypeError, AttributeError):
+                    pass
+            elif hasattr(self._sock, "_sock") and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST:
+                try:
+                    self._sock._sock.detach()
+                except (AttributeError, OSError):
+                    pass
 
         self._connect_called = False
         self._established.clear()
