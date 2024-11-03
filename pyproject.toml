@@ -108,14 +108,12 @@ filterwarnings = [
     "error",
     '''default:No IPv6 support. Falling back to IPv4:urllib3.exceptions.HTTPWarning''',
     '''default:No IPv6 support. skipping:urllib3.exceptions.HTTPWarning''',
-    '''default:ssl\.TLSVersion\.TLSv1 is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLS is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1 is deprecated:DeprecationWarning''',
     '''default:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1_1 is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1_2 is deprecated:DeprecationWarning''',
     '''default:unclosed .*:ResourceWarning''',
-    '''default:loop is closed:ResourceWarning''',
     '''default:ssl NPN is deprecated, use ALPN instead:DeprecationWarning''',
     # https://github.com/pytest-dev/pytest/issues/10977
     '''default:ast\.(Num|NameConstant|Str) is deprecated and will be removed in Python 3\.14; use ast\.Constant instead:DeprecationWarning:_pytest''',
@@ -129,6 +127,9 @@ filterwarnings = [
     '''ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning''',
     '''ignore:function _SSLProtocolTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:The `hash` argument is deprecated in favor of `unsafe_hash`:DeprecationWarning''',
+    '''ignore:ssl\.TLSVersion\.TLSv1 is deprecated:DeprecationWarning''',
+    '''ignore:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
+    '''ignore:loop is closed:ResourceWarning''',
 ]
 
 [tool.isort]

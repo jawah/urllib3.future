@@ -99,6 +99,8 @@ class TestSvnCapability(TraefikTestCase):
         assert r.status == 200
         assert r.version == 20
 
+        p.close()
+
     def test_cannot_disable_everything(self) -> None:
         with pytest.raises(RuntimeError):
             p = HTTPSConnectionPool(
@@ -268,6 +270,8 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+        conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     def test_drop_post_established_h3(self) -> None:
         conn = HTTPSConnection(
@@ -321,6 +325,8 @@ class TestSvnCapability(TraefikTestCase):
 
         conn.close()
 
+        pm.clear()
+
         pm = PoolManager(
             ca_certs=self.ca_authority,
             preemptive_quic_cache=dumb_cache,
@@ -334,6 +340,9 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 30
 
         assert len(dumb_cache.keys()) == 1
+
+        conn.close()
+        pm.clear()
 
     def test_can_upgrade_h2c_via_altsvc(self) -> None:
         with HTTPConnectionPool(

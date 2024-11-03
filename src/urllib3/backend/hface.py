@@ -200,7 +200,10 @@ class HfaceBackend(BaseBackend):
             # if conn target another host.
             if self._response and self._response.authority != self.host:
                 self._svn = None
-                self._new_conn()  # restore socket defaults
+                self._response = None  # type: ignore[assignment]
+                if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
+                    self.blocksize = DEFAULT_BLOCKSIZE
+                self.socket_kind = SOCK_STREAM
         else:
             if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
                 self.blocksize = DEFAULT_BLOCKSIZE
@@ -773,7 +776,7 @@ class HfaceBackend(BaseBackend):
         For example, google/quiche send regular unsolicited data and expect regular ACKs, otherwise will
         deduct that network conn is dead.
         see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
-             https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
+        and: https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
         """
         if self.sock is None or self._protocol is None:
             return False

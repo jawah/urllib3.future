@@ -31,6 +31,7 @@ def test_returns_urllib3_HTTPResponse(pool: HTTPConnectionPool) -> None:
     response = conn.getresponse()
 
     assert isinstance(response, HTTPResponse)
+    pool._put_conn(conn)
 
 
 def test_does_not_release_conn(pool: HTTPConnectionPool) -> None:

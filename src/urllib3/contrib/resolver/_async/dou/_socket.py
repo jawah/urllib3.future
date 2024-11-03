@@ -70,6 +70,7 @@ class PlainResolver(AsyncBaseResolver):
         if not self._terminated:
             with self._lock:
                 self._socket.close()
+                await self._socket.wait_for_close()
                 self._terminated = True
 
     def is_available(self) -> bool:

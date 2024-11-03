@@ -224,16 +224,14 @@ try:  # Do we have ssl at all?
     # Python built against (very) restrictive ssl library may ship with a single TLS version
     # thus, it seems to make attribute "minimum_version" and "maximum_version" unavailable.
     # note: it raises an exception! maybe a CPython bug.
-    SUPPORT_MIN_MAX_TLS_VERSION = hasattr(
-        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT), "maximum_version"
-    )
+    SUPPORT_MIN_MAX_TLS_VERSION = hasattr(ssl.SSLContext, "maximum_version")
 except ImportError:
     OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]
     OP_NO_TICKET = 0x4000  # type: ignore[assignment]
     OP_NO_SSLv2 = 0x1000000  # type: ignore[assignment]
     OP_NO_SSLv3 = 0x2000000  # type: ignore[assignment]
     PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
-    PROTOCOL_TLS_CLIENT = 16  # type: ignore[assignment]
+    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS
     OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
     SUPPORT_MIN_MAX_TLS_VERSION = False
 
@@ -298,18 +296,58 @@ def resolve_cert_reqs(candidate: None | int | str) -> VerifyMode:
     return candidate  # type: ignore[return-value]
 
 
-def resolve_ssl_version(candidate: None | int | str) -> int:
+@typing.overload
+def resolve_ssl_version(
+    candidate: None | int | str,
+    *,
+    mitigate_tls_version: typing.Literal[True] = True,
+) -> ssl.TLSVersion:
+    ...
+
+
+@typing.overload
+def resolve_ssl_version(
+    candidate: None | int | str,
+    *,
+    mitigate_tls_version: typing.Literal[False] = False,
+) -> int:
+    ...
+
+
+def resolve_ssl_version(
+    candidate: None | int | str, mitigate_tls_version: bool = False
+) -> int | ssl.TLSVersion:
     """
     like resolve_cert_reqs
     """
     if candidate is None:
+        if mitigate_tls_version:
+            return PROTOCOL_TLS_CLIENT
         return PROTOCOL_TLS
 
     if isinstance(candidate, str):
+        if mitigate_tls_version and hasattr(ssl, "TLSVersion"):
+            res = getattr(ssl.TLSVersion, candidate, None)
+
+            if res is not None:
+                return res  # type: ignore[no-any-return]
+
+            res = getattr(ssl.TLSVersion, candidate.replace("PROTOCOL_", ""), None)
+
+            if res is not None:
+                return res  # type: ignore[no-any-return]
+
         res = getattr(ssl, candidate, None)
         if res is None:
             res = getattr(ssl, "PROTOCOL_" + candidate)
         return typing.cast(int, res)
+
+    if mitigate_tls_version:
+        if candidate in _SSL_VERSION_TO_TLS_VERSION:
+            return _SSL_VERSION_TO_TLS_VERSION[candidate]
+        if candidate == PROTOCOL_TLS_CLIENT or candidate == PROTOCOL_TLS:
+            return PROTOCOL_TLS_CLIENT
+        return ssl.TLSVersion.MAXIMUM_SUPPORTED
 
     return candidate
 
@@ -363,13 +401,17 @@ def create_urllib3_context(
             )
 
         else:
-            # Use 'ssl_minimum_version' and 'ssl_maximum_version' instead.
-            ssl_minimum_version = _SSL_VERSION_TO_TLS_VERSION.get(
-                ssl_version, TLSVersion.MINIMUM_SUPPORTED
-            )
-            ssl_maximum_version = _SSL_VERSION_TO_TLS_VERSION.get(
-                ssl_version, TLSVersion.MAXIMUM_SUPPORTED
-            )
+            if hasattr(ssl, "TLSVersion") and isinstance(ssl_version, ssl.TLSVersion):
+                ssl_minimum_version = ssl_version
+                ssl_maximum_version = ssl_version
+            else:
+                # Use 'ssl_minimum_version' and 'ssl_maximum_version' instead.
+                ssl_minimum_version = _SSL_VERSION_TO_TLS_VERSION.get(
+                    ssl_version, TLSVersion.MINIMUM_SUPPORTED
+                )
+                ssl_maximum_version = _SSL_VERSION_TO_TLS_VERSION.get(
+                    ssl_version, TLSVersion.MAXIMUM_SUPPORTED
+                )
 
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)

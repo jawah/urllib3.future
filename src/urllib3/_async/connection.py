@@ -920,7 +920,7 @@ async def _ssl_wrap_socket_and_match_hostname(
     """
     default_ssl_context = False
     sharable_ext_options: dict[str, int | str | None] = {
-        "ssl_version": resolve_ssl_version(ssl_version),
+        "ssl_version": resolve_ssl_version(ssl_version, mitigate_tls_version=True),
         "ssl_minimum_version": ssl_minimum_version,
         "ssl_maximum_version": ssl_maximum_version,
         "cert_reqs": resolve_cert_reqs(cert_reqs),

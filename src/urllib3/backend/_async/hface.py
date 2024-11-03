@@ -190,7 +190,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             # if conn target another host.
             if self._response and self._response.authority != self.host:
                 self._svn = None
-                await self._new_conn()  # restore socket defaults
+                self._response = None
+                if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
+                    self.blocksize = DEFAULT_BLOCKSIZE
+                self.socket_kind = SOCK_STREAM
         else:
             if self.blocksize == UDP_DEFAULT_BLOCKSIZE:
                 self.blocksize = DEFAULT_BLOCKSIZE
@@ -1644,6 +1647,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             try:
                 self.sock.close()
+                # this avoids having SelectorSocketTransport in "closing" state
+                # pending. Thus avoid a ResourceWarning.
+                await self.sock.wait_for_close()
             except OSError:
                 pass
 

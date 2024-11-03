@@ -66,6 +66,8 @@ class TestConnection(TraefikTestCase):
 
         assert resp.version == 20
 
+        await conn.close()
+
     async def test_getresponse_not_ready(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,
@@ -99,6 +101,8 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 30
 
+        await conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_capable_but_disabled(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
@@ -120,6 +124,8 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 20
 
+        await conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_explicit_not_capable(self) -> None:
         quic_cache_resumption: dict[tuple[str, int], tuple[str, int] | None] = {
@@ -139,6 +145,8 @@ class TestConnection(TraefikTestCase):
 
         assert resp.status == 200
         assert resp.version == 20
+
+        await conn.close()
 
     @pytest.mark.usefixtures("requires_http3")
     async def test_quic_cache_implicit_not_capable(self) -> None:
@@ -160,6 +168,8 @@ class TestConnection(TraefikTestCase):
 
         assert len(quic_cache_resumption.keys()) == 1
         assert (self.host, self.https_port) in quic_cache_resumption
+
+        await conn.close()
 
     @pytest.mark.usefixtures("requires_http3")
     async def test_quic_extract_ssl_ctx_ca_root(self) -> None:
@@ -194,6 +204,8 @@ class TestConnection(TraefikTestCase):
         assert resp.status == 200
         assert resp.version == 30
 
+        await conn.close()
+
     @pytest.mark.xfail(
         reason="experimental support for reusable outgoing port", strict=False
     )
@@ -206,6 +218,8 @@ class TestConnection(TraefikTestCase):
                 resolver=self.test_async_resolver.new(),
                 source_address=("0.0.0.0", 8745),
             )
+
+            await conn.connect()
 
             await conn.request("GET", "/get")
             resp = await conn.getresponse()

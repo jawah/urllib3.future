@@ -163,14 +163,32 @@ def ssl_options_to_context(  # type: ignore[no-untyped-def]
     alpn_protocols=None,
 ) -> ssl.SSLContext:
     """Return an equivalent SSLContext based on ssl.wrap_socket args."""
-    ssl_version = resolve_ssl_version(ssl_version)
+    _major, _minor, _patch = ssl.OPENSSL_VERSION_INFO[:3]
+    is_broken_old_ssl: bool = (
+        "OpenSSL" in ssl.OPENSSL_VERSION and _major < 1 or (_major == 1 and _minor < 1)
+    )
+
+    ssl_version = resolve_ssl_version(  # type: ignore[call-overload]
+        ssl_version, mitigate_tls_version=not is_broken_old_ssl
+    )
     cert_none = resolve_cert_reqs("CERT_NONE")
     if cert_reqs is None:
         cert_reqs = cert_none
     else:
         cert_reqs = resolve_cert_reqs(cert_reqs)
 
-    ctx = ssl.SSLContext(ssl_version)
+    if (
+        hasattr(ssl.SSLContext, "minimum_version")
+        and hasattr(ssl, "PROTOCOL_TLS_SERVER")
+        and is_broken_old_ssl is False
+    ):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        if hasattr(ssl, "TLSVersion") and isinstance(ssl_version, ssl.TLSVersion):
+            ctx.minimum_version = ssl_version
+            ctx.maximum_version = ssl_version
+    else:
+        ctx = ssl.SSLContext(ssl_version)  # type: ignore[arg-type]
+
     ctx.load_cert_chain(certfile, keyfile)
     ctx.verify_mode = cert_reqs
     if ctx.verify_mode != cert_none:
