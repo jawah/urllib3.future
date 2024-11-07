@@ -15,13 +15,20 @@ from urllib3.contrib.resolver import (
     ResolverDescription,
 )
 from urllib3.contrib.resolver.doh import HTTPSResolver
-from urllib3.contrib.resolver.doq import QUICResolver
-from urllib3.contrib.resolver.dot import TLSResolver
-from urllib3.contrib.resolver.dou import PlainResolver
-from urllib3.contrib.resolver.in_memory import InMemoryResolver
-from urllib3.contrib.resolver.null import NullResolver
-from urllib3.contrib.resolver.system import SystemResolver
-from urllib3.exceptions import InsecureRequestWarning
+
+_MISSING_QUIC_SENTINEL = object()
+
+try:
+    from urllib3.contrib.resolver.doq._qh3 import QUICResolver
+except ImportError:
+    QUICResolver = _MISSING_QUIC_SENTINEL  # type: ignore
+
+from urllib3.contrib.resolver.dot import TLSResolver  # noqa: E402
+from urllib3.contrib.resolver.dou import PlainResolver  # noqa: E402
+from urllib3.contrib.resolver.in_memory import InMemoryResolver  # noqa: E402
+from urllib3.contrib.resolver.null import NullResolver  # noqa: E402
+from urllib3.contrib.resolver.system import SystemResolver  # noqa: E402
+from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -81,6 +88,9 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
 def test_url_resolver(
     url: str, expected_resolver_class: type[BaseResolver] | None
 ) -> None:
+    if expected_resolver_class is _MISSING_QUIC_SENTINEL:
+        pytest.skip("Test requires qh3 installed")
+
     if expected_resolver_class is None:
         with pytest.raises(
             (
@@ -116,6 +126,9 @@ def test_url_resolver(
     ],
 )
 def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     res = resolver.getaddrinfo(
@@ -152,6 +165,9 @@ def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
     ],
 )
 def test_dnssec_exception(dns_url: str, hostname: str, expected_failure: bool) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     if expected_failure:
@@ -273,6 +289,9 @@ def test_many_resolver_host_constraint_distribution() -> None:
     ],
 )
 def test_short_endurance_sprint(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     for host in [
@@ -354,6 +373,9 @@ def test_doh_rfc8484(dns_url: str) -> None:
     ],
 )
 def test_thread_safe_resolver(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     def _run(
@@ -453,6 +475,9 @@ def test_many_resolver_thread_safe() -> None:
     ],
 )
 def test_resolver_recycle(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     resolver.close()
@@ -485,6 +510,9 @@ def test_resolver_recycle(dns_url: str) -> None:
     ],
 )
 def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     with pytest.raises(RuntimeError):
@@ -506,6 +534,9 @@ def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
 )
 def test_ipv6_always_preferred(dns_url: str) -> None:
     """Our resolvers must place IPV6 address in the beginning of returned list."""
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     inet_classes = []
@@ -540,6 +571,9 @@ def test_ipv6_always_preferred(dns_url: str) -> None:
 )
 def test_dgram_upgrade(dns_url: str) -> None:
     """www.cloudflare.com records HTTPS exist, we know it. This verify that we are able to propose a DGRAM upgrade."""
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = ResolverDescription.from_url(dns_url).new()
 
     sock_types = []

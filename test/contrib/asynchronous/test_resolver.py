@@ -14,13 +14,20 @@ from urllib3.contrib.resolver._async import (
     AsyncResolverDescription,
 )
 from urllib3.contrib.resolver._async.doh import HTTPSResolver
-from urllib3.contrib.resolver._async.doq import QUICResolver
-from urllib3.contrib.resolver._async.dot import TLSResolver
-from urllib3.contrib.resolver._async.dou import PlainResolver
-from urllib3.contrib.resolver._async.in_memory import InMemoryResolver
-from urllib3.contrib.resolver._async.null import NullResolver
-from urllib3.contrib.resolver._async.system import SystemResolver
-from urllib3.exceptions import InsecureRequestWarning
+
+_MISSING_QUIC_SENTINEL = object()
+
+try:
+    from urllib3.contrib.resolver._async.doq._qh3 import QUICResolver
+except ImportError:
+    QUICResolver = _MISSING_QUIC_SENTINEL  # type: ignore
+
+from urllib3.contrib.resolver._async.dot import TLSResolver  # noqa: E402
+from urllib3.contrib.resolver._async.dou import PlainResolver  # noqa: E402
+from urllib3.contrib.resolver._async.in_memory import InMemoryResolver  # noqa: E402
+from urllib3.contrib.resolver._async.null import NullResolver  # noqa: E402
+from urllib3.contrib.resolver._async.system import SystemResolver  # noqa: E402
+from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -82,6 +89,9 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
 async def test_url_resolver(
     url: str, expected_resolver_class: type[AsyncBaseResolver] | None
 ) -> None:
+    if expected_resolver_class is _MISSING_QUIC_SENTINEL:
+        pytest.skip("Test requires qh3 installed")
+
     if expected_resolver_class is None:
         with pytest.raises(
             (
@@ -118,6 +128,9 @@ async def test_url_resolver(
 )
 @pytest.mark.asyncio
 async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     res = await resolver.getaddrinfo(
@@ -158,6 +171,9 @@ async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
 async def test_dnssec_exception(
     dns_url: str, hostname: str, expected_failure: bool
 ) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     if expected_failure:
@@ -282,6 +298,9 @@ async def test_many_resolver_host_constraint_distribution() -> None:
 )
 @pytest.mark.asyncio
 async def test_short_endurance_sprint(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     for host in [
@@ -365,6 +384,9 @@ async def test_doh_rfc8484(dns_url: str) -> None:
 )
 @pytest.mark.asyncio
 async def test_task_safe_resolver(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     tasks = []
@@ -446,6 +468,9 @@ async def test_many_resolver_task_safe() -> None:
 )
 @pytest.mark.asyncio
 async def test_resolver_recycle(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     await resolver.close()
@@ -479,6 +504,9 @@ async def test_resolver_recycle(dns_url: str) -> None:
 )
 @pytest.mark.asyncio
 async def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     with pytest.raises(RuntimeError):
@@ -501,6 +529,9 @@ async def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
 @pytest.mark.asyncio
 async def test_ipv6_always_preferred(dns_url: str) -> None:
     """Our resolvers must place IPV6 address in the beginning of returned list."""
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     inet_classes = []
@@ -536,6 +567,9 @@ async def test_ipv6_always_preferred(dns_url: str) -> None:
 @pytest.mark.asyncio
 async def test_dgram_upgrade(dns_url: str) -> None:
     """www.cloudflare.com records HTTPS exist, we know it. This verify that we are able to propose a DGRAM upgrade."""
+    if QUICResolver is _MISSING_QUIC_SENTINEL and dns_url.startswith("doq"):
+        pytest.skip("Test requires qh3 installed")
+
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     sock_types = []
