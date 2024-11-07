@@ -7,6 +7,7 @@ import typing
 from ....util.ssl_ import resolve_cert_reqs, ssl_wrap_socket
 from ..dou import PlainResolver
 from ..protocols import ProtocolResolver
+from ..system import SystemResolver
 
 
 class TLSResolver(PlainResolver):
@@ -20,20 +21,30 @@ class TLSResolver(PlainResolver):
 
     def __init__(
         self,
-        server: str | None,
+        server: str,
         port: int | None = None,
         *patterns: str,
         **kwargs: typing.Any,
     ) -> None:
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if "timeout" in kwargs and isinstance(kwargs["timeout"], (int, float)):
+            timeout = kwargs["timeout"]
+        else:
+            timeout = None
 
         if "source_address" in kwargs and isinstance(kwargs["source_address"], str):
             bind_ip, bind_port = kwargs["source_address"].split(":", 1)
+        else:
+            bind_ip, bind_port = "0.0.0.0", "0"
 
-            if bind_ip and bind_port.isdigit():
-                self._socket.bind((bind_ip, int(bind_port)))
-
-        self._socket.connect((server, port or 853))
+        self._socket = SystemResolver().create_connection(
+            (server, port or 853),
+            timeout=timeout,
+            source_address=(bind_ip, int(bind_port))
+            if bind_ip != "0.0.0.0" or bind_port != "0"
+            else None,
+            socket_options=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp"),),
+            socket_kind=socket.SOCK_STREAM,
+        )
 
         super().__init__(server, port, *patterns, **kwargs)
 
@@ -56,9 +67,6 @@ class TLSResolver(PlainResolver):
             certdata=kwargs["cert_data"] if "cert_data" in kwargs else None,
             keydata=kwargs["key_data"] if "key_data" in kwargs else None,
         )
-
-        if "timeout" in kwargs and isinstance(kwargs["timeout"], (int, float)):
-            self._socket.settimeout(kwargs["timeout"])
 
         # DNS over TLS mandate the size-prefix (unsigned int, 2 bytes)
         self._hook_in = lambda p: p[2:]

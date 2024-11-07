@@ -6,9 +6,9 @@ import typing
 
 from .....util._async.ssl_ import ssl_wrap_socket
 from .....util.ssl_ import resolve_cert_reqs
-from ....ssa import AsyncSocket
 from ...protocols import ProtocolResolver
 from ..dou import PlainResolver
+from ..system import SystemResolver
 
 
 class TLSResolver(PlainResolver):
@@ -27,18 +27,9 @@ class TLSResolver(PlainResolver):
         *patterns: str,
         **kwargs: typing.Any,
     ) -> None:
-        self._socket = AsyncSocket(socket.AF_INET, socket.SOCK_STREAM)
-
-        if "source_address" in kwargs and isinstance(kwargs["source_address"], str):
-            bind_ip, bind_port = kwargs["source_address"].split(":", 1)
-
-            if bind_ip and bind_port.isdigit():
-                self._socket.bind((bind_ip, int(bind_port)))
+        self._socket_type = socket.SOCK_STREAM
 
         super().__init__(server, port or 853, *patterns, **kwargs)
-
-        if "timeout" in kwargs and isinstance(kwargs["timeout"], (int, float)):
-            self._socket.settimeout(kwargs["timeout"])
 
         # DNS over TLS mandate the size-prefix (unsigned int, 2 bytes)
         self._hook_in = lambda p: p[2:]
@@ -63,9 +54,16 @@ class TLSResolver(PlainResolver):
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
-        if self._socket.should_connect():
+        if self._socket is None and self._connect_attempt.is_set() is False:
             assert self.server is not None
-            await self._socket.connect((self.server, self.port or 853))
+            self._connect_attempt.set()
+            self._socket = await SystemResolver().create_connection(
+                (self.server, self.port or 853),
+                timeout=self._timeout,
+                source_address=self._source_address,
+                socket_options=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp"),),
+                socket_kind=self._socket_type,
+            )
             self._socket = await ssl_wrap_socket(
                 self._socket,
                 server_hostname=self.server
@@ -103,6 +101,7 @@ class TLSResolver(PlainResolver):
                 if "key_data" in self._kwargs
                 else None,
             )
+            self._connect_finalized.set()
 
         return await super().getaddrinfo(
             host,

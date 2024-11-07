@@ -79,7 +79,9 @@ class AsyncResolverFactory(metaclass=ABCMeta):
             and issubclass(e, AsyncBaseResolver)
             and (
                 (specifier is None and e.specifier is None) or specifier == e.specifier
-            ),
+            )
+            and hasattr(e, "protocol")
+            and e.protocol == protocol,
         )
 
         if not implementations:

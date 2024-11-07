@@ -12,6 +12,7 @@ from ..protocols import (
     ProtocolResolver,
     SupportedQueryType,
 )
+from ..system import SystemResolver
 from ..utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
 
 
@@ -28,7 +29,7 @@ class PlainResolver(BaseResolver):
 
     def __init__(
         self,
-        server: str | None,
+        server: str,
         port: int | None = None,
         *patterns: str,
         **kwargs: typing.Any,
@@ -36,24 +37,31 @@ class PlainResolver(BaseResolver):
         super().__init__(server, port, *patterns, **kwargs)
 
         if not hasattr(self, "_socket"):
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            if "timeout" in kwargs and isinstance(
+                kwargs["timeout"],
+                (
+                    float,
+                    int,
+                ),
+            ):
+                timeout = kwargs["timeout"]
+            else:
+                timeout = None
 
             if "source_address" in kwargs and isinstance(kwargs["source_address"], str):
                 bind_ip, bind_port = kwargs["source_address"].split(":", 1)
+            else:
+                bind_ip, bind_port = "0.0.0.0", "0"
 
-                if bind_ip and bind_port.isdigit():
-                    self._socket.bind((bind_ip, int(bind_port)))
-
-            self._socket.connect((server, port or 53))
-
-        if "timeout" in kwargs and isinstance(
-            kwargs["timeout"],
-            (
-                float,
-                int,
-            ),
-        ):
-            self._socket.settimeout(kwargs["timeout"])
+            self._socket = SystemResolver().create_connection(
+                (server, port or 53),
+                timeout=timeout,
+                source_address=(bind_ip, int(bind_port))
+                if bind_ip != "0.0.0.0" or bind_port != "0"
+                else None,
+                socket_options=None,
+                socket_kind=socket.SOCK_DGRAM,
+            )
 
         #: Only useful for inheritance, e.g. DNS over TLS support dns-message but require a prefix.
         self._hook_out: typing.Callable[[bytes], bytes] | None = None
@@ -67,7 +75,9 @@ class PlainResolver(BaseResolver):
     def close(self) -> None:
         if not self._terminated:
             with self._lock:
-                self._socket.close()
+                if self._socket is not None:
+                    self._socket.shutdown(0)
+                    self._socket.close()
                 self._terminated = True
 
     def is_available(self) -> bool:
@@ -190,7 +200,12 @@ class PlainResolver(BaseResolver):
                         self._unconsumed.remove(dns_resp)
                         continue
 
-                payload = self._socket.recv(1500)
+                try:
+                    payload = self._socket.recv(1500)
+                except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
+                    raise socket.gaierror(
+                        "Got unexpectedly disconnected while waiting for name resolution"
+                    ) from e
 
                 if not payload:
                     self._terminated = True

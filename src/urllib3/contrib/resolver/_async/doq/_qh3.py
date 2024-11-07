@@ -20,7 +20,7 @@ from qh3.quic.events import (
     StreamReset,
 )
 
-from .....util.ssl_ import resolve_cert_reqs
+from .....util.ssl_ import IS_FIPS, resolve_cert_reqs
 from ...protocols import (
     COMMON_RCODE_LABEL,
     DomainNameServerQuery,
@@ -30,6 +30,12 @@ from ...protocols import (
 )
 from ...utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
 from ..dou import PlainResolver
+from ..system import SystemResolver
+
+if IS_FIPS:
+    raise ImportError(
+        "DNS-over-QUIC disabled when Python is built with FIPS-compliant ssl module"
+    )
 
 
 class QUICResolver(PlainResolver):
@@ -77,6 +83,7 @@ class QUICResolver(PlainResolver):
         self._quic = QuicConnection(configuration=configuration)
 
         self._read_semaphore: asyncio.Semaphore = asyncio.Semaphore()
+        self._connect_attempt: asyncio.Event = asyncio.Event()
         self._handshake_event: asyncio.Event = asyncio.Event()
 
         self._terminated: bool = False
@@ -90,7 +97,11 @@ class QUICResolver(PlainResolver):
         self._pending: deque[DomainNameServerQuery] = deque()
 
     async def close(self) -> None:  # type: ignore[override]
-        if not self._terminated and not self._socket.should_connect():
+        if (
+            not self._terminated
+            and self._socket is not None
+            and not self._socket.should_connect()
+        ):
             self._quic.close()
 
             while True:
@@ -106,13 +117,13 @@ class QUICResolver(PlainResolver):
             self._socket.close()
             await self._socket.wait_for_close()
             self._terminated = True
-        if self._socket.should_connect():
+        if self._socket is None or self._socket.should_connect():
             self._terminated = True
 
     def is_available(self) -> bool:
         if self._terminated:
             return False
-        if self._socket.should_connect():
+        if self._socket is None or self._socket.should_connect():
             return True
         self._quic.handle_timer(monotonic())
         if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
@@ -185,14 +196,23 @@ class QUICResolver(PlainResolver):
 
         validate_length_of(host)
 
-        if self._socket.should_connect():
+        if self._socket is None and self._connect_attempt.is_set() is False:
+            self._connect_attempt.set()
             assert self.server is not None
             self._quic.connect((self._server, self._port), monotonic())
-            await self._socket.connect((self.server, self.port or 853))
+            self._socket = await SystemResolver().create_connection(
+                (self.server, self.port or 853),
+                timeout=self._timeout,
+                source_address=self._source_address,
+                socket_options=None,
+                socket_kind=self._socket_type,
+            )
             await self.__exchange_until(HandshakeCompleted, receive_first=False)
             self._handshake_event.set()
         else:
             await self._handshake_event.wait()
+
+        assert self._socket is not None
 
         remote_preemptive_quic_rr = False
 
@@ -367,6 +387,8 @@ class QUICResolver(PlainResolver):
         | None = None,
         respect_end_stream_signal: bool = True,
     ) -> list[QuicEvent]:
+        assert self._socket is not None
+
         while True:
             if receive_first is False:
                 now = monotonic()

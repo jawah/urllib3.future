@@ -19,7 +19,7 @@ from qh3.quic.events import (
     StreamReset,
 )
 
-from ....util.ssl_ import resolve_cert_reqs
+from ....util.ssl_ import IS_FIPS, resolve_cert_reqs
 from ..dou import PlainResolver
 from ..protocols import (
     COMMON_RCODE_LABEL,
@@ -30,6 +30,11 @@ from ..protocols import (
 )
 from ..utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
 
+if IS_FIPS:
+    raise ImportError(
+        "DNS-over-QUIC disabled when Python is built with FIPS-compliant ssl module"
+    )
+
 
 class QUICResolver(PlainResolver):
     protocol = ProtocolResolver.DOQ
@@ -37,7 +42,7 @@ class QUICResolver(PlainResolver):
 
     def __init__(
         self,
-        server: str | None,
+        server: str,
         port: int | None = None,
         *patterns: str,
         **kwargs: typing.Any,
@@ -233,11 +238,16 @@ class QUICResolver(PlainResolver):
                         self._pending.remove(query)
                         continue
 
-                events: list[StreamDataReceived] = self.__exchange_until(  # type: ignore[assignment]
-                    StreamDataReceived,
-                    receive_first=True,
-                    event_type_collectable=(StreamDataReceived,),
-                )
+                try:
+                    events: list[StreamDataReceived] = self.__exchange_until(  # type: ignore[assignment]
+                        StreamDataReceived,
+                        receive_first=True,
+                        event_type_collectable=(StreamDataReceived,),
+                    )
+                except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
+                    raise socket.gaierror(
+                        "Got unexpectedly disconnected while waiting for name resolution"
+                    ) from e
 
                 payload = b"".join([e.data for e in events])
 

@@ -15,6 +15,7 @@ from ...protocols import (
 )
 from ...utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
 from ..protocols import AsyncBaseResolver
+from ..system import SystemResolver
 
 
 class PlainResolver(AsyncBaseResolver):
@@ -37,14 +38,19 @@ class PlainResolver(AsyncBaseResolver):
     ) -> None:
         super().__init__(server, port, *patterns, **kwargs)
 
-        if not hasattr(self, "_socket"):
-            self._socket = AsyncSocket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket: AsyncSocket | None = None
 
-            if "source_address" in kwargs and isinstance(kwargs["source_address"], str):
+        if not hasattr(self, "_socket_type"):
+            self._socket_type = socket.SOCK_DGRAM
+
+        if "source_address" in kwargs and isinstance(kwargs["source_address"], str):
+            if ":" in kwargs["source_address"]:
                 bind_ip, bind_port = kwargs["source_address"].split(":", 1)
-
-                if bind_ip and bind_port.isdigit():
-                    self._socket.bind((bind_ip, int(bind_port)))
+                self._source_address: tuple[str, int] | None = (bind_ip, int(bind_port))
+            else:
+                self._source_address = (kwargs["source_address"], 0)
+        else:
+            self._source_address = None
 
         if "timeout" in kwargs and isinstance(
             kwargs["timeout"],
@@ -53,7 +59,9 @@ class PlainResolver(AsyncBaseResolver):
                 int,
             ),
         ):
-            self._socket.settimeout(kwargs["timeout"])
+            self._timeout: float | int | None = kwargs["timeout"]
+        else:
+            self._timeout = None
 
         #: Only useful for inheritance, e.g. DNS over TLS support dns-message but require a prefix.
         self._hook_out: typing.Callable[[bytes], bytes] | None = None
@@ -63,14 +71,17 @@ class PlainResolver(AsyncBaseResolver):
         self._pending: deque[DomainNameServerQuery] = deque()
 
         self._read_semaphore: asyncio.Semaphore = asyncio.Semaphore()
+        self._connect_attempt: asyncio.Event = asyncio.Event()
+        self._connect_finalized: asyncio.Event = asyncio.Event()
 
         self._terminated: bool = False
 
     async def close(self) -> None:  # type: ignore[override]
         if not self._terminated:
             with self._lock:
-                self._socket.close()
-                await self._socket.wait_for_close()
+                if self._socket is not None:
+                    self._socket.close()
+                    await self._socket.wait_for_close()
                 self._terminated = True
 
     def is_available(self) -> bool:
@@ -143,10 +154,20 @@ class PlainResolver(AsyncBaseResolver):
 
         validate_length_of(host)
 
-        if self._socket.should_connect():
+        if self._socket is None and self._connect_attempt.is_set() is False:
+            self._connect_attempt.set()
             assert self.server is not None
-            await self._socket.connect((self.server, self.port or 53))
+            self._socket = await SystemResolver().create_connection(
+                (self.server, self.port or 53),
+                timeout=self._timeout,
+                source_address=self._source_address,
+                socket_options=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp"),),
+                socket_kind=self._socket_type,
+            )
+            self._connect_finalized.set()
         else:
+            await self._connect_finalized.wait()
+            assert self._socket is not None
             await self._socket.wait_for_readiness()
 
         remote_preemptive_quic_rr = False

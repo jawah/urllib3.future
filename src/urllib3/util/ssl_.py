@@ -225,6 +225,17 @@ try:  # Do we have ssl at all?
     # thus, it seems to make attribute "minimum_version" and "maximum_version" unavailable.
     # note: it raises an exception! maybe a CPython bug.
     SUPPORT_MIN_MAX_TLS_VERSION = hasattr(ssl.SSLContext, "maximum_version")
+
+    IS_FIPS: bool = "fips" in OPENSSL_VERSION.lower()
+
+    # not necessarily declared in version string
+    if IS_FIPS is False:
+        if hasattr(ssl, "FIPS_mode") and callable(ssl.FIPS_mode):
+            IS_FIPS = bool(ssl.FIPS_mode())
+        else:  # messy detection
+            # md5 is available in Python 3.7 -- 3.13, so far. unless removed by FIPS patch
+            IS_FIPS = 32 not in HASHFUNC_MAP
+
 except ImportError:
     OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]
     OP_NO_TICKET = 0x4000  # type: ignore[assignment]
@@ -234,6 +245,7 @@ except ImportError:
     PROTOCOL_TLS_CLIENT = PROTOCOL_TLS
     OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
     SUPPORT_MIN_MAX_TLS_VERSION = False
+    IS_FIPS = False
 
 
 def assert_fingerprint(cert: bytes | None, fingerprint: str) -> None:
@@ -337,6 +349,9 @@ def resolve_ssl_version(
             if res is not None:
                 return res  # type: ignore[no-any-return]
 
+        if mitigate_tls_version and candidate == "PROTOCOL_TLS":
+            candidate = "PROTOCOL_TLS_CLIENT"
+
         res = getattr(ssl, candidate, None)
         if res is None:
             res = getattr(ssl, "PROTOCOL_" + candidate)
@@ -364,12 +379,11 @@ def create_urllib3_context(
 
     :param ssl_version:
         The desired protocol version to use. This will default to
-        PROTOCOL_SSLv23 which will negotiate the highest protocol that both
+        PROTOCOL_TLS_CLIENT which will negotiate the highest protocol that both
         the server and your installation of OpenSSL support.
-
-        This parameter is deprecated instead use 'ssl_minimum_version'.
     :param ssl_minimum_version:
         The minimum version of TLS to be used. Use the 'ssl.TLSVersion' enum for specifying the value.
+        By default, it is assigned to 'ssl.TLSVersion.TLSv1_2'.
     :param ssl_maximum_version:
         The maximum version of TLS to be used. Use the 'ssl.TLSVersion' enum for specifying the value.
         Not recommended to set to anything other than 'ssl.TLSVersion.MAXIMUM_SUPPORTED' which is the
