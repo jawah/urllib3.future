@@ -55,7 +55,7 @@ TLSv1_2_CERTS = DEFAULT_CERTS.copy()
 TLSv1_2_CERTS["ssl_version"] = getattr(ssl, "PROTOCOL_TLSv1_2", None)
 
 TLSv1_3_CERTS = DEFAULT_CERTS.copy()
-TLSv1_3_CERTS["ssl_version"] = getattr(ssl, "PROTOCOL_TLS", None)
+TLSv1_3_CERTS["ssl_version"] = getattr(ssl, "PROTOCOL_TLS_CLIENT", None)
 
 
 CLIENT_INTERMEDIATE_PEM = "client_intermediate.pem"
@@ -511,6 +511,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             # the python ssl module).
             if hasattr(conn.sock, "server_hostname"):
                 assert conn.sock.server_hostname == "localhost"  # type: ignore[union-attr]
+
+            conn.close()
 
     def test_assert_fingerprint_md5(self) -> None:
         with HTTPSConnectionPool(

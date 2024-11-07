@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import platform
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
@@ -23,6 +21,7 @@ from urllib3.contrib.resolver.dou import PlainResolver
 from urllib3.contrib.resolver.in_memory import InMemoryResolver
 from urllib3.contrib.resolver.null import NullResolver
 from urllib3.contrib.resolver.system import SystemResolver
+from urllib3.exceptions import InsecureRequestWarning
 
 
 @pytest.mark.parametrize(
@@ -62,16 +61,7 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dou://1.1.1.1", PlainResolver),
         ("dox://ooooo.com", None),
         ("doh://dns.google/resolve", HTTPSResolver),
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            QUICResolver,
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        ("doq://dns.nextdns.io/?timeout=3", QUICResolver),
         ("dns://dns.nextdns.io", None),
         ("null://default", NullResolver),
         ("default://null", None),
@@ -85,16 +75,7 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dot://1.1.1.1/?implementation=nonexistent", None),
         ("system://", SystemResolver),
         ("dot://", None),
-        pytest.param(
-            "doq://dns.nextdns.io/?implementation=qh3&timeout=1",
-            QUICResolver,
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        ("doq://dns.nextdns.io/?implementation=qh3&timeout=1", QUICResolver),
     ],
 )
 def test_url_resolver(
@@ -129,15 +110,7 @@ def test_url_resolver(
         "system://default",
         "dot://dns.google",
         "dot://one.one.one.one",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "doh+google://",
         "doh+cloudflare://default",
     ],
@@ -167,15 +140,7 @@ def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
         "doh://dns.google",
         "dot://dns.google",
         "dot://one.one.one.one",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
     ],
 )
 @pytest.mark.parametrize(
@@ -302,15 +267,7 @@ def test_many_resolver_host_constraint_distribution() -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -391,15 +348,7 @@ def test_doh_rfc8484(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -498,15 +447,7 @@ def test_many_resolver_thread_safe() -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -538,15 +479,7 @@ def test_resolver_recycle(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -566,15 +499,7 @@ def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -608,15 +533,7 @@ def test_ipv6_always_preferred(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        pytest.param(
-            "doq://dns.nextdns.io/?timeout=1",
-            marks=pytest.mark.xfail(
-                os.environ.get("CI", None) is not None
-                and platform.system() != "Darwin",
-                reason="Github Action CI: Network Unreachable UDP/QUIC",
-                strict=False,
-            ),
-        ),
+        "doq://dns.nextdns.io/?timeout=3",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -743,27 +660,25 @@ def test_doh_http11() -> None:
 
     assert len(res)
 
+    resolver.close()
+
 
 @requires_network()
-@pytest.mark.xfail(
-    os.environ.get("CI", None) is not None and platform.system() != "Darwin",
-    reason="Github Action CI: Network Unreachable UDP/QUIC",
-    strict=False,
-)
 def test_doh_http11_upgradable() -> None:
     """Ensure we can do DoH over HTTP/1.1 that can upgrade to HTTP/3"""
     resolver = ResolverDescription.from_url(
-        "doh+google://default/?disabled_svn=h2"
+        "doh+google://default/?disabled_svn=h2&cert_reqs=0"
     ).new()
+    with pytest.warns(InsecureRequestWarning):
+        res = resolver.getaddrinfo(
+            "www.cloudflare.com",
+            80,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+        )
 
-    res = resolver.getaddrinfo(
-        "www.cloudflare.com",
-        80,
-        socket.AF_UNSPEC,
-        socket.SOCK_STREAM,
-    )
-
-    assert len(res)
+        assert len(res)
+    resolver.close()
 
 
 @requires_network()

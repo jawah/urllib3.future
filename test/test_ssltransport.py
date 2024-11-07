@@ -182,6 +182,8 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
             validate_request(request)
             unwrapped_sock.sendall(sample_response())
 
+            unwrapped_sock.close()
+
         self.start_dummy_server(shutdown_handler)
         sock = socket.create_connection((self.host, self.port))
         ssock = SSLTransport(sock, self.client_context, server_hostname="localhost")
@@ -196,6 +198,8 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
         sock.sendall(sample_request())
         response = consume_socket(sock)
         validate_response(response)
+
+        ssock.close()
 
     @pytest.mark.timeout(PER_TEST_TIMEOUT)
     def test_ssl_object_attributes(self) -> None:

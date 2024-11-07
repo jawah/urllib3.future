@@ -46,6 +46,7 @@ def test_does_not_release_conn(pool: HTTPConnectionPool) -> None:
 
     response.release_conn()
     assert pool.pool.qsize() == 0  # type: ignore[union-attr]
+    conn.close()
 
 
 def test_releases_conn(pool: HTTPConnectionPool) -> None:
@@ -68,6 +69,7 @@ def test_releases_conn(pool: HTTPConnectionPool) -> None:
 
     response.release_conn()
     assert pool.pool.qsize() == 1  # type: ignore[union-attr]
+    conn.close()
 
 
 def test_double_getresponse(pool: HTTPConnectionPool) -> None:
@@ -83,6 +85,8 @@ def test_double_getresponse(pool: HTTPConnectionPool) -> None:
     # Calling getrepsonse() twice should cause an error
     with pytest.raises(ResponseNotReady):
         conn.getresponse()
+
+    conn.close()
 
 
 def test_connection_state_properties(pool: HTTPConnectionPool) -> None:

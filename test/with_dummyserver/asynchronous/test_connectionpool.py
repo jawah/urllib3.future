@@ -766,6 +766,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             )
 
             assert await r1.read(first_chunk) == resp_data[:first_chunk]
+            await r1.data  # consume the data, otherwise we get a resourcewarning!
 
             return
 
@@ -803,8 +804,11 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert pool.pool.qsize() == 0
 
             # Make request without releasing connection
-            await pool.request("GET", "/", release_conn=False, preload_content=False)
+            r = await pool.request(
+                "GET", "/", release_conn=False, preload_content=False
+            )
             assert pool.pool.qsize() == 0
+            await r.data  # we must consume, or the conn ref will hang.
 
     async def test_dns_error(self) -> None:
         async with AsyncHTTPConnectionPool(
@@ -844,16 +848,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool(
             self.host, self.port, source_address=invalid_source_address, retries=False
         ) as pool:
-            if is_ipv6:
-                with pytest.raises(NameResolutionError):
-                    await pool.request(
-                        "GET", f"/source_address?{invalid_source_address}"
-                    )
-            else:
-                with pytest.raises(NewConnectionError):
-                    await pool.request(
-                        "GET", f"/source_address?{invalid_source_address}"
-                    )
+            with pytest.raises(NewConnectionError):
+                await pool.request("GET", f"/source_address?{invalid_source_address}")
 
     async def test_stream_keepalive(self) -> None:
         x = 2
@@ -1091,7 +1087,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             else:
                 conn = await pool._get_conn()
                 await conn.request("GET", "/headers", chunked=chunked)
-                await pool._put_conn(conn)
+                await conn.close()
 
             assert pool.headers == {"key": "val"}
             assert isinstance(pool.headers, header_type)
@@ -1102,7 +1098,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             else:
                 conn = await pool._get_conn()
                 await conn.request("GET", "/headers", headers=headers, chunked=chunked)
-                await pool._put_conn(conn)
+                await conn.close()
 
             assert headers == {"key": "val"}
 
@@ -1481,8 +1477,9 @@ class TestRetryPoolSize(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool(
             self.host, self.port, maxsize=10, retries=retries, block=True
         ) as pool:
-            await pool.urlopen("GET", "/not_found", preload_content=False)
+            r = await pool.urlopen("GET", "/not_found", preload_content=False)
             assert pool.num_connections == 1
+            await r.data  # we have to consume it afterward, or we'll have a dangling conn somewhere.
 
 
 @pytest.mark.asyncio
@@ -1494,5 +1491,6 @@ class TestRedirectPoolSize(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool(
             self.host, self.port, maxsize=10, retries=retries, block=True
         ) as pool:
-            await pool.urlopen("GET", "/redirect", preload_content=False)
+            r = await pool.urlopen("GET", "/redirect", preload_content=False)
             assert pool.num_connections == 1
+            await r.data  # we have to consume it afterward, or we'll have a dangling conn somewhere.

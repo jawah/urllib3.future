@@ -16,12 +16,28 @@ import nox
 
 
 @contextlib.contextmanager
-def traefik_boot(session: nox.Session) -> typing.Generator[None, None, None]:
+def traefik_boot(
+    session: nox.Session, *args: str
+) -> typing.Generator[None, None, None]:
     """
     Start a server to reliably test HTTP/1.1, HTTP/2 and HTTP/3 over QUIC.
     """
     # we may want to avoid starting the traefik server...
     if os.environ.get("TRAEFIK_HTTPBIN_ENABLE", "true") != "true":
+        yield
+        return
+
+    # nox allows us to specify pos args
+    # if we detect any of them, we should check
+    # if the target tests requires Traefik or not.
+    detect_specific_traefik: bool | None = None
+    for arg in args:
+        if arg.startswith("test/"):
+            detect_specific_traefik = False
+        if arg.startswith("test/with_traefik") or arg == "test/":
+            detect_specific_traefik = True
+            break
+    if detect_specific_traefik is False:
         yield
         return
 
@@ -205,8 +221,9 @@ def tests_impl(
     session: nox.Session,
     extras: str = "socks,brotli,zstd,ws",
     byte_string_comparisons: bool = False,
+    tracemalloc_enable: bool = False,
 ) -> None:
-    with traefik_boot(session):
+    with traefik_boot(session, *session.posargs):
         # Install deps and the package itself.
         session.install("-U", "pip", "setuptools", silent=False)
         session.install("-r", "dev-requirements.txt", silent=False)
@@ -241,6 +258,7 @@ def tests_impl(
             env={
                 "PYTHONWARNINGS": "always::DeprecationWarning",
                 "COVERAGE_CORE": "sysmon",
+                "PYTHONTRACEMALLOC": "25" if tracemalloc_enable else "",
             },
         )
 
@@ -248,6 +266,11 @@ def tests_impl(
 @nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "pypy"])
 def test(session: nox.Session) -> None:
     tests_impl(session)
+
+
+@nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13"])
+def tracemalloc(session: nox.Session) -> None:
+    tests_impl(session, tracemalloc_enable=True)
 
 
 @nox.session(python=["3"])
