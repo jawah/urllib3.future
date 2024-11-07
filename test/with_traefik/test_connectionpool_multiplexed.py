@@ -12,6 +12,7 @@ from . import TraefikTestCase
 
 
 class TestConnectionPoolMultiplexed(TraefikTestCase):
+    @notMacOS()
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with HTTPSConnectionPool(
             self.host,

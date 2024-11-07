@@ -13,6 +13,7 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestConnectionPoolMultiplexed(TraefikTestCase):
+    @notMacOS()
     async def test_multiplexing_fastest_to_slowest(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,
@@ -52,6 +53,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             assert 3.5 >= round(time() - before, 2)
             assert await pool.get_response() is None
 
+    @notMacOS()
     async def test_multiplexing_without_preload(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,

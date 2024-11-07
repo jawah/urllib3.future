@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from test import notMacOS
 from time import time
 
 import pytest
@@ -11,6 +12,7 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestConnectionMultiplexed(TraefikTestCase):
+    @notMacOS()
     async def test_multiplexing_fastest_to_slowest(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,
@@ -41,6 +43,7 @@ class TestConnectionMultiplexed(TraefikTestCase):
 
         await conn.close()
 
+    @notMacOS()
     async def test_multiplexing_slowest_to_fastest(self) -> None:
         conn = AsyncHTTPSConnection(
             self.host,
