@@ -49,6 +49,25 @@ class QUICResolver(PlainResolver):
     ):
         super().__init__(server, port or 853, *patterns, **kwargs)
 
+        # qh3 load_default_certs seems off. need to investigate.
+        if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
+            kwargs["ca_cert_data"] = []
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+            try:
+                ctx.load_default_certs()
+
+                for der in ctx.get_ca_certs(binary_form=True):
+                    kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
+
+                if kwargs["ca_cert_data"]:
+                    kwargs["ca_cert_data"] = "\n".join(kwargs["ca_cert_data"])
+                else:
+                    del kwargs["ca_cert_data"]
+            except (AttributeError, ValueError, OSError):
+                del kwargs["ca_cert_data"]
+
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["doq"],
@@ -376,24 +395,26 @@ class QUICResolver(PlainResolver):
             events = []
 
             while True:
-                data = self._socket.recv(1500)
+                if not self._quic._events:
+                    data = self._socket.recv(1500)
 
-                if not data:
-                    break
-
-                now = monotonic()
-
-                self._quic.receive_datagram(data, (self._server, self._port), now)
-
-                while True:
-                    datagrams = self._quic.datagrams_to_send(now)
-
-                    if not datagrams:
+                    if not data:
                         break
 
-                    for datagram in datagrams:
-                        data, addr = datagram
-                        self._socket.sendall(data)
+                    now = monotonic()
+
+                    self._quic.receive_datagram(data, (self._server, self._port), now)
+
+                    while True:
+                        now = monotonic()
+                        datagrams = self._quic.datagrams_to_send(now)
+
+                        if not datagrams:
+                            break
+
+                        for datagram in datagrams:
+                            data, addr = datagram
+                            self._socket.sendall(data)
 
                 for ev in iter(self._quic.next_event, None):
                     if isinstance(ev, ConnectionTerminated):

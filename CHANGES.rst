@@ -9,6 +9,7 @@
 - Preemptively disabled QUIC (HTTP/3 included) with interpreter built with FIPS-compliant SSL module.
   Our QUIC implementation isn't FIPS-compliant for the moment. To force using non-FIPS QUIC implementation,
   please patch ``urllib3.util.ssl_.IS_FIPS`` and set it to ``False``.
+- Fixed DoQ default certs loading as done in DoT, and DoH.
 
 2.11.908 (2024-11-03)
 =====================

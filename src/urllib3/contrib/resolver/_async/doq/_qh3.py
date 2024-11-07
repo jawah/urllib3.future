@@ -51,6 +51,25 @@ class QUICResolver(PlainResolver):
     ):
         super().__init__(server, port or 853, *patterns, **kwargs)
 
+        # qh3 load_default_certs seems off. need to investigate.
+        if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
+            kwargs["ca_cert_data"] = []
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+            try:
+                ctx.load_default_certs()
+
+                for der in ctx.get_ca_certs(binary_form=True):
+                    kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
+
+                if kwargs["ca_cert_data"]:
+                    kwargs["ca_cert_data"] = "\n".join(kwargs["ca_cert_data"])
+                else:
+                    del kwargs["ca_cert_data"]
+            except (AttributeError, ValueError, OSError):
+                del kwargs["ca_cert_data"]
+
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["doq"],
