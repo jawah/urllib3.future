@@ -1,4 +1,4 @@
-2.11.909 (2024-11-??)
+2.11.909 (2024-11-07)
 =====================
 
 - Fixed DNS-over-QUIC, DNS-over-TLS, and DNS-over-UDP(Cleartext) connection procedure on network that lacks IPv6 access.
@@ -10,6 +10,8 @@
   Our QUIC implementation isn't FIPS-compliant for the moment. To force using non-FIPS QUIC implementation,
   please patch ``urllib3.util.ssl_.IS_FIPS`` and set it to ``False``.
 - Fixed DoQ default certs loading as done in DoT, and DoH.
+- Improved reusability of a specific outgoing port. This is still an experimental feature, it is
+  likely that CPython have a bug that prevent consistent behavior for this.
 
 2.11.908 (2024-11-03)
 =====================
