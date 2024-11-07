@@ -743,7 +743,7 @@ class TestSOCKSWithTLS(IPV4SocketDummyServerTestCase):
                 handler.send(True)
 
             # Wrap in TLS
-            context = better_ssl.SSLContext(ssl.PROTOCOL_SSLv23)  # type: ignore[misc]
+            context = better_ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)  # type: ignore[misc]
             context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
             tls = context.wrap_socket(sock, server_side=True)
             buf = b""

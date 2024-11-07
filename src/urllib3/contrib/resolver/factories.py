@@ -38,7 +38,9 @@ class ResolverFactory(metaclass=ABCMeta):
             and issubclass(e, BaseResolver)
             and (
                 (specifier is None and e.specifier is None) or specifier == e.specifier
-            ),
+            )
+            and hasattr(e, "protocol")
+            and e.protocol == protocol,
         )
 
         if not implementations:

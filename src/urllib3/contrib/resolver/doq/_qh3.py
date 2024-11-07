@@ -19,7 +19,7 @@ from qh3.quic.events import (
     StreamReset,
 )
 
-from ....util.ssl_ import resolve_cert_reqs
+from ....util.ssl_ import IS_FIPS, resolve_cert_reqs
 from ..dou import PlainResolver
 from ..protocols import (
     COMMON_RCODE_LABEL,
@@ -30,6 +30,11 @@ from ..protocols import (
 )
 from ..utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
 
+if IS_FIPS:
+    raise ImportError(
+        "DNS-over-QUIC disabled when Python is built with FIPS-compliant ssl module"
+    )
+
 
 class QUICResolver(PlainResolver):
     protocol = ProtocolResolver.DOQ
@@ -37,12 +42,41 @@ class QUICResolver(PlainResolver):
 
     def __init__(
         self,
-        server: str | None,
+        server: str,
         port: int | None = None,
         *patterns: str,
         **kwargs: typing.Any,
     ):
         super().__init__(server, port or 853, *patterns, **kwargs)
+
+        # qh3 load_default_certs seems off. need to investigate.
+        if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
+            kwargs["ca_cert_data"] = []
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+            try:
+                ctx.load_default_certs()
+
+                for der in ctx.get_ca_certs(binary_form=True):
+                    kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
+
+                if kwargs["ca_cert_data"]:
+                    kwargs["ca_cert_data"] = "".join(kwargs["ca_cert_data"])
+                else:
+                    del kwargs["ca_cert_data"]
+            except (AttributeError, ValueError, OSError):
+                del kwargs["ca_cert_data"]
+
+        if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
+            if (
+                "cert_reqs" not in kwargs
+                or resolve_cert_reqs(kwargs["cert_reqs"]) is ssl.CERT_REQUIRED
+            ):
+                raise ssl.SSLError(
+                    "DoQ requires at least one CA loaded in order to verify the remote peer certificate. "
+                    "Add ?cert_reqs=0 to disable certificate checks."
+                )
 
         configuration = QuicConfiguration(
             is_client=True,
@@ -233,11 +267,16 @@ class QUICResolver(PlainResolver):
                         self._pending.remove(query)
                         continue
 
-                events: list[StreamDataReceived] = self.__exchange_until(  # type: ignore[assignment]
-                    StreamDataReceived,
-                    receive_first=True,
-                    event_type_collectable=(StreamDataReceived,),
-                )
+                try:
+                    events: list[StreamDataReceived] = self.__exchange_until(  # type: ignore[assignment]
+                        StreamDataReceived,
+                        receive_first=True,
+                        event_type_collectable=(StreamDataReceived,),
+                    )
+                except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
+                    raise socket.gaierror(
+                        "Got unexpectedly disconnected while waiting for name resolution"
+                    ) from e
 
                 payload = b"".join([e.data for e in events])
 
@@ -366,24 +405,26 @@ class QUICResolver(PlainResolver):
             events = []
 
             while True:
-                data = self._socket.recv(1500)
+                if not self._quic._events:
+                    data = self._socket.recv(1500)
 
-                if not data:
-                    break
-
-                now = monotonic()
-
-                self._quic.receive_datagram(data, (self._server, self._port), now)
-
-                while True:
-                    datagrams = self._quic.datagrams_to_send(now)
-
-                    if not datagrams:
+                    if not data:
                         break
 
-                    for datagram in datagrams:
-                        data, addr = datagram
-                        self._socket.sendall(data)
+                    now = monotonic()
+
+                    self._quic.receive_datagram(data, (self._server, self._port), now)
+
+                    while True:
+                        now = monotonic()
+                        datagrams = self._quic.datagrams_to_send(now)
+
+                        if not datagrams:
+                            break
+
+                        for datagram in datagrams:
+                            data, addr = datagram
+                            self._socket.sendall(data)
 
                 for ev in iter(self._quic.next_event, None):
                     if isinstance(ev, ConnectionTerminated):

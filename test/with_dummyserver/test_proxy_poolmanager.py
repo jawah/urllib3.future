@@ -175,6 +175,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
             assert conn.__class__ == VerifiedHTTPSConnection
             https_pool.request("GET", "/")  # Should succeed without exceptions.
 
+            https_pool.close()
+
             http = proxy_from_url(
                 self.proxy_url, cert_reqs="REQUIRED", ca_certs=DEFAULT_CA
             )

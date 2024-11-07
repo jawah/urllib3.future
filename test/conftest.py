@@ -356,7 +356,7 @@ def requires_tlsv1_3(supported_tls_versions: typing.AbstractSet[str]) -> None:
 _TRAEFIK_AVAILABLE = None
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def requires_traefik() -> None:
     global _TRAEFIK_AVAILABLE
 
@@ -378,6 +378,7 @@ def requires_traefik() -> None:
         )
     else:
         _TRAEFIK_AVAILABLE = True
+        sock.shutdown(0)
         sock.close()
 
 

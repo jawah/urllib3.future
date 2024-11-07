@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import socket
 import struct
 import threading
@@ -197,6 +198,14 @@ class BaseResolver(metaclass=ABCMeta):
         if family != socket.AF_UNSPEC:
             default_socket_family = family
 
+        if source_address is not None:
+            if isinstance(
+                ipaddress.ip_address(source_address[0]), ipaddress.IPv4Address
+            ):
+                default_socket_family = socket.AF_INET
+            else:
+                default_socket_family = socket.AF_INET6
+
         try:
             host.encode("idna")
         except UnicodeError:
@@ -236,13 +245,13 @@ class BaseResolver(metaclass=ABCMeta):
                         ):  # Defensive: we can't do anything better than this.
                             pass
 
+                    sock.bind(source_address)
+
                 # If provided, set socket level options before connecting.
                 _set_socket_options(sock, socket_options)
 
                 if timeout is not _DEFAULT_TIMEOUT:
                     sock.settimeout(timeout)
-                if source_address:
-                    sock.bind(source_address)
 
                 if self._unsafe_expose:
                     self._sock_cursor = sock

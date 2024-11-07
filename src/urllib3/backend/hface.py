@@ -77,6 +77,11 @@ _HAS_SYS_AUDIT = hasattr(sys, "audit")
 
 @lru_cache(maxsize=1)
 def _HAS_HTTP3_SUPPORT() -> bool:
+    from ..util.ssl_ import IS_FIPS
+
+    if IS_FIPS:
+        return False
+
     import importlib.util
 
     try:

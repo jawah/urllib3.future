@@ -1,4 +1,4 @@
-mypy==1.12.1; python_version >= '3.8'
+mypy==1.13.0; python_version >= '3.8'
 mypy==1.4.1; python_version < '3.8'
 idna>=2.0.0
 cryptography==42.0.5
@@ -6,7 +6,6 @@ tornado>=6.1
 pytest>=6.2
 trustme==0.9.0
 types-backports
-types-requests
 nox
 qh3>=1.2.0,<2.0.0
 h11>=0.11.0,<1.0.0

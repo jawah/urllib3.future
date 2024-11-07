@@ -161,10 +161,9 @@ async def idle_conn_watch_task(
     try:
         while pool.pool is not None:
             pool.num_background_watch_iter += 1
-            try:
-                await asyncio.sleep(waiting_delay)
-            except asyncio.CancelledError:
-                return
+
+            await asyncio.sleep(waiting_delay)
+
             if pool.pool is None:
                 return
             try:
@@ -197,7 +196,7 @@ async def idle_conn_watch_task(
                                     await conn.ping()
             except AttributeError:
                 return
-    except ReferenceError:
+    except (ReferenceError, asyncio.CancelledError):
         return
 
 
@@ -551,6 +550,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                         f"in-memory://default?hosts={self.host}:{target_solo_addr}"
                     ).new()
                     conn_kw["socket_family"] = ip_address[0]
+
+                    if (
+                        "source_address" in conn_kw
+                        and conn_kw["source_address"] is not None
+                    ):
+                        conn_kw["source_address"] = (conn_kw["source_address"][0], 0)
 
                     challengers.append(
                         self.ConnectionCls(

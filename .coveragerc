@@ -13,8 +13,8 @@ source =
 [report]
 omit =
     src/urllib3/contrib/pyopenssl.py
-    src/urllib3/contrib/securetransport.py
-    src/urllib3/contrib/_securetransport/*
+    src/urllib3/contrib/emscripten/*
+    src/urllib3/http2/*
 
 exclude_lines =
     except ModuleNotFoundError:

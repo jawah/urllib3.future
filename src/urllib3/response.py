@@ -7,7 +7,6 @@ import logging
 import re
 import sys
 import typing
-import warnings
 import zlib
 from contextlib import contextmanager
 from socket import timeout as SocketTimeout
@@ -389,14 +388,7 @@ class HTTPResponse(io.IOBase):
         self._original_response = original_response
         self._fp_bytes_read = 0
 
-        if msg is not None:
-            warnings.warn(
-                "Passing msg=.. is deprecated and no-op in urllib3.future and is scheduled to be removed in a future major.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        self.msg = msg
+        self.msg = msg  # no-op, kept for BC.
 
         if body and isinstance(body, (str, bytes)):
             self._body = body

@@ -7,11 +7,13 @@ import errno
 import io
 import os
 import os.path
+import platform
 import select
 import shutil
 import socket
 import ssl
 import tempfile
+import threading
 import time
 import typing
 import warnings
@@ -155,17 +157,37 @@ def original_ssl_wrap_socket(
     certfile: StrOrBytesPath | None = None,
     server_side: bool = False,
     cert_reqs: ssl.VerifyMode = ssl.CERT_NONE,
-    ssl_version: int = ssl.PROTOCOL_TLS,
+    ssl_version: int | str = "PROTOCOL_TLS",
     ca_certs: str | None = None,
     do_handshake_on_connect: bool = True,
     suppress_ragged_eofs: bool = True,
     ciphers: str | None = None,
 ) -> ssl.SSLSocket:
+    _major, _minor, _patch = ssl.OPENSSL_VERSION_INFO[:3]
+    is_broken_old_ssl: bool = (
+        "OpenSSL" in ssl.OPENSSL_VERSION and _major < 1 or (_major == 1 and _minor < 1)
+    )
+    ssl_version = ssl_.resolve_ssl_version(  # type: ignore[call-overload]
+        ssl_version, mitigate_tls_version=not is_broken_old_ssl
+    )
     if server_side and not certfile:
         raise ValueError("certfile must be specified for server-side operations")
     if keyfile and not certfile:
         raise ValueError("certfile must be specified")
-    context = ssl.SSLContext(ssl_version)
+    if (
+        hasattr(ssl.SSLContext, "minimum_version")
+        and hasattr(ssl, "PROTOCOL_TLS_SERVER")
+        and is_broken_old_ssl is False
+    ):
+        context = ssl.SSLContext(
+            ssl.PROTOCOL_TLS_SERVER if server_side else ssl.PROTOCOL_TLS_CLIENT
+        )
+        if hasattr(ssl, "TLSVersion") and isinstance(ssl_version, ssl.TLSVersion):
+            context.minimum_version = ssl_version
+            context.maximum_version = ssl_version
+    else:
+        context = ssl.SSLContext(ssl_version)  # type: ignore[arg-type]
+
     context.verify_mode = cert_reqs
     if ca_certs:
         context.load_verify_locations(ca_certs)
@@ -373,7 +395,7 @@ class TestClientCerts(SocketDummyServerTestCase):
 
         self._start_server(socket_handler)
         assert ssl_.SSLContext is not None
-        ssl_context = ssl_.SSLContext(ssl_.PROTOCOL_SSLv23)
+        ssl_context = ssl_.SSLContext(ssl_.PROTOCOL_TLS_CLIENT)
         ssl_context.load_cert_chain(
             certfile=self.cert_path, keyfile=self.password_key_path, password=password
         )
@@ -390,10 +412,15 @@ class TestClientCerts(SocketDummyServerTestCase):
 
             assert len(client_certs) == 1
 
-    @pytest.mark.xfail(raises=BlockingIOError, reason="CPython 3.7.x bug", strict=False)
+    @pytest.mark.xfail(
+        platform.python_version().startswith("3.7."),
+        raises=BlockingIOError,
+        reason="CPython 3.7.x bug",
+        strict=False,
+    )
     def test_load_keyfile_with_invalid_password(self) -> None:
         assert ssl_.SSLContext is not None
-        context = ssl_.SSLContext(ssl_.PROTOCOL_SSLv23)
+        context = ssl_.SSLContext(ssl_.PROTOCOL_TLS_CLIENT)
         with pytest.raises(ssl.SSLError):
             context.load_cert_chain(
                 certfile=self.cert_path,
@@ -1821,7 +1848,10 @@ class TestInformationalResponse(SocketDummyServerTestCase):
         assert early_response_count == 3
 
     def test_switching_protocol_is_not_early_response(self) -> None:
+        mutual_close_agreement = threading.Event()
+
         def socket_handler(listener: socket.socket) -> None:
+            nonlocal mutual_close_agreement
             sock = listener.accept()[0]
 
             buf = b""
@@ -1829,6 +1859,8 @@ class TestInformationalResponse(SocketDummyServerTestCase):
                 buf += sock.recv(65536)
 
             sock.send(b"HTTP/1.1 101 Switching Protocols\r\n" + b"\r\n\r\n")
+            mutual_close_agreement.wait()
+            sock.close()
 
         self._start_server(socket_handler)
 
@@ -1847,6 +1879,9 @@ class TestInformationalResponse(SocketDummyServerTestCase):
             )
 
             assert r.status == 101
+            assert r.extension is not None
+            r.extension.close()
+            mutual_close_agreement.set()
 
         assert early_response_received is False
 

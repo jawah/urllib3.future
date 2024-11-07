@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import socket
 import typing
 from abc import ABCMeta, abstractmethod
@@ -87,6 +88,14 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
 
         if family != socket.AF_UNSPEC:
             default_socket_family = family
+
+        if source_address is not None:
+            if isinstance(
+                ipaddress.ip_address(source_address[0]), ipaddress.IPv4Address
+            ):
+                default_socket_family = socket.AF_INET
+            else:
+                default_socket_family = socket.AF_INET6
 
         try:
             host.encode("idna")

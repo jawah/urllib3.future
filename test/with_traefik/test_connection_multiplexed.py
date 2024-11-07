@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from test import notMacOS
 from time import time
 
 import pytest
@@ -10,6 +11,7 @@ from . import TraefikTestCase
 
 
 class TestConnectionMultiplexed(TraefikTestCase):
+    @notMacOS()
     def test_multiplexing_fastest_to_slowest(self) -> None:
         conn = HTTPSConnection(
             self.host,
@@ -40,6 +42,7 @@ class TestConnectionMultiplexed(TraefikTestCase):
 
         conn.close()
 
+    @notMacOS()
     def test_multiplexing_slowest_to_fastest(self) -> None:
         conn = HTTPSConnection(
             self.host,

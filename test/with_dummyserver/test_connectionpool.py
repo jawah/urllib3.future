@@ -771,12 +771,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         with HTTPConnectionPool(
             self.host, self.port, source_address=invalid_source_address, retries=False
         ) as pool:
-            if is_ipv6:
-                with pytest.raises(NameResolutionError):
-                    pool.request("GET", f"/source_address?{invalid_source_address}")
-            else:
-                with pytest.raises(NewConnectionError):
-                    pool.request("GET", f"/source_address?{invalid_source_address}")
+            with pytest.raises(NewConnectionError):
+                pool.request("GET", f"/source_address?{invalid_source_address}")
 
     def test_stream_keepalive(self) -> None:
         x = 2
@@ -1014,7 +1010,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             else:
                 conn = pool._get_conn()
                 conn.request("GET", "/headers", chunked=chunked)
-                pool._put_conn(conn)
+                conn.close()
 
             assert pool.headers == {"key": "val"}
             assert isinstance(pool.headers, header_type)
@@ -1025,7 +1021,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             else:
                 conn = pool._get_conn()
                 conn.request("GET", "/headers", headers=headers, chunked=chunked)
-                pool._put_conn(conn)
+                conn.close()
 
             assert headers == {"key": "val"}
 
