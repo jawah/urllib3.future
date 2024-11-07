@@ -9,6 +9,7 @@ RUN pip install nox
 
 ENV TRAEFIK_HTTPBIN_ENABLE=false
 ENV CI=true
+ENV TERM=xterm-256color
 
 COPY ./src/urllib3 src/urllib3/
 COPY ./test test/
