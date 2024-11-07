@@ -557,6 +557,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     ).new()
                     conn_kw["socket_family"] = ip_address[0]
 
+                    if (
+                        "source_address" in conn_kw
+                        and conn_kw["source_address"] is not None
+                    ):
+                        conn_kw["source_address"] = (conn_kw["source_address"][0], 0)
+
                     challengers.append(
                         self.ConnectionCls(
                             host=self.host,
