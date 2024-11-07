@@ -1,3 +1,15 @@
+2.11.909 (2024-11-??)
+=====================
+
+- Fixed DNS-over-QUIC, DNS-over-TLS, and DNS-over-UDP(Cleartext) connection procedure on network that lacks IPv6 access.
+- Fixed DNS-over-TLS unstable over a slow network.
+- Fixed a bug when setting a specific port in ``source_address`` and setting ``happy_eyeballs=True``.
+  We now silently discard the specific port to avoid a conflict / race condition with OS outgoing port allocation.
+- Improved reliability of our tests and fixed warnings in them.
+- Preemptively disabled QUIC (HTTP/3 included) with interpreter built with FIPS-compliant SSL module.
+  Our QUIC implementation isn't FIPS-compliant for the moment. To force using non-FIPS QUIC implementation,
+  please patch ``urllib3.util.ssl_.IS_FIPS`` and set it to ``False``.
+
 2.11.908 (2024-11-03)
 =====================
 
