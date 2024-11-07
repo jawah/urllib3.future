@@ -161,10 +161,9 @@ async def idle_conn_watch_task(
     try:
         while pool.pool is not None:
             pool.num_background_watch_iter += 1
-            try:
-                await asyncio.sleep(waiting_delay)
-            except asyncio.CancelledError:
-                return
+
+            await asyncio.sleep(waiting_delay)
+
             if pool.pool is None:
                 return
             try:
@@ -197,7 +196,7 @@ async def idle_conn_watch_task(
                                     await conn.ping()
             except AttributeError:
                 return
-    except ReferenceError:
+    except (ReferenceError, asyncio.CancelledError):
         return
 
 
