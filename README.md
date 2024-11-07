@@ -125,7 +125,7 @@ what was graciously made by our predecessors. So much knowledge has been poured 
 we must just extend it.
 
 We attempted to participate in urllib3 development only to find that we were in disagreement on how
-to proceed. It happens all the time, even on the biggest projects out there (e.g. OpenSSL vs BoringSSL or NSS or LibreSSL...))
+to proceed. It happens all the time, even on the biggest projects out there (e.g. OpenSSL vs BoringSSL or NSS or LibreSSL...)
 
 - **OK, but I got there because I saw that urllib3 was replaced in my environment!**
 
@@ -230,7 +230,44 @@ In addition to that, we enforced key integration tests to watch how urllib3-futu
 Top-priorities issues are those impacting users with the "shadowing" part. Meaning, if a user is suffering
 an error or something that ends up causing an undesirable outcome from a third-party library that leverage urllib3.
 
-- **OS Package Managers**
+- **Can I contribute to this?**
+
+Yes! But keep in mind that it is going to be hard to contribute as we have huge constraints.
+Some of them: Python 3.7+, OpenSSL <1.1.1,>1, LibreSSL, Downstream Perfect Compat, API Compatibility with urllib3, and so on.
+
+If you like a good challenge, then this project will definitely suit you.
+
+Make sure everything passes before submitting a PR, unless you need guidance on a specific topic.
+
+After applying your patch, run (Unix, Linux):
+
+```
+./ci/run_legacy_openssl.sh
+./ci/run_legacy_libressl.sh
+./ci/run_dockerized.sh
+nox -s test-3.11
+```
+
+replace the `3.11` part in `test-3.11` by your interpreter version.
+
+If the tests all passes, then it is a firm good start.
+
+Complete them with:
+
+```
+nox -s downstream_requests
+nox -s downstream_niquests
+nox -s downstream_boto3
+nox -s downstream_sphinx
+```
+
+Finally make sure to fix any lint errors:
+
+```
+nox -s lint
+```
+
+- **OS Package Managers, beware!**
 
 Fellow OS package maintainers, you cannot _just_ build and ship this package to your package registry.
 As it override `urllib3` and due to its current criticality, you'll have to set:
