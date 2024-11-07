@@ -68,7 +68,7 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dou://1.1.1.1", PlainResolver),
         ("dox://ooooo.com", None),
         ("doh://dns.google/resolve", HTTPSResolver),
-        ("doq://dns.nextdns.io/?timeout=3", QUICResolver),
+        ("doq://dns.nextdns.io/?timeout=3&cert_reqs=0", QUICResolver),
         ("dns://dns.nextdns.io", None),
         ("null://default", NullResolver),
         ("default://null", None),
@@ -82,7 +82,10 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dot://1.1.1.1/?implementation=nonexistent", None),
         ("system://", SystemResolver),
         ("dot://", None),
-        ("doq://dns.nextdns.io/?implementation=qh3&timeout=1", QUICResolver),
+        (
+            "doq://dns.nextdns.io/?implementation=qh3&timeout=1&cert_reqs=0",
+            QUICResolver,
+        ),
     ],
 )
 def test_url_resolver(
@@ -120,7 +123,7 @@ def test_url_resolver(
         "system://default",
         "dot://dns.google",
         "dot://one.one.one.one",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "doh+google://",
         "doh+cloudflare://default",
     ],
@@ -153,7 +156,7 @@ def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
         "doh://dns.google",
         "dot://dns.google",
         "dot://one.one.one.one",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
     ],
 )
 @pytest.mark.parametrize(
@@ -283,7 +286,7 @@ def test_many_resolver_host_constraint_distribution() -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -367,7 +370,7 @@ def test_doh_rfc8484(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -469,7 +472,7 @@ def test_many_resolver_thread_safe() -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -504,7 +507,7 @@ def test_resolver_recycle(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -527,7 +530,7 @@ def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -564,7 +567,7 @@ def test_ipv6_always_preferred(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=3",
+        "doq://dns.nextdns.io/?timeout=3&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
