@@ -62,11 +62,21 @@ class QUICResolver(PlainResolver):
                     kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
 
                 if kwargs["ca_cert_data"]:
-                    kwargs["ca_cert_data"] = "\n".join(kwargs["ca_cert_data"])
+                    kwargs["ca_cert_data"] = "".join(kwargs["ca_cert_data"])
                 else:
                     del kwargs["ca_cert_data"]
             except (AttributeError, ValueError, OSError):
                 del kwargs["ca_cert_data"]
+
+        if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
+            if (
+                "cert_reqs" not in kwargs
+                or resolve_cert_reqs(kwargs["cert_reqs"]) is ssl.CERT_REQUIRED
+            ):
+                raise ssl.SSLError(
+                    "DoQ requires at least one CA loaded in order to verify the remote peer certificate. "
+                    "Add ?cert_reqs=0 to disable certificate checks."
+                )
 
         configuration = QuicConfiguration(
             is_client=True,
