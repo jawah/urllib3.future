@@ -245,6 +245,13 @@ class BaseResolver(metaclass=ABCMeta):
                         ):  # Defensive: we can't do anything better than this.
                             pass
 
+                    try:
+                        sock.setsockopt(
+                            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                        )
+                    except (OSError, AttributeError):
+                        pass
+
                     sock.bind(source_address)
 
                 # If provided, set socket level options before connecting.

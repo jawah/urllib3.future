@@ -369,7 +369,7 @@ def requires_traefik() -> None:
 
     try:
         sock = socket.create_connection(
-            (os.environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1"), 8888), timeout=0.3
+            (os.environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1"), 8888), timeout=1
         )
     except (ConnectionRefusedError, socket.gaierror, TimeoutError):
         _TRAEFIK_AVAILABLE = False

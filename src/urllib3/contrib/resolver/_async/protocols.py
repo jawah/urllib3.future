@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import struct
 import typing
 from abc import ABCMeta, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -132,6 +133,13 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                             AttributeError,
                         ):  # Defensive: we can't do anything better than this.
                             pass
+
+                    try:
+                        sock.setsockopt(
+                            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                        )
+                    except (OSError, AttributeError):
+                        pass
 
                 # If provided, set socket level options before connecting.
                 _set_socket_options(sock, socket_options)

@@ -1,3 +1,8 @@
+2.11.910 (2024-11-08)
+=====================
+
+- Improved reliability of reusing a specific outgoing port. The feature is no longer experimental.
+
 2.11.909 (2024-11-07)
 =====================
 

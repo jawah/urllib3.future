@@ -200,9 +200,6 @@ class TestConnection(TraefikTestCase):
 
         conn.close()
 
-    @pytest.mark.xfail(
-        reason="experimental support for reusable outgoing port", strict=False
-    )
     def test_fast_reuse_outgoing_port(self) -> None:
         for _ in range(4):
             conn = HTTPSConnection(
