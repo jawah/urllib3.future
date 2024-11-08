@@ -206,9 +206,6 @@ class TestConnection(TraefikTestCase):
 
         await conn.close()
 
-    @pytest.mark.xfail(
-        reason="experimental support for reusable outgoing port", strict=False
-    )
     async def test_fast_reuse_outgoing_port(self) -> None:
         for _ in range(4):
             conn = AsyncHTTPSConnection(

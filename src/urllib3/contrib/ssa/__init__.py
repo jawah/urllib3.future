@@ -6,7 +6,6 @@ import socket
 import typing
 import warnings
 
-SHUT_RD = 0  # taken from the "_socket" module
 StandardTimeoutError = socket.timeout
 
 try:
@@ -126,7 +125,7 @@ class AsyncSocket:
 
             if hasattr(self._sock, "shutdown"):
                 try:
-                    self._sock.shutdown(SHUT_RD)
+                    self._sock.shutdown(socket.SHUT_RD)
                     shutdown_called = True
                 except TypeError:
                     uvloop_edge_case_bug = True
@@ -143,7 +142,7 @@ class AsyncSocket:
                             pass
                         else:
                             try:
-                                direct_sock.shutdown(SHUT_RD)
+                                direct_sock.shutdown(socket.SHUT_RD)
                                 shutdown_called = True
                             except OSError:
                                 warnings.warn(
@@ -174,7 +173,7 @@ class AsyncSocket:
                     and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST
                 ):
                     try:
-                        self._sock._sock.detach()
+                        self._sock._sock.close()
                     except (AttributeError, OSError):
                         pass
 
@@ -198,7 +197,7 @@ class AsyncSocket:
     async def wait_for_readiness(self) -> None:
         await self._established.wait()
 
-    def setsockopt(self, __level: int, __optname: int, __value: int) -> None:
+    def setsockopt(self, __level: int, __optname: int, __value: int | bytes) -> None:
         self._sock.setsockopt(__level, __optname, __value)
 
     def getsockopt(self, __level: int, __optname: int) -> int:
