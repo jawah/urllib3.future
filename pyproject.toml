@@ -127,6 +127,7 @@ filterwarnings = [
     '''ignore:ssl\.TLSVersion\.TLSv1 is deprecated:DeprecationWarning''',
     '''ignore:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
     '''ignore:loop is closed:ResourceWarning''',
+    '''ignore:iscoroutinefunction:DeprecationWarning''',
 ]
 
 [tool.isort]
