@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import platform
 import socket
 import sys
 import time
 import typing
 import warnings
+from tempfile import NamedTemporaryFile
 from test import LONG_TIMEOUT, SHORT_TIMEOUT
 from threading import Event
 from unittest import mock
 from urllib.parse import urlencode
 
+import aiofile
 import pytest
 
 from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
@@ -299,6 +302,19 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
             r = await pool.request("POST", "/echo", body=abody())
             assert await r.data == b"foobar"
+
+    async def test_sending_aiofile_iterable(self) -> None:
+        tmp = NamedTemporaryFile(mode="wb", delete=False)
+        path_file = tmp.name
+        tmp.write(b"foobar")
+        tmp.close()
+
+        async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+            async with aiofile.async_open(path_file, "rb") as fp:
+                r = await pool.request("POST", "/echo", body=fp)  # type: ignore[arg-type]
+                assert await r.data == b"foobar"
+
+        os.remove(path_file)
 
     async def test_sending_async_iterable_orig_str(self) -> None:
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:

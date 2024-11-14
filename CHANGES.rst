@@ -1,3 +1,9 @@
+2.11.911 (2024-11-14)
+=====================
+
+- Improved support for async I/O data reader.
+- Fixed non-respect of blocksize when uploading a body in an asynchronous context.
+
 2.11.910 (2024-11-08)
 =====================
 

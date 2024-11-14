@@ -52,27 +52,30 @@ jobs:
         include:
           - experimental: false
             traefik-server: true
+          - experimental: true
+            python-version: "3.14"
+            os: ubuntu-22.04
           - python-version: "pypy-3.7"
-            os: ubuntu-latest
+            os: ubuntu-22.04
             experimental: false
             nox-session: test-pypy
           - python-version: "pypy-3.8"
-            os: ubuntu-latest
+            os: ubuntu-22.04
             experimental: false
             nox-session: test-pypy
             traefik-server: true
           - python-version: "pypy-3.9-v7.3.13"  # urllib3#3308
-            os: ubuntu-latest
+            os: ubuntu-22.04
             experimental: false
             nox-session: test-pypy
             traefik-server: true
           - python-version: "pypy-3.10"
-            os: ubuntu-latest
+            os: ubuntu-22.04
             experimental: false
             nox-session: test-pypy
             traefik-server: true
           - python-version: "3.x"
-            os: ubuntu-latest
+            os: ubuntu-22.04
             experimental: false
             nox-session: test_brotlipy
           # Test CPython with a broken hostname_checks_common_name (the fix is in 3.9.3)
@@ -85,8 +88,6 @@ jobs:
           # https://github.com/python/cpython/issues/83001
           - python-version: "3.7"
             os: ubuntu-22.04
-          - python-version: "3.7"
-            os: macos-13
           - python-version: "3.8"
             os: ubuntu-22.04
 
