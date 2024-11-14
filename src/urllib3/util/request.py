@@ -255,8 +255,8 @@ def body_to_chunks(
             if encode is None:
                 encode = isinstance(block, str)
             if len(buf) >= blocksize:
-                yield buf
-                buf = b""
+                yield buf[:blocksize]
+                buf = buf[blocksize:]
                 continue
             buf += block.encode("utf-8") if encode else block
 
@@ -275,7 +275,7 @@ def body_to_chunks(
             chunks = (converted,)
 
     # File-like object, TODO: use seek() and tell() for length?
-    elif hasattr(body, "read"):
+    elif hasattr(body, "read") and not hasattr(body, "__aiter__"):
         chunks = chunk_readable()
         content_length = None
     elif hasattr(body, "__aiter__"):
