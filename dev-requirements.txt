@@ -13,4 +13,4 @@ backports.zoneinfo==0.2.1; python_version<"3.9"
 tzdata==2024.2; python_version<"3.8"
 towncrier==21.9.0
 pytest-asyncio>=0.21.1,<=0.24.0
-aiofile>=3.9,<4
+aiofile>=2,<4
