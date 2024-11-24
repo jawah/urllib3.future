@@ -2,6 +2,7 @@
 =====================
 
 - Improved timeout reliability in asynchronous mode.
+- Fixed PyPy discrete background watcher stop condition in synchronous mode when the ConnectionPool isn't closed properly.
 
 2.11.911 (2024-11-14)
 =====================
