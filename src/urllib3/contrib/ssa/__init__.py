@@ -6,6 +6,8 @@ import socket
 import typing
 import warnings
 
+from ._timeout import timeout
+
 StandardTimeoutError = socket.timeout
 
 try:
@@ -237,10 +239,8 @@ class AsyncSocket:
 
         if self._external_timeout is not None:
             try:
-                await asyncio.wait_for(
-                    asyncio.get_running_loop().sock_connect(self._sock, addr),
-                    self._external_timeout,
-                )
+                async with timeout(self._external_timeout):
+                    await asyncio.get_running_loop().sock_connect(self._sock, addr)
             except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
                 self._connect_called = False
                 raise StandardTimeoutError from e
@@ -316,9 +316,8 @@ class AsyncSocket:
             try:
                 if self._external_timeout is not None:
                     try:
-                        return await asyncio.wait_for(
-                            self._reader.read(n=size), self._external_timeout
-                        )
+                        async with timeout(self._external_timeout):
+                            return await self._reader.read(n=size)
                     except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
                         self._reader_semaphore.release()
                         raise StandardTimeoutError from e
@@ -329,10 +328,10 @@ class AsyncSocket:
         try:
             if self._external_timeout is not None:
                 try:
-                    return await asyncio.wait_for(
-                        asyncio.get_running_loop().sock_recv(self._sock, size),
-                        self._external_timeout,
-                    )
+                    async with timeout(self._external_timeout):
+                        return await asyncio.get_running_loop().sock_recv(
+                            self._sock, size
+                        )
                 except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
                     self._reader_semaphore.release()
                     raise StandardTimeoutError from e

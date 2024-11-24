@@ -1,3 +1,8 @@
+2.11.912 (2024-11-24)
+=====================
+
+- Improved timeout reliability in asynchronous mode.
+
 2.11.911 (2024-11-14)
 =====================
 
