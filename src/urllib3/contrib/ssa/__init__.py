@@ -101,7 +101,14 @@ class AsyncSocket:
         if self._writer is None:
             return
 
-        is_ssl = self._writer.get_extra_info("ssl_object") is not None
+        try:
+            # report made in https://github.com/jawah/niquests/issues/184
+            # made us believe that sometime ssl_transport is freed before
+            # getting there. So we could end up there with a half broken
+            # writer state. The original user was using Windows at the time.
+            is_ssl = self._writer.get_extra_info("ssl_object") is not None
+        except AttributeError:
+            is_ssl = False
 
         if is_ssl:
             # Give the connection a chance to write any data in the buffer,
