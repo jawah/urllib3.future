@@ -157,7 +157,12 @@ class NewConnectionError(ConnectTimeoutError, HTTPError):
     """Raised when we fail to establish a new connection. Usually ECONNREFUSED."""
 
     def __init__(
-        self, conn: HTTPConnection | AsyncHTTPConnection, message: str
+        self,
+        conn: HTTPConnection
+        | AsyncHTTPConnection
+        | ConnectionPool
+        | AsyncConnectionPool,
+        message: str,
     ) -> None:
         self.conn = conn
         super().__init__(f"{conn}: {message}")
@@ -169,7 +174,10 @@ class NameResolutionError(NewConnectionError):
     def __init__(
         self,
         host: str,
-        conn: HTTPConnection | AsyncHTTPConnection,
+        conn: HTTPConnection
+        | AsyncHTTPConnection
+        | ConnectionPool
+        | AsyncConnectionPool,
         reason: socket.gaierror,
     ):
         message = f"Failed to resolve '{host}' ({reason})"

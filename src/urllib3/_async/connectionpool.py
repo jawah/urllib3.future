@@ -41,6 +41,7 @@ from ..contrib.resolver._async import (
     AsyncManyResolver,
     AsyncResolverDescription,
 )
+from ..contrib.ssa._timeout import timeout
 from ..contrib.webextensions._async import load_extension
 from ..exceptions import (
     BaseSSLError,
@@ -52,6 +53,7 @@ from ..exceptions import (
     LocationValueError,
     MaxRetryError,
     MustDowngradeError,
+    NameResolutionError,
     NewConnectionError,
     ProtocolError,
     ProxyError,
@@ -479,16 +481,46 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 self.port or "443",
             )
 
-            dt_pre_resolve = datetime.now(tz=timezone.utc)
-            ip_addresses = await self._resolver.getaddrinfo(
-                self.host,
-                self.port,
-                socket.AF_UNSPEC
-                if "socket_family" not in self.conn_kw
-                else self.conn_kw["socket_family"],
-                socket.SOCK_STREAM,
-                quic_upgrade_via_dns_rr=False,
+            if heb_timeout is None:
+                heb_timeout = self.timeout
+
+            override_timeout = (
+                heb_timeout.connect_timeout
+                if heb_timeout.connect_timeout is not None
+                and isinstance(heb_timeout.connect_timeout, (float, int))
+                else None
             )
+
+            dt_pre_resolve = datetime.now(tz=timezone.utc)
+
+            if override_timeout is not None:
+                try:
+                    async with timeout(override_timeout):
+                        ip_addresses = await self._resolver.getaddrinfo(
+                            self.host,
+                            self.port,
+                            socket.AF_UNSPEC
+                            if "socket_family" not in self.conn_kw
+                            else self.conn_kw["socket_family"],
+                            socket.SOCK_STREAM,
+                            quic_upgrade_via_dns_rr=False,
+                        )
+                except TimeoutError:
+                    new_err = socket.gaierror(
+                        f"unable to resolve '{self.host}' within {override_timeout}s"
+                    )
+                    raise NameResolutionError(self.host, self, new_err)
+            else:
+                ip_addresses = await self._resolver.getaddrinfo(
+                    self.host,
+                    self.port,
+                    socket.AF_UNSPEC
+                    if "socket_family" not in self.conn_kw
+                    else self.conn_kw["socket_family"],
+                    socket.SOCK_STREAM,
+                    quic_upgrade_via_dns_rr=False,
+                )
+
             delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
 
             if len(ip_addresses) > 1:
@@ -527,16 +559,6 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 challengers = []
                 max_task = (
                     4 if isinstance(self.happy_eyeballs, bool) else self.happy_eyeballs
-                )
-
-                if heb_timeout is None:
-                    heb_timeout = self.timeout
-
-                override_timeout = (
-                    heb_timeout.connect_timeout
-                    if heb_timeout.connect_timeout is not None
-                    and isinstance(heb_timeout.connect_timeout, (float, int))
-                    else None
                 )
 
                 for ip_address in ip_addresses[:max_task]:
@@ -2086,19 +2108,52 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                 self.port or "443",
             )
 
+            if heb_timeout is None:
+                heb_timeout = self.timeout
+
+            override_timeout = (
+                heb_timeout.connect_timeout
+                if heb_timeout.connect_timeout is not None
+                and isinstance(heb_timeout.connect_timeout, (float, int))
+                else None
+            )
+
             # we have to get this metric here, as the underlying Connection object
             # will have the DNS resolution set to 0s!
             dt_pre_resolve = datetime.now(tz=timezone.utc)
-            ip_addresses = await self._resolver.getaddrinfo(
-                actual_host,
-                actual_port,
-                socket.AF_UNSPEC
-                if "socket_family" not in self.conn_kw
-                else self.conn_kw["socket_family"],
-                socket.SOCK_STREAM,
-                quic_upgrade_via_dns_rr=True,  # we don't know if H3 is actually supported by the underlying Connection,
-                # we don't care, it will sort it out later.
-            )
+            if override_timeout is not None:
+                try:
+                    async with timeout(override_timeout):
+                        ip_addresses = await self._resolver.getaddrinfo(
+                            actual_host,
+                            actual_port,
+                            socket.AF_UNSPEC
+                            if "socket_family" not in self.conn_kw
+                            else self.conn_kw["socket_family"],
+                            socket.SOCK_STREAM,
+                            quic_upgrade_via_dns_rr=True,
+                            # we don't know if H3 is actually supported by the underlying Connection,
+                            # we don't care, it will sort it out later.
+                        )
+                except TimeoutError:
+                    new_err = socket.gaierror(
+                        f"unable to resolve '{actual_host}' within {override_timeout}s"
+                    )
+                    raise NameResolutionError(actual_host, self, new_err)
+
+            else:
+                ip_addresses = await self._resolver.getaddrinfo(
+                    actual_host,
+                    actual_port,
+                    socket.AF_UNSPEC
+                    if "socket_family" not in self.conn_kw
+                    else self.conn_kw["socket_family"],
+                    socket.SOCK_STREAM,
+                    quic_upgrade_via_dns_rr=True,
+                    # we don't know if H3 is actually supported by the underlying Connection,
+                    # we don't care, it will sort it out later.
+                )
+
             delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
 
             target_pqc = {}
@@ -2153,16 +2208,6 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                 challengers = []
                 max_task = (
                     4 if isinstance(self.happy_eyeballs, bool) else self.happy_eyeballs
-                )
-
-                if heb_timeout is None:
-                    heb_timeout = self.timeout
-
-                override_timeout = (
-                    heb_timeout.connect_timeout
-                    if heb_timeout.connect_timeout is not None
-                    and isinstance(heb_timeout.connect_timeout, (float, int))
-                    else None
                 )
 
                 for ip_address in ip_addresses[:max_task]:
