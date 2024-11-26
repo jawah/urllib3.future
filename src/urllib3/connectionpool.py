@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import logging
+import platform
 import queue
 import socket
 import sys
@@ -152,6 +153,8 @@ def idle_conn_watch_task(
 ) -> None:
     """Discrete background task that monitor incoming data
     and manage automated keep-alive."""
+    _pypy_gc_delayed: bool = platform.python_implementation() == "PyPy"
+
     try:
         while not pool._background_monitoring_stop.is_set():
             pool.num_background_watch_iter += 1
@@ -163,6 +166,14 @@ def idle_conn_watch_task(
                 # was closed properly
                 if pool._background_monitoring_stop.is_set():
                     return
+
+            # PyPy gc does not behave like CPython
+            # the collect procedure may take longer
+            # than what is commonly expected.
+            if _pypy_gc_delayed:
+                import gc
+
+                gc.collect()
 
             # check again[...] due to mutable state
             if pool._background_monitoring_stop.is_set():

@@ -26,6 +26,7 @@ from python_socks._protocols.errors import ReplyError  # type: ignore
 from python_socks._types import ProxyType  # type: ignore
 
 from .ssa import AsyncSocket
+from .ssa._timeout import timeout as timeout_
 
 
 class Resolver(abc.AsyncResolver):  # type: ignore[misc]
@@ -108,14 +109,12 @@ class AsyncioProxy(abc.AsyncProxy):  # type: ignore[misc]
             timeout = 60
 
         try:
-            return await asyncio.wait_for(
-                self._connect(
+            async with timeout_(timeout):
+                return await self._connect(
                     dest_host=dest_host,
                     dest_port=dest_port,
                     _socket=_socket,  # type: ignore[arg-type]
-                ),
-                timeout,
-            )
+                )
         except asyncio.TimeoutError as e:
             raise ProxyTimeoutError(f"Proxy connection timed out: {timeout}") from e
 

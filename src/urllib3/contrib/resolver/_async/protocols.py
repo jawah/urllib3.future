@@ -13,6 +13,7 @@ from ....exceptions import LocationParseError
 from ....util.connection import _set_socket_options, allowed_gai_family
 from ....util.timeout import _DEFAULT_TIMEOUT
 from ...ssa import AsyncSocket
+from ...ssa._timeout import timeout as timeout_
 from ..protocols import BaseResolver
 
 
@@ -104,13 +105,33 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
             raise LocationParseError(f"'{host}', label empty or too long") from None
 
         dt_pre_resolve = datetime.now(tz=timezone.utc)
-        records = await self.getaddrinfo(
-            host,
-            port,
-            default_socket_family,
-            socket_kind,
-            quic_upgrade_via_dns_rr=quic_upgrade_via_dns_rr,
-        )
+        if timeout is not _DEFAULT_TIMEOUT and timeout is not None:
+            # we can hang here in case of bad networking conditions
+            # the DNS may never answer or the packets can be lost.
+            # this isn't possible in sync mode. unfortunately.
+            # found by user at https://github.com/jawah/niquests/issues/183
+            # todo: find a way to limit getaddrinfo delays in sync mode.
+            try:
+                async with timeout_(timeout):
+                    records = await self.getaddrinfo(
+                        host,
+                        port,
+                        default_socket_family,
+                        socket_kind,
+                        quic_upgrade_via_dns_rr=quic_upgrade_via_dns_rr,
+                    )
+            except TimeoutError:
+                raise socket.gaierror(
+                    f"unable to resolve '{host}' within timeout. the DNS server may be unresponsive."
+                )
+        else:
+            records = await self.getaddrinfo(
+                host,
+                port,
+                default_socket_family,
+                socket_kind,
+                quic_upgrade_via_dns_rr=quic_upgrade_via_dns_rr,
+            )
         delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
 
         dt_pre_established = datetime.now(tz=timezone.utc)
