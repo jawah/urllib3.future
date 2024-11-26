@@ -209,4 +209,7 @@ __all__ = (
     "is_ipv4",
     "is_ipv6",
     "validate_length_of",
+    "rfc1035_pack",
+    "rfc1035_unpack",
+    "rfc1035_should_read",
 )
