@@ -13,7 +13,15 @@ from ..protocols import (
     SupportedQueryType,
 )
 from ..system import SystemResolver
-from ..utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
+from ..utils import (
+    is_ipv4,
+    is_ipv6,
+    packet_fragment,
+    rfc1035_pack,
+    rfc1035_should_read,
+    rfc1035_unpack,
+    validate_length_of,
+)
 
 
 class PlainResolver(BaseResolver):
@@ -64,8 +72,7 @@ class PlainResolver(BaseResolver):
             )
 
         #: Only useful for inheritance, e.g. DNS over TLS support dns-message but require a prefix.
-        self._hook_out: typing.Callable[[bytes], bytes] | None = None
-        self._hook_in: typing.Callable[[bytes], bytes] | None = None
+        self._rfc1035_prefix_mandated: bool = False
 
         self._unconsumed: deque[DomainNameServerReturn] = deque()
         self._pending: deque[DomainNameServerQuery] = deque()
@@ -173,8 +180,8 @@ class PlainResolver(BaseResolver):
                 payload = bytes(q)
                 self._pending.append(q)
 
-                if self._hook_out is not None:
-                    payload = self._hook_out(payload)
+                if self._rfc1035_prefix_mandated is True:
+                    payload = rfc1035_pack(payload)
 
                 self._socket.sendall(payload)
 
@@ -202,6 +209,10 @@ class PlainResolver(BaseResolver):
 
                 try:
                     payload = self._socket.recv(1500)
+
+                    if self._rfc1035_prefix_mandated is True:
+                        while rfc1035_should_read(payload):
+                            payload += self._socket.recv(1500)
                 except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
                     raise socket.gaierror(
                         "Got unexpectedly disconnected while waiting for name resolution"
@@ -216,12 +227,12 @@ class PlainResolver(BaseResolver):
                 pending_raw_identifiers = [_.raw_id for _ in self._pending]
 
                 #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
-                fragments = packet_fragment(payload, *pending_raw_identifiers)
+                if self._rfc1035_prefix_mandated is True:
+                    fragments = rfc1035_unpack(payload)
+                else:
+                    fragments = packet_fragment(payload, *pending_raw_identifiers)
 
                 for fragment in fragments:
-                    if self._hook_in is not None:
-                        fragment = self._hook_in(fragment)
-
                     dns_resp = DomainNameServerReturn(fragment)
 
                     if any(dns_resp.id == _.id for _ in queries):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import socket
-import struct
 import typing
 
 from .....util._async.ssl_ import ssl_wrap_socket
@@ -32,8 +31,7 @@ class TLSResolver(PlainResolver):
         super().__init__(server, port or 853, *patterns, **kwargs)
 
         # DNS over TLS mandate the size-prefix (unsigned int, 2 bytes)
-        self._hook_in = lambda p: p[2:]
-        self._hook_out = lambda p: struct.pack("!H", len(p)) + p
+        self._rfc1035_prefix_mandated = True
 
     async def getaddrinfo(  # type: ignore[override]
         self,

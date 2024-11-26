@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
-import struct
 import typing
 from collections import deque
 from ssl import SSLError
@@ -28,7 +27,14 @@ from ...protocols import (
     ProtocolResolver,
     SupportedQueryType,
 )
-from ...utils import is_ipv4, is_ipv6, packet_fragment, validate_length_of
+from ...utils import (
+    is_ipv4,
+    is_ipv6,
+    rfc1035_pack,
+    rfc1035_should_read,
+    rfc1035_unpack,
+    validate_length_of,
+)
 from ..dou import PlainResolver
 from ..system import SystemResolver
 
@@ -119,8 +125,7 @@ class QUICResolver(PlainResolver):
         self._should_disconnect: bool = False
 
         # DNS over QUIC mandate the size-prefix (unsigned int, 2b)
-        self._hook_in = lambda p: p[2:]
-        self._hook_out = lambda p: struct.pack("!H", len(p)) + p
+        self._rfc1035_prefix_mandated = True
 
         self._unconsumed: deque[DomainNameServerReturn] = deque()
         self._pending: deque[DomainNameServerQuery] = deque()
@@ -267,8 +272,8 @@ class QUICResolver(PlainResolver):
 
             self._pending.append(q)
 
-            if self._hook_out is not None:
-                payload = self._hook_out(payload)
+            if self._rfc1035_prefix_mandated is True:
+                payload = rfc1035_pack(payload)
 
             stream_id = self._quic.get_next_available_stream_id()
             self._quic.send_stream_data(stream_id, payload, True)
@@ -298,28 +303,40 @@ class QUICResolver(PlainResolver):
                     self._read_semaphore.release()
                     continue
 
-            events: list[StreamDataReceived] = await self.__exchange_until(  # type: ignore[assignment]
-                StreamDataReceived,
-                receive_first=True,
-                event_type_collectable=(StreamDataReceived,),
-            )
+            try:
+                events: list[StreamDataReceived] = await self.__exchange_until(  # type: ignore[assignment]
+                    StreamDataReceived,
+                    receive_first=True,
+                    event_type_collectable=(StreamDataReceived,),
+                    respect_end_stream_signal=False,
+                )
 
-            payload = b"".join([e.data for e in events])
+                payload = b"".join([e.data for e in events])
+
+                while rfc1035_should_read(payload):
+                    events.extend(
+                        await self.__exchange_until(  # type: ignore[arg-type]
+                            StreamDataReceived,
+                            receive_first=True,
+                            event_type_collectable=(StreamDataReceived,),
+                            respect_end_stream_signal=False,
+                        )
+                    )
+                    payload = b"".join([e.data for e in events])
+            except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
+                raise socket.gaierror(
+                    "Got unexpectedly disconnected while waiting for name resolution"
+                ) from e
 
             self._read_semaphore.release()
 
             if not payload:
                 continue
 
-            pending_raw_identifiers = [_.raw_id for _ in self._pending]
-
             #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
-            fragments = packet_fragment(payload, *pending_raw_identifiers)
+            fragments = rfc1035_unpack(payload)
 
             for fragment in fragments:
-                if self._hook_in is not None:
-                    fragment = self._hook_in(fragment)
-
                 dns_resp = DomainNameServerReturn(fragment)
 
                 if any(dns_resp.id == _.id for _ in queries):

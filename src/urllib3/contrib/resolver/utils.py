@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import binascii
 import socket
+import struct
 
 
 def inet4_ntoa(address: bytes) -> str:
@@ -163,6 +164,42 @@ def validate_length_of(hostname: str) -> None:
         raise UnicodeError("hostname to resolve exceed 253 characters")
     elif any([len(_) > 63 for _ in hostname.split(".")]):
         raise UnicodeError("at least one label to resolve exceed 63 characters")
+
+
+def rfc1035_should_read(payload: bytes) -> bool:
+    if not payload:
+        return False
+    if len(payload) <= 2:
+        return True
+
+    cursor = payload
+
+    while True:
+        expected_size: int = struct.unpack("!H", cursor[:2])[0]
+
+        if len(cursor[2:]) == expected_size:
+            return False
+        elif len(cursor[2:]) < expected_size:
+            return True
+
+        cursor = cursor[2 + expected_size :]
+
+
+def rfc1035_unpack(payload: bytes) -> tuple[bytes, ...]:
+    cursor = payload
+    packets = []
+
+    while cursor:
+        expected_size: int = struct.unpack("!H", cursor[:2])[0]
+
+        packets.append(cursor[2 : 2 + expected_size])
+        cursor = cursor[2 + expected_size :]
+
+    return tuple(packets)
+
+
+def rfc1035_pack(message: bytes) -> bytes:
+    return struct.pack("!H", len(message)) + message
 
 
 __all__ = (
