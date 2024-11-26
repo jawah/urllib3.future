@@ -1,8 +1,11 @@
-2.11.912 (2024-11-24)
+2.11.912 (2024-11-26)
 =====================
 
-- Improved timeout reliability in asynchronous mode.
+- Improved timeout reliability and performance in asynchronous mode.
 - Fixed PyPy discrete background watcher stop condition in synchronous mode when the ConnectionPool isn't closed properly.
+- Fixed lack of timeout using default system resolver in asynchronous mode.
+- Fixed a rare issue when connection tear down ran into an exception in Windows proactor loop mode. ssltransport is freed before what we initially expected.
+- Improved reliability of DNS-over-QUIC, and DNS-over-TLS.
 
 2.11.911 (2024-11-14)
 =====================
