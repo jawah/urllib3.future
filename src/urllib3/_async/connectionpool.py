@@ -1073,7 +1073,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         if extension is not None:
             if response.status == 101 or (
-                200 <= response.status < 300 and method == "CONNECT"
+                200 <= response.status < 300
+                and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
                     extension = load_extension(None)()
@@ -1372,7 +1373,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         response._pool = self
 
         if response.status == 101 or (
-            200 <= response.status < 300 and method == "CONNECT"
+            200 <= response.status < 300
+            and (method == "CONNECT" or extension is not None)
         ):
             if extension is None:
                 extension = load_extension(None)()

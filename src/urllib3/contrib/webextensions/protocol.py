@@ -120,6 +120,11 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
                 if self._response:
                     self.close()
 
+    @property
+    def urlopen_kwargs(self) -> dict[str, typing.Any]:
+        """Return prerequisites. Must be passed as additional parameters to urlopen."""
+        return {}
+
     def start(self, response: HTTPResponse) -> None:
         """The HTTP server gave us the go-to start negotiating another protocol."""
         if response._fp is None or not hasattr(response._fp, "_dsa"):

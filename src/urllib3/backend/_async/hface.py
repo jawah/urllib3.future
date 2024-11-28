@@ -1006,6 +1006,16 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if reshelve_events:
                         self._protocol.reshelve(*reshelve_events)
                     return events
+                elif (
+                    stream_related_event
+                    and event.end_stream is True  # type: ignore[attr-defined]
+                    and maximal_data_in_read is None
+                    and event_type_collectable is not None
+                    and stream_id == event.stream_id  # type: ignore[attr-defined]
+                ):
+                    if reshelve_events:
+                        self._protocol.reshelve(*reshelve_events)
+                    return events
 
     def putrequest(
         self,
@@ -1249,6 +1259,32 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         self._last_used_at = time.monotonic()
 
+    async def __abort_st(self, __stream_id: int) -> None:
+        """Kill a stream properly."""
+        assert self._protocol is not None
+        assert self.sock is not None
+
+        self._protocol.submit_stream_reset(stream_id=__stream_id)
+
+        while True:
+            data_out = self._protocol.bytes_to_send()
+
+            if not data_out:
+                break
+
+            await self.sock.sendall(data_out)
+
+        try:
+            del self._pending_responses[__stream_id]
+        except KeyError:
+            pass  # Hmm... this should be impossible.
+
+        # remote can refuse future inquiries, so no need to go further with this conn.
+        if self._protocol.has_expired():
+            await self.close()
+
+        self._last_used_at = time.monotonic()
+
     async def __read_st(
         self,
         __amt: int | None,
@@ -1461,6 +1497,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             port=self.port,
             stream_id=promise.stream_id,
             dsa=dsa,
+            stream_abort=self.__abort_st,
         )
 
         promise.response = self._response

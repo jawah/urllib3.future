@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .protocol import ExtensionFromHTTP
 from .raw import RawExtensionFromHTTP
+from .sse import ServerSideEventExtensionFromHTTP
 
 try:
     from .ws import WebSocketExtensionFromHTTP, WebSocketExtensionFromMultiplexedHTTP
@@ -35,5 +36,6 @@ __all__ = (
     "RawExtensionFromHTTP",
     "WebSocketExtensionFromHTTP",
     "WebSocketExtensionFromMultiplexedHTTP",
+    "ServerSideEventExtensionFromHTTP",
     "load_extension",
 )

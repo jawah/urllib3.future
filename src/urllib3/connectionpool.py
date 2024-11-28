@@ -1069,7 +1069,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         if extension is not None:
             if response.status == 101 or (
-                200 <= response.status < 300 and method == "CONNECT"
+                200 <= response.status < 300
+                and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
                     extension = load_extension(None)()
@@ -1355,7 +1356,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         response._pool = self
 
         if response.status == 101 or (
-            200 <= response.status < 300 and method == "CONNECT"
+            200 <= response.status < 300
+            and (method == "CONNECT" or extension is not None)
         ):
             if extension is None:
                 extension = load_extension(None)()

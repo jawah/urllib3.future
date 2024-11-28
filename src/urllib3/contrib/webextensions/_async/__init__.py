@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .protocol import AsyncExtensionFromHTTP
 from .raw import AsyncRawExtensionFromHTTP
+from .sse import AsyncServerSideEventExtensionFromHTTP
 
 try:
     from .ws import (
@@ -38,5 +39,6 @@ __all__ = (
     "AsyncRawExtensionFromHTTP",
     "AsyncWebSocketExtensionFromHTTP",
     "AsyncWebSocketExtensionFromMultiplexedHTTP",
+    "AsyncServerSideEventExtensionFromHTTP",
     "load_extension",
 )

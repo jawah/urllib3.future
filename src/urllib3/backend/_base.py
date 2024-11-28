@@ -212,6 +212,7 @@ class LowLevelResponse:
         sock: socket.socket | None = None,
         # this obj should not be always available[...]
         dsa: DirectStreamAccess | None = None,
+        stream_abort: typing.Callable[[int], None] | None = None,
     ):
         self.status = status
         self.version = version
@@ -257,6 +258,7 @@ class LowLevelResponse:
         self._sock = sock
         self._fp: socket.SocketIO | None = None
         self._dsa = dsa
+        self._stream_abort = stream_abort
 
         self._stream_id = stream_id
 
@@ -352,6 +354,7 @@ class LowLevelResponse:
             data = data[:__size]
 
         if self._eot and len(self.__buffer_excess) == 0:
+            self._stream_abort = None
             self.closed = True
             self._sock = None
 
@@ -367,6 +370,16 @@ class LowLevelResponse:
         self.data_in_count += size_in
 
         return data
+
+    def abort(self) -> None:
+        if self._stream_abort is not None:
+            if self._eot is False:
+                if self._stream_id is not None:
+                    self._stream_abort(self._stream_id)
+                self._eot = True
+                self._stream_abort = None
+                self.closed = True
+                self._dsa = None
 
     def close(self) -> None:
         self.__internal_read_st = None

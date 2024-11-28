@@ -1607,3 +1607,33 @@ Setting it to ``None`` makes it disabled.
 .. note:: By default, it checks for incoming data and react to it every 5000ms.
 
 .. warning:: Disabling this will void the effect of our automated keepalive.
+
+Server Side Event
+-----------------
+
+.. note:: Upgrade urllib3-future to 2.12+ or later to benefit from this.
+
+You can start leveraging SSE through HTTP/1, HTTP/2 or HTTP/3 with a mere line of code!
+Everything is handled by us, you don't have to worry about protocols internal. Do as you
+did simple http request.
+
+.. code-block:: python
+
+    import urllib3
+
+    if __name__ == "__main__":
+
+        with urllib3.PoolManager() as pm:
+            r = pm.urlopen("GET", "sse://httpbingo.org/sse?delay=1s&duration=5s&count=10")
+
+            while r.extension.closed is False:
+                event = r.extension.next_payload()  # here, next_payload() returns an ServerSentEvent object.
+                print(event)
+                print(event.json())
+
+            print(r.trailers)  # some server can give you some stats post ending the stream of events, you'll find them here.
+
+.. warning:: By default ``sse://`` is bound to ``https://``. Use ``psse://`` to connect using plain http instead.
+
+In opposition to WebSocket, the method ``next_payload()`` output an object. The event fully parsed.
+If you wanted to get the raw event, untouched, as unicode string, add the kwarg ``raw=True`` into the method ``next_payload()``.
