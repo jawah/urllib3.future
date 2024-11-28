@@ -242,10 +242,16 @@ def tests_impl(
             "python",
             *(("-bb",) if byte_string_comparisons else ()),
             "-m",
-            "coverage",
-            "run",
-            "--parallel-mode",
-            "-m",
+            *(
+                (
+                    "coverage",
+                    "run",
+                    "--parallel-mode",
+                    "-m",
+                )
+                if tracemalloc_enable is False
+                else ()
+            ),
             "pytest",
             "-v",
             "-ra",
