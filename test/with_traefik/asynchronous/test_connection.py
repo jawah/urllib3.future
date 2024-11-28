@@ -213,7 +213,7 @@ class TestConnection(TraefikTestCase):
                 self.https_port,
                 ca_certs=self.ca_authority,
                 resolver=self.test_async_resolver.new(),
-                source_address=("0.0.0.0", 8745),
+                source_address=("0.0.0.0", 8789),
             )
 
             await conn.connect()

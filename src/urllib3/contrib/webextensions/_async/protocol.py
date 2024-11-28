@@ -120,6 +120,10 @@ class AsyncExtensionFromHTTP(metaclass=ABCMeta):
                 if self._response:
                     await self.close()
 
+    @property
+    def urlopen_kwargs(self) -> dict[str, typing.Any]:
+        return {}
+
     async def start(self, response: AsyncHTTPResponse) -> None:
         """The HTTP server gave us the go-to start negotiating another protocol."""
         if response._fp is None or not hasattr(response._fp, "_dsa"):

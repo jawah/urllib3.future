@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 from urllib3 import AsyncPoolManager, HttpVersion, Timeout
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.contrib.webextensions._async import (
     AsyncRawExtensionFromHTTP,
+    AsyncServerSideEventExtensionFromHTTP,
     AsyncWebSocketExtensionFromHTTP,
 )
 from urllib3.exceptions import ReadTimeoutError
@@ -246,6 +251,7 @@ class TestWebExtensions(TraefikTestCase):
             resolver=self.test_async_resolver,
             ca_certs=self.ca_authority,
             timeout=Timeout(read=1),
+            retries=False,
         ) as pm:
             resp = await pm.urlopen("GET", target_url + "/websocket/echo")
 
@@ -267,3 +273,230 @@ class TestWebExtensions(TraefikTestCase):
                 await resp.extension.next_payload()
 
             await resp.extension.close()
+
+    @pytest.mark.parametrize(
+        "target_protocol, target_http",
+        [
+            ("sse", 11),
+            ("sse", 20),
+            ("sse", 30),
+            ("psse", 11),
+            ("psse", 20),
+        ],
+    )
+    async def test_server_side_event(
+        self, target_protocol: str, target_http: int
+    ) -> None:
+        target_url = self.https_url if target_protocol == "sse" else self.http_url
+        target_url = (
+            target_url.replace("https://", "sse://")
+            if target_protocol == "sse"
+            else target_url.replace("http://", "psse://")
+        )
+
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
+
+        disabled_svn = set()
+
+        if target_http == 11:
+            disabled_svn.add(HttpVersion.h2)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 20:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 30:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h2)
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn=disabled_svn,
+        ) as pm:
+            resp = await pm.urlopen("GET", target_url + "/sse?delay=1s&count=5")
+
+            # The response ends with a "200 OK"!
+            assert resp.status == 200
+
+            # The HTTP extension should be automatically loaded!
+            assert resp.extension is not None
+
+            assert resp.version == target_http
+
+            assert isinstance(resp.extension, AsyncServerSideEventExtensionFromHTTP)
+
+            events = []
+
+            while resp.extension.closed is False:
+                ev = await resp.extension.next_payload()
+                print(ev)
+                if ev is not None:
+                    events.append(ev)
+
+            assert len(events) == 5
+
+            assert resp.extension.closed is True
+
+            for event in events:
+                assert event.json()  # type: ignore
+                assert "timestamp" in event.json()  # type: ignore
+
+            assert resp.trailers
+            assert "server-timing" in resp.trailers
+
+    @pytest.mark.parametrize(
+        "target_protocol, target_http",
+        [
+            ("sse", 11),
+            ("sse", 20),
+            ("sse", 30),
+            ("psse", 11),
+            ("psse", 20),
+        ],
+    )
+    async def test_server_side_event_abort(
+        self, target_protocol: str, target_http: int
+    ) -> None:
+        target_url = self.https_url if target_protocol == "sse" else self.http_url
+        target_url = (
+            target_url.replace("https://", "sse://")
+            if target_protocol == "sse"
+            else target_url.replace("http://", "psse://")
+        )
+
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
+
+        disabled_svn = set()
+
+        if target_http == 11:
+            disabled_svn.add(HttpVersion.h2)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 20:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 30:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h2)
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn=disabled_svn,
+        ) as pm:
+            resp = await pm.urlopen("GET", target_url + "/sse?delay=1s&count=5")
+
+            # The response ends with a "200 OK"!
+            assert resp.status == 200
+
+            # The HTTP extension should be automatically loaded!
+            assert resp.extension is not None
+
+            assert isinstance(resp.extension, AsyncServerSideEventExtensionFromHTTP)
+
+            events = []
+
+            while resp.extension.closed is False:
+                events.append(await resp.extension.next_payload())
+
+                if len(events) == 2:
+                    await resp.extension.close()
+
+            assert len(events) == 2
+
+            assert resp.extension.closed is True
+
+            for event in events:
+                assert event.json()  # type: ignore
+                assert "timestamp" in event.json()  # type: ignore
+
+            assert not resp.trailers
+
+    @pytest.mark.parametrize(
+        "target_protocol, target_http",
+        [
+            ("sse", 20),
+            ("sse", 30),
+            ("psse", 20),
+        ],
+    )
+    async def test_server_side_event_multiplexed(
+        self, target_protocol: str, target_http: int
+    ) -> None:
+        target_url = self.https_url if target_protocol == "sse" else self.http_url
+        target_url = (
+            target_url.replace("https://", "sse://")
+            if target_protocol == "sse"
+            else target_url.replace("http://", "psse://")
+        )
+
+        disabled_svn = set()
+
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
+
+        if target_http == 20:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 30:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h2)
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn=disabled_svn,
+        ) as pm:
+            before = time.time()
+
+            await asyncio.gather(
+                *[
+                    pm.urlopen(
+                        "GET", target_url + "/sse?delay=1s&count=5", multiplexed=True
+                    ),
+                    pm.urlopen(
+                        "GET", target_url + "/sse?delay=1s&count=5", multiplexed=True
+                    ),
+                    pm.urlopen(
+                        "GET", target_url + "/sse?delay=1s&count=5", multiplexed=True
+                    ),
+                ]
+            )
+
+            responses = await asyncio.gather(
+                *[pm.get_response(), pm.get_response(), pm.get_response()]
+            )
+
+            assert pm.pools.rsize() == 1
+
+            for resp in responses:
+                assert resp is not None
+                # The response ends with a "200 OK"!
+                assert resp.status == 200
+
+                # The HTTP extension should be automatically loaded!
+                assert resp.extension is not None
+
+                assert resp.version == target_http
+
+                assert isinstance(resp.extension, AsyncServerSideEventExtensionFromHTTP)
+
+            events = []
+
+            while any(e.extension.closed is False for e in responses):  # type: ignore
+                for resp in responses:
+                    assert resp is not None
+                    if resp.extension.closed:  # type: ignore
+                        continue
+                    ev = await resp.extension.next_payload()  # type: ignore
+                    if ev is not None:
+                        events.append(ev)
+
+            assert len(events) == 5 * 3
+
+            for event in events:
+                assert event.json()  # type: ignore
+                assert "timestamp" in event.json()  # type: ignore
+
+            assert time.time() - before <= 10.0

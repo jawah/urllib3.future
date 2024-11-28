@@ -755,9 +755,11 @@ class PoolManager(RequestMethods):
 
         extension = from_promise.get_parameter("extension")
 
-        if extension is not None:
+        # Pool may have already set&start extension.
+        if extension is not None and response.extension is None:
             if response.status == 101 or (
-                200 <= response.status < 300 and method == "CONNECT"
+                200 <= response.status < 300
+                and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
                     extension = load_extension(None)()
@@ -839,6 +841,7 @@ class PoolManager(RequestMethods):
         if u.scheme is not None and u.scheme.lower() not in ("http", "https"):
             extension = load_extension(*parse_extension(u.scheme))
             kw["extension"] = extension()
+            kw.update(kw["extension"].urlopen_kwargs)
 
         kw["assert_same_host"] = False
         kw["redirect"] = False

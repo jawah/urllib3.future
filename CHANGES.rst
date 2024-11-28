@@ -1,3 +1,14 @@
+2.12.900 (2024-11-28)
+=====================
+
+- Added built-in support for Server-Side-Event (or SSE) via a WebExtension.
+  It is as simple as doing ``pm.urlopen("GET", "sse://sse.dev/test")``. ``sse`` is using https under the hood by default.
+  To force SSE via plain HTTP, replace ``sse://`` by ``psse://``.
+  The ``extension`` attribute of produced response will be set, and you will be able to consume event promptly.
+  See the documentation to learn more.
+- Fixed unintentional regression using ``CONNECT`` verb manually outside of its standard usage.
+- Fixed using a WebExtension with ``urlopen(..., multiplexed=True)`` from a PoolManager instance.
+
 2.11.912 (2024-11-26)
 =====================
 

@@ -134,6 +134,7 @@ class AsyncLowLevelResponse:
         stream_id: int | None = None,
         # this obj should not be always available[...]
         dsa: AsyncDirectStreamAccess | None = None,
+        stream_abort: typing.Callable[[int], typing.Awaitable[None]] | None = None,
     ) -> None:
         self.status = status
         self.version = version
@@ -175,6 +176,7 @@ class AsyncLowLevelResponse:
         self.__buffer_excess: bytes = b""
         self.__promise: ResponsePromise | None = None
         self._dsa = dsa
+        self._stream_abort = stream_abort
 
         self.trailers: HTTPHeaderDict | None = None
 
@@ -241,6 +243,7 @@ class AsyncLowLevelResponse:
             data = data[:__size]
 
         if self._eot and len(self.__buffer_excess) == 0:
+            self._stream_abort = None
             self.closed = True
 
         size_in = len(data)
@@ -255,6 +258,16 @@ class AsyncLowLevelResponse:
         self.data_in_count += size_in
 
         return data
+
+    async def abort(self) -> None:
+        if self._stream_abort is not None:
+            if self._eot is False:
+                if self._stream_id is not None:
+                    await self._stream_abort(self._stream_id)
+                self._eot = True
+                self._stream_abort = None
+                self.closed = True
+                self._dsa = None
 
     def close(self) -> None:
         self.__internal_read_st = None
