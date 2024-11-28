@@ -77,7 +77,7 @@ def headers_to_request(headers: HeadersType) -> h11.Event:
     if authority is None:
         raise ValueError("Missing request header: :authority")
 
-    if method == b"CONNECT":
+    if method == b"CONNECT" and path is None:
         # CONNECT requests are a special case.
         target = authority
     else:
