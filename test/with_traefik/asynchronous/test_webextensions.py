@@ -294,6 +294,9 @@ class TestWebExtensions(TraefikTestCase):
             else target_url.replace("http://", "psse://")
         )
 
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
+
         disabled_svn = set()
 
         if target_http == 11:
@@ -361,6 +364,9 @@ class TestWebExtensions(TraefikTestCase):
             if target_protocol == "sse"
             else target_url.replace("http://", "psse://")
         )
+
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
 
         disabled_svn = set()
 
