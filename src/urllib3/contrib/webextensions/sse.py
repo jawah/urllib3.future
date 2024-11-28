@@ -11,7 +11,6 @@ from ...backend import HttpVersion
 from .protocol import ExtensionFromHTTP
 
 
-
 class ServerSentEvent:
     def __init__(
         self,
@@ -65,7 +64,6 @@ class ServerSentEvent:
 
 
 class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -112,7 +110,9 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
         ...
 
     @typing.overload
-    def next_payload(self, *, raw: typing.Literal[False] = False) -> ServerSentEvent | None:
+    def next_payload(
+        self, *, raw: typing.Literal[False] = False
+    ) -> ServerSentEvent | None:
         ...
 
     def next_payload(self, *, raw: bool = False) -> ServerSentEvent | str | None:
@@ -159,9 +159,7 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
             if "id" not in kwargs and self._last_event_id is not None:
                 kwargs["id"] = self._last_event_id
 
-            event = ServerSentEvent(
-                **kwargs
-            )
+            event = ServerSentEvent(**kwargs)
 
             if event.id:
                 self._last_event_id = event.id

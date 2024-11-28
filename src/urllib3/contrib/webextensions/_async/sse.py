@@ -11,7 +11,6 @@ from .protocol import AsyncExtensionFromHTTP
 
 
 class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -57,7 +56,9 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
         ...
 
     @typing.overload
-    async def next_payload(self, *, raw: typing.Literal[False] = False) -> ServerSentEvent | None:
+    async def next_payload(
+        self, *, raw: typing.Literal[False] = False
+    ) -> ServerSentEvent | None:
         ...
 
     async def next_payload(self, *, raw: bool = False) -> ServerSentEvent | str | None:
@@ -105,9 +106,7 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
         if "id" not in kwargs and self._last_event_id is not None:
             kwargs["id"] = self._last_event_id
 
-        event = ServerSentEvent(
-            **kwargs
-        )
+        event = ServerSentEvent(**kwargs)
 
         if event.id:
             self._last_event_id = event.id
