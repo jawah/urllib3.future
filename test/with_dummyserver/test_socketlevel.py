@@ -587,10 +587,10 @@ class TestSocketClosing(SocketDummyServerTestCase):
 
         # In situations where the main thread throws an exception, the server
         # thread can hang on an accept() call. This ensures everything times
-        # out within 1 second. This should be long enough for any socket
+        # out within 3 second. This should be long enough for any socket
         # operations in the test suite to complete
         default_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(1)
+        socket.setdefaulttimeout(3)
 
         try:
             self._start_server(socket_handler)

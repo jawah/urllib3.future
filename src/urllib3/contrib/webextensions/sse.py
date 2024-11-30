@@ -91,8 +91,13 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
     def close(self) -> None:
         if self._stream is not None and self._response is not None:
             self._stream.close()
-            if self._response._fp is not None and hasattr(self._response._fp, "abort"):
-                self._response._fp.abort()
+            if (
+                self._response._fp is not None
+                and self._police_officer is not None
+                and hasattr(self._response._fp, "abort")
+            ):
+                with self._police_officer.borrow(self._response):
+                    self._response._fp.abort()
             self._stream = None
             self._response = None
             self._police_officer = None

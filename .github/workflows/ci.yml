@@ -55,6 +55,15 @@ jobs:
           - experimental: true
             python-version: "3.14"
             os: ubuntu-22.04
+            traefik-server: true
+          - experimental: true
+            python-version: "3.14"
+            os: macos-13
+            traefik-server: true
+          - experimental: true
+            python-version: "3.14"
+            os: windows-2022
+            traefik-server: true
           - python-version: "pypy-3.7"
             os: ubuntu-22.04
             experimental: false
@@ -94,16 +103,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ fromJson('{"macos-13":"macOS","windows-2022":"Windows","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-22.04":"Ubuntu 22 (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        uses: douglascamata/setup-docker-macos-action@8d5fa43892aed7eee4effcdea113fd53e4d4bf83
+        uses: douglascamata/setup-docker-macos-action@4fe96839fcba8a2d746e020d00a89a37afbc7dc9
         with:
           colima-network-address: true
+
+      - name: "Colima VM List (MacOS)"
+        if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
+        run: colima list
 
       - name: "Setup Python ${{ matrix.python-version }}"
         uses: "actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3"
@@ -121,7 +134,7 @@ jobs:
           NOX_SESSION: ${{ matrix.nox-session }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
           # on MacOS, the Colima VM is located at "192.168.106.2" by default.
-          TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && '192.168.106.2' || '127.0.0.1' }}
+          TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && '192.168.65.2' || '127.0.0.1' }}
 
       - name: "Upload artifact"
         uses: "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
@@ -129,7 +142,6 @@ jobs:
           name: coverage-data
           path: ".coverage.*"
           if-no-files-found: error
-
 
   coverage:
     if: always()

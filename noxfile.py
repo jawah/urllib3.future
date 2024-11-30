@@ -120,32 +120,16 @@ def traefik_boot(
                 "./traefik/patched.Dockerfile", "./go-httpbin/patched.Dockerfile"
             )
 
-            pre_build = subprocess.Popen(
+            dc_process = subprocess.Popen(
                 [
                     "docker",
                     "compose",
                     "-f",
                     "docker-compose.win.yaml",
-                    "build",
-                    "httpbin",
+                    "up",
+                    "-d",
                 ]
             )
-
-            pre_build.wait()
-
-            if pre_build.returncode == 0:
-                dc_process = subprocess.Popen(
-                    [
-                        "docker",
-                        "compose",
-                        "-f",
-                        "docker-compose.win.yaml",
-                        "up",
-                        "-d",
-                    ]
-                )
-            else:
-                raise OSError("Unable to build go-httpbin on Windows")
         else:
             if dc_v1_legacy:
                 dc_process = subprocess.Popen(["docker-compose", "up", "-d"])
@@ -359,6 +343,7 @@ def downstream_niquests(session: nox.Session) -> None:
         "-v",
         f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
         *(session.posargs or ("tests/",)),
+        env={"NIQUESTS_STRICT_OCSP": "1"},
     )
 
 

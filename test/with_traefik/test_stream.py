@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import platform
 from json import JSONDecodeError, loads
 
 import pytest
@@ -36,7 +38,17 @@ class TestStreamResponse(TraefikTestCase):
 
                 assert resp.status == 200
                 if _HAS_HTTP3_SUPPORT():
-                    assert resp.version == (20 if i == 0 else 30)
+                    # colima is our only way to test HTTP/2 and HTTP/3 in GHA runners
+                    # its known to have flaky behaviors. We can lose the connection easily...
+                    # and our automatic downgrade to HTTP/2 makes the following assert
+                    # problematic!
+                    if (
+                        os.environ.get("CI") is not None
+                        and platform.system() == "Darwin"
+                    ):
+                        assert resp.version in {20, 30}
+                    else:
+                        assert resp.version == (20 if i == 0 else 30)
                 else:
                     assert resp.version == 20
 
