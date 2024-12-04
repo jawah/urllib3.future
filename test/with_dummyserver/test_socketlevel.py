@@ -1038,7 +1038,9 @@ class TestSocketClosing(SocketDummyServerTestCase):
             ssl_sock.close()
             ssl_sock.sendall(b"hello")
             assert ssl_sock.fileno() > 0
-            ssl_sock.sendall(b"\r\n\r\n")  # sent to make sure the thread exit (server_start) properly!
+            ssl_sock.sendall(
+                b"\r\n\r\n"
+            )  # sent to make sure the thread exit (server_start) properly!
 
 
 class TestProxyManager(SocketDummyServerTestCase):

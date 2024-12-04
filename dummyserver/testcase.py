@@ -111,7 +111,10 @@ class SocketDummyServerTestCase:
         if hasattr(cls, "server_thread"):
             cls.server_thread.join(0.1)
             if cls.server_thread.is_alive():
-                warnings.warn("SocketDummyServerTestCase leaks a thread beyond authorized lifetime", ResourceWarning)
+                warnings.warn(
+                    "SocketDummyServerTestCase leaks a thread beyond authorized lifetime",
+                    ResourceWarning,
+                )
 
     def assert_header_received(
         self,
