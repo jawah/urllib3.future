@@ -1013,6 +1013,8 @@ class TestSocketClosing(SocketDummyServerTestCase):
             assert ssl_sock.fileno() == -1
 
     def test_socket_close_stays_open_with_makefile_open(self) -> None:
+        quit_event = threading.Event()
+
         def consume_ssl_socket(listener: socket.socket) -> None:
             try:
                 with listener.accept()[0] as sock, original_ssl_wrap_socket(
@@ -1021,9 +1023,9 @@ class TestSocketClosing(SocketDummyServerTestCase):
                     keyfile=DEFAULT_CERTS["keyfile"],
                     certfile=DEFAULT_CERTS["certfile"],
                     ca_certs=DEFAULT_CA,
-                ) as ssl_sock:
-                    consume_socket(ssl_sock)
-            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                ):
+                    quit_event.wait()
+            except (ConnectionResetError, ConnectionAbortedError, OSError, SSLError):
                 pass
 
         self._start_server(consume_ssl_socket)
@@ -1038,9 +1040,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
             ssl_sock.close()
             ssl_sock.sendall(b"hello")
             assert ssl_sock.fileno() > 0
-            ssl_sock.sendall(
-                b"\r\n\r\n"
-            )  # sent to make sure the thread exit (server_start) properly!
+            quit_event.set()
 
 
 class TestProxyManager(SocketDummyServerTestCase):
