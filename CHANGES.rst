@@ -1,3 +1,10 @@
+2.12.901 (2024-12-04)
+=====================
+
+- Fixed a thread/task safety issue when closing a SSE extension.
+- Fixed a rare case when closing a connection would hang forever in Python 3.8, and 3.9 due to a bug in a "wait for close" internal procedure.
+- Improved tests runtime and performance.
+
 2.12.900 (2024-11-28)
 =====================
 

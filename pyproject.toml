@@ -106,6 +106,7 @@ markers = ["limit_memory"]
 log_level = "DEBUG"
 filterwarnings = [
     "error",
+    '''ignore:.*iscoroutinefunction.*:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLS is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1 is deprecated:DeprecationWarning''',
     '''default:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
@@ -127,7 +128,6 @@ filterwarnings = [
     '''ignore:ssl\.TLSVersion\.TLSv1 is deprecated:DeprecationWarning''',
     '''ignore:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
     '''ignore:loop is closed:ResourceWarning''',
-    '''ignore:iscoroutinefunction:DeprecationWarning''',
 ]
 
 [tool.isort]

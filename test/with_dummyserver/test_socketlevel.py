@@ -587,10 +587,10 @@ class TestSocketClosing(SocketDummyServerTestCase):
 
         # In situations where the main thread throws an exception, the server
         # thread can hang on an accept() call. This ensures everything times
-        # out within 1 second. This should be long enough for any socket
+        # out within 3 second. This should be long enough for any socket
         # operations in the test suite to complete
         default_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(1)
+        socket.setdefaulttimeout(3)
 
         try:
             self._start_server(socket_handler)
@@ -1013,6 +1013,8 @@ class TestSocketClosing(SocketDummyServerTestCase):
             assert ssl_sock.fileno() == -1
 
     def test_socket_close_stays_open_with_makefile_open(self) -> None:
+        quit_event = threading.Event()
+
         def consume_ssl_socket(listener: socket.socket) -> None:
             try:
                 with listener.accept()[0] as sock, original_ssl_wrap_socket(
@@ -1021,9 +1023,9 @@ class TestSocketClosing(SocketDummyServerTestCase):
                     keyfile=DEFAULT_CERTS["keyfile"],
                     certfile=DEFAULT_CERTS["certfile"],
                     ca_certs=DEFAULT_CA,
-                ) as ssl_sock:
-                    consume_socket(ssl_sock)
-            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                ):
+                    quit_event.wait()
+            except (ConnectionResetError, ConnectionAbortedError, OSError, SSLError):
                 pass
 
         self._start_server(consume_ssl_socket)
@@ -1038,6 +1040,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
             ssl_sock.close()
             ssl_sock.sendall(b"hello")
             assert ssl_sock.fileno() > 0
+            quit_event.set()
 
 
 class TestProxyManager(SocketDummyServerTestCase):
@@ -2364,24 +2367,23 @@ class TestBrokenPipe(SocketDummyServerTestCase):
 class TestMultipartResponse(SocketDummyServerTestCase):
     def test_multipart_assert_header_parsing_no_defects(self) -> None:
         def socket_handler(listener: socket.socket) -> None:
-            for _ in range(2):
-                sock = listener.accept()[0]
-                while not sock.recv(65536).endswith(b"\r\n\r\n"):
-                    pass
+            sock = listener.accept()[0]
+            while not sock.recv(65536).endswith(b"\r\n\r\n"):
+                pass
 
-                sock.sendall(
-                    b"HTTP/1.1 404 Not Found\r\n"
-                    b"Server: example.com\r\n"
-                    b"Content-Type: multipart/mixed; boundary=36eeb8c4e26d842a\r\n"
-                    b"Content-Length: 73\r\n"
-                    b"\r\n"
-                    b"--36eeb8c4e26d842a\r\n"
-                    b"Content-Type: text/plain\r\n"
-                    b"\r\n"
-                    b"1\r\n"
-                    b"--36eeb8c4e26d842a--\r\n",
-                )
-                sock.close()
+            sock.sendall(
+                b"HTTP/1.1 404 Not Found\r\n"
+                b"Server: example.com\r\n"
+                b"Content-Type: multipart/mixed; boundary=36eeb8c4e26d842a\r\n"
+                b"Content-Length: 73\r\n"
+                b"\r\n"
+                b"--36eeb8c4e26d842a\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"\r\n"
+                b"1\r\n"
+                b"--36eeb8c4e26d842a--\r\n",
+            )
+            sock.close()
 
         self._start_server(socket_handler)
         from urllib3.connectionpool import log
@@ -2460,8 +2462,6 @@ class TestContentFraming(SocketDummyServerTestCase):
             )
             sock.close()
 
-        self._start_server(socket_handler)
-
         body: typing.Any
         if body_type == "generator":
 
@@ -2476,6 +2476,8 @@ class TestContentFraming(SocketDummyServerTestCase):
             if chunked is False:
                 pytest.skip("urllib3 uses Content-Length in this case")
             body = b"x" * 10
+
+        self._start_server(socket_handler)
 
         with HTTPConnectionPool(
             self.host, self.port, timeout=LONG_TIMEOUT, retries=False

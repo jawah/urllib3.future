@@ -6,6 +6,8 @@ import socket
 import ssl
 import threading
 import typing
+import warnings
+from test import LONG_TIMEOUT
 
 import pytest
 from tornado import httpserver, ioloop, web
@@ -108,7 +110,12 @@ class SocketDummyServerTestCase:
     @classmethod
     def teardown_class(cls) -> None:
         if hasattr(cls, "server_thread"):
-            cls.server_thread.join(0.1)
+            cls.server_thread.join(LONG_TIMEOUT)
+            if cls.server_thread.is_alive():
+                warnings.warn(
+                    "SocketDummyServerTestCase leaks a thread beyond authorized lifetime",
+                    ResourceWarning,
+                )
 
     def assert_header_received(
         self,

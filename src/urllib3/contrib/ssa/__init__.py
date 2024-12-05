@@ -116,7 +116,17 @@ class AsyncSocket:
             await asyncio.sleep(0)
             self._writer.transport.abort()
 
-        await self._writer.wait_closed()
+        try:
+            # wait_closed can hang indefinitely!
+            # on Python 3.8 and 3.9
+            # there's some case where Python want an explicit EOT
+            # (spoiler: it was a CPython bug) fixed in recent interpreters.
+            # to circumvent this and still have a proper close
+            # we enforce a maximum delay (1000ms).
+            async with timeout(1):
+                await self._writer.wait_closed()
+        except TimeoutError:
+            pass
 
     def close(self) -> None:
         if self._writer is not None:

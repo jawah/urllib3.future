@@ -64,8 +64,15 @@ class TestWebExtensions(TraefikTestCase):
             await resp.extension.send_payload("Hello World!")
             await resp.extension.send_payload(b"Foo Bar Baz!")
 
+            # send a PING frame manually
+            await resp.extension.ping()
+
             # they should be echoed in order.
             assert (await resp.extension.next_payload()) == "Hello World!"
+
+            # send another PING frame manually
+            await resp.extension.ping()
+
             assert (await resp.extension.next_payload()) == b"Foo Bar Baz!"
 
             # gracefully close the sub protocol.

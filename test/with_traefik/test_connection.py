@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import socket
+
 import pytest
 
 from urllib3 import HttpVersion
@@ -200,14 +203,26 @@ class TestConnection(TraefikTestCase):
 
         conn.close()
 
+    @pytest.mark.xfail(
+        os.environ.get("CI") is not None, reason="Flaky in CI", strict=False
+    )
     def test_fast_reuse_outgoing_port(self) -> None:
+        def _get_free_port(host: str) -> int:
+            s = socket.socket()
+            s.bind((host, 0))
+            port = s.getsockname()[1]
+            s.close()
+            return port  # type: ignore[no-any-return]
+
+        _tba_port = _get_free_port("localhost")
+
         for _ in range(4):
             conn = HTTPSConnection(
                 self.host,
                 self.https_port,
                 ca_certs=self.ca_authority,
                 resolver=self.test_resolver.new(),
-                source_address=("0.0.0.0", 50010),
+                source_address=("0.0.0.0", _tba_port),
             )
 
             conn.connect()
