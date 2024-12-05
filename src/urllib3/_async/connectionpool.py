@@ -583,7 +583,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                         self.ConnectionCls(
                             host=self.host,
                             port=self.port,
-                            timeout=self.timeout.connect_timeout,
+                            timeout=override_timeout,
                             **conn_kw,
                         )
                     )
@@ -615,7 +615,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
                         remnant_tasks.append(finished_task)
 
-                    if winner_task:
+                    if winner_task or not pending:
                         break
 
                 for task in pending:

@@ -660,7 +660,7 @@ class TestHTTPSProxyVerification:
         proxy_url = f"https://{proxy.host}:{proxy.port}"
         destination_url = f"https://{server.host}:{server.port}"
 
-        proxy_fingerprint = self._get_proxy_fingerprint_md5(proxy.ca_certs)
+        proxy_fingerprint = self._get_proxy_fingerprint_md5(proxy.ca_certs)  # type: ignore[arg-type]
         with proxy_from_url(
             proxy_url,
             ca_certs=proxy.ca_certs,
@@ -675,7 +675,7 @@ class TestHTTPSProxyVerification:
         proxy_url = f"https://{proxy.host}:{proxy.port}"
         destination_url = f"https://{server.host}:{server.port}"
 
-        proxy_fingerprint = self._get_proxy_fingerprint_md5(proxy.ca_certs)
+        proxy_fingerprint = self._get_proxy_fingerprint_md5(proxy.ca_certs)  # type: ignore[arg-type]
         new_char = "b" if proxy_fingerprint[5] == "a" else "a"
         proxy_fingerprint = proxy_fingerprint[:5] + new_char + proxy_fingerprint[6:]
 

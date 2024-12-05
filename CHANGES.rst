@@ -1,3 +1,8 @@
+2.12.902 (2024-12-05)
+=====================
+
+- Fixed a rare issue where Happy-Eyeballs algorithm would not respect timeout for a plain HTTP connection where all available endpoints are unreachable.
+
 2.12.901 (2024-12-04)
 =====================
 

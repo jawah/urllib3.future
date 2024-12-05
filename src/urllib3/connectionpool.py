@@ -553,7 +553,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     heb_timeout.connect_timeout
                     if heb_timeout.connect_timeout is not None
                     and isinstance(heb_timeout.connect_timeout, (float, int))
-                    else 0.4
+                    else 5.0
                 )
 
                 for ip_address in ip_addresses[:max_task]:
@@ -628,7 +628,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     )
                     raise NewConnectionError(
                         challengers[0],
-                        f"Failed to establish a new connection: No suitable endpoint to connect to using Happy Eyeballs for {self.host}:{self.port}{within_delay_msg}",
+                        f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs for {self.host}:{self.port}{within_delay_msg}",
                     ) from tasks[0].exception()
 
                 conn = challengers[tasks.index(winning_task)]

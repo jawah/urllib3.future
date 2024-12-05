@@ -28,7 +28,7 @@ class ServerConfig(typing.NamedTuple):
     scheme: str
     host: str
     port: int
-    ca_certs: str
+    ca_certs: str | None
 
     @property
     def base_url(self) -> str:
@@ -51,11 +51,20 @@ def _write_cert_to_dir(
 
 @contextlib.contextmanager
 def run_server_in_thread(
-    scheme: str, host: str, tmpdir: Path, ca: trustme.CA, server_cert: trustme.LeafCert
+    scheme: str,
+    host: str,
+    tmpdir: Path | None,
+    ca: trustme.CA | None,
+    server_cert: trustme.LeafCert | None,
 ) -> typing.Generator[ServerConfig, None, None]:
-    ca_cert_path = str(tmpdir / "ca.pem")
-    ca.cert_pem.write_to_path(ca_cert_path)
-    server_certs = _write_cert_to_dir(server_cert, tmpdir)
+    if ca is not None and server_cert is not None and tmpdir is not None:
+        ca_cert_path = str(tmpdir / "ca.pem")
+        ca.cert_pem.write_to_path(ca_cert_path)
+        server_certs = _write_cert_to_dir(server_cert, tmpdir)
+    else:
+        assert scheme == "http"
+        ca_cert_path = None
+        server_certs = {}
 
     with run_loop_in_thread() as io_loop:
 
@@ -67,7 +76,7 @@ def run_server_in_thread(
         port = asyncio.run_coroutine_threadsafe(
             run_app(), io_loop.asyncio_loop  # type: ignore[attr-defined]
         ).result()
-        yield ServerConfig("https", host, port, ca_cert_path)
+        yield ServerConfig(scheme, host, port, ca_cert_path)
 
 
 @contextlib.contextmanager
@@ -240,6 +249,15 @@ def ipv4_san_server(
     server_cert = ca.issue_cert("127.0.0.1")
 
     with run_server_in_thread("https", "127.0.0.1", tmpdir, ca, server_cert) as cfg:
+        yield cfg
+
+
+@pytest.fixture
+def ipv6_plain_server() -> typing.Generator[ServerConfig, None, None]:
+    if not HAS_IPV6:
+        pytest.skip("Only runs on IPv6 systems")
+
+    with run_server_in_thread("http", "::1", None, None, None) as cfg:
         yield cfg
 
 
