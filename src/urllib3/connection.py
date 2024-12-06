@@ -290,6 +290,8 @@ class HTTPConnection(HfaceBackend):
     def is_connected(self) -> bool:
         if self.sock is None:
             return False
+        # has_expired can be True when the connection isn't dead
+        # with GoAway for example.
         if self._promises or self._pending_responses:
             return True
         return self._protocol is not None and self._protocol.has_expired() is False
