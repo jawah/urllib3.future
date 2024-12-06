@@ -152,7 +152,11 @@ class HfaceBackend(BaseBackend):
     def is_saturated(self) -> bool:
         if self._protocol is None:
             return True
-        return self._protocol.is_available() is False
+        # is_available also includes whether we must goaway
+        # we want to focus on stream capacity here.
+        if self._protocol.is_available() is False:
+            return self._protocol.has_expired() is False
+        return False
 
     @property
     def is_multiplexed(self) -> bool:

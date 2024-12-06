@@ -1,7 +1,10 @@
-2.12.902 (2024-12-05)
+2.12.902 (2024-12-06)
 =====================
 
 - Fixed a rare issue where Happy-Eyeballs algorithm would not respect timeout for a plain HTTP connection where all available endpoints are unreachable.
+- Fixed an issue where a HTTP/2 idle connection would be considered "used/saturated" instead of "idle" when remote expressed wish to goaway.
+  This issue can lead to a ``traffic_police.OverwhelmedTraffic`` in synchronous context and indefinite hang in asynchronous after awhile.
+- Increased default keepalive window to 1h by default for HTTP/2, and HTTP/3.
 
 2.12.901 (2024-12-04)
 =====================
