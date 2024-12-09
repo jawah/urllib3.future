@@ -22,8 +22,12 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             promises = []
 
             for i in range(5):
-                promise_slow = await pool.urlopen("GET", f"{self.https_url}/delay/3", multiplexed=True)
-                promise_fast = await pool.urlopen("GET", f"{self.https_url}/delay/1", multiplexed=True)
+                promise_slow = await pool.urlopen(
+                    "GET", f"{self.https_url}/delay/3", multiplexed=True
+                )
+                promise_fast = await pool.urlopen(
+                    "GET", f"{self.https_url}/delay/1", multiplexed=True
+                )
 
                 assert isinstance(promise_fast, ResponsePromise)
                 assert isinstance(promise_slow, ResponsePromise)
@@ -60,10 +64,16 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
 
             for i in range(5):
                 promise_slow = await pool.urlopen(
-                    "GET", f"{self.https_url}/delay/3", multiplexed=True, preload_content=False
+                    "GET",
+                    f"{self.https_url}/delay/3",
+                    multiplexed=True,
+                    preload_content=False,
                 )
                 promise_fast = await pool.urlopen(
-                    "GET", f"{self.https_url}/delay/1", multiplexed=True, preload_content=False
+                    "GET",
+                    f"{self.https_url}/delay/1",
+                    multiplexed=True,
+                    preload_content=False,
                 )
 
                 assert isinstance(promise_fast, ResponsePromise)
@@ -97,7 +107,10 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
 
             for i in range(300):
                 promise = await pool.urlopen(
-                    "GET", f"{self.https_url}/delay/1", multiplexed=True, preload_content=False
+                    "GET",
+                    f"{self.https_url}/delay/1",
+                    multiplexed=True,
+                    preload_content=False,
                 )
                 assert isinstance(promise, ResponsePromise)
                 promises.append(promise)
