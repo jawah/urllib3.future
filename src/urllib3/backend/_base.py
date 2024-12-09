@@ -576,6 +576,10 @@ class BaseBackend:
         return not self._promises and not self._pending_responses
 
     @property
+    def max_stream_count(self) -> int:
+        raise NotImplementedError
+
+    @property
     def is_multiplexed(self) -> bool:
         raise NotImplementedError
 

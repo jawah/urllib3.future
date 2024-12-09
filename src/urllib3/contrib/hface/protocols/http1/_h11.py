@@ -151,8 +151,15 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def is_available(self) -> bool:
         return self._connection.our_state == self._connection.their_state == h11.IDLE
 
+    @property
+    def max_stream_count(self) -> int:
+        return 1
+
     def is_idle(self) -> bool:
-        return self.is_available()
+        return self._connection.their_state in {
+            h11.IDLE,
+            h11.MUST_CLOSE,
+        }
 
     def has_expired(self) -> bool:
         return self._terminated
@@ -283,7 +290,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     )
                 )
             elif isinstance(h11_event, h11.Data):
-                a(self._data_from_h11(h11_event))
+                a(DataReceived(self._current_stream_id, bytes(h11_event.data)))
             elif isinstance(h11_event, h11.EndOfMessage):
                 # HTTP/2 and HTTP/3 send END_STREAM flag with HEADERS and DATA frames.
                 # We emulate similar behavior for HTTP/1.
@@ -301,16 +308,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                 self._maybe_start_next_cycle()
             elif isinstance(h11_event, h11.ConnectionClosed):
                 a(self._connection_terminated())
-
-    def _headers_from_h11_response(
-        self, h11_event: h11.Response | h11.InformationalResponse
-    ) -> Event:
-        return HeadersReceived(
-            self._current_stream_id, headers_from_response(h11_event)
-        )
-
-    def _data_from_h11(self, h11_event: h11.Data) -> Event:
-        return DataReceived(self._current_stream_id, bytes(h11_event.data))
 
     def _connection_terminated(
         self, error_code: int = 0, message: str | None = None

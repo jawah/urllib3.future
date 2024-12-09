@@ -26,8 +26,11 @@ else:
 
 
 class TrafficState(int, Enum):
+    #: can be used to issue new request
     IDLE = 0
+    #: can be used to issue new request + have stream opened
     USED = 1
+    #: cannot be used to issue new request + have stream opened
     SATURATED = 2
 
 
@@ -48,10 +51,7 @@ class AtomicTraffic(TrafficPoliceFine, queue.Empty):
 
 
 def traffic_state_of(manageable_traffic: ManageableTraffic) -> TrafficState:
-    if (
-        getattr(manageable_traffic, "is_saturated", None)
-        and manageable_traffic.sock is not None  # type: ignore[union-attr]
-    ):
+    if getattr(manageable_traffic, "is_saturated", False):
         return TrafficState.SATURATED
     else:
         return TrafficState.IDLE if manageable_traffic.is_idle else TrafficState.USED
@@ -96,9 +96,21 @@ class TrafficPolice(typing.Generic[T]):
 
     @property
     def bag_only_idle(self) -> bool:
+        """All manageable traffic is idle. No activities for all entries."""
         with self._lock:
             return all(
                 traffic_state_of(_) == TrafficState.IDLE
+                for _ in self._registry.values()
+            )
+
+    @property
+    def bag_only_saturated(self) -> bool:
+        """All manageable traffic is saturated. No more capacity available."""
+        with self._lock:
+            if not self._registry:
+                return False
+            return all(
+                traffic_state_of(_) == TrafficState.SATURATED
                 for _ in self._registry.values()
             )
 

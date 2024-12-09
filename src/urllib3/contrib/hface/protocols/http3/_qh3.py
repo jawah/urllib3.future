@@ -41,11 +41,18 @@ from qh3 import (
     h3_events,
     quic_events,
 )
+from qh3.h3.connection import FrameType
 
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
 from ..._typing import AddressType, HeadersType
-from ...events import ConnectionTerminated, DataReceived, EarlyHeadersReceived, Event
+from ...events import (
+    ConnectionTerminated,
+    DataReceived,
+    EarlyHeadersReceived,
+    Event,
+    GoawayReceived,
+)
 from ...events import HandshakeCompleted as _HandshakeCompleted
 from ...events import HeadersReceived, StreamResetReceived
 from .._protocols import HTTP3Protocol
@@ -115,26 +122,39 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._terminated: bool = False
         self._data_in_flight: bool = False
         self._open_stream_count: int = 0
+        self._total_stream_count: int = 0
+        self._goaway_to_honor: bool = False
+        self._max_stream_count: int = (
+            100  # safe-default, broadly used. (and set by qh3)
+        )
+        self._max_frame_size: int | None = None
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
+    @property
+    def max_stream_count(self) -> int:
+        return self._max_stream_count
+
     def is_available(self) -> bool:
-        max_stream_bidi = 128  # todo: find a way to adapt dynamically to self._quic.max_concurrent_bidi_streams
         return (
             self._terminated is False
-            and max_stream_bidi > self._quic.open_outbound_streams
+            and self._max_stream_count > self._quic.open_outbound_streams
         )
 
     def is_idle(self) -> bool:
         return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
-        self._quic.handle_timer(monotonic())
-        if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
-            self._events.extend(self._map_quic_event(self._quic._close_event))
-        return self._terminated
+        if not self._terminated and not self._goaway_to_honor:
+            self._quic.handle_timer(monotonic())
+            if (
+                hasattr(self._quic, "_close_event")
+                and self._quic._close_event is not None
+            ):
+                self._events.extend(self._map_quic_event(self._quic._close_event))
+        return self._terminated or self._goaway_to_honor
 
     @property
     def session_ticket(self) -> SessionTicket | None:
@@ -161,6 +181,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> None:
         assert self._http is not None
         self._open_stream_count += 1
+        self._total_stream_count += 1
         self._http.send_headers(stream_id, list(headers), end_stream)
 
     def submit_data(
@@ -200,6 +221,37 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if self._data_in_flight:
             self._data_in_flight = False
 
+        # we want to perpetually mark the connection as "saturated"
+        if self._goaway_to_honor:
+            self._max_stream_count = self._open_stream_count
+        else:
+            # This section may confuse beginners
+            # See RFC 9000 -> 19.11.  MAX_STREAMS Frames
+            # footer extract:
+            # Note that these frames (and the corresponding transport parameters)
+            #    do not describe the number of streams that can be opened
+            #    concurrently.  The limit includes streams that have been closed as
+            #    well as those that are open.
+            #
+            # so, finding that remote_max_streams_bidi is increasing constantly is normal.
+            new_stream_limit = (
+                self._quic._remote_max_streams_bidi - self._total_stream_count
+            )
+
+            if (
+                new_stream_limit
+                and new_stream_limit != self._max_stream_count
+                and new_stream_limit > 0
+            ):
+                self._max_stream_count = new_stream_limit
+
+            if (
+                self._quic._remote_max_stream_data_bidi_remote
+                and self._quic._remote_max_stream_data_bidi_remote
+                != self._max_frame_size
+            ):
+                self._max_frame_size = self._quic._remote_max_stream_data_bidi_remote
+
     def bytes_to_send(self) -> bytes:
         now = monotonic()
 
@@ -230,8 +282,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if isinstance(quic_event, quic_events.HandshakeCompleted):
             yield _HandshakeCompleted(quic_event.alpn_protocol)
         elif isinstance(quic_event, quic_events.ConnectionTerminated):
-            self._terminated = True
-            yield ConnectionTerminated(quic_event.error_code, quic_event.reason_phrase)
+            if quic_event.frame_type == FrameType.GOAWAY.value:
+                self._goaway_to_honor = True
+                stream_list: list[int] = [
+                    e for e in self._events._matrix.keys() if e is not None
+                ]
+                yield GoawayReceived(stream_list[-1], quic_event.error_code)
+            else:
+                self._terminated = True
+                yield ConnectionTerminated(
+                    quic_event.error_code, quic_event.reason_phrase
+                )
         elif isinstance(quic_event, quic_events.StreamReset):
             self._open_stream_count -= 1
             yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)
@@ -467,3 +528,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def ping(self) -> None:
         self._quic.send_ping(randint(0, 65535))
+
+    def max_frame_size(self) -> int:
+        if self._max_frame_size is not None:
+            return self._max_frame_size
+
+        raise NotImplementedError
