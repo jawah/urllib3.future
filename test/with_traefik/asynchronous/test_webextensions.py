@@ -12,13 +12,23 @@ from urllib3.contrib.webextensions._async import (
     AsyncServerSideEventExtensionFromHTTP,
     AsyncWebSocketExtensionFromHTTP,
 )
-from urllib3.exceptions import ReadTimeoutError
+from urllib3.exceptions import ReadTimeoutError, URLSchemeUnknown
 
 from .. import TraefikTestCase
 
 
 @pytest.mark.asyncio
 class TestWebExtensions(TraefikTestCase):
+    async def test_unknown_implementation(self) -> None:
+        target_url = self.https_url
+        target_url = target_url.replace("https://", "wss+wzproto://")
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver, ca_certs=self.ca_authority
+        ) as pm:
+            with pytest.raises(URLSchemeUnknown):
+                await pm.urlopen("GET", target_url + "/websocket/echo")
+
     @pytest.mark.skipif(
         AsyncWebSocketExtensionFromHTTP is None, reason="test requires wsproto"
     )
@@ -38,7 +48,7 @@ class TestWebExtensions(TraefikTestCase):
         target_url = (
             target_url.replace("https://", "wss://")
             if target_protocol == "wss"
-            else target_url.replace("http://", "ws://")
+            else target_url.replace("http://", "ws+wsproto://")
         )
 
         async with AsyncPoolManager(

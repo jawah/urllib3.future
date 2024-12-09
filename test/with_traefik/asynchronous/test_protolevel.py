@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from json import JSONDecodeError
 
 import pytest
 
@@ -17,6 +18,7 @@ from urllib3.exceptions import InsecureRequestWarning, ProtocolError
 from urllib3.util import parse_url
 from urllib3.util.request import SKIP_HEADER
 
+from ... import LogRecorder
 from .. import TraefikTestCase
 
 
@@ -39,6 +41,37 @@ class TestProtocolLevel(TraefikTestCase):
                     headers={"Host": SKIP_HEADER},
                     retries=False,
                 )
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {":path": "/html"},
+            {":path": b"/html"},
+            {b":path": "/html"},
+            {b":path": b"/html"},
+        ],
+    )
+    async def test_override_pseudo_header(
+        self, override: dict[str | bytes, str | bytes]
+    ) -> None:
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+        ) as p:
+            r = await p.request(
+                "GET",
+                f"{self.https_url}/get",
+                headers=override,  # type: ignore[arg-type]
+            )
+
+            assert r.status == 200
+
+            with pytest.raises(JSONDecodeError):
+                await r.json()
+
+            assert b"<html>" in (await r.data)
 
     @pytest.mark.parametrize(
         "headers",
@@ -375,3 +408,90 @@ class TestProtocolLevel(TraefikTestCase):
             assert p.num_pings >= 1
 
         assert p._background_monitoring is None
+
+    async def test_goaway_handled_properly(self) -> None:
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_alt_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            keepalive_delay=None,
+            retries=False,
+        ) as p:
+            r = await p.urlopen("GET", "/get")
+
+            assert r.status == 200
+            assert r.version == 20
+
+            _ptr_conn_sock_a = list(p.pool._container.values())[  # type: ignore[union-attr]
+                0
+            ].sock  # warning: unsafe call
+
+            # we configured Traefik to send a Goaway after 10s
+            # no matter what happen. (only alt https port)
+            await asyncio.sleep(8)
+
+            # up to this point, the connection should receive a Goaway[...]
+            r = await p.urlopen("GET", "/get")
+
+            assert r.status == 200
+            assert r.version == 20
+
+            _ptr_conn_sock_b = list(p.pool._container.values())[  # type: ignore[union-attr]
+                0
+            ].sock  # warning: unsafe call
+
+            # the first conn should have been removed / closed properly.
+            assert _ptr_conn_sock_a is not None
+            assert _ptr_conn_sock_b is None
+
+            _ptr_conn_sock_a = None  # free the ref.
+
+            from urllib3._async.connectionpool import log as cp_logger
+
+            with LogRecorder(target=cp_logger) as logs:
+                # A new handshake should occur here!
+                r = await p.urlopen("GET", "/get")
+
+            assert any(
+                f"Resetting dropped connection: {self.host}" in log.message
+                for log in logs
+            )
+
+            assert r.status == 200
+            assert r.version == 20
+
+    @pytest.mark.parametrize(
+        "disabled_svn",
+        [
+            {
+                HttpVersion.h11,
+                HttpVersion.h2,
+            },
+            {
+                HttpVersion.h11,
+                HttpVersion.h3,
+            },
+            {
+                HttpVersion.h2,
+                HttpVersion.h3,
+            },
+        ],
+    )
+    async def test_unknown_http_code_handling(
+        self, disabled_svn: set[HttpVersion]
+    ) -> None:
+        if HttpVersion.h3 not in disabled_svn and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3")
+
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            disabled_svn=disabled_svn,
+        ) as p:
+            r = await p.urlopen("GET", "/status/598")
+
+            assert r.status == 598
+            assert r.reason == "Unknown"

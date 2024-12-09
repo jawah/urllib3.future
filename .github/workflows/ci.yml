@@ -52,6 +52,30 @@ jobs:
         include:
           - experimental: false
             traefik-server: true
+          - traefik-server: false
+            nox-session: test_ssl_large_resources
+            python-version: "3.7"
+            os: windows-2022
+          - traefik-server: false
+            nox-session: test_ssl_large_resources
+            python-version: "3.9"
+            os: windows-2022
+          - traefik-server: false
+            nox-session: test_ssl_large_resources
+            python-version: "3.13"
+            os: windows-2022
+          - traefik-server: false
+            nox-session: test_ssl_large_resources
+            python-version: "3.7"
+            os: ubuntu-20.04
+          - traefik-server: false
+            nox-session: test_ssl_large_resources
+            python-version: "3.9"
+            os: ubuntu-22.04
+          - traefik-server: false
+            nox-session: test_ssl_large_resources
+            python-version: "3.13"
+            os: ubuntu-22.04
           - experimental: true
             python-version: "3.14"
             os: ubuntu-22.04

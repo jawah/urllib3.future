@@ -292,7 +292,7 @@ async def test_many_resolver_host_constraint_distribution() -> None:
 @pytest.mark.parametrize(
     "dns_url",
     [
-        "doh+google://",
+        "doh+google://default/?timeout=1",
         "doh+cloudflare://",
         "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",

@@ -4,8 +4,8 @@ services:
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
-      interval: 3s
-      timeout: 3s
+      interval: 10s
+      timeout: 10s
       retries: 10
     ports:
       - target: 8888
@@ -61,7 +61,10 @@ services:
       - --api.dashboard=false
       # Enable healthcheck
       - --ping
-      - --log.level=INFO
+      - --log.level=ERROR
+      # Set auto Goaway send for testing purposes (HTTP/1 or HTTP/2)
+      # Sadly unsupported for HTTP/3!
+      - --entrypoints.alt-https.transport.keepAliveMaxTime=5s
 
   httpbin:
     image: jawah/httpbin:windows
