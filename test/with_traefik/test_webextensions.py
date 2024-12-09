@@ -11,12 +11,20 @@ from urllib3.contrib.webextensions import (
     ServerSideEventExtensionFromHTTP,
     WebSocketExtensionFromHTTP,
 )
-from urllib3.exceptions import ReadTimeoutError
+from urllib3.exceptions import ReadTimeoutError, URLSchemeUnknown
 
 from . import TraefikTestCase
 
 
 class TestWebExtensions(TraefikTestCase):
+    def test_unknown_implementation(self) -> None:
+        target_url = self.https_url
+        target_url = target_url.replace("https://", "wss+wzproto://")
+
+        with PoolManager(resolver=self.test_resolver, ca_certs=self.ca_authority) as pm:
+            with pytest.raises(URLSchemeUnknown):
+                pm.urlopen("GET", target_url + "/websocket/echo")
+
     @pytest.mark.skipif(
         WebSocketExtensionFromHTTP is None, reason="test requires wsproto"
     )
@@ -36,7 +44,7 @@ class TestWebExtensions(TraefikTestCase):
         target_url = (
             target_url.replace("https://", "wss://")
             if target_protocol == "wss"
-            else target_url.replace("http://", "ws://")
+            else target_url.replace("http://", "ws+wsproto://")
         )
 
         with PoolManager(resolver=self.test_resolver, ca_certs=self.ca_authority) as pm:

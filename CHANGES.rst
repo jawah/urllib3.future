@@ -1,3 +1,15 @@
+2.12.903 (2024-12-09)
+=====================
+
+- Minor improvements on our algorithm that manage multiplexed connection.
+  A) We ensured that when a remote peer sent a Goaway frame, we keep the connection alive just long enough that you may
+  retrieve all remaining data/response pending.
+  B) HTTP/3 max stream limit was not calculated properly (and in real time) thus causing undesirable additional latency in rare cases.
+  C) Implement ``is_saturated`` for ``ConnectionPool`` to get a hint on whether all allocatable stream are busy.
+- Removed unused code from older version of urllib3-future ``HTTPProtocolFactory.has(...)`` and ``ResolverFactory.has(...)``.
+- Fixed using "very-specific" scheme for supported web extension like ``ws+wsproto://...`` for ws=plain websocket and wsproto=implementation.
+- Reworking the test suite to revamp our coverage target toward 100%.
+
 2.12.902 (2024-12-06)
 =====================
 

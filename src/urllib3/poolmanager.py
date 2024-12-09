@@ -427,12 +427,13 @@ class PoolManager(RequestMethods):
         pool_key_constructor = self.key_fn_by_scheme.get(scheme)
 
         if pool_key_constructor is None:
+            target_scheme, target_implementation = parse_extension(scheme)
             try:
-                extension = load_extension(*parse_extension(scheme))
+                extension = load_extension(target_scheme, target_implementation)
             except ImportError:
                 pass
             else:
-                scheme = extension.scheme_to_http_scheme(scheme)
+                scheme = extension.scheme_to_http_scheme(target_scheme)
 
                 pool_key_constructor = self.key_fn_by_scheme.get(scheme)
 

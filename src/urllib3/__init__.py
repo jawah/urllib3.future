@@ -97,7 +97,7 @@ if (
     environ.get("SSHKEYLOGFILE", None) is not None
     or environ.get("QUICLOGDIR", None) is not None
 ):
-    warnings.warn(
+    warnings.warn(  # Defensive: security warning only. not feature.
         "urllib3.future detected that development/debug environment variable are set. "
         "If you are unaware of it please audit your environment. "
         "Variables 'SSHKEYLOGFILE' and 'QUICLOGDIR' can only be set in a non-production environment.",
@@ -136,22 +136,13 @@ def request(
     retries: Retry | bool | int | None = None,
     timeout: Timeout | float | int | None = 3,
     json: typing.Any | None = None,
-    multiplexed: bool = False,
 ) -> HTTPResponse:
     """
     A convenience, top-level request method. It uses a module-global ``PoolManager`` instance.
     Therefore, its side effects could be shared across dependencies relying on it.
     To avoid side effects create a new ``PoolManager`` instance and use it instead.
-    The method does not accept low-level ``**urlopen_kw`` keyword arguments neither does
-    it issue multiplexed/concurrent request.
+    The method does not accept low-level ``**urlopen_kw``.
     """
-
-    if multiplexed:
-        warnings.warn(
-            "Setting multiplexed=True in urllib3.request top-level function is a no-op. "
-            "Use a local PoolManager or HTTPPoolConnection instead.",
-            UserWarning,
-        )
 
     return _DEFAULT_POOL.request(
         method,

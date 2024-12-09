@@ -151,12 +151,18 @@ class HfaceBackend(BaseBackend):
     @property
     def is_saturated(self) -> bool:
         if self._protocol is None:
-            return True
+            return False
         # is_available also includes whether we must goaway
         # we want to focus on stream capacity here.
         if self._protocol.is_available() is False:
             return self._protocol.has_expired() is False
         return False
+
+    @property
+    def max_stream_count(self) -> int:
+        if self._protocol is None:
+            return 0
+        return self._protocol.max_stream_count
 
     @property
     def is_multiplexed(self) -> bool:
@@ -1368,7 +1374,7 @@ class HfaceBackend(BaseBackend):
                 pass  # Hmm... this should be impossible.
 
             # remote can refuse future inquiries, so no need to go further with this conn.
-            if self._protocol.has_expired():  # type: ignore[union-attr]
+            if self._protocol.is_idle() and self._protocol.has_expired():  # type: ignore[union-attr]
                 self.close()
             return b"", True, None
 
@@ -1395,7 +1401,7 @@ class HfaceBackend(BaseBackend):
                 pass  # Hmm... this should be impossible.
 
             # remote can refuse future inquiries, so no need to go further with this conn.
-            if self._protocol.has_expired():  # type: ignore[union-attr]
+            if self._protocol.is_idle() and self._protocol.has_expired():  # type: ignore[union-attr]
                 self.close()
             elif self.is_idle:
                 # probe for h3/quic if available, and remember it.

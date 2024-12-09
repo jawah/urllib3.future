@@ -5,26 +5,29 @@ from time import time
 
 import pytest
 
-from urllib3 import HTTPSConnectionPool, ResponsePromise, Retry
+from urllib3 import AsyncPoolManager, ResponsePromise, Retry
 from urllib3.exceptions import MaxRetryError
 
-from . import TraefikTestCase
+from .. import TraefikTestCase
 
 
-class TestConnectionPoolMultiplexed(TraefikTestCase):
+@pytest.mark.asyncio
+class TestPoolManagerMultiplexed(TraefikTestCase):
     @notMacOS()
-    def test_multiplexing_fastest_to_slowest(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+    async def test_multiplexing_fastest_to_slowest(self) -> None:
+        async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_async_resolver,
         ) as pool:
             promises = []
 
             for i in range(5):
-                promise_slow = pool.urlopen("GET", "/delay/3", multiplexed=True)
-                promise_fast = pool.urlopen("GET", "/delay/1", multiplexed=True)
+                promise_slow = await pool.urlopen(
+                    "GET", f"{self.https_url}/delay/3", multiplexed=True
+                )
+                promise_fast = await pool.urlopen(
+                    "GET", f"{self.https_url}/delay/1", multiplexed=True
+                )
 
                 assert isinstance(promise_fast, ResponsePromise)
                 assert isinstance(promise_slow, ResponsePromise)
@@ -36,37 +39,41 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             before = time()
 
             for i in range(5):
-                response = pool.get_response()
+                response = await pool.get_response()
                 assert response is not None
                 assert response.status == 200
-                assert "/delay/1" in response.json()["url"]
+                assert "/delay/1" in (await response.json())["url"]
 
             assert 1.5 >= round(time() - before, 2)
 
             for i in range(5):
-                response = pool.get_response()
+                response = await pool.get_response()
                 assert response is not None
                 assert response.status == 200
-                assert "/delay/3" in response.json()["url"]
+                assert "/delay/3" in (await response.json())["url"]
 
             assert 3.5 >= round(time() - before, 2)
-            assert pool.get_response() is None
+            assert await pool.get_response() is None
 
-    def test_multiplexing_without_preload(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+    async def test_multiplexing_without_preload(self) -> None:
+        async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_async_resolver,
         ) as pool:
             promises = []
 
             for i in range(5):
-                promise_slow = pool.urlopen(
-                    "GET", "/delay/3", multiplexed=True, preload_content=False
+                promise_slow = await pool.urlopen(
+                    "GET",
+                    f"{self.https_url}/delay/3",
+                    multiplexed=True,
+                    preload_content=False,
                 )
-                promise_fast = pool.urlopen(
-                    "GET", "/delay/1", multiplexed=True, preload_content=False
+                promise_fast = await pool.urlopen(
+                    "GET",
+                    f"{self.https_url}/delay/1",
+                    multiplexed=True,
+                    preload_content=False,
                 )
 
                 assert isinstance(promise_fast, ResponsePromise)
@@ -77,48 +84,46 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             assert len(promises) == 10
 
             for i in range(5):
-                response = pool.get_response()
+                response = await pool.get_response()
                 assert response is not None
                 assert response.status == 200
-                assert "/delay/1" in response.json()["url"]
+                assert "/delay/1" in (await response.json())["url"]
 
             for i in range(5):
-                response = pool.get_response()
+                response = await pool.get_response()
                 assert response is not None
                 assert response.status == 200
-                assert "/delay/3" in response.json()["url"]
+                assert "/delay/3" in (await response.json())["url"]
 
-            assert pool.get_response() is None
+            assert await pool.get_response() is None
 
     @notMacOS()
-    def test_multiplexing_stream_saturation(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+    async def test_multiplexing_stream_saturation(self) -> None:
+        async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            maxsize=2,
-            resolver=self.test_resolver,
+            resolver=self.test_async_resolver,
         ) as pool:
             promises = []
 
             for i in range(300):
-                promise = pool.urlopen(
-                    "GET", "/delay/1", multiplexed=True, preload_content=False
+                promise = await pool.urlopen(
+                    "GET",
+                    f"{self.https_url}/delay/1",
+                    multiplexed=True,
+                    preload_content=False,
                 )
                 assert isinstance(promise, ResponsePromise)
                 promises.append(promise)
 
             assert len(promises) == 300
-            assert pool.num_connections == 2
 
             for i in range(300):
-                response = pool.get_response()
+                response = await pool.get_response()
                 assert response is not None
                 assert response.status == 200
-                assert "/delay/1" in response.json()["url"]
+                assert "/delay/1" in (await response.json())["url"]
 
-            assert pool.get_response() is None
-            assert pool.pool is not None and pool.num_connections == 2
+            assert await pool.get_response() is None
 
     @pytest.mark.parametrize(
         "depth, max_retries",
@@ -173,19 +178,17 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             ),
         ],
     )
-    def test_multiplexing_with_redirect(
+    async def test_multiplexing_with_redirect(
         self, depth: int, max_retries: int | None
     ) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+        async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_async_resolver,
         ) as pool:
             retry = Retry(redirect=max_retries) if max_retries is not None else None
-            promise = pool.urlopen(
+            promise = await pool.urlopen(
                 "GET",
-                f"/redirect/{depth}",
+                f"{self.https_url}/redirect/{depth}",
                 redirect=True,
                 retries=retry,
                 multiplexed=True,
@@ -199,21 +202,19 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 and depth > Retry.DEFAULT.total
             ):
                 with pytest.raises(MaxRetryError):
-                    pool.get_response(promise=promise)
+                    await pool.get_response(promise=promise)
             else:
-                response = pool.get_response(promise=promise)
+                response = await pool.get_response(promise=promise)
 
                 assert response is not None
                 assert response.url is not None
                 assert "/redirect" not in response.url
                 assert 200 == response.status
 
-    def test_retries_in_multiplexed_mode(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+    async def test_retries_in_multiplexed_mode(self) -> None:
+        async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_async_resolver,
         ) as pool:
             retry = Retry(
                 16, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
@@ -233,9 +234,9 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
             for _ in range(32):
                 promises.append(
-                    pool.urlopen(
+                    await pool.urlopen(
                         "GET",
-                        "/unstable?failure_rate=0.4",
+                        f"{self.https_url}/unstable?failure_rate=0.4",
                         redirect=True,
                         retries=retry,
                         multiplexed=True,
@@ -245,7 +246,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             responses = []
 
             for promise in promises:
-                responses.append(pool.get_response(promise=promise))
+                responses.append(await pool.get_response(promise=promise))
 
             for response in responses:
                 assert response is not None

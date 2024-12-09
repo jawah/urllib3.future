@@ -47,21 +47,25 @@ class NullResolver(BaseResolver):
         ]
     ]:
         if host is None:
-            host = "localhost"
+            host = "localhost"  # Defensive: stdlib cpy behavior
 
         if port is None:
-            port = 0
+            port = 0  # Defensive: stdlib cpy behavior
         if isinstance(port, str):
-            port = int(port)
+            port = int(port)  # Defensive: stdlib cpy behavior
         if port < 0:
-            raise socket.gaierror("Servname not supported for ai_socktype")
+            raise socket.gaierror(
+                "Servname not supported for ai_socktype"
+            )  # Defensive: stdlib cpy behavior
 
         if isinstance(host, bytes):
-            host = host.decode("ascii")
+            host = host.decode("ascii")  # Defensive: stdlib cpy behavior
 
         if is_ipv4(host):
             if family == socket.AF_INET6:
-                raise socket.gaierror("Address family for hostname not supported")
+                raise socket.gaierror(
+                    "Address family for hostname not supported"
+                )  # Defensive: stdlib cpy behavior
             return [
                 (
                     socket.AF_INET,
@@ -76,7 +80,9 @@ class NullResolver(BaseResolver):
             ]
         elif is_ipv6(host):
             if family == socket.AF_INET:
-                raise socket.gaierror("Address family for hostname not supported")
+                raise socket.gaierror(
+                    "Address family for hostname not supported"
+                )  # Defensive: stdlib cpy behavior
             return [
                 (
                     socket.AF_INET6,

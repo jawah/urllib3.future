@@ -5,26 +5,28 @@ from time import time
 
 import pytest
 
-from urllib3 import HTTPSConnectionPool, ResponsePromise, Retry
+from urllib3 import PoolManager, ResponsePromise, Retry
 from urllib3.exceptions import MaxRetryError
 
 from . import TraefikTestCase
 
 
-class TestConnectionPoolMultiplexed(TraefikTestCase):
+class TestPoolManagerMultiplexed(TraefikTestCase):
     @notMacOS()
     def test_multiplexing_fastest_to_slowest(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+        with PoolManager(
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
         ) as pool:
             promises = []
 
             for i in range(5):
-                promise_slow = pool.urlopen("GET", "/delay/3", multiplexed=True)
-                promise_fast = pool.urlopen("GET", "/delay/1", multiplexed=True)
+                promise_slow = pool.urlopen(
+                    "GET", f"{self.https_url}/delay/3", multiplexed=True
+                )
+                promise_fast = pool.urlopen(
+                    "GET", f"{self.https_url}/delay/1", multiplexed=True
+                )
 
                 assert isinstance(promise_fast, ResponsePromise)
                 assert isinstance(promise_slow, ResponsePromise)
@@ -53,9 +55,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             assert pool.get_response() is None
 
     def test_multiplexing_without_preload(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+        with PoolManager(
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
         ) as pool:
@@ -63,10 +63,16 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
             for i in range(5):
                 promise_slow = pool.urlopen(
-                    "GET", "/delay/3", multiplexed=True, preload_content=False
+                    "GET",
+                    f"{self.https_url}/delay/3",
+                    multiplexed=True,
+                    preload_content=False,
                 )
                 promise_fast = pool.urlopen(
-                    "GET", "/delay/1", multiplexed=True, preload_content=False
+                    "GET",
+                    f"{self.https_url}/delay/1",
+                    multiplexed=True,
+                    preload_content=False,
                 )
 
                 assert isinstance(promise_fast, ResponsePromise)
@@ -92,24 +98,23 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
     @notMacOS()
     def test_multiplexing_stream_saturation(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+        with PoolManager(
             ca_certs=self.ca_authority,
-            maxsize=2,
             resolver=self.test_resolver,
         ) as pool:
             promises = []
 
             for i in range(300):
                 promise = pool.urlopen(
-                    "GET", "/delay/1", multiplexed=True, preload_content=False
+                    "GET",
+                    f"{self.https_url}/delay/1",
+                    multiplexed=True,
+                    preload_content=False,
                 )
                 assert isinstance(promise, ResponsePromise)
                 promises.append(promise)
 
             assert len(promises) == 300
-            assert pool.num_connections == 2
 
             for i in range(300):
                 response = pool.get_response()
@@ -118,7 +123,6 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 assert "/delay/1" in response.json()["url"]
 
             assert pool.get_response() is None
-            assert pool.pool is not None and pool.num_connections == 2
 
     @pytest.mark.parametrize(
         "depth, max_retries",
@@ -176,16 +180,14 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
     def test_multiplexing_with_redirect(
         self, depth: int, max_retries: int | None
     ) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+        with PoolManager(
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
         ) as pool:
             retry = Retry(redirect=max_retries) if max_retries is not None else None
             promise = pool.urlopen(
                 "GET",
-                f"/redirect/{depth}",
+                f"{self.https_url}/redirect/{depth}",
                 redirect=True,
                 retries=retry,
                 multiplexed=True,
@@ -209,9 +211,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 assert 200 == response.status
 
     def test_retries_in_multiplexed_mode(self) -> None:
-        with HTTPSConnectionPool(
-            self.host,
-            self.https_port,
+        with PoolManager(
             ca_certs=self.ca_authority,
             resolver=self.test_resolver,
         ) as pool:
@@ -235,7 +235,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 promises.append(
                     pool.urlopen(
                         "GET",
-                        "/unstable?failure_rate=0.4",
+                        f"{self.https_url}/unstable?failure_rate=0.4",
                         redirect=True,
                         retries=retry,
                         multiplexed=True,

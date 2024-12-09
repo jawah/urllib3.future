@@ -23,7 +23,6 @@ from typing import Any, Sequence
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
-from .._error_codes import HTTPErrorCodes
 from .._typing import HeadersType
 from ..events import Event
 
@@ -163,21 +162,16 @@ class HTTPProtocol(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    @property
+    @abstractmethod
+    def max_stream_count(self) -> int:
+        """Determine how much concurrent stream the connection can handle."""
+        raise NotImplementedError
+
     @abstractmethod
     def is_idle(self) -> bool:
         """
         Return True if this connection is BOTH available and not doing anything.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def error_codes(self) -> HTTPErrorCodes:
-        """
-        Error codes for the HTTP version of this protocol.
-
-        These error codes can be used when a stream is reset
-        or when a GOAWAY frame is sent.
         """
         raise NotImplementedError
 
@@ -341,12 +335,6 @@ class HTTP1Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):
     ) -> bool | None:
         return NotImplemented
 
-    error_codes = HTTPErrorCodes(
-        protocol_error=400,
-        internal_error=500,
-        connect_error=502,
-    )
-
 
 class HTTP2Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):
     """
@@ -360,12 +348,6 @@ class HTTP2Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):
     def multiplexed(self) -> bool:
         return True
 
-    error_codes = HTTPErrorCodes(
-        protocol_error=0x01,
-        internal_error=0x02,
-        connect_error=0x0A,
-    )
-
 
 class HTTP3Protocol(HTTPOverQUICProtocol, metaclass=ABCMeta):
     """
@@ -378,9 +360,3 @@ class HTTP3Protocol(HTTPOverQUICProtocol, metaclass=ABCMeta):
     @property
     def multiplexed(self) -> bool:
         return True
-
-    error_codes = HTTPErrorCodes(
-        protocol_error=0x0101,
-        internal_error=0x0102,
-        connect_error=0x010F,
-    )

@@ -99,6 +99,16 @@ class AsyncTrafficPolice(typing.Generic[T]):
             traffic_state_of(_) == TrafficState.IDLE for _ in self._registry.values()
         )
 
+    @property
+    def bag_only_saturated(self) -> bool:
+        """All manageable traffic is saturated. No more capacity available."""
+        if not self._registry:
+            return False
+        return all(
+            traffic_state_of(_) == TrafficState.SATURATED
+            for _ in self._registry.values()
+        )
+
     async def wait_for_unallocated_or_available_slot(
         self, timeout: float | None = None
     ) -> None:

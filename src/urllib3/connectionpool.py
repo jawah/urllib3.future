@@ -352,7 +352,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 "urllib3.util.traffic_police.TrafficPolice if necessary.",
                 DeprecationWarning,
             )
-            self.QueueCls = TrafficPolice
+            self.QueueCls = TrafficPolice  # Defensive: auto fallback on known safe structure for HTTP/2+
 
         self.pool: TrafficPolice[HTTPConnection] | None = self.QueueCls(maxsize)
         self.block = block
@@ -471,6 +471,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
     @property
     def is_idle(self) -> bool:
         return self.pool is None or self.pool.bag_only_idle
+
+    @property
+    def is_saturated(self) -> bool:
+        return self.pool is not None and self.pool.bag_only_saturated
 
     def _new_conn(self, *, heb_timeout: Timeout | None = None) -> HTTPConnection:
         """

@@ -110,21 +110,27 @@ class PlainResolver(BaseResolver):
         ]
     ]:
         if host is None:
-            raise socket.gaierror("Tried to resolve 'localhost' from a PlainResolver")
+            raise socket.gaierror(  # Defensive: stdlib cpy behavior
+                "Tried to resolve 'localhost' from a PlainResolver"
+            )
 
         if port is None:
-            port = 0
+            port = 0  # Defensive: stdlib cpy behavior
         if isinstance(port, str):
-            port = int(port)
+            port = int(port)  # Defensive: stdlib cpy behavior
         if port < 0:
-            raise socket.gaierror("Servname not supported for ai_socktype")
+            raise socket.gaierror(  # Defensive: stdlib cpy behavior
+                "Servname not supported for ai_socktype"
+            )
 
         if isinstance(host, bytes):
-            host = host.decode("ascii")
+            host = host.decode("ascii")  # Defensive: stdlib cpy behavior
 
         if is_ipv4(host):
             if family == socket.AF_INET6:
-                raise socket.gaierror("Address family for hostname not supported")
+                raise socket.gaierror(  # Defensive: stdlib cpy behavior
+                    "Address family for hostname not supported"
+                )
             return [
                 (
                     socket.AF_INET,
@@ -139,7 +145,9 @@ class PlainResolver(BaseResolver):
             ]
         elif is_ipv6(host):
             if family == socket.AF_INET:
-                raise socket.gaierror("Address family for hostname not supported")
+                raise socket.gaierror(  # Defensive: stdlib cpy behavior
+                    "Address family for hostname not supported"
+                )
             return [
                 (
                     socket.AF_INET6,

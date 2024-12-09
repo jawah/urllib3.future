@@ -24,12 +24,17 @@ def test_single_ev_in_matrix() -> None:
 def test_flat_stream_matrix() -> None:
     sm = StreamMatrix()
 
+    assert bool(sm) is False
+
     sm.append(HandshakeCompleted("h2"))
     sm.append(HeadersReceived(4, (), True))
     sm.append(HeadersReceived(7, (), False))
     sm.append(DataReceived(7, b"foo", False))
     sm.append(DataReceived(7, b"", True))
     sm.append(ConnectionTerminated())
+
+    assert bool(sm) is True
+    assert len(sm) == 6
 
     assert isinstance(sm.popleft(), HandshakeCompleted)
     cursor_ev = sm.popleft()

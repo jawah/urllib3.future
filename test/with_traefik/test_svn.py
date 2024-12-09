@@ -305,6 +305,8 @@ class TestSvnCapability(TraefikTestCase):
         assert resp.version == 20
         assert resp.status == 200
 
+        conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     def test_pool_manager_quic_cache(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()

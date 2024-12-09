@@ -38,45 +38,6 @@ from ._protocols import HTTPOverQUICProtocol, HTTPOverTCPProtocol, HTTPProtocol
 
 class HTTPProtocolFactory(metaclass=ABCMeta):
     @staticmethod
-    def has(
-        type_protocol: type[HTTPProtocol],
-        implementation: str | None = None,
-    ) -> bool:
-        assert (
-            type_protocol != HTTPProtocol
-        ), "HTTPProtocol is ambiguous and cannot be requested in the factory."
-
-        package_name: str = __name__.split(".")[0]
-
-        version_target: str = "".join(
-            c for c in str(type_protocol).replace(package_name, "") if c.isdigit()
-        )
-        module_expr: str = f".protocols.http{version_target}"
-
-        if implementation:
-            module_expr += f"._{implementation.lower()}"
-
-        try:
-            http_module = importlib.import_module(
-                module_expr, f"{package_name}.contrib.hface"
-            )
-        except ImportError:
-            return False
-
-        implementations: list[
-            tuple[str, type[HTTPOverQUICProtocol | HTTPOverTCPProtocol]]
-        ] = inspect.getmembers(
-            http_module,
-            lambda e: isinstance(e, type)
-            and issubclass(e, (HTTPOverQUICProtocol, HTTPOverTCPProtocol)),
-        )
-
-        if not implementations:
-            return False
-
-        return True
-
-    @staticmethod
     def new(
         type_protocol: type[HTTPProtocol],
         implementation: str | None = None,

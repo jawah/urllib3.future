@@ -18,12 +18,8 @@ class StreamMatrix:
     def __len__(self) -> int:
         return self._count
 
-    def __iadd__(self, other: typing.Iterable[Event]) -> StreamMatrix:
-        self.extend(other)
-        return self
-
     def __bool__(self) -> bool:
-        return self.count() > 0
+        return self._count > 0
 
     @property
     def streams(self) -> list[int]:

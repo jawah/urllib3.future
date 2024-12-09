@@ -51,7 +51,7 @@ class ConnectionTerminated(Event):
     #: Optional message with more information
     message: str | None = field(default=None, compare=False)
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return f"{cls}(error_code={self.error_code!r}, message={self.message!r})"
 
@@ -70,7 +70,7 @@ class GoawayReceived(Event):
     #: Reason for closing the connection.
     error_code: int = 0
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return (
             f"{cls}(last_stream_id={self.last_stream_id!r}, "
@@ -115,7 +115,7 @@ class StreamReset(StreamEvent):
     #: Reason for closing the stream.
     error_code: int = 0
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return f"{cls}(stream_id={self.stream_id!r}, error_code={self.error_code!r})"
 
@@ -147,7 +147,7 @@ class StreamResetSent(StreamReset):
 class HandshakeCompleted(Event):
     alpn_protocol: str | None
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return f"{cls}(alpn={self.alpn_protocol})"
 
@@ -166,7 +166,7 @@ class HeadersReceived(StreamEvent):
     #: Signals that data will not be sent by the peer over the stream.
     end_stream: bool = False
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return (
             f"{cls}(stream_id={self.stream_id!r}, "
@@ -188,7 +188,7 @@ class DataReceived(StreamEvent):
     #: Signals that no more data will be sent by the peer over the stream.
     end_stream: bool = False
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return (
             f"{cls}(stream_id={self.stream_id!r}, "
@@ -201,7 +201,7 @@ class EarlyHeadersReceived(StreamEvent):
     #: The received HTTP headers
     headers: HeadersType
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return (
             f"{cls}(stream_id={self.stream_id!r}, "

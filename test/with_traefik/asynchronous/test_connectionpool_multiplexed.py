@@ -209,3 +209,50 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 assert response.url is not None
                 assert "/redirect" not in response.url
                 assert 200 == response.status
+
+    async def test_retries_in_multiplexed_mode(self) -> None:
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+        ) as pool:
+            retry = Retry(
+                16, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
+            )
+
+            incr = 0
+            bck_method = Retry.increment
+
+            def _catch_increment_done_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal bck_method, incr
+                incr += 1
+                return bck_method(*args, **kwargs)
+
+            Retry.increment = _catch_increment_done_once  # type: ignore[method-assign]
+
+            promises = []
+
+            for _ in range(32):
+                promises.append(
+                    await pool.urlopen(
+                        "GET",
+                        "/unstable?failure_rate=0.4",
+                        redirect=True,
+                        retries=retry,
+                        multiplexed=True,
+                    )
+                )
+
+            responses = []
+
+            for promise in promises:
+                responses.append(await pool.get_response(promise=promise))
+
+            for response in responses:
+                assert response is not None
+                assert response.status == 200
+
+            Retry.increment = bck_method  # type: ignore[method-assign]
+
+            assert incr > 0
