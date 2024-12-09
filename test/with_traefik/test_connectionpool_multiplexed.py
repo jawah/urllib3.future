@@ -235,7 +235,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 promises.append(
                     pool.urlopen(
                         "GET",
-                        "/unstable?failure_rate=0.3",
+                        "/unstable?failure_rate=0.4",
                         redirect=True,
                         retries=retry,
                         multiplexed=True,

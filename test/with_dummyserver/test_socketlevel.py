@@ -1637,8 +1637,7 @@ class TestSSL(SocketDummyServerTestCase):
         assert server_closed.wait(LONG_TIMEOUT), "The socket was not terminated"
 
     @pytest.mark.skipif(
-        os.environ.get("CI") is not None
-        or os.environ.get("GITHUB_ACTIONS") is not None,
+        os.environ.get("CI") is not None,
         reason="too slow to run in CI",
     )
     @pytest.mark.parametrize(
