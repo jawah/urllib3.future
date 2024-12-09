@@ -218,7 +218,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             resolver=self.test_async_resolver,
         ) as pool:
             retry = Retry(
-                10, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
+                16, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
             )
 
             incr = 0
@@ -233,7 +233,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
             promises = []
 
-            for _ in range(16):
+            for _ in range(32):
                 promises.append(
                     await pool.urlopen(
                         "GET",
