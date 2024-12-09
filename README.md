@@ -80,7 +80,7 @@ asyncio.run(main())
 urllib3.future can be installed with [pip](https://pip.pypa.io):
 
 ```bash
-$ python -m pip install urllib3.future
+python -m pip install urllib3.future
 ```
 
 You either do 
@@ -104,6 +104,7 @@ FROM python:3.12
 RUN pip install .
 # then! (after every other pip call)
 RUN pip install urllib3-future
+# that is it! enjoy a descent http client, as we would expect in late 2024...
 ```
 
 Doing `import urllib3_future` is the safest option if you start a project from scratch for you as there is a significant number of projects that
@@ -183,7 +184,7 @@ Yes! We have some funds coming in regularly to ensure its sustainability.
 
 You can easily do so:
 
-```
+```shell
 # remove both
 python -m pip uninstall -y urllib3 urllib3-future
 # reinstate legacy urllib3
@@ -192,7 +193,7 @@ python -m pip install urllib3
 
 OK! How to let them both?
 
-```
+```shell
 # remove both
 python -m pip uninstall -y urllib3 urllib3-future
 # install urllib3-future
@@ -216,7 +217,7 @@ This applies to every package you wish to install and brings indirectly urllib3-
 - **Can you guarantee us that everything will go smooth?**
 
 Guarantee is a strong word with a lot of (legal) implication. We cannot offer a "guarantee".
-But, we answer and solve issues in a timely manner as you may have seen in our tracker.
+Yet, we answer and solve issues in a timely manner as you may have seen in our tracker.
 
 We take a lot of precaution with this fork, and we welcome any contribution at the sole condition
 that you don't break the compatibility between the projects. Namely, urllib3 and urllib3-future.
@@ -242,7 +243,7 @@ Make sure everything passes before submitting a PR, unless you need guidance on 
 
 After applying your patch, run (Unix, Linux):
 
-```
+```shell
 ./ci/run_legacy_openssl.sh
 ./ci/run_legacy_libressl.sh
 ./ci/run_dockerized.sh
@@ -255,7 +256,7 @@ If the tests all passes, then it is a firm good start.
 
 Complete them with:
 
-```
+```shell
 nox -s downstream_requests
 nox -s downstream_niquests
 nox -s downstream_boto3
@@ -264,7 +265,7 @@ nox -s downstream_sphinx
 
 Finally make sure to fix any lint errors:
 
-```
+```shell
 nox -s lint
 ```
 
@@ -283,7 +284,7 @@ You should _always_ install the downstream project prior to this fork. It is com
 
 e.g. I want `requests` to be use this package.
 
-```
+```shell
 python -m pip install requests
 python -m pip install urllib3.future
 ```
@@ -300,7 +301,7 @@ Although it is not made mandatory to run the test suite, it is strongly recommen
 
 You should have docker installed and the compose plugin available. The rest will be handled automatically.
 
-```
+```shell
 python -m pip install nox
 nox -s test-3.11
 ```
@@ -310,7 +311,7 @@ Both Traefik and httpbin are written in golang.
 
 You may prevent the containers from starting by passing the following environment variable:
 
-```
+```shell
 TRAEFIK_HTTPBIN_ENABLE=false nox -s test-3.11
 ```
 
@@ -324,7 +325,8 @@ urllib3.future happily accepts contributions.
 
 ## Security Disclosures
 
-To report a security vulnerability, please use the GitHub advisory disclosure form.
+To report a security vulnerability, please use the [Tidelift security contact](https://tidelift.com/security).
+Tidelift will coordinate the fix and disclosure with maintainers.
 
 ## Sponsorship
 
