@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from ._configuration import QuicTLSConfig
-from ._error_codes import HTTPErrorCodes
 from .protocols import (
     HTTP1Protocol,
     HTTP2Protocol,
@@ -30,7 +29,6 @@ from .protocols import (
 
 __all__ = (
     "QuicTLSConfig",
-    "HTTPErrorCodes",
     "HTTP1Protocol",
     "HTTP2Protocol",
     "HTTP3Protocol",

@@ -14,41 +14,6 @@ from .protocols import BaseResolver, ProtocolResolver
 
 class ResolverFactory(metaclass=ABCMeta):
     @staticmethod
-    def has(
-        protocol: ProtocolResolver,
-        specifier: str | None = None,
-        implementation: str | None = None,
-    ) -> bool:
-        package_name: str = __name__.split(".")[0]
-        module_expr = f".{protocol.value.replace('-', '_')}"
-
-        if implementation:
-            module_expr += f"._{implementation.replace('-', '_').lower()}"
-
-        try:
-            resolver_module = importlib.import_module(
-                module_expr, f"{package_name}.contrib.resolver"
-            )
-        except ImportError:
-            return False
-
-        implementations: list[tuple[str, type[BaseResolver]]] = inspect.getmembers(
-            resolver_module,
-            lambda e: isinstance(e, type)
-            and issubclass(e, BaseResolver)
-            and (
-                (specifier is None and e.specifier is None) or specifier == e.specifier
-            )
-            and hasattr(e, "protocol")
-            and e.protocol == protocol,
-        )
-
-        if not implementations:
-            return False
-
-        return True
-
-    @staticmethod
     def new(
         protocol: ProtocolResolver,
         specifier: str | None = None,
