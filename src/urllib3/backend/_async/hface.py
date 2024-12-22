@@ -118,6 +118,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__remaining_body_length: int | None = None
         self.__authority_bit_set: bool = False
         self.__legacy_host_entry: bytes | None = None
+        self.__protocol_bit_set: bool = False
 
         # h3 specifics
         self.__custom_tls_settings: QuicTLSConfig | None = None
@@ -1040,6 +1041,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__remaining_body_length = None
         self.__legacy_host_entry = None
         self.__authority_bit_set = False
+        self.__protocol_bit_set = False
 
         self._start_last_request = datetime.now(tz=timezone.utc)
 
@@ -1121,6 +1123,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             )
 
             if encoded_header.startswith(b":"):
+                if encoded_header == b":protocol":
+                    self.__protocol_bit_set = True
                 item_to_remove = None
 
                 for _k, _v in self.__headers:
@@ -1167,7 +1171,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         # only h2 and h3 support streams, it is faked/simulated for h1.
         self._stream_id = self._protocol.get_available_stream_id()
         # unless anything hint the opposite, the request head frame is the end stream
-        should_end_stream: bool = expect_body_afterward is False
+        should_end_stream: bool = (
+            expect_body_afterward is False and self.__protocol_bit_set is False
+        )
 
         # handle cases where 'Host' header is set manually
         if self.__legacy_host_entry is not None:
@@ -1220,7 +1226,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         else:
             self._last_used_at = time.monotonic()
 
-        if should_end_stream:
+        if expect_body_afterward is False:
             if self._start_last_request and self.conn_info:
                 self.conn_info.request_sent_latency = (
                     datetime.now(tz=timezone.utc) - self._start_last_request
