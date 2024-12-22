@@ -324,7 +324,6 @@ def downstream_botocore(session: nox.Session) -> None:
     session.run("python", "scripts/ci/install")
 
     session.cd(root)
-    session.install("setuptools<71")
 
     session.install(".", silent=False)
     session.cd(f"{tmp_dir}/botocore")
