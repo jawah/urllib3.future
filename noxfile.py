@@ -55,26 +55,10 @@ def traefik_boot(
     if not os.path.exists("./traefik/httpbin.local.pem"):
         session.log("Prepare fake certificates for our Traefik server...")
 
-        addon_proc = subprocess.Popen(
-            [
-                "python",
-                "-m",
-                "pip",
-                "install",
-                "cffi==1.17.0rc1; python_version > '3.12'",
-                "trustme",
-            ]
-        )
+        session.install("trustme")
 
-        addon_proc.wait()
-
-        if addon_proc.returncode != 0:
-            yield
-            session.warn("Unable to install trustme outside of the nox Session")
-            return
-
-        trustme_proc = subprocess.Popen(
-            [
+        session.run(
+            *[
                 "python",
                 "-m",
                 "trustme",
@@ -85,13 +69,6 @@ def traefik_boot(
                 "./traefik",
             ]
         )
-
-        trustme_proc.wait()
-
-        if trustme_proc.returncode != 0:
-            session.warn("Unable to issue required certificates for our Traefik stack")
-            yield
-            return
 
         shutil.move("./traefik/server.pem", "./traefik/httpbin.local.pem")
 
