@@ -52,7 +52,16 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                 "The WebSocket HTTP extension requires 'Sec-Websocket-Accept' header in the server response but was not present."
             )
 
-        fake_http_response += accept_token.encode() + b"\r\n\r\n"
+        fake_http_response += accept_token.encode() + b"\r\n"
+
+        if "sec-websocket-extensions" in response.headers:
+            fake_http_response += (
+                b"Sec-Websocket-Extensions: "
+                + response.headers.get("sec-websocket-extensions").encode()  # type: ignore[union-attr]
+                + b"\r\n"
+            )
+
+        fake_http_response += b"\r\n"
 
         try:
             self._protocol.receive_data(fake_http_response)
