@@ -28,18 +28,22 @@ class TraefikTestCase:
     http_alt_port: int = 9999
     https_alt_port: int = 8754
 
+    https_haproxy_port: int = 9443
+
     http_url: str = f"http://{host}:{http_port}"
     https_url: str = f"https://{host}:{https_port}"
 
     http_alt_url: str = f"http://{host}:{http_alt_port}"
     https_alt_url: str = f"https://{host}:{https_alt_port}"
 
-    test_resolver: ResolverDescription = ResolverDescription.from_url(
-        f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}"
-    )
+    https_haproxy_url: str = f"https://{host}:{https_haproxy_port}"
+
+    test_resolver_raw: str = f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}"
+
+    test_resolver: ResolverDescription = ResolverDescription.from_url(test_resolver_raw)
 
     test_async_resolver: AsyncResolverDescription = AsyncResolverDescription.from_url(
-        f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}"
+        test_resolver_raw
     )
 
     ca_authority: str | None = None

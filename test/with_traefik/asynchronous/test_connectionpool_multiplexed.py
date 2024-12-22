@@ -19,7 +19,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=[self.test_async_resolver],
         ) as pool:
             promises = []
 

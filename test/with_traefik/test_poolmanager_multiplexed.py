@@ -16,7 +16,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with PoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_resolver.new(),
         ) as pool:
             promises = []
 
@@ -100,7 +100,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     def test_multiplexing_stream_saturation(self) -> None:
         with PoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=[self.test_resolver],
         ) as pool:
             promises = []
 

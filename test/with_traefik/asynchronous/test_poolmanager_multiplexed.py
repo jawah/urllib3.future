@@ -17,7 +17,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     async def test_multiplexing_fastest_to_slowest(self) -> None:
         async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=self.test_resolver_raw,
         ) as pool:
             promises = []
 
@@ -214,7 +214,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     async def test_retries_in_multiplexed_mode(self) -> None:
         async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=[self.test_resolver_raw],
         ) as pool:
             retry = Retry(
                 16, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
