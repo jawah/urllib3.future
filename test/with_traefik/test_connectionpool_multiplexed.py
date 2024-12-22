@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from random import randint
 from test import notMacOS
-from time import time
+from time import sleep, time
 
 import pytest
 
@@ -232,6 +233,10 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             promises = []
 
             for _ in range(32):
+                # we need this to avoid killing the "failure_rate" respect
+                # in manual multiplexed mode. it's too fast, and the rate isn't respected
+                # as it should.
+                sleep(randint(100, 350) / 1000.0)
                 promises.append(
                     pool.urlopen(
                         "GET",

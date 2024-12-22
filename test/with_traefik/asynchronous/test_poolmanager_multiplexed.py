@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from asyncio import sleep
+from random import randint
 from test import notMacOS
 from time import time
 
@@ -233,6 +235,10 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             promises = []
 
             for _ in range(32):
+                # we need this to avoid killing the "failure_rate" respect
+                # in manual multiplexed mode. it's too fast, and the rate isn't respected
+                # as it should.
+                await sleep(randint(100, 350) / 1000.0)
                 promises.append(
                     await pool.urlopen(
                         "GET",
