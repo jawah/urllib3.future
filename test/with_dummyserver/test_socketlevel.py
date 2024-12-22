@@ -1042,6 +1042,74 @@ class TestSocketClosing(SocketDummyServerTestCase):
             assert ssl_sock.fileno() > 0
             quit_event.set()
 
+    def test_socket_shutdown_stops_recv(self) -> None:
+        """Backported from https://github.com/urllib3/urllib3/pull/3527 urllib3-future was
+        already ready to never hang. we just want to be sure shutdown is there even
+        if it does nothing."""
+        timed_out, starting_read = Event(), Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            ssl_sock = original_ssl_wrap_socket(
+                sock,
+                server_side=True,
+                keyfile=DEFAULT_CERTS["keyfile"],
+                certfile=DEFAULT_CERTS["certfile"],
+                ca_certs=DEFAULT_CA,
+            )
+
+            # Consume request
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf = ssl_sock.recv(65535)
+
+            # Send incomplete message (note Content-Length)
+            ssl_sock.send(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"Content-Length: 10\r\n"
+                b"\r\n"
+                b"Hi-"
+            )
+            timed_out.wait(5)
+            ssl_sock.close()
+
+        self._start_server(socket_handler)
+
+        class TestClient(threading.Thread):
+            def __init__(self, host: str, port: int) -> None:
+                super().__init__()
+                self.host, self.port = host, port
+                self.response: HTTPResponse | None = None
+
+            def run(self) -> None:
+                with HTTPSConnectionPool(
+                    self.host, self.port, ca_certs=DEFAULT_CA
+                ) as pool:
+                    self.response = pool.urlopen(
+                        "GET", "/", preload_content=False, retries=0
+                    )
+                    # either exception is accepted. the goal there is that we never
+                    # hang.
+                    with pytest.raises(
+                        ProtocolError, match="Connection broken|IncompleteRead"
+                    ):
+                        starting_read.set()
+                        self.response.read()
+
+        test_client = TestClient(self.host, self.port)
+        test_client.start()
+        # First, wait to make sure the client is really stuck reading
+        starting_read.wait(5)
+        time.sleep(LONG_TIMEOUT)
+        # Calling shutdown here calls shutdown() on the underlying socket,
+        # so that the remaining read will fail instead of blocking
+        # indefinitely
+        assert test_client.response is not None
+        test_client.response.shutdown()
+        timed_out.set()
+
 
 class TestProxyManager(SocketDummyServerTestCase):
     def test_simple(self) -> None:
