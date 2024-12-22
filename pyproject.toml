@@ -89,6 +89,7 @@ include = [
   "/docker-compose.win.yaml",
   "/traefik/certificate.toml",
   "/traefik/patched.Dockerfile",
+  "/traefik/haproxy.cfg",
 ]
 
 [tool.hatch.build.targets.wheel]

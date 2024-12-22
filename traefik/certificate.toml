@@ -1,3 +1,3 @@
 [[tls.certificates]]
   certFile = "/certs/httpbin.local.pem"
-  keyFile = "/certs/httpbin.local.key"
+  keyFile = "/certs/httpbin.local.pem.key"

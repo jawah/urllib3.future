@@ -95,10 +95,10 @@ def traefik_boot(
 
         shutil.move("./traefik/server.pem", "./traefik/httpbin.local.pem")
 
-        if os.path.exists("./traefik/httpbin.local.key"):
-            os.unlink("./traefik/httpbin.local.key")
+        if os.path.exists("./traefik/httpbin.local.pem.key"):
+            os.unlink("./traefik/httpbin.local.pem.key")
 
-        shutil.move("./traefik/server.key", "./traefik/httpbin.local.key")
+        shutil.move("./traefik/server.key", "./traefik/httpbin.local.pem.key")
 
         if os.path.exists("./rootCA.pem"):
             os.unlink("./rootCA.pem")
