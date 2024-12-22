@@ -163,7 +163,7 @@ class TestSvnCapability(TraefikTestCase):
             timeout=1,
             retries=False,
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_async_resolver,
             disabled_svn={HttpVersion.h11, HttpVersion.h2},
         ) as p:
             try:
