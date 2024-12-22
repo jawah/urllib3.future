@@ -156,6 +156,25 @@ class TestSvnCapability(TraefikTestCase):
                 )
 
     @pytest.mark.usefixtures("requires_http3")
+    async def test_dont_downgrade_avoid_runtime_error(self) -> None:
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_alt_port,
+            timeout=1,
+            retries=False,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+        ) as p:
+            try:
+                await p.request(
+                    "GET",
+                    "/get",
+                )
+            except Exception as e:
+                assert not isinstance(e, RuntimeError)
+
+    @pytest.mark.usefixtures("requires_http3")
     async def test_misleading_upgrade_h3(self) -> None:
         dumb_cache: dict[tuple[str, int], tuple[str, int] | None] = dict()
 

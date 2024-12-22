@@ -650,10 +650,16 @@ class HfaceBackend(BaseBackend):
                 # this avoid the close() to attempt re-use the (dead) sock
                 self._protocol = None
 
-                raise MustDowngradeError(
-                    f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
-                    f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
-                ) from e
+                # we don't want to force downgrade if the user specifically said
+                # to kill support for all other supported protocols!
+                if (
+                    HttpVersion.h11 not in self.disabled_svn
+                    or HttpVersion.h2 not in self.disabled_svn
+                ):
+                    raise MustDowngradeError(
+                        f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
+                        f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
+                    ) from e
             raise
 
         self._connected_at = time.monotonic()
@@ -1027,9 +1033,10 @@ class HfaceBackend(BaseBackend):
                     if (self._svn == HttpVersion.h2 and event.error_code == 0xD) or (
                         self._svn == HttpVersion.h3 and event.error_code == 0x0110
                     ):
-                        raise MustDowngradeError(
-                            f"The remote server is unable to serve this resource over {self._svn}"
-                        )
+                        if HttpVersion.h11 not in self.disabled_svn:
+                            raise MustDowngradeError(
+                                f"The remote server is unable to serve this resource over {self._svn}"
+                            )
                     raise ProtocolError(
                         f"Stream {event.stream_id} was reset by remote peer. Reason: {hex(event.error_code)}."
                     )
