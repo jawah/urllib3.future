@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from random import randint
 from test import notMacOS
-from time import time
+from time import sleep, time
 
 import pytest
 
@@ -16,7 +17,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with PoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_resolver.new(),
         ) as pool:
             promises = []
 
@@ -100,7 +101,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     def test_multiplexing_stream_saturation(self) -> None:
         with PoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=[self.test_resolver],
         ) as pool:
             promises = []
 
@@ -232,6 +233,10 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             promises = []
 
             for _ in range(32):
+                # we need this to avoid killing the "failure_rate" respect
+                # in manual multiplexed mode. it's too fast, and the rate isn't respected
+                # as it should.
+                sleep(randint(100, 350) / 1000.0)
                 promises.append(
                     pool.urlopen(
                         "GET",

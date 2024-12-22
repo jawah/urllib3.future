@@ -118,6 +118,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__remaining_body_length: int | None = None
         self.__authority_bit_set: bool = False
         self.__legacy_host_entry: bytes | None = None
+        self.__protocol_bit_set: bool = False
 
         # h3 specifics
         self.__custom_tls_settings: QuicTLSConfig | None = None
@@ -594,10 +595,16 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 # this avoid the close() to attempt re-use the (dead) sock
                 self._protocol = None
 
-                raise MustDowngradeError(
-                    f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
-                    f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
-                ) from e
+                # we don't want to force downgrade if the user specifically said
+                # to kill support for all other supported protocols!
+                if (
+                    HttpVersion.h11 not in self.disabled_svn
+                    or HttpVersion.h2 not in self.disabled_svn
+                ):
+                    raise MustDowngradeError(
+                        f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
+                        f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
+                    ) from e
             raise
 
         self._connected_at = time.monotonic()
@@ -964,9 +971,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if (self._svn == HttpVersion.h2 and event.error_code == 0xD) or (
                         self._svn == HttpVersion.h3 and event.error_code == 0x0110
                     ):
-                        raise MustDowngradeError(
-                            f"The remote server is unable to serve this resource over {self._svn}"
-                        )
+                        if HttpVersion.h11 not in self.disabled_svn:
+                            raise MustDowngradeError(
+                                f"The remote server is unable to serve this resource over {self._svn}"
+                            )
 
                     raise ProtocolError(
                         f"Stream {event.stream_id} was reset by remote peer. Reason: {hex(event.error_code)}."
@@ -1040,6 +1048,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__remaining_body_length = None
         self.__legacy_host_entry = None
         self.__authority_bit_set = False
+        self.__protocol_bit_set = False
 
         self._start_last_request = datetime.now(tz=timezone.utc)
 
@@ -1121,6 +1130,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             )
 
             if encoded_header.startswith(b":"):
+                if encoded_header == b":protocol":
+                    self.__protocol_bit_set = True
                 item_to_remove = None
 
                 for _k, _v in self.__headers:
@@ -1167,7 +1178,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         # only h2 and h3 support streams, it is faked/simulated for h1.
         self._stream_id = self._protocol.get_available_stream_id()
         # unless anything hint the opposite, the request head frame is the end stream
-        should_end_stream: bool = expect_body_afterward is False
+        should_end_stream: bool = (
+            expect_body_afterward is False and self.__protocol_bit_set is False
+        )
 
         # handle cases where 'Host' header is set manually
         if self.__legacy_host_entry is not None:
@@ -1220,7 +1233,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         else:
             self._last_used_at = time.monotonic()
 
-        if should_end_stream:
+        if expect_body_afterward is False:
             if self._start_last_request and self.conn_info:
                 self.conn_info.request_sent_latency = (
                     datetime.now(tz=timezone.utc) - self._start_last_request

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from random import randint
 from test import notMacOS
-from time import time
+from time import sleep, time
 
 import pytest
 
@@ -18,7 +19,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=[self.test_resolver],
         ) as pool:
             promises = []
 
@@ -180,7 +181,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=self.test_resolver_raw,
         ) as pool:
             retry = Retry(redirect=max_retries) if max_retries is not None else None
             promise = pool.urlopen(
@@ -213,7 +214,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=[self.test_resolver_raw],
         ) as pool:
             retry = Retry(
                 16, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
@@ -232,6 +233,10 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
             promises = []
 
             for _ in range(32):
+                # we need this to avoid killing the "failure_rate" respect
+                # in manual multiplexed mode. it's too fast, and the rate isn't respected
+                # as it should.
+                sleep(randint(100, 350) / 1000.0)
                 promises.append(
                     pool.urlopen(
                         "GET",

@@ -167,6 +167,10 @@ class NewConnectionError(ConnectTimeoutError, HTTPError):
         self.conn = conn
         super().__init__(f"{conn}: {message}")
 
+    def __reduce__(self) -> _TYPE_REDUCE_RESULT:
+        # For pickling purposes.
+        return self.__class__, (None, None)
+
 
 class NameResolutionError(NewConnectionError):
     """Raised when host name resolution fails."""
@@ -182,6 +186,10 @@ class NameResolutionError(NewConnectionError):
     ):
         message = f"Failed to resolve '{host}' ({reason})"
         super().__init__(conn, message)
+
+    def __reduce__(self) -> _TYPE_REDUCE_RESULT:
+        # For pickling purposes.
+        return self.__class__, (None, None, None)
 
 
 class EmptyPoolError(PoolError):

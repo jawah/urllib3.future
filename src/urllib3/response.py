@@ -1057,6 +1057,14 @@ class HTTPResponse(io.IOBase):
         if buffer:
             yield b"".join(buffer)
 
+    def shutdown(self) -> None:
+        """urllib3 implemented this method in version 2.3 to palliate for a
+        thread safety issue[...] using another thread safety issue[...]
+        fortunately, we don't need that hack with urllib3-future thanks to
+        our extensive safety with TrafficPolice. You may safely remove that
+        call."""
+        pass
+
 
 # Kept for BC-purposes.
 BaseHTTPResponse = HTTPResponse

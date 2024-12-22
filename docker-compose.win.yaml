@@ -2,6 +2,9 @@ services:
   proxy:
     image: traefik:v3.2-windowsservercore-ltsc2022
     restart: unless-stopped
+    depends_on:
+      httpbin:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
       interval: 10s
@@ -72,9 +75,6 @@ services:
       context: ./go-httpbin
       dockerfile: patched.Dockerfile
     restart: unless-stopped
-    depends_on:
-      proxy:
-        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)

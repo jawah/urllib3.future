@@ -10,6 +10,20 @@ except ImportError:
     WebSocketExtensionFromHTTP = None  # type: ignore[misc, assignment]
     WebSocketExtensionFromMultiplexedHTTP = None  # type: ignore[misc, assignment]
 
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+def recursive_subclasses(cls: type[T]) -> list[type[T]]:
+    all_subclasses = []
+
+    for subclass in cls.__subclasses__():
+        all_subclasses.append(subclass)
+        all_subclasses.extend(recursive_subclasses(subclass))
+
+    return all_subclasses
+
 
 def load_extension(
     scheme: str | None, implementation: str | None = None
@@ -17,7 +31,12 @@ def load_extension(
     if scheme is None:
         return RawExtensionFromHTTP
 
-    for extension in ExtensionFromHTTP.__subclasses__():
+    scheme = scheme.lower()
+
+    if implementation:
+        implementation = implementation.lower()
+
+    for extension in recursive_subclasses(ExtensionFromHTTP):
         if scheme in extension.supported_schemes():
             if (
                 implementation is not None

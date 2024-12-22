@@ -282,6 +282,9 @@ class HTTPConnection(HfaceBackend):
         # not using tunnelling.
         self._has_connected_to_proxy = bool(self.proxy)
 
+        if self._has_connected_to_proxy:
+            self.proxy_is_verified = False
+
     @property
     def is_closed(self) -> bool:
         return self.sock is None
@@ -299,6 +302,20 @@ class HTTPConnection(HfaceBackend):
     @property
     def has_connected_to_proxy(self) -> bool:
         return self._has_connected_to_proxy
+
+    @property
+    def proxy_is_forwarding(self) -> bool:
+        """
+        Return True if a forwarding proxy is configured, else return False
+        """
+        return bool(self.proxy) and self._tunnel_host is None
+
+    @property
+    def proxy_is_tunneling(self) -> bool:
+        """
+        Return True if a tunneling proxy is configured, else return False
+        """
+        return self._tunnel_host is not None
 
     def close(self) -> None:
         try:
@@ -766,13 +783,15 @@ class HTTPSConnection(HTTPConnection):
                     alpn_protocols.append("h2")
 
             # Do we need to establish a tunnel?
-            if self._tunnel_host is not None:
+            if self.proxy_is_tunneling:
                 # We're tunneling to an HTTPS origin so need to do TLS-in-TLS.
                 if self._tunnel_scheme == "https":
                     self.sock = sock = self._connect_tls_proxy(
                         self.host, sock, ["http/1.1"]
                     )
                     tls_in_tls = True
+                elif self._tunnel_scheme == "http":
+                    self.proxy_is_verified = False
 
                 self._post_conn()
 
@@ -781,7 +800,7 @@ class HTTPSConnection(HTTPConnection):
 
                 self._tunnel()
                 # Override the host with the one we're requesting data from.
-                server_hostname = self._tunnel_host
+                server_hostname = self._tunnel_host  # type: ignore[assignment]
 
             if self.server_hostname is not None:
                 server_hostname = self.server_hostname
@@ -808,14 +827,27 @@ class HTTPSConnection(HTTPConnection):
                 key_data=self.key_data,
             )
             self.sock = sock_and_verified.socket  # type: ignore[assignment]
-            self.is_verified = sock_and_verified.is_verified
+
+            # Forwarding proxies can never have a verified target since
+            # the proxy is the one doing the verification. Should instead
+            # use a CONNECT tunnel in order to verify the target.
+            # See: https://github.com/urllib3/urllib3/issues/3267.
+            if self.proxy_is_forwarding:
+                self.is_verified = False
+            else:
+                self.is_verified = sock_and_verified.is_verified
+
+            # If there's a proxy to be connected to we are fully connected.
+            # This is set twice (once above and here) due to forwarding proxies
+            # not using tunnelling.
+            self._has_connected_to_proxy = bool(self.proxy)
+
+            # Set `self.proxy_is_verified` unless it's already set while
+            # establishing a tunnel.
+            if self._has_connected_to_proxy and self.proxy_is_verified is None:
+                self.proxy_is_verified = sock_and_verified.is_verified
 
         self._post_conn()
-
-        # If there's a proxy to be connected to we are fully connected.
-        # This is set twice (once above and here) due to forwarding proxies
-        # not using tunnelling.
-        self._has_connected_to_proxy = bool(self.proxy)
 
     def _connect_tls_proxy(
         self,

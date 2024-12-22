@@ -2,6 +2,9 @@ services:
   proxy:
     image: traefik:v3.2
     restart: unless-stopped
+    depends_on:
+      httpbin:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
       interval: 10s
@@ -64,12 +67,27 @@ services:
       # Sadly unsupported for HTTP/3!
       - --entrypoints.alt-https.transport.keepAliveMaxTime=5s
 
+  # haproxy is one of the very few
+  # capable of handling RFC8441 natively.
+  # todo: wait for Traefik to implement RFC8441, Caddy is almost ready (v2.9).
+  #       golang stdlib is ready for it.
+  haproxy:
+    image: haproxy:3.1-alpine
+    restart: unless-stopped
+    depends_on:
+      httpbin:
+        condition: service_started
+    ports:
+      - target: 443
+        published: 9443
+        protocol: tcp
+        mode: host
+    volumes:
+      - ./traefik:/usr/local/etc/haproxy
+
   httpbin:
     image: mccutchen/go-httpbin:v2.15.0
     restart: unless-stopped
-    depends_on:
-      proxy:
-        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)

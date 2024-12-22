@@ -31,7 +31,7 @@ class TestStreamResponse(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_resolver,
+            resolver=[self.test_resolver_raw],
         ) as p:
             for i in range(3):
                 resp = p.request("GET", "/get", preload_content=False)

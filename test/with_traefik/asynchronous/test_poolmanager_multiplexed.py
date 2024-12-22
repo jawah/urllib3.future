@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from asyncio import sleep
+from random import randint
 from test import notMacOS
 from time import time
 
@@ -17,7 +19,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     async def test_multiplexing_fastest_to_slowest(self) -> None:
         async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=self.test_resolver_raw,
         ) as pool:
             promises = []
 
@@ -214,7 +216,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     async def test_retries_in_multiplexed_mode(self) -> None:
         async with AsyncPoolManager(
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=[self.test_resolver_raw],
         ) as pool:
             retry = Retry(
                 16, status_forcelist=[500], backoff_factor=0.05, raise_on_redirect=True
@@ -233,6 +235,10 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             promises = []
 
             for _ in range(32):
+                # we need this to avoid killing the "failure_rate" respect
+                # in manual multiplexed mode. it's too fast, and the rate isn't respected
+                # as it should.
+                await sleep(randint(100, 350) / 1000.0)
                 promises.append(
                     await pool.urlopen(
                         "GET",

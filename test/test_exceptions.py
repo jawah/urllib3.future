@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pickle
+import socket
 from email.errors import MessageDefect
 from test import DUMMY_POOL
 
 import pytest
 
+from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import HTTPConnectionPool
 from urllib3.exceptions import (
     ClosedPoolError,
@@ -16,6 +18,8 @@ from urllib3.exceptions import (
     HTTPError,
     LocationParseError,
     MaxRetryError,
+    NameResolutionError,
+    NewConnectionError,
     ReadTimeoutError,
 )
 
@@ -36,6 +40,8 @@ class TestPickle:
             EmptyPoolError(HTTPConnectionPool("localhost"), ""),
             HostChangedError(HTTPConnectionPool("localhost"), "/", 0),
             ReadTimeoutError(HTTPConnectionPool("localhost"), "/", ""),
+            NewConnectionError(HTTPConnection("localhost"), ""),
+            NameResolutionError("", HTTPConnection("localhost"), socket.gaierror()),
         ],
     )
     def test_exceptions(self, exception: Exception) -> None:

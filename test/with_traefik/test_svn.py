@@ -149,6 +149,25 @@ class TestSvnCapability(TraefikTestCase):
                     == 'h3-25=":443"; ma=3600, h2=":443"; ma=3600'
                 )
 
+    @pytest.mark.usefixtures("requires_http3")
+    def test_dont_downgrade_avoid_runtime_error(self) -> None:
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_alt_port,
+            timeout=1,
+            retries=False,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+        ) as p:
+            try:
+                p.request(
+                    "GET",
+                    "/get",
+                )
+            except Exception as e:
+                assert not isinstance(e, RuntimeError)
+
     def test_illegal_upgrade_h3(self) -> None:
         with HTTPSConnectionPool(
             self.host,

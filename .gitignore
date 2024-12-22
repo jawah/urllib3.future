@@ -8,6 +8,6 @@
 /build
 /docs/_build
 coverage.xml
-traefik/httpbin.local.key
 traefik/httpbin.local.pem
+traefik/httpbin.local.pem.key
 rootCA.pem

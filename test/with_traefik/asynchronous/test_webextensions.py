@@ -11,9 +11,11 @@ from urllib3.contrib.webextensions._async import (
     AsyncRawExtensionFromHTTP,
     AsyncServerSideEventExtensionFromHTTP,
     AsyncWebSocketExtensionFromHTTP,
+    AsyncWebSocketExtensionFromMultiplexedHTTP,
 )
 from urllib3.exceptions import ReadTimeoutError, URLSchemeUnknown
 
+from ... import notWindows
 from .. import TraefikTestCase
 
 
@@ -517,3 +519,42 @@ class TestWebExtensions(TraefikTestCase):
                 assert "timestamp" in event.json()  # type: ignore
 
             assert time.time() - before <= 10.0
+
+    @notWindows()
+    async def test_websocket_rfc8441(self) -> None:
+        target_url = self.https_haproxy_url
+        target_url = target_url.replace("https://", "wss+rfc8441://")
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver, ca_certs=self.ca_authority
+        ) as pm:
+            resp = await pm.urlopen("GET", target_url + "/websocket/echo")
+
+            # The response SHOULD NOT end with a "101 Switching Protocol"!
+            # We don't switch protocol, we only get authorized to R/W in the
+            # given stream. HTTP/2 remain there.
+            assert resp.status == 200
+
+            # The HTTP extension should be automatically loaded!
+            assert resp.extension is not None
+
+            # This response should not have a body, therefor don't try to read from
+            # socket in there!
+            assert (await resp.data) == b""
+            assert (await resp.read()) == b""
+
+            # the extension here should be WebSocketExtensionFromMultiplexedHTTP
+            assert isinstance(
+                resp.extension, AsyncWebSocketExtensionFromMultiplexedHTTP
+            )
+
+            # send two example payloads, one of type string, one of type bytes.
+            await resp.extension.send_payload("Hello World!")
+            await resp.extension.send_payload(b"Foo Bar Baz!")
+
+            # they should be echoed in order.
+            assert (await resp.extension.next_payload()) == "Hello World!"
+            assert (await resp.extension.next_payload()) == b"Foo Bar Baz!"
+
+            # gracefully close the sub protocol.
+            await resp.extension.close()

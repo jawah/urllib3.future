@@ -13,6 +13,8 @@ except ImportError:
     AsyncWebSocketExtensionFromHTTP = None  # type: ignore[misc, assignment]
     AsyncWebSocketExtensionFromMultiplexedHTTP = None  # type: ignore[misc, assignment]
 
+from .. import recursive_subclasses
+
 
 def load_extension(
     scheme: str | None, implementation: str | None = None
@@ -20,7 +22,12 @@ def load_extension(
     if scheme is None:
         return AsyncRawExtensionFromHTTP
 
-    for extension in AsyncExtensionFromHTTP.__subclasses__():
+    scheme = scheme.lower()
+
+    if implementation:
+        implementation = implementation.lower()
+
+    for extension in recursive_subclasses(AsyncExtensionFromHTTP):
         if scheme in extension.supported_schemes():
             if (
                 implementation is not None

@@ -32,7 +32,7 @@ class TestStreamResponse(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=self.test_async_resolver.new(),
         ) as p:
             for i in range(3):
                 resp = await p.request("GET", "/get", preload_content=False)
@@ -76,7 +76,7 @@ class TestStreamResponse(TraefikTestCase):
             self.host,
             self.https_port,
             ca_certs=self.ca_authority,
-            resolver=self.test_async_resolver,
+            resolver=[self.test_async_resolver],
         ) as p:
             resp = await p.request("GET", "/get", preload_content=False)
             assert resp.status == 200
