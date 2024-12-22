@@ -2350,7 +2350,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         if conn.is_closed:
             await conn.connect()
 
-        if not conn.is_verified:
+        if not conn.is_verified and not conn.proxy_is_verified:
             warnings.warn(
                 (
                     f"Unverified HTTPS request is being made to host '{conn.host}'. "
