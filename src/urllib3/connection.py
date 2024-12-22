@@ -282,6 +282,9 @@ class HTTPConnection(HfaceBackend):
         # not using tunnelling.
         self._has_connected_to_proxy = bool(self.proxy)
 
+        if self._has_connected_to_proxy:
+            self.proxy_is_verified = False
+
     @property
     def is_closed(self) -> bool:
         return self.sock is None
@@ -787,6 +790,8 @@ class HTTPSConnection(HTTPConnection):
                         self.host, sock, ["http/1.1"]
                     )
                     tls_in_tls = True
+                elif self._tunnel_scheme == "http":
+                    self.proxy_is_verified = False
 
                 self._post_conn()
 
@@ -827,16 +832,22 @@ class HTTPSConnection(HTTPConnection):
             # the proxy is the one doing the verification. Should instead
             # use a CONNECT tunnel in order to verify the target.
             # See: https://github.com/urllib3/urllib3/issues/3267.
-            self.is_verified = (
-                sock_and_verified.is_verified and not self.proxy_is_forwarding
-            )
+            if self.proxy_is_forwarding:
+                self.is_verified = False
+            else:
+                self.is_verified = sock_and_verified.is_verified
+
+            # If there's a proxy to be connected to we are fully connected.
+            # This is set twice (once above and here) due to forwarding proxies
+            # not using tunnelling.
+            self._has_connected_to_proxy = bool(self.proxy)
+
+            # Set `self.proxy_is_verified` unless it's already set while
+            # establishing a tunnel.
+            if self._has_connected_to_proxy and self.proxy_is_verified is None:
+                self.proxy_is_verified = sock_and_verified.is_verified
 
         self._post_conn()
-
-        # If there's a proxy to be connected to we are fully connected.
-        # This is set twice (once above and here) due to forwarding proxies
-        # not using tunnelling.
-        self._has_connected_to_proxy = bool(self.proxy)
 
     def _connect_tls_proxy(
         self,
