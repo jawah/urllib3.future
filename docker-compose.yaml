@@ -2,6 +2,9 @@ services:
   proxy:
     image: traefik:v3.2
     restart: unless-stopped
+    depends_on:
+      httpbin:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "traefik" ,"healthcheck", "--ping" ]
       interval: 10s
@@ -67,9 +70,6 @@ services:
   httpbin:
     image: mccutchen/go-httpbin:v2.15.0
     restart: unless-stopped
-    depends_on:
-      proxy:
-        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
