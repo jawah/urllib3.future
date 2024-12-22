@@ -1,3 +1,22 @@
+2.12.904 (2024-12-22)
+=====================
+
+- Fixed an issue when trying to force load Websocket over HTTP/2 or HTTP/3.
+- Ensured WebSocket via HTTP/2 with improved CI pipeline featuring haproxy as the reverse proxy.
+- Fixed ``RuntimeError`` when forcing HTTP/3 by disabling both HTTP/1, and HTTP/2 and the remote is unable to negotiate HTTP/3.
+  This issue occurred because of our automatic downgrade procedure introduced in our 2.10.x series. The downgrade ends in panic
+  due to unavailable lower protocols. This only improve the UX by not downgrading and letting the original error out.
+  See https://github.com/jawah/niquests/issues/189 for original user report.
+- Fixed negotiated extensions for WebSocket being ignored (e.g. per-deflate message).
+- Backported ``HTTPResponse.shutdown()`` and nullified it. The fix they attempt to ship only concern
+  them, we are already safe (based on issue reproduction). See https://github.com/urllib3/urllib3/issues/2868
+- Backported ``proxy_is_tunneling`` property to ``HTTPConnection`` and ``HTTPSConnection``.
+  See https://github.com/urllib3/urllib3/pull/3459
+- Backported ``HTTPSConnection.is_verified`` to False when using a forwarding proxy.
+  See https://github.com/urllib3/urllib3/pull/3283
+- Backported pickling support to ``NewConnectionError`` and ``NameResolutionError``.
+  See https://github.com/urllib3/urllib3/pull/3480
+
 2.12.903 (2024-12-09)
 =====================
 
