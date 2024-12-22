@@ -155,6 +155,7 @@ def traefik_boot(
                 RemoteDisconnected,
                 TimeoutError,
                 SocketTimeout,
+                ConnectionError,
             ) as e:
                 i += 1
                 time.sleep(1)
