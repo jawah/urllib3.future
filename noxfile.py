@@ -55,8 +55,6 @@ def traefik_boot(
     if not os.path.exists("./traefik/httpbin.local.pem"):
         session.log("Prepare fake certificates for our Traefik server...")
 
-        session.install("trustme")
-
         session.run(
             *[
                 "python",
@@ -185,10 +183,11 @@ def tests_impl(
     byte_string_comparisons: bool = False,
     tracemalloc_enable: bool = False,
 ) -> None:
+    # Install deps and the package itself.
+    session.install("-U", "pip", "setuptools", silent=False)
+    session.install("-r", "dev-requirements.txt", silent=False)
+
     with traefik_boot(session, *session.posargs):
-        # Install deps and the package itself.
-        session.install("-U", "pip", "setuptools", silent=False)
-        session.install("-r", "dev-requirements.txt", silent=False)
         session.install(f".[{extras}]", silent=False)
 
         # Show the pip version.
