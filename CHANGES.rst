@@ -1,3 +1,9 @@
+2.12.905 (2024-12-29)
+=====================
+
+- Fixed error due to an internal change in python-socks 2.6
+- Pinned python-socks upper bound to 2.5.3 pending further improvement into our integration.
+
 2.12.904 (2024-12-22)
 =====================
 

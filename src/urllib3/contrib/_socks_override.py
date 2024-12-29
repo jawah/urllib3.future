@@ -13,23 +13,23 @@ import asyncio
 import socket
 import typing
 
-from python_socks import _abc as abc  # type: ignore
+from python_socks import _abc as abc
 
 # look the other way if unpleasant. No choice for now.
 # will start discussions once we have a solid traffic.
-from python_socks._connectors.abc import AsyncConnector  # type: ignore
-from python_socks._connectors.socks4_async import Socks4AsyncConnector  # type: ignore
-from python_socks._connectors.socks5_async import Socks5AsyncConnector  # type: ignore
-from python_socks._errors import ProxyError, ProxyTimeoutError  # type: ignore
-from python_socks._helpers import parse_proxy_url  # type: ignore
-from python_socks._protocols.errors import ReplyError  # type: ignore
-from python_socks._types import ProxyType  # type: ignore
+from python_socks._connectors.abc import AsyncConnector
+from python_socks._connectors.socks4_async import Socks4AsyncConnector
+from python_socks._connectors.socks5_async import Socks5AsyncConnector
+from python_socks._errors import ProxyError, ProxyTimeoutError
+from python_socks._helpers import parse_proxy_url
+from python_socks._protocols.errors import ReplyError
+from python_socks._types import ProxyType
 
 from .ssa import AsyncSocket
 from .ssa._timeout import timeout as timeout_
 
 
-class Resolver(abc.AsyncResolver):  # type: ignore[misc]
+class Resolver(abc.AsyncResolver):
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
 
@@ -77,7 +77,7 @@ def create_connector(
     raise ValueError(f"Invalid proxy type: {proxy_type}")
 
 
-class AsyncioProxy(abc.AsyncProxy):  # type: ignore[misc]
+class AsyncioProxy:
     def __init__(
         self,
         proxy_type: ProxyType,
@@ -130,7 +130,7 @@ class AsyncioProxy(abc.AsyncProxy):  # type: ignore[misc]
                 resolver=self._resolver,
             )
             await connector.connect(
-                stream=_socket,
+                stream=_socket,  # type: ignore[arg-type]
                 host=dest_host,
                 port=dest_port,
             )
@@ -141,7 +141,7 @@ class AsyncioProxy(abc.AsyncProxy):  # type: ignore[misc]
             raise
         except ReplyError as e:
             _socket.close()
-            raise ProxyError(e, error_code=e.error_code)
+            raise ProxyError(e, error_code=e.error_code)  # type: ignore[no-untyped-call]
         except Exception:  # Defensive:
             _socket.close()
             raise
