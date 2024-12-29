@@ -44,13 +44,13 @@ from __future__ import annotations
 BYPASS_SOCKS_LEGACY: bool = False
 
 try:
-    from python_socks import (  # type: ignore[import-untyped]
+    from python_socks import (
         ProxyConnectionError,
         ProxyError,
         ProxyTimeoutError,
         ProxyType,
     )
-    from python_socks.sync import Proxy  # type: ignore[import-untyped]
+    from python_socks.sync import Proxy
 
     from ._socks_override import AsyncioProxy
 except ImportError:
@@ -162,7 +162,7 @@ if not BYPASS_SOCKS_LEGACY:
                 assert self._socks_options["proxy_port"] is not None
 
                 p = Proxy(
-                    proxy_type=self._socks_options["socks_version"],
+                    proxy_type=self._socks_options["socks_version"],  # type: ignore[arg-type]
                     host=self._socks_options["proxy_host"],
                     port=int(self._socks_options["proxy_port"]),
                     username=self._socks_options["username"],
@@ -182,11 +182,11 @@ if not BYPASS_SOCKS_LEGACY:
                     timing_hook=lambda _: setattr(self, "_connect_timings", _),
                 )
 
-                return p.connect(  # type: ignore[no-any-return]
+                return p.connect(
                     self.host,
                     self.port,
                     self.timeout,
-                    _socket,
+                    _socket=_socket,
                 )
             except (SocketTimeout, ProxyTimeoutError) as e:
                 raise ConnectTimeoutError(
@@ -320,7 +320,7 @@ if not BYPASS_SOCKS_LEGACY:
                 assert self._socks_options["proxy_port"] is not None
 
                 p = AsyncioProxy(
-                    proxy_type=self._socks_options["socks_version"],
+                    proxy_type=self._socks_options["socks_version"],  # type: ignore[arg-type]
                     host=self._socks_options["proxy_host"],
                     port=int(self._socks_options["proxy_port"]),
                     username=self._socks_options["username"],
