@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import io
@@ -39,16 +40,13 @@ HASHFUNC_MAP = {
 
 def _compute_key_ctx_build(
     *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None,
-) -> str:
+) -> int:
     """We want a dedicated hashing technics to cache ssl ctx, so that they are reusable across the runtime."""
     key: str = ""
 
     for arg in args:
         if arg is None:
             key += "\x00"
-            continue
-        if isinstance(arg, (int, bool)):
-            key += str(arg)
             continue
         if isinstance(
             arg,
@@ -59,6 +57,9 @@ def _compute_key_ctx_build(
         ):
             key += str(hash(arg))
             continue
+        if isinstance(arg, (int, bool)):
+            key += str(arg)
+            continue
         if isinstance(arg, dict):
             key += str(arg)
             continue
@@ -68,44 +69,50 @@ def _compute_key_ctx_build(
                 key += item
             key += ")"
 
-    return key
+    return hash(key)
 
 
 class _CacheableSSLContext:
-    def __init__(self, maxsize: int | None = 258) -> None:
+    def __init__(self, maxsize: int | None = 32) -> None:
         self._maxsize = maxsize
-        self._container: dict[str, ssl.SSLContext] = {}
-        self._cache_key_get_fail: str | None = None
+        self._container: dict[int, ssl.SSLContext] = {}
+        self._cursor: int | None = None
         self._lock: threading.RLock = threading.RLock()
 
     def clear(self) -> None:
         with self._lock:
-            self._container.clear()
-            self._cache_key_get_fail = None
+            self._cursor = None
+            self._container = {}
 
-    def get(
+    @contextlib.contextmanager
+    def lock(
         self, *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None
-    ) -> ssl.SSLContext | None:
+    ) -> typing.Generator[None]:
         key = _compute_key_ctx_build(*args)
         with self._lock:
-            if key in self._container:
-                self._cache_key_get_fail = None
-                return self._container[key]
-        self._cache_key_get_fail = key
-        return None
+            self._cursor = key
+            yield
+            self._cursor = None
+
+    def get(self) -> ssl.SSLContext | None:
+        with self._lock:
+            if self._cursor is None:
+                raise OSError("You MUST start WITH lock()")
+
+            if self._cursor in self._container:
+                return self._container[self._cursor]
+
+            return None
 
     def save(
         self,
         ctx: ssl.SSLContext,
-        *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None,
     ) -> None:
-        key = _compute_key_ctx_build(*args) if args else self._cache_key_get_fail
-
-        if key is None:
-            raise KeyError
-
         with self._lock:
-            self._container[key] = ctx
+            if self._cursor is None:
+                raise OSError("You MUST start WITH lock()")
+
+            self._container[self._cursor] = ctx
 
             if self._maxsize and len(self._container) > self._maxsize:
                 self._container.pop(next(self._container.keys().__iter__()))
@@ -609,86 +616,75 @@ def ssl_wrap_socket(
     """
     context = ssl_context
 
-    cached_ctx = (
-        _SSLContextCache.get(
-            keyfile,
-            certfile,
-            cert_reqs,
-            ca_certs,
-            ssl_version,
-            ciphers,
-            sharable_ssl_context,
-            ca_cert_dir,
-            alpn_protocols,
-            certdata,
-            keydata,
-            key_password,
+    with _SSLContextCache.lock(
+        keyfile,
+        certfile,
+        cert_reqs,
+        ca_certs,
+        ssl_version,
+        ciphers,
+        sharable_ssl_context,
+        ca_cert_dir,
+        alpn_protocols,
+        certdata,
+        keydata,
+        key_password,
+        ca_cert_data,
+    ):
+        cached_ctx = (
+            _SSLContextCache.get() if sharable_ssl_context is not None else None
         )
-        if sharable_ssl_context
-        else None
-    )
 
-    if cached_ctx is None:
-        if context is None:
-            # Note: This branch of code and all the variables in it are only used in tests.
-            # We should consider deprecating and removing this code.
-            context = create_urllib3_context(ssl_version, cert_reqs, ciphers=ciphers)
-
-        if ca_certs or ca_cert_dir or ca_cert_data:
-            try:
-                context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
-            except OSError as e:
-                raise SSLError(e) from e
-
-        elif ssl_context is None and hasattr(context, "load_default_certs"):
-            # try to load OS default certs; works well on Windows.
-            context.load_default_certs()
-
-        # Attempt to detect if we get the goofy behavior of the
-        # keyfile being encrypted and OpenSSL asking for the
-        # passphrase via the terminal and instead error out.
-        if keyfile and key_password is None and _is_key_file_encrypted(keyfile):
-            raise SSLError("Client private key is encrypted, password is required")
-
-        if certfile:
-            if key_password is None:
-                context.load_cert_chain(certfile, keyfile)
-            else:
-                context.load_cert_chain(certfile, keyfile, key_password)
-        elif certdata:
-            try:
-                _ctx_load_cert_chain(context, certdata, keydata, key_password)
-            except io.UnsupportedOperation as e:
-                warnings.warn(
-                    f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
-                    Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
-                    UserWarning,
+        if cached_ctx is None:
+            if context is None:
+                # Note: This branch of code and all the variables in it are only used in tests.
+                # We should consider deprecating and removing this code.
+                context = create_urllib3_context(
+                    ssl_version, cert_reqs, ciphers=ciphers
                 )
 
-        try:
-            context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
-        except (
-            NotImplementedError
-        ):  # Defensive: in CI, we always have set_alpn_protocols
-            pass
+            if ca_certs or ca_cert_dir or ca_cert_data:
+                try:
+                    context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
+                except OSError as e:
+                    raise SSLError(e) from e
 
-        if sharable_ssl_context:
-            _SSLContextCache.save(
-                context,
-                keyfile,
-                certfile,
-                cert_reqs,
-                ca_certs,
-                ssl_version,
-                ciphers,
-                sharable_ssl_context,
-                ca_cert_dir,
-                alpn_protocols,
-                certdata,
-                keydata,
-            )
-    else:
-        context = cached_ctx
+            elif ssl_context is None and hasattr(context, "load_default_certs"):
+                # try to load OS default certs; works well on Windows.
+                context.load_default_certs()
+
+            # Attempt to detect if we get the goofy behavior of the
+            # keyfile being encrypted and OpenSSL asking for the
+            # passphrase via the terminal and instead error out.
+            if keyfile and key_password is None and _is_key_file_encrypted(keyfile):
+                raise SSLError("Client private key is encrypted, password is required")
+
+            if certfile:
+                if key_password is None:
+                    context.load_cert_chain(certfile, keyfile)
+                else:
+                    context.load_cert_chain(certfile, keyfile, key_password)
+            elif certdata:
+                try:
+                    _ctx_load_cert_chain(context, certdata, keydata, key_password)
+                except io.UnsupportedOperation as e:
+                    warnings.warn(
+                        f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
+                        Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
+                        UserWarning,
+                    )
+
+            try:
+                context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
+            except (
+                NotImplementedError
+            ):  # Defensive: in CI, we always have set_alpn_protocols
+                pass
+
+            if sharable_ssl_context is not None:
+                _SSLContextCache.save(context)
+        else:
+            context = cached_ctx
 
     ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
     return ssl_sock

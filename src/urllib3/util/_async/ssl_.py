@@ -27,7 +27,7 @@ class DummyLock:
 
 
 class _NoLock_CacheableSSLContext(_CacheableSSLContext):
-    def __init__(self, maxsize: int | None = 258):
+    def __init__(self, maxsize: int | None = 32):
         super().__init__(maxsize=maxsize)
         self._lock = DummyLock()  # type: ignore[assignment]
 
@@ -85,72 +85,74 @@ async def ssl_wrap_socket(
     """
     context = ssl_context
 
-    cached_ctx = (
-        _SSLContextCache.get(
-            keyfile,
-            certfile,
-            cert_reqs,
-            ca_certs,
-            ssl_version,
-            ciphers,
-            sharable_ssl_context,
-            ca_cert_dir,
-            alpn_protocols,
-            certdata,
-            keydata,
-            key_password,
+    with _SSLContextCache.lock(
+        keyfile,
+        certfile,
+        cert_reqs,
+        ca_certs,
+        ssl_version,
+        ciphers,
+        sharable_ssl_context,
+        ca_cert_dir,
+        alpn_protocols,
+        certdata,
+        keydata,
+        key_password,
+        ca_cert_data,
+    ):
+        cached_ctx = (
+            _SSLContextCache.get() if sharable_ssl_context is not None else None
         )
-        if sharable_ssl_context
-        else None
-    )
 
-    if cached_ctx is None:
-        if context is None:
-            # Note: This branch of code and all the variables in it are only used in tests.
-            # We should consider deprecating and removing this code.
-            context = create_urllib3_context(ssl_version, cert_reqs, ciphers=ciphers)
-
-        if ca_certs or ca_cert_dir or ca_cert_data:
-            try:
-                context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
-            except OSError as e:
-                raise SSLError(e) from e
-
-        elif ssl_context is None and hasattr(context, "load_default_certs"):
-            # try to load OS default certs; works well on Windows.
-            context.load_default_certs()
-
-        # Attempt to detect if we get the goofy behavior of the
-        # keyfile being encrypted and OpenSSL asking for the
-        # passphrase via the terminal and instead error out.
-        if keyfile and key_password is None and _is_key_file_encrypted(keyfile):
-            raise SSLError("Client private key is encrypted, password is required")
-
-        if certfile:
-            if key_password is None:
-                context.load_cert_chain(certfile, keyfile)
-            else:
-                context.load_cert_chain(certfile, keyfile, key_password)
-        elif certdata:
-            try:
-                _ctx_load_cert_chain(context, certdata, keydata, key_password)
-            except io.UnsupportedOperation as e:
-                warnings.warn(
-                    f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
-                    Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
-                    UserWarning,
+        if cached_ctx is None:
+            if context is None:
+                # Note: This branch of code and all the variables in it are only used in tests.
+                # We should consider deprecating and removing this code.
+                context = create_urllib3_context(
+                    ssl_version, cert_reqs, ciphers=ciphers
                 )
 
-        try:
-            context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
-        except (
-            NotImplementedError
-        ):  # Defensive: in CI, we always have set_alpn_protocols
-            pass
+            if ca_certs or ca_cert_dir or ca_cert_data:
+                try:
+                    context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
+                except OSError as e:
+                    raise SSLError(e) from e
 
-        if sharable_ssl_context:
-            _SSLContextCache.save(context)
-    else:
-        context = cached_ctx
+            elif ssl_context is None and hasattr(context, "load_default_certs"):
+                # try to load OS default certs; works well on Windows.
+                context.load_default_certs()
+
+            # Attempt to detect if we get the goofy behavior of the
+            # keyfile being encrypted and OpenSSL asking for the
+            # passphrase via the terminal and instead error out.
+            if keyfile and key_password is None and _is_key_file_encrypted(keyfile):
+                raise SSLError("Client private key is encrypted, password is required")
+
+            if certfile:
+                if key_password is None:
+                    context.load_cert_chain(certfile, keyfile)
+                else:
+                    context.load_cert_chain(certfile, keyfile, key_password)
+            elif certdata:
+                try:
+                    _ctx_load_cert_chain(context, certdata, keydata, key_password)
+                except io.UnsupportedOperation as e:
+                    warnings.warn(
+                        f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
+                        Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
+                        UserWarning,
+                    )
+
+            try:
+                context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
+            except (
+                NotImplementedError
+            ):  # Defensive: in CI, we always have set_alpn_protocols
+                pass
+
+            if sharable_ssl_context is not None:
+                _SSLContextCache.save(context)
+        else:
+            context = cached_ctx
 
     return await sock.wrap_socket(context, server_hostname=server_hostname)
