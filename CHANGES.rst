@@ -1,3 +1,8 @@
+2.12.906 (2024-01-03)
+=====================
+
+- Improved our logic around caching a ssl_context in a concurrent environment.
+
 2.12.905 (2024-12-29)
 =====================
 
