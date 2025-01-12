@@ -927,10 +927,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert keylog_file.is_file(), "keylogfile '%s' should exist" % str(
                 keylog_file
             )
-            assert keylog_file.read_text().startswith(
-                "# TLS secrets log file"
-            ), "keylogfile '%s' should start with '# TLS secrets log file'" % str(
-                keylog_file
+            assert keylog_file.read_text().startswith("# TLS secrets log file"), (
+                "keylogfile '%s' should start with '# TLS secrets log file'"
+                % str(keylog_file)
             )
 
     @pytest.mark.parametrize("sslkeylogfile", [None, ""])

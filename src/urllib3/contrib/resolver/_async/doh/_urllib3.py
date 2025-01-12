@@ -127,9 +127,9 @@ class HTTPSResolver(AsyncBaseResolver):
             kwargs["disabled_svn"] = disabled_svn
 
         if "on_post_connection" in kwargs and callable(kwargs["on_post_connection"]):
-            self._connection_callback: typing.Callable[
-                [ConnectionInfo], None
-            ] | None = kwargs["on_post_connection"]
+            self._connection_callback: (
+                typing.Callable[[ConnectionInfo], None] | None
+            ) = kwargs["on_post_connection"]
             kwargs.pop("on_post_connection")
         else:
             self._connection_callback = None

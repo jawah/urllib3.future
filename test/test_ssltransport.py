@@ -33,13 +33,11 @@ def server_client_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
 
 
 @typing.overload
-def sample_request(binary: Literal[True] = ...) -> bytes:
-    ...
+def sample_request(binary: Literal[True] = ...) -> bytes: ...
 
 
 @typing.overload
-def sample_request(binary: Literal[False]) -> str:
-    ...
+def sample_request(binary: Literal[False]) -> str: ...
 
 
 def sample_request(binary: bool = True) -> bytes | str:
@@ -61,18 +59,15 @@ def validate_request(
 
 
 @typing.overload
-def sample_response(binary: Literal[True] = ...) -> bytes:
-    ...
+def sample_response(binary: Literal[True] = ...) -> bytes: ...
 
 
 @typing.overload
-def sample_response(binary: Literal[False]) -> str:
-    ...
+def sample_response(binary: Literal[False]) -> str: ...
 
 
 @typing.overload
-def sample_response(binary: bool = ...) -> bytes | str:
-    ...
+def sample_response(binary: bool = ...) -> bytes | str: ...
 
 
 def sample_response(binary: bool = True) -> bytes | str:

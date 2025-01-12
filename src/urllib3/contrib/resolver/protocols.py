@@ -544,8 +544,7 @@ COMMON_RCODE_LABEL: dict[int, str] = {
 }
 
 
-class DomainNameServerParseException(Exception):
-    ...
+class DomainNameServerParseException(Exception): ...
 
 
 class DomainNameServerReturn:

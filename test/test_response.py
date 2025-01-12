@@ -922,7 +922,9 @@ class TestResponse:
         ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
             return b"", True, None
 
-        r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
+        r = LowLevelResponse(
+            "HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock
+        )  # type: ignore[arg-type]
         resp = HTTPResponse(
             r,
             preload_content=False,
@@ -1026,7 +1028,9 @@ class TestResponse:
             idx += 1
             return d, False, None
 
-        r = LowLevelResponse("GET", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
+        r = LowLevelResponse(
+            "GET", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock
+        )  # type: ignore[arg-type]
 
         headers = {"transfer-encoding": "chunked", "content-encoding": "gzip"}
         resp = HTTPResponse(r, preload_content=False, headers=headers)

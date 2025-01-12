@@ -111,14 +111,12 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
         return {"accept": "text/event-stream", "cache-control": "no-store"}
 
     @typing.overload
-    def next_payload(self, *, raw: typing.Literal[True] = True) -> str | None:
-        ...
+    def next_payload(self, *, raw: typing.Literal[True] = True) -> str | None: ...
 
     @typing.overload
     def next_payload(
         self, *, raw: typing.Literal[False] = False
-    ) -> ServerSentEvent | None:
-        ...
+    ) -> ServerSentEvent | None: ...
 
     def next_payload(self, *, raw: bool = False) -> ServerSentEvent | str | None:
         """Unpack the next received message/payload from remote."""

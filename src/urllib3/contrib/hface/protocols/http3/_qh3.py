@@ -320,14 +320,12 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return self._data_in_flight
 
     @typing.overload
-    def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None:
-        ...
+    def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None: ...
 
     @typing.overload
     def getissuercert(
         self, *, binary_form: Literal[False] = ...
-    ) -> dict[str, Any] | None:
-        ...
+    ) -> dict[str, Any] | None: ...
 
     def getissuercert(
         self, *, binary_form: bool = False
@@ -398,12 +396,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         return issuer_info
 
     @typing.overload
-    def getpeercert(self, *, binary_form: Literal[True]) -> bytes:
-        ...
+    def getpeercert(self, *, binary_form: Literal[True]) -> bytes: ...
 
     @typing.overload
-    def getpeercert(self, *, binary_form: Literal[False] = ...) -> dict[str, Any]:
-        ...
+    def getpeercert(self, *, binary_form: Literal[False] = ...) -> dict[str, Any]: ...
 
     def getpeercert(
         self, *, binary_form: bool = False
@@ -491,13 +487,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         for endpoint in x509_certificate.get_ocsp_endpoints():
             decoded_endpoint = endpoint.decode()
 
-            peer_info["OCSP"].append(decoded_endpoint[decoded_endpoint.index("(") + 1 : -1])  # type: ignore[attr-defined]
+            peer_info["OCSP"].append(
+                decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
+            )  # type: ignore[attr-defined]
 
         peer_info["caIssuers"] = []
 
         for endpoint in x509_certificate.get_issuer_endpoints():
             decoded_endpoint = endpoint.decode()
-            peer_info["caIssuers"].append(decoded_endpoint[decoded_endpoint.index("(") + 1 : -1])  # type: ignore[attr-defined]
+            peer_info["caIssuers"].append(
+                decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
+            )  # type: ignore[attr-defined]
 
         peer_info["crlDistributionPoints"] = []
 

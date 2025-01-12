@@ -777,8 +777,7 @@ class PoolManager(RequestMethods):
         *,
         multiplexed: Literal[False] = ...,
         **kw: typing.Any,
-    ) -> HTTPResponse:
-        ...
+    ) -> HTTPResponse: ...
 
     @typing.overload
     def urlopen(
@@ -789,8 +788,7 @@ class PoolManager(RequestMethods):
         *,
         multiplexed: Literal[True],
         **kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     def urlopen(
         self, method: str, url: str, redirect: bool = True, **kw: typing.Any
@@ -1033,7 +1031,10 @@ class ProxyManager(PoolManager):
             )
 
         return super().connection_from_host(
-            self.proxy.host, self.proxy.port, self.proxy.scheme, pool_kwargs=pool_kwargs  # type: ignore[union-attr]
+            self.proxy.host,
+            self.proxy.port,
+            self.proxy.scheme,
+            pool_kwargs=pool_kwargs,  # type: ignore[union-attr]
         )
 
     def _set_proxy_headers(
@@ -1062,8 +1063,7 @@ class ProxyManager(PoolManager):
         *,
         multiplexed: Literal[False] = ...,
         **kw: typing.Any,
-    ) -> HTTPResponse:
-        ...
+    ) -> HTTPResponse: ...
 
     @typing.overload
     def urlopen(
@@ -1074,8 +1074,7 @@ class ProxyManager(PoolManager):
         *,
         multiplexed: Literal[True],
         **kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     def urlopen(
         self,

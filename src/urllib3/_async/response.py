@@ -119,7 +119,9 @@ class AsyncHTTPResponse(HTTPResponse):
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
 
-        self._police_officer: AsyncTrafficPolice[AsyncHTTPConnection] | None = police_officer  # type: ignore[assignment]
+        self._police_officer: AsyncTrafficPolice[AsyncHTTPConnection] | None = (
+            police_officer  # type: ignore[assignment]
+        )
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)

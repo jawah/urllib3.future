@@ -75,9 +75,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self._shutdown: bool = False
 
-        self.__ctx_cursor: contextvars.ContextVar[
-            ActiveCursor[T] | None
-        ] = contextvars.ContextVar("cursor", default=None)
+        self.__ctx_cursor: contextvars.ContextVar[ActiveCursor[T] | None] = (
+            contextvars.ContextVar("cursor", default=None)
+        )
 
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
@@ -655,9 +655,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             try:
                 await conn_or_pool.close()
-            except (
-                Exception
-            ):  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
+            except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
                 pass
 
             self._map_clear(conn_or_pool)

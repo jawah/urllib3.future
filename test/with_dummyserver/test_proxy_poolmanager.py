@@ -178,7 +178,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
 
     def test_oldapi(self) -> None:
         with ProxyManager(
-            connection_from_url(self.proxy_url), ca_certs=DEFAULT_CA  # type: ignore[arg-type]
+            connection_from_url(self.proxy_url),
+            ca_certs=DEFAULT_CA,  # type: ignore[arg-type]
         ) as http:
             r = http.request("GET", f"{self.http_url}/")
             assert r.status == 200

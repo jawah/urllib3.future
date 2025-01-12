@@ -34,20 +34,16 @@ class TrafficState(int, Enum):
     SATURATED = 2
 
 
-class TrafficPoliceFine(Exception):
-    ...
+class TrafficPoliceFine(Exception): ...
 
 
-class OverwhelmedTraffic(TrafficPoliceFine, queue.Full):
-    ...
+class OverwhelmedTraffic(TrafficPoliceFine, queue.Full): ...
 
 
-class UnavailableTraffic(TrafficPoliceFine, queue.Empty):
-    ...
+class UnavailableTraffic(TrafficPoliceFine, queue.Empty): ...
 
 
-class AtomicTraffic(TrafficPoliceFine, queue.Empty):
-    ...
+class AtomicTraffic(TrafficPoliceFine, queue.Empty): ...
 
 
 def traffic_state_of(manageable_traffic: ManageableTraffic) -> TrafficState:
@@ -695,9 +691,7 @@ class TrafficPolice(typing.Generic[T]):
 
                 try:
                     conn_or_pool.close()
-                except (
-                    Exception
-                ):  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
+                except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
                     pass
 
                 self._map_clear(conn_or_pool)

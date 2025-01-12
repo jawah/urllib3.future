@@ -644,8 +644,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         *,
         multiplexed: Literal[False] = ...,
         **kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def urlopen(
@@ -656,8 +655,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         *,
         multiplexed: Literal[True],
         **kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def urlopen(
         self, method: str, url: str, redirect: bool = True, **kw: typing.Any
@@ -895,7 +893,10 @@ class AsyncProxyManager(AsyncPoolManager):
             )
 
         return await super().connection_from_host(
-            self.proxy.host, self.proxy.port, self.proxy.scheme, pool_kwargs=pool_kwargs  # type: ignore[union-attr]
+            self.proxy.host,
+            self.proxy.port,
+            self.proxy.scheme,
+            pool_kwargs=pool_kwargs,  # type: ignore[union-attr]
         )
 
     def _set_proxy_headers(
@@ -924,8 +925,7 @@ class AsyncProxyManager(AsyncPoolManager):
         *,
         multiplexed: Literal[False] = ...,
         **kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def urlopen(
@@ -936,8 +936,7 @@ class AsyncProxyManager(AsyncPoolManager):
         *,
         multiplexed: Literal[True],
         **kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def urlopen(
         self,
