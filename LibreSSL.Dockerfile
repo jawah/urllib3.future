@@ -16,6 +16,6 @@ COPY ./test test/
 COPY ./dummyserver dummyserver/
 COPY ./ci ci/
 
-COPY noxfile.py LICENSE.txt pyproject.toml README.md setup.cfg hatch_build.py dev-requirements.txt mypy-requirements.txt ./
+COPY noxfile.py LICENSE.txt pyproject.toml README.md hatch_build.py dev-requirements.txt mypy-requirements.txt ./
 
 CMD nox -s test-3.7
