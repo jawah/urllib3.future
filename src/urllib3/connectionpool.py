@@ -1633,7 +1633,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             retries = Retry.from_int(retries, redirect=redirect, default=self.retries)
 
         if release_conn is None:
-            release_conn = preload_content
+            release_conn = True
 
         # Check host
         if assert_same_host and not self.is_same_host(url):
@@ -1744,7 +1744,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 response.set_parameter("assert_same_host", assert_same_host)
                 response.set_parameter("chunked", chunked)
                 response.set_parameter("body_pos", body_pos)
-                release_this_conn = True if not conn.is_saturated else False
 
             # Everything went great!
             clean_exit = True
@@ -1809,27 +1808,25 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 # Close the connection, set the variable to None, and make sure
                 # we put the None back in the pool to avoid leaking it.
                 if conn:
-                    conn.close()
                     self.pool.kill_cursor()  # type: ignore[union-attr]
                     conn = None
-                release_this_conn = True
-            elif conn and conn.is_multiplexed is True:
-                # multiplexing allows us to issue more requests.
+
                 release_this_conn = True
 
-            if release_this_conn is True and conn is not None:
-                # Put the connection back to be reused. If the connection is
-                # expired then it will be None, which will get replaced with a
-                # fresh connection during _get_conn.
-                self._put_conn(conn)
-                if (
-                    clean_exit
-                    and isinstance(response, ResponsePromise)
-                    and self.pool is not None
-                ):
-                    self.pool.memorize(response, conn)
-            elif release_this_conn is True and self.pool is not None:
-                self.pool.kill_cursor()
+            if (
+                clean_exit is True
+                and conn is not None
+                and isinstance(response, ResponsePromise) is True
+            ):
+                self.pool.memorize(response, conn)  # type: ignore[union-attr]
+
+            if release_this_conn is True:
+                if conn is not None:
+                    assert self.pool is not None
+                    if self.pool.is_held(conn) is True:
+                        self._put_conn(conn)
+                else:
+                    self.pool.kill_cursor()  # type: ignore[union-attr]
 
         if not conn:
             # Try again

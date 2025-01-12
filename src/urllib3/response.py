@@ -575,9 +575,11 @@ class HTTPResponse(io.IOBase):
         if not self._connection:
             return None
 
-        if self._police_officer is not None:
-            if self._police_officer.busy:
-                self._police_officer.release()
+        if (
+            self._police_officer is not None
+            and self._police_officer.is_held(self._connection) is True
+        ):
+            self._police_officer.release()
 
         self._connection = None
 
@@ -872,7 +874,7 @@ class HTTPResponse(io.IOBase):
                 if 0 < amt <= len(self._decoded_buffer):
                     return self._decoded_buffer.get(amt)
 
-            if self._police_officer is not None and not self._police_officer.busy:
+            if self._police_officer is not None:
                 with self._police_officer.borrow(self):
                     data = self._raw_read(amt)
             else:
@@ -911,10 +913,7 @@ class HTTPResponse(io.IOBase):
                     # TODO make sure to initially read enough data to get past the headers
                     # For example, the GZ file header takes 10 bytes, we don't want to read
                     # it one byte at a time
-                    if (
-                        self._police_officer is not None
-                        and not self._police_officer.busy
-                    ):
+                    if self._police_officer is not None:
                         with self._police_officer.borrow(self):
                             data = self._raw_read(amt)
                     else:
@@ -938,8 +937,6 @@ class HTTPResponse(io.IOBase):
                     or self._fp._dsa.closed is True  # type: ignore[union-attr]
                 ):
                     self._police_officer.forget(self)
-                    if self._police_officer.busy:
-                        self._police_officer.release()
                     self._police_officer = None
 
     def stream(

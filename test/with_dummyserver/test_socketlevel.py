@@ -727,7 +727,9 @@ class TestSocketClosing(SocketDummyServerTestCase):
             response = pool.urlopen(
                 "GET", "/", retries=0, preload_content=False, timeout=LONG_TIMEOUT
             )
-            assert 0 == pool.pool.qsize()
+            assert (
+                1 == pool.pool.qsize()
+            )  # we always put the conn back now (since v2.12.907)
             try:
                 with pytest.raises(ReadTimeoutError):
                     response.read()
@@ -802,7 +804,9 @@ class TestSocketClosing(SocketDummyServerTestCase):
             assert pool.pool is not None
             assert 0 == pool.pool.qsize()
             response = pool.request("GET", "/", retries=0, preload_content=False)
-            assert 0 == pool.pool.qsize()
+            assert (
+                1 == pool.pool.qsize()
+            )  # we always put the conn back now (since v2.12.907)
 
             with pytest.raises(ProtocolError):
                 response.read()

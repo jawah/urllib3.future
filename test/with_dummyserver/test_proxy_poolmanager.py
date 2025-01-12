@@ -207,6 +207,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
 
             conn = https_pool._new_conn()
             assert conn.__class__ == VerifiedHTTPSConnection
+            https_pool.pool.put(conn)  # type: ignore[union-attr]
+
             https_pool.request("GET", "/")  # Should succeed without exceptions.
 
             https_pool.close()
