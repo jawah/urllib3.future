@@ -6,7 +6,7 @@
   <a href="https://pypi.org/project/urllib3-future"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3-future.svg?maxAge=86400" /></a>
   <a href="https://pypi.org/project/urllib3-future"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3-future.svg?maxAge=86400" /></a>
   <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
-  <br><small>✨🍰 Enjoy HTTP like its 2024 🍰✨</small>
+  <br><small>✨🍰 Enjoy HTTP like its 2025 🍰✨</small>
   <br><small>💰 Promotional offer, get everything and more for <del>40k</del> <b>0</b>$!</small>
   <br><small>Wondering why and how this fork exist? Why urllib3 is stuck? <a href="https://medium.com/@ahmed.tahri/revived-the-promise-made-six-years-ago-for-requests-3-37b440e6a064">Take a peek at this article!</a></small>
 </p>
@@ -37,6 +37,7 @@
 - Post-Quantum Security with QUIC.
 - Detailed connection inspection.
 - HTTP/2 with prior knowledge.
+- Support for free-threaded.
 - Server Side Event (SSE).
 - Multiplexed connection.
 - Mirrored Sync & Async.
