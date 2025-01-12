@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from urllib3 import HTTPHeaderDict
-from urllib3.backend import HttpVersion, LowLevelResponse
+from urllib3.backend import LowLevelResponse
 from urllib3.exceptions import (
     DecodeError,
     IncompleteRead,
@@ -922,9 +922,7 @@ class TestResponse:
         ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
             return b"", True, None
 
-        r = LowLevelResponse(
-            "HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock
-        )  # type: ignore[arg-type]
+        r = LowLevelResponse("HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
         resp = HTTPResponse(
             r,
             preload_content=False,
@@ -1028,9 +1026,7 @@ class TestResponse:
             idx += 1
             return d, False, None
 
-        r = LowLevelResponse(
-            "GET", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock
-        )  # type: ignore[arg-type]
+        r = LowLevelResponse("GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
 
         headers = {"transfer-encoding": "chunked", "content-encoding": "gzip"}
         resp = HTTPResponse(r, preload_content=False, headers=headers)

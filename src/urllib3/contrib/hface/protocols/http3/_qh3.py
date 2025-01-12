@@ -487,17 +487,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         for endpoint in x509_certificate.get_ocsp_endpoints():
             decoded_endpoint = endpoint.decode()
 
-            peer_info["OCSP"].append(
+            peer_info["OCSP"].append(  # type: ignore[attr-defined]
                 decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
-            )  # type: ignore[attr-defined]
+            )
 
         peer_info["caIssuers"] = []
 
         for endpoint in x509_certificate.get_issuer_endpoints():
             decoded_endpoint = endpoint.decode()
-            peer_info["caIssuers"].append(
+            peer_info["caIssuers"].append(  # type: ignore[attr-defined]
                 decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
-            )  # type: ignore[attr-defined]
+            )
 
         peer_info["crlDistributionPoints"] = []
 

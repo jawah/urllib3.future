@@ -892,11 +892,13 @@ class AsyncProxyManager(AsyncPoolManager):
                 host, port, scheme, pool_kwargs=pool_kwargs
             )
 
+        assert self.proxy is not None
+
         return await super().connection_from_host(
             self.proxy.host,
             self.proxy.port,
             self.proxy.scheme,
-            pool_kwargs=pool_kwargs,  # type: ignore[union-attr]
+            pool_kwargs=pool_kwargs,
         )
 
     def _set_proxy_headers(
