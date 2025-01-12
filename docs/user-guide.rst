@@ -121,7 +121,7 @@ The :class:`~response.HTTPResponse` object provides
 
 JSON Content
 ~~~~~~~~~~~~
-JSON content can be loaded by :meth:`~response.HTTPResponse.json` 
+JSON content can be loaded by :meth:`~response.HTTPResponse.json`
 method of the response:
 
 .. code-block:: python
@@ -134,7 +134,7 @@ method of the response:
     # {"origin": "127.0.0.1"}
 
 Alternatively, Custom JSON libraries such as `orjson` can be used to encode data,
-retrieve data by decoding and deserializing the :attr:`~response.HTTPResponse.data` 
+retrieve data by decoding and deserializing the :attr:`~response.HTTPResponse.data`
 attribute of the request:
 
 .. code-block:: python
@@ -256,7 +256,7 @@ the ``;`` delimited key-value pairs:
     )
 
     print(resp.json())
-    # {"cookies": {"id": "30", "session": "f3efe9db"}}  
+    # {"cookies": {"id": "30", "session": "f3efe9db"}}
 
 Cookies provided by the server are stored in the ``Set-Cookie`` header:
 
@@ -330,7 +330,7 @@ dictionary in the ``fields`` argument provided to
         "https://httpbin.org/post",
         fields={"field": "value"}
     )
-    
+
     print(resp.json()["form"])
     # {"field": "value"}
 
@@ -339,10 +339,10 @@ dictionary in the ``fields`` argument provided to
 JSON
 ~~~~
 
-To send JSON in the body of a request, provide the data in the ``json`` argument to 
+To send JSON in the body of a request, provide the data in the ``json`` argument to
 :meth:`~urllib3.PoolManager.request` and  urllib3 will automatically encode the data
-using the ``json`` module with ``UTF-8`` encoding. 
-In addition, when ``json`` is provided, the ``"Content-Type"`` in headers is set to 
+using the ``json`` module with ``UTF-8`` encoding.
+In addition, when ``json`` is provided, the ``"Content-Type"`` in headers is set to
 ``"application/json"`` if not specified otherwise.
 
 .. code-block:: python
@@ -357,9 +357,9 @@ In addition, when ``json`` is provided, the ``"Content-Type"`` in headers is set
     )
 
     print(resp.json())
-    # {'headers': {'Content-Type': 'application/json', ...}, 
+    # {'headers': {'Content-Type': 'application/json', ...},
     #  'data': '{"attribute":"value"}', 'json': {'attribute': 'value'}, ...}
-    
+
 Files & Binary Data
 ~~~~~~~~~~~~~~~~~~~
 
@@ -374,7 +374,7 @@ approach as :ref:`form_data` and specify the file field as a tuple of
     # Reading the text file from local storage.
     with open("example.txt") as fp:
         file_data = fp.read()
-    
+
     # Sending the request.
     resp = urllib3.request(
         "POST",
@@ -383,7 +383,7 @@ approach as :ref:`form_data` and specify the file field as a tuple of
            "filefield": ("example.txt", file_data),
         }
     )
-    
+
     print(resp.json()["files"])
     # {"filefield": "..."}
 
@@ -602,7 +602,7 @@ the timeout at the :class:`~urllib3.poolmanager.PoolManager` level:
     import urllib3
 
     http = urllib3.PoolManager(timeout=3.0)
-    
+
     http = urllib3.PoolManager(
         timeout=urllib3.Timeout(connect=1.0, read=2.0)
     )
@@ -683,7 +683,7 @@ To disable redirects but keep the retrying logic, specify ``redirect=False``:
         "https://httpbin.org/redirect/1",
         redirect=False
     )
-    
+
     print(resp.status)
     # 302
 
@@ -714,7 +714,7 @@ You can also disable exceptions for too many redirects and just return the
             raise_on_redirect=False
         )
     )
-    
+
     print(resp.status)
     # 302
 

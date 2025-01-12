@@ -228,9 +228,9 @@ class HfaceBackend(BaseBackend):
         return None
 
     def _upgrade(self) -> None:
-        assert (
-            self._response is not None
-        ), "attempt to call _upgrade() prior to successful getresponse()"
+        assert self._response is not None, (
+            "attempt to call _upgrade() prior to successful getresponse()"
+        )
         assert self.sock is not None
         assert self._svn is not None
 
@@ -299,9 +299,9 @@ class HfaceBackend(BaseBackend):
 
             if upgradable_svn == HttpVersion.h3:
                 if self._preemptive_quic_cache is not None:
-                    self._preemptive_quic_cache[
-                        (self.host, self.port or 443)
-                    ] = self.__alt_authority
+                    self._preemptive_quic_cache[(self.host, self.port or 443)] = (
+                        self.__alt_authority
+                    )
 
                     if (self.host, self.port or 443) not in self._preemptive_quic_cache:
                         return
@@ -415,12 +415,12 @@ class HfaceBackend(BaseBackend):
 
     def _post_conn(self) -> None:
         if self._tunnel_host is None:
-            assert (
-                self._protocol is None
-            ), "_post_conn() must be called when socket is closed or unset"
-        assert (
-            self.sock is not None
-        ), "probable attempt to call _post_conn() prior to successful _new_conn()"
+            assert self._protocol is None, (
+                "_post_conn() must be called when socket is closed or unset"
+            )
+        assert self.sock is not None, (
+            "probable attempt to call _post_conn() prior to successful _new_conn()"
+        )
 
         # first request was not made yet // need to infer what protocol to use.
         if self._svn is None:

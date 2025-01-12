@@ -107,26 +107,22 @@ class OverQUICProtocol(OverUDPProtocol):
         raise NotImplementedError
 
     @typing.overload
-    def getpeercert(self, *, binary_form: Literal[True]) -> bytes:
-        ...
+    def getpeercert(self, *, binary_form: Literal[True]) -> bytes: ...
 
     @typing.overload
-    def getpeercert(self, *, binary_form: Literal[False] = ...) -> dict[str, Any]:
-        ...
+    def getpeercert(self, *, binary_form: Literal[False] = ...) -> dict[str, Any]: ...
 
     @abstractmethod
     def getpeercert(self, *, binary_form: bool = False) -> bytes | dict[str, Any]:
         raise NotImplementedError
 
     @typing.overload
-    def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None:
-        ...
+    def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None: ...
 
     @typing.overload
     def getissuercert(
         self, *, binary_form: Literal[False] = ...
-    ) -> dict[str, Any] | None:
-        ...
+    ) -> dict[str, Any] | None: ...
 
     @abstractmethod
     def getissuercert(

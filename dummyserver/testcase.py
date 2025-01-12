@@ -311,9 +311,7 @@ class ConnectionMarker:
 
     @classmethod
     @contextlib.contextmanager
-    def mark(
-        cls, monkeypatch: pytest.MonkeyPatch
-    ) -> typing.Generator[None, None, None]:
+    def mark(cls, monkeypatch: pytest.MonkeyPatch) -> typing.Generator[None]:
         """
         Mark connections under in that context.
         """
@@ -321,7 +319,7 @@ class ConnectionMarker:
         orig_request = HTTPConnection.request
 
         def call_and_mark(
-            target: typing.Callable[..., None]
+            target: typing.Callable[..., None],
         ) -> typing.Callable[..., None]:
             def part(
                 self: HTTPConnection, *args: typing.Any, **kwargs: typing.Any

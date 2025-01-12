@@ -288,9 +288,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
     """
 
     scheme = "http"
-    ConnectionCls: (
-        type[AsyncHTTPConnection] | type[AsyncHTTPSConnection]
-    ) = AsyncHTTPConnection
+    ConnectionCls: type[AsyncHTTPConnection] | type[AsyncHTTPSConnection] = (
+        AsyncHTTPConnection
+    )
 
     def __init__(
         self,
@@ -1116,8 +1116,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         extension: AsyncExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[True],
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     @typing.overload
     async def _make_request(
@@ -1144,8 +1143,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         extension: AsyncExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[False] = ...,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     async def _make_request(
         self,
@@ -1474,8 +1472,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         *,
         multiplexed: Literal[False] = ...,
         **response_kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def urlopen(
@@ -1505,8 +1502,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         *,
         multiplexed: Literal[True],
         **response_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def urlopen(
         self,

@@ -83,10 +83,7 @@ class TestCookies(SocketDummyServerTestCase):
                 buf += sock.recv(65536)
 
             sock.send(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Set-Cookie: foo=1\r\n"
-                b"Set-Cookie: bar=1\r\n"
-                b"\r\n"
+                b"HTTP/1.1 200 OK\r\nSet-Cookie: foo=1\r\nSet-Cookie: bar=1\r\n\r\n"
             )
             sock.close()
 
@@ -117,9 +114,9 @@ class TestSNI(SocketDummyServerTestCase):
                 pass
             successful = done_receiving.wait(LONG_TIMEOUT)
             assert successful, "Timed out waiting for connection accept"
-            assert (
-                self.host.encode("ascii") in self.buf
-            ), "missing hostname in SSL handshake"
+            assert self.host.encode("ascii") in self.buf, (
+                "missing hostname in SSL handshake"
+            )
 
 
 class TestALPN(SocketDummyServerTestCase):
@@ -146,9 +143,9 @@ class TestALPN(SocketDummyServerTestCase):
             successful = done_receiving.wait(LONG_TIMEOUT)
             assert successful, "Timed out waiting for connection accept"
             for protocol in util.ALPN_PROTOCOLS:
-                assert (
-                    protocol.encode("ascii") in self.buf
-                ), "missing ALPN protocol in SSL handshake"
+                assert protocol.encode("ascii") in self.buf, (
+                    "missing ALPN protocol in SSL handshake"
+                )
 
 
 def original_ssl_wrap_socket(
@@ -989,25 +986,28 @@ class TestSocketClosing(SocketDummyServerTestCase):
     def test_socket_close_socket_then_file(self) -> None:
         def consume_ssl_socket(listener: socket.socket) -> None:
             try:
-                with listener.accept()[0] as sock, original_ssl_wrap_socket(
-                    sock,
-                    server_side=True,
-                    keyfile=DEFAULT_CERTS["keyfile"],
-                    certfile=DEFAULT_CERTS["certfile"],
-                    ca_certs=DEFAULT_CA,
-                ) as ssl_sock:
+                with (
+                    listener.accept()[0] as sock,
+                    original_ssl_wrap_socket(
+                        sock,
+                        server_side=True,
+                        keyfile=DEFAULT_CERTS["keyfile"],
+                        certfile=DEFAULT_CERTS["certfile"],
+                        ca_certs=DEFAULT_CA,
+                    ) as ssl_sock,
+                ):
                     consume_socket(ssl_sock)
             except (ConnectionResetError, ConnectionAbortedError, OSError):
                 pass
 
         self._start_server(consume_ssl_socket)
-        with socket.create_connection(
-            (self.host, self.port)
-        ) as sock, contextlib.closing(
-            ssl_wrap_socket(sock, server_hostname=self.host, ca_certs=DEFAULT_CA)
-        ) as ssl_sock, ssl_sock.makefile(
-            "rb"
-        ) as f:
+        with (
+            socket.create_connection((self.host, self.port)) as sock,
+            contextlib.closing(
+                ssl_wrap_socket(sock, server_hostname=self.host, ca_certs=DEFAULT_CA)
+            ) as ssl_sock,
+            ssl_sock.makefile("rb") as f,
+        ):
             ssl_sock.close()
             f.close()
             # SecureTransport is supposed to raise OSError but raises
@@ -1021,24 +1021,27 @@ class TestSocketClosing(SocketDummyServerTestCase):
 
         def consume_ssl_socket(listener: socket.socket) -> None:
             try:
-                with listener.accept()[0] as sock, original_ssl_wrap_socket(
-                    sock,
-                    server_side=True,
-                    keyfile=DEFAULT_CERTS["keyfile"],
-                    certfile=DEFAULT_CERTS["certfile"],
-                    ca_certs=DEFAULT_CA,
+                with (
+                    listener.accept()[0] as sock,
+                    original_ssl_wrap_socket(
+                        sock,
+                        server_side=True,
+                        keyfile=DEFAULT_CERTS["keyfile"],
+                        certfile=DEFAULT_CERTS["certfile"],
+                        ca_certs=DEFAULT_CA,
+                    ),
                 ):
                     quit_event.wait()
             except (ConnectionResetError, ConnectionAbortedError, OSError, SSLError):
                 pass
 
         self._start_server(consume_ssl_socket)
-        with socket.create_connection(
-            (self.host, self.port)
-        ) as sock, contextlib.closing(
-            ssl_wrap_socket(sock, server_hostname=self.host, ca_certs=DEFAULT_CA)
-        ) as ssl_sock, ssl_sock.makefile(
-            "rb"
+        with (
+            socket.create_connection((self.host, self.port)) as sock,
+            contextlib.closing(
+                ssl_wrap_socket(sock, server_hostname=self.host, ca_certs=DEFAULT_CA)
+            ) as ssl_sock,
+            ssl_sock.makefile("rb"),
         ):
             ssl_sock.close()
             ssl_sock.close()
@@ -1383,7 +1386,7 @@ class TestProxyManager(SocketDummyServerTestCase):
 
             errored.set()  # Avoid a ConnectionAbortedError on Windows.
 
-            assert type(e.value.reason) == ProxyError
+            assert type(e.value.reason) is ProxyError
             assert "Your proxy appears to only use HTTP and not HTTPS" in str(
                 e.value.reason
             )
@@ -1766,16 +1769,14 @@ class TestSSL(SocketDummyServerTestCase):
 class TestErrorWrapping(SocketDummyServerTestCase):
     def test_bad_statusline(self) -> None:
         self.start_response_handler(
-            b"HTTP/1.1 Omg What Is This?\r\n" b"Content-Length: 0\r\n" b"\r\n"
+            b"HTTP/1.1 Omg What Is This?\r\nContent-Length: 0\r\n\r\n"
         )
         with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
             with pytest.raises(ProtocolError):
                 pool.request("GET", "/")
 
     def test_unknown_protocol(self) -> None:
-        self.start_response_handler(
-            b"HTTP/1000 200 OK\r\n" b"Content-Length: 0\r\n" b"\r\n"
-        )
+        self.start_response_handler(b"HTTP/1000 200 OK\r\nContent-Length: 0\r\n\r\n")
         with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
             with pytest.raises(ProtocolError):
                 pool.request("GET", "/")
@@ -2011,7 +2012,7 @@ class TestHeaders(SocketDummyServerTestCase):
         ]
 
         def filter_non_x_headers(
-            d: typing.OrderedDict[str, str]
+            d: typing.OrderedDict[str, str],
         ) -> list[tuple[str, str]]:
             return [(k, v) for (k, v) in d.items() if k.startswith("X-Header-")]
 
@@ -2112,9 +2113,7 @@ class TestHeaders(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2145,11 +2144,7 @@ class TestBrokenHeaders(SocketDummyServerTestCase):
         self, headers: list[bytes], unparsed_data_check: str | None = None
     ) -> None:
         self.start_response_handler(
-            (
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Length: 0\r\n"
-                b"Content-type: text/plain\r\n"
-            )
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-type: text/plain\r\n")
             + b"\r\n".join(headers)
             + b"\r\n\r\n"
         )
@@ -2175,7 +2170,7 @@ class TestBrokenHeaders(SocketDummyServerTestCase):
 class TestHeaderParsingContentType(SocketDummyServerTestCase):
     def _test_okay_header_parsing(self, header: bytes) -> None:
         self.start_response_handler(
-            (b"HTTP/1.1 200 OK\r\n" b"Content-Length: 0\r\n") + header + b"\r\n\r\n"
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n") + header + b"\r\n\r\n"
         )
 
         with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
@@ -2485,9 +2480,7 @@ class TestContentFraming(SocketDummyServerTestCase):
             while not buffer.endswith(b"\r\n\r\n"):
                 buffer += sock.recv(65536)
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2527,16 +2520,14 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
         body: typing.Any
         if body_type == "generator":
 
-            def body_generator() -> typing.Generator[bytes, None, None]:
+            def body_generator() -> typing.Generator[bytes]:
                 yield b"x" * 10
 
             body = body_generator()
@@ -2585,9 +2576,7 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2596,7 +2585,7 @@ class TestContentFraming(SocketDummyServerTestCase):
         body: typing.Any
         if body_type == "generator":
 
-            def body_generator() -> typing.Generator[bytes, None, None]:
+            def body_generator() -> typing.Generator[bytes]:
                 yield b"x" * 10
 
             body = body_generator()
@@ -2661,9 +2650,7 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2695,9 +2682,7 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2731,9 +2716,7 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2743,7 +2726,10 @@ class TestContentFraming(SocketDummyServerTestCase):
             self.host, self.port, timeout=LONG_TIMEOUT, retries=False
         ) as pool:
             resp = pool.request(
-                "POST", "/", body="{}", headers={"Content-Type": b"application/json"}  # type: ignore[dict-item]
+                "POST",
+                "/",
+                body="{}",
+                headers={"Content-Type": b"application/json"},  # type: ignore[dict-item]
             )
             assert resp.status == 200
 
@@ -2767,9 +2753,7 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 
@@ -2834,9 +2818,7 @@ class TestContentFraming(SocketDummyServerTestCase):
                     continue
 
             sock.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: example.com\r\n"
-                b"Content-Length: 0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
             )
             sock.close()
 

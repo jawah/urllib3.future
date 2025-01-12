@@ -16,7 +16,7 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
 
         self._last_event_id: str | None = None
         self._buffer: str = ""
-        self._stream: typing.AsyncGenerator[bytes, None] | None = None
+        self._stream: typing.AsyncGenerator[bytes] | None = None
 
     @staticmethod
     def supported_svn() -> set[HttpVersion]:
@@ -57,14 +57,12 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
         return {"accept": "text/event-stream", "cache-control": "no-store"}
 
     @typing.overload
-    async def next_payload(self, *, raw: typing.Literal[True] = True) -> str | None:
-        ...
+    async def next_payload(self, *, raw: typing.Literal[True] = True) -> str | None: ...
 
     @typing.overload
     async def next_payload(
         self, *, raw: typing.Literal[False] = False
-    ) -> ServerSentEvent | None:
-        ...
+    ) -> ServerSentEvent | None: ...
 
     async def next_payload(self, *, raw: bool = False) -> ServerSentEvent | str | None:
         """Unpack the next received message/payload from remote."""

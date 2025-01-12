@@ -64,8 +64,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **kw: typing.Any,
-    ) -> HTTPResponse:
-        ...
+    ) -> HTTPResponse: ...
 
     @typing.overload
     def urlopen(
@@ -79,8 +78,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[True],
         **kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     def urlopen(
         self,
@@ -109,8 +107,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **urlopen_kw: typing.Any,
-    ) -> HTTPResponse:
-        ...
+    ) -> HTTPResponse: ...
 
     @typing.overload
     def request(
@@ -124,8 +121,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[True],
         **urlopen_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     def request(
         self,
@@ -157,7 +153,7 @@ class RequestMethods:
         if json is not None:
             if headers is None:
                 headers = self.headers.copy()  # type: ignore
-            if not ("content-type" in map(str.lower, headers.keys())):
+            if "content-type" not in map(str.lower, headers.keys()):
                 headers["Content-Type"] = "application/json"  # type: ignore
 
             body = _json.dumps(json, separators=(",", ":"), ensure_ascii=False).encode(
@@ -194,8 +190,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **urlopen_kw: typing.Any,
-    ) -> HTTPResponse:
-        ...
+    ) -> HTTPResponse: ...
 
     @typing.overload
     def request_encode_url(
@@ -207,8 +202,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[True],
         **urlopen_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     def request_encode_url(
         self,
@@ -245,8 +239,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **urlopen_kw: typing.Any,
-    ) -> HTTPResponse:
-        ...
+    ) -> HTTPResponse: ...
 
     @typing.overload
     def request_encode_body(
@@ -260,8 +253,7 @@ class RequestMethods:
         *,
         multiplexed: Literal[True],
         **urlopen_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     def request_encode_body(
         self,
@@ -384,8 +376,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def urlopen(
@@ -399,8 +390,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[True],
         **kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def urlopen(
         self,
@@ -429,8 +419,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **urlopen_kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def request(
@@ -444,8 +433,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[True],
         **urlopen_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def request(
         self,
@@ -477,7 +465,7 @@ class AsyncRequestMethods:
         if json is not None:
             if headers is None:
                 headers = self.headers.copy()  # type: ignore
-            if not ("content-type" in map(str.lower, headers.keys())):
+            if "content-type" not in map(str.lower, headers.keys()):
                 headers["Content-Type"] = "application/json"  # type: ignore
 
             body = _json.dumps(json, separators=(",", ":"), ensure_ascii=False).encode(
@@ -514,8 +502,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **urlopen_kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def request_encode_url(
@@ -527,8 +514,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[True],
         **urlopen_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def request_encode_url(
         self,
@@ -565,8 +551,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[False] = ...,
         **urlopen_kw: typing.Any,
-    ) -> AsyncHTTPResponse:
-        ...
+    ) -> AsyncHTTPResponse: ...
 
     @typing.overload
     async def request_encode_body(
@@ -580,8 +565,7 @@ class AsyncRequestMethods:
         *,
         multiplexed: Literal[True],
         **urlopen_kw: typing.Any,
-    ) -> ResponsePromise:
-        ...
+    ) -> ResponsePromise: ...
 
     async def request_encode_body(
         self,

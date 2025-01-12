@@ -26,6 +26,7 @@ Factories unify access to the creation of the protocol instances,
 so that clients and servers can swap protocol implementations,
 delegating the initialization to factories.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -44,9 +45,9 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
         **kwargs: Any,
     ) -> HTTPOverQUICProtocol | HTTPOverTCPProtocol:
         """Create a new state-machine that target given protocol type."""
-        assert (
-            type_protocol != HTTPProtocol
-        ), "HTTPProtocol is ambiguous and cannot be requested in the factory."
+        assert type_protocol != HTTPProtocol, (
+            "HTTPProtocol is ambiguous and cannot be requested in the factory."
+        )
 
         package_name: str = __name__.split(".")[0]
 
@@ -82,8 +83,8 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
                 "Make sure your implementation inherit either from HTTPOverQUICProtocol or HTTPOverTCPProtocol."
             )
 
-        implementation_target: type[
-            HTTPOverQUICProtocol | HTTPOverTCPProtocol
-        ] = implementations.pop()[1]
+        implementation_target: type[HTTPOverQUICProtocol | HTTPOverTCPProtocol] = (
+            implementations.pop()[1]
+        )
 
         return implementation_target(**kwargs)

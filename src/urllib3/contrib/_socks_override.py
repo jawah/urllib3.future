@@ -7,6 +7,7 @@ Reasoning behind this:
 1) python-socks requires another dependency, namely asyncio-timeout, that is one too much for us.
 2) it does not support our AsyncSocket wrapper (it has his own internally)
 """
+
 from __future__ import annotations
 
 import asyncio

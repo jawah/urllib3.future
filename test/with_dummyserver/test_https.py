@@ -856,7 +856,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             finally:
                 conn.close()
 
-        assert [str(wm) for wm in w if wm.category != ResourceWarning] == []
+        assert [str(wm) for wm in w if wm.category is not ResourceWarning] == []
 
     def test_no_tls_version_deprecation_with_ssl_context(self) -> None:
         if self.tls_protocol_name is None:
@@ -877,7 +877,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             finally:
                 conn.close()
 
-        assert [str(wm) for wm in w if wm.category != ResourceWarning] == []
+        assert [str(wm) for wm in w if wm.category is not ResourceWarning] == []
 
     def test_tls_version_maximum_and_minimum(self) -> None:
         if self.tls_protocol_name is None:
@@ -927,10 +927,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert keylog_file.is_file(), "keylogfile '%s' should exist" % str(
                 keylog_file
             )
-            assert keylog_file.read_text().startswith(
-                "# TLS secrets log file"
-            ), "keylogfile '%s' should start with '# TLS secrets log file'" % str(
-                keylog_file
+            assert keylog_file.read_text().startswith("# TLS secrets log file"), (
+                "keylogfile '%s' should start with '# TLS secrets log file'"
+                % str(keylog_file)
             )
 
     @pytest.mark.parametrize("sslkeylogfile", [None, ""])
@@ -1116,7 +1115,7 @@ class TestHTTPS_Hostname:
         # IP addresses should fail for commonName.
         else:
             assert err is not None
-            assert type(err.reason) == SSLError
+            assert type(err.reason) is SSLError
             assert isinstance(
                 err.reason.args[0], (ssl.SSLCertVerificationError, CertificateError)
             )

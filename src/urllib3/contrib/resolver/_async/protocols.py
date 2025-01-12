@@ -250,7 +250,7 @@ class AsyncManyResolver(AsyncBaseResolver):
 
     def __resolvers(
         self, constrained: bool = False
-    ) -> typing.Generator[AsyncBaseResolver, None, None]:
+    ) -> typing.Generator[AsyncBaseResolver]:
         resolvers = self._unconstrained if not constrained else self._constrained
 
         if not resolvers:

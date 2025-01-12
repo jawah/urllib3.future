@@ -339,9 +339,7 @@ class ManyResolver(BaseResolver):
     def is_available(self) -> bool:
         return not self._terminated
 
-    def __resolvers(
-        self, constrained: bool = False
-    ) -> typing.Generator[BaseResolver, None, None]:
+    def __resolvers(self, constrained: bool = False) -> typing.Generator[BaseResolver]:
         resolvers = self._unconstrained if not constrained else self._constrained
 
         if not resolvers:
@@ -544,8 +542,7 @@ COMMON_RCODE_LABEL: dict[int, str] = {
 }
 
 
-class DomainNameServerParseException(Exception):
-    ...
+class DomainNameServerParseException(Exception): ...
 
 
 class DomainNameServerReturn:

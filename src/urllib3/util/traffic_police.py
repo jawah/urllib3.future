@@ -34,20 +34,16 @@ class TrafficState(int, Enum):
     SATURATED = 2
 
 
-class TrafficPoliceFine(Exception):
-    ...
+class TrafficPoliceFine(Exception): ...
 
 
-class OverwhelmedTraffic(TrafficPoliceFine, queue.Full):
-    ...
+class OverwhelmedTraffic(TrafficPoliceFine, queue.Full): ...
 
 
-class UnavailableTraffic(TrafficPoliceFine, queue.Empty):
-    ...
+class UnavailableTraffic(TrafficPoliceFine, queue.Empty): ...
 
 
-class AtomicTraffic(TrafficPoliceFine, queue.Empty):
-    ...
+class AtomicTraffic(TrafficPoliceFine, queue.Empty): ...
 
 
 def traffic_state_of(manageable_traffic: ManageableTraffic) -> TrafficState:
@@ -339,7 +335,7 @@ class TrafficPolice(typing.Generic[T]):
             for indicator in traffic_indicators:
                 self.memorize(indicator, conn_or_pool)
 
-    def iter_idle(self) -> typing.Generator[T, None, None]:
+    def iter_idle(self) -> typing.Generator[T]:
         with self._lock:
             if self.busy is True:
                 raise AtomicTraffic(
@@ -602,7 +598,7 @@ class TrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
         not_idle_only: bool = False,
-    ) -> typing.Generator[T, None, None]:
+    ) -> typing.Generator[T]:
         try:
             cursor_key = current_thread().name
 
@@ -695,9 +691,7 @@ class TrafficPolice(typing.Generic[T]):
 
                 try:
                     conn_or_pool.close()
-                except (
-                    Exception
-                ):  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
+                except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
                     pass
 
                 self._map_clear(conn_or_pool)

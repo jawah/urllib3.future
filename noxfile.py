@@ -16,9 +16,7 @@ import nox
 
 
 @contextlib.contextmanager
-def traefik_boot(
-    session: nox.Session, *args: str
-) -> typing.Generator[None, None, None]:
+def traefik_boot(session: nox.Session, *args: str) -> typing.Generator[None]:
     """
     Start a server to reliably test HTTP/1.1, HTTP/2 and HTTP/3 over QUIC.
     """

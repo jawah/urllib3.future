@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from urllib3 import HTTPHeaderDict
-from urllib3.backend import HttpVersion, LowLevelResponse
+from urllib3.backend import LowLevelResponse
 from urllib3.exceptions import (
     DecodeError,
     IncompleteRead,
@@ -103,7 +103,7 @@ nP4HF2uWHA=="""
 
 
 @pytest.fixture
-def sock() -> typing.Generator[socket.socket, None, None]:
+def sock() -> typing.Generator[socket.socket]:
     s = socket.socket()
     yield s
     s.close()
@@ -922,7 +922,7 @@ class TestResponse:
         ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
             return b"", True, None
 
-        r = LowLevelResponse("HEAD", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
+        r = LowLevelResponse("HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
         resp = HTTPResponse(
             r,
             preload_content=False,
@@ -1005,7 +1005,7 @@ class TestResponse:
         assert actual_stream == expected_stream
 
     def test__iter__decode_content(self) -> None:
-        def stream() -> typing.Generator[bytes, None, None]:
+        def stream() -> typing.Generator[bytes]:
             # Set up a generator to chunk the gzipped body
             compress = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
             data = compress.compress(b"foo\nbar")
@@ -1026,7 +1026,7 @@ class TestResponse:
             idx += 1
             return d, False, None
 
-        r = LowLevelResponse("GET", 200, HttpVersion.h11, "OK", HTTPHeaderDict(), mock_sock)  # type: ignore[arg-type]
+        r = LowLevelResponse("GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
 
         headers = {"transfer-encoding": "chunked", "content-encoding": "gzip"}
         resp = HTTPResponse(r, preload_content=False, headers=headers)
@@ -1043,7 +1043,7 @@ class TestResponse:
         )
 
         @contextlib.contextmanager
-        def make_bad_mac_fp() -> typing.Generator[BytesIO, None, None]:
+        def make_bad_mac_fp() -> typing.Generator[BytesIO]:
             fp = BytesIO(b"")
             with mock.patch.object(fp, "read") as fp_read:
                 # mac/decryption error

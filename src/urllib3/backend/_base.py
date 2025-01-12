@@ -39,15 +39,15 @@ class ConnectionInfo:
 
         #: The SSL certificate presented by the remote peer (not the proxy)
         self.certificate_der: bytes | None = None
-        self.certificate_dict: dict[
-            str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
-        ] | None = None
+        self.certificate_dict: (
+            dict[str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str] | None
+        ) = None
 
         #: The SSL issuer certificate for the remote peer certificate (not the proxy)
         self.issuer_certificate_der: bytes | None = None
-        self.issuer_certificate_dict: dict[
-            str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str
-        ] | None = None
+        self.issuer_certificate_dict: (
+            dict[str, int | tuple[tuple[str, str], ...] | tuple[str, ...] | str] | None
+        ) = None
 
         #: The IP address used to reach the remote peer (not the proxy), that was yield by your resolver.
         self.destination_address: tuple[str, int] | None = None
@@ -100,16 +100,19 @@ class DirectStreamAccess:
         self._stream_id = stream_id
 
         if read is not None:
-            self._read: typing.Callable[
-                [int | None, bool], tuple[bytes, bool, HTTPHeaderDict | None]
-            ] | None = lambda amt, fo: read(amt, self._stream_id, amt is not None, fo)
+            self._read: (
+                typing.Callable[
+                    [int | None, bool], tuple[bytes, bool, HTTPHeaderDict | None]
+                ]
+                | None
+            ) = lambda amt, fo: read(amt, self._stream_id, amt is not None, fo)
         else:
             self._read = None
 
         if write is not None:
-            self._write: typing.Callable[
-                [bytes, bool], None
-            ] | None = lambda buf, eot: write(buf, self._stream_id, eot)
+            self._write: typing.Callable[[bytes, bool], None] | None = (
+                lambda buf, eot: write(buf, self._stream_id, eot)
+            )
         else:
             self._write = None
 
