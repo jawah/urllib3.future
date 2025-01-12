@@ -7,6 +7,8 @@
   and performance. We backported some improvements in ``AsyncTrafficPolice`` when applicable.
 - Improved error message whenever the pool capacity have been exhausted.
 - Fixed background discrete watcher that never reached some connections in the pool.
+- Bumped allowed upper bound for ``python-socks`` to 2.6.1 (we will have to manually increase the upper bound
+  each minor/patch version due to our complex integration that invoke private classes/APIs)
 
 2.12.906 (2024-01-03)
 =====================
