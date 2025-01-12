@@ -1,3 +1,13 @@
+2.12.907 (2024-01-12)
+=====================
+
+- Fixed our thread safety protection against the experimental freethreaded Python build.
+  As expected, the absence of GIL challenged our implementation of ``TrafficPolice`` and
+  took it to its knees. We reviewed the in-depht logic and improved it for maximum resilience
+  and performance. We backported some improvements in ``AsyncTrafficPolice`` when applicable.
+- Improved error message whenever the pool capacity have been exhausted.
+- Fixed background discrete watcher that never reached some connections in the pool.
+
 2.12.906 (2024-01-03)
 =====================
 
