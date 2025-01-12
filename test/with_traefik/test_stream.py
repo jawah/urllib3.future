@@ -63,12 +63,12 @@ class TestStreamResponse(TraefikTestCase):
                     print(e)
                     payload_reconstructed = None
 
-                assert (
-                    payload_reconstructed is not None
-                ), f"HTTP/{resp.version / 10} stream failure"
-                assert (
-                    "args" in payload_reconstructed
-                ), f"HTTP/{resp.version / 10} stream failure"
+                assert payload_reconstructed is not None, (
+                    f"HTTP/{resp.version / 10} stream failure"
+                )
+                assert "args" in payload_reconstructed, (
+                    f"HTTP/{resp.version / 10} stream failure"
+                )
 
     def test_read_zero(self) -> None:
         with HTTPSConnectionPool(

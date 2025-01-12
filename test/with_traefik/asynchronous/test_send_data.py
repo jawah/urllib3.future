@@ -123,18 +123,18 @@ class TestPostBody(TraefikTestCase):
                 )
 
                 if isinstance(body, str):
-                    assert payload_seen_by_server == body.encode(
-                        "utf-8"
-                    ), f"HTTP/{resp.version / 10} POST body failure: str"
+                    assert payload_seen_by_server == body.encode("utf-8"), (
+                        f"HTTP/{resp.version / 10} POST body failure: str"
+                    )
                 elif isinstance(body, bytes):
-                    assert (
-                        payload_seen_by_server == body
-                    ), f"HTTP/{resp.version / 10} POST body failure: bytes"
+                    assert payload_seen_by_server == body, (
+                        f"HTTP/{resp.version / 10} POST body failure: bytes"
+                    )
                 else:
                     body.seek(0, 0)
-                    assert (
-                        payload_seen_by_server == body.read()
-                    ), f"HTTP/{resp.version / 10} POST body failure: BytesIO"
+                    assert payload_seen_by_server == body.read(), (
+                        f"HTTP/{resp.version / 10} POST body failure: BytesIO"
+                    )
 
     @pytest.mark.parametrize(
         "method",

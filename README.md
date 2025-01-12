@@ -6,7 +6,7 @@
   <a href="https://pypi.org/project/urllib3-future"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3-future.svg?maxAge=86400" /></a>
   <a href="https://pypi.org/project/urllib3-future"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3-future.svg?maxAge=86400" /></a>
   <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
-  <br><small>✨🍰 Enjoy HTTP like its 2024 🍰✨</small>
+  <br><small>✨🍰 Enjoy HTTP like its 2025 🍰✨</small>
   <br><small>💰 Promotional offer, get everything and more for <del>40k</del> <b>0</b>$!</small>
   <br><small>Wondering why and how this fork exist? Why urllib3 is stuck? <a href="https://medium.com/@ahmed.tahri/revived-the-promise-made-six-years-ago-for-requests-3-37b440e6a064">Take a peek at this article!</a></small>
 </p>
@@ -37,6 +37,7 @@
 - Post-Quantum Security with QUIC.
 - Detailed connection inspection.
 - HTTP/2 with prior knowledge.
+- Support for free-threaded.
 - Server Side Event (SSE).
 - Multiplexed connection.
 - Mirrored Sync & Async.
@@ -83,7 +84,7 @@ urllib3.future can be installed with [pip](https://pip.pypa.io):
 python -m pip install urllib3.future
 ```
 
-You either do 
+You either do
 
 ```python
 import urllib3
@@ -114,7 +115,7 @@ require `urllib3`.
 
 - **It's a fork**
 
-⚠️ Installing urllib3.future shadows the actual urllib3 package (_depending on installation order_). 
+⚠️ Installing urllib3.future shadows the actual urllib3 package (_depending on installation order_).
 The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node is always greater or equal to 900.
 
 Support for bugs or improvements is served in this repository. We regularly sync this fork
@@ -169,7 +170,7 @@ Here are some of the reasons (not exhaustive) we choose to work this way:
 1. It is faster than its counterpart, we measured gain up to 2X faster in a multithreaded environment using a http2 endpoint.
 2. It works well with gevent / does not conflict. We do not use the standard queue class from stdlib as it does not fit http2+ constraints.
 3. Leveraging recent protocols like http2 and http3 transparently. Code and behaviors does not change one bit.
-4. You do not depend on the standard library to emit http/1 requests, and that is actually a good news. http.client 
+4. You do not depend on the standard library to emit http/1 requests, and that is actually a good news. http.client
   has numerous known flaws but cannot be fixed as we speak. (e.g. urllib3 is based on http.client)
 5. There a ton of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
   to enable specific capabilities, like but not limited to: "DNS over QUIC, HTTP" / "Happy Eyeballs" / "Native Asyncio" / "Advanced Multiplexing".
@@ -289,7 +290,7 @@ python -m pip install requests
 python -m pip install urllib3.future
 ```
 
-Nowadays, we suggest using the package [**Niquests**](https://github.com/jawah/niquests) as a drop-in replacement for **Requests**. 
+Nowadays, we suggest using the package [**Niquests**](https://github.com/jawah/niquests) as a drop-in replacement for **Requests**.
 It leverages urllib3.future capabilities appropriately.
 
 ## Testing

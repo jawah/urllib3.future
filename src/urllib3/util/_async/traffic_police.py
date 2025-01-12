@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import contextvars
 import typing
+from dataclasses import dataclass
 
 from ..traffic_police import (
     AtomicTraffic,
@@ -32,8 +33,17 @@ else:
     T = typing.TypeVar("T")
 
 
+@dataclass
+class ActiveCursor(typing.Generic[T]):
+    """Duplicated from sync part for typing reasons. 'T' in TrafficPolice sync is bound to sync types!"""
+
+    obj_id: int
+    conn_or_pool: T
+    depth: int = 1
+
+
 class AsyncTrafficPolice(typing.Generic[T]):
-    """Task-safe extended-LIFO implementation.
+    """Task-safe extended-Queue implementation.
 
     This class is made to enforce the 'I will have order!' psychopath philosophy.
     Rational: Recent HTTP protocols handle concurrent streams, therefore it is
@@ -56,47 +66,45 @@ class AsyncTrafficPolice(typing.Generic[T]):
         """
         self.maxsize = maxsize
         self.concurrency = concurrency
+
         self._registry: dict[int, T] = {}
         self._container: dict[int, T] = {}
+
         self._map: dict[int | PoolKey, T] = {}
         self._map_types: dict[int | PoolKey, type] = {}
+
         self._shutdown: bool = False
 
-        self.__ctx_cursor: contextvars.ContextVar[
-            tuple[int, T] | None
-        ] = contextvars.ContextVar("cursor", default=None)
-        self.__ctx_wait_clock: contextvars.ContextVar[
-            float | None
-        ] = contextvars.ContextVar("wait_clock", default=None)
+        self.__ctx_cursor: contextvars.ContextVar[ActiveCursor[T] | None] = (
+            contextvars.ContextVar("cursor", default=None)
+        )
 
     @property
-    def _cursor(self) -> tuple[int, T] | None:
+    def _cursor(self) -> ActiveCursor[T] | None:
         try:
             return self.__ctx_cursor.get()
         except LookupError:
             return None
 
-    @property
-    def _wait_clock(self) -> float | None:
-        try:
-            return self.__ctx_wait_clock.get()
-        except LookupError:
-            return None
-
-    def _set_cursor(self, value: tuple[int, T] | None) -> None:
+    def _set_cursor(self, value: ActiveCursor[T] | None) -> None:
         self.__ctx_cursor.set(value)
-
-    def _set_wait_clock(self, value: float | None) -> None:
-        self.__ctx_wait_clock.set(value)
 
     @property
     def busy(self) -> bool:
         return self._cursor is not None
 
+    def is_held(self, conn_or_pool: T) -> bool:
+        active_cursor = self._cursor
+
+        if active_cursor is None:
+            return False
+
+        return active_cursor.obj_id == id(conn_or_pool)
+
     @property
     def bag_only_idle(self) -> bool:
         return all(
-            traffic_state_of(_) == TrafficState.IDLE for _ in self._registry.values()
+            traffic_state_of(_) is TrafficState.IDLE for _ in self._registry.values()
         )
 
     @property
@@ -105,7 +113,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if not self._registry:
             return False
         return all(
-            traffic_state_of(_) == TrafficState.SATURATED
+            traffic_state_of(_) is TrafficState.SATURATED
             for _ in self._registry.values()
         )
 
@@ -124,13 +132,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             for obj_id, conn_or_pool in self._registry.items():
                 if (
-                    traffic_state_of(conn_or_pool) != TrafficState.SATURATED  # type: ignore[arg-type]
+                    traffic_state_of(conn_or_pool) is not TrafficState.SATURATED  # type: ignore[arg-type]
                     and obj_id in self._container
                 ):
                     return
 
+            before = asyncio.get_running_loop().time()
             await asyncio.sleep(0.001)
-            combined_wait += 0.001
+            combined_wait += asyncio.get_running_loop().time() - before
 
             if timeout is not None and combined_wait >= combined_wait:
                 raise TimeoutError(
@@ -151,13 +160,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             for obj_id, conn_or_pool in self._registry.items():
                 if (
-                    traffic_state_of(conn_or_pool) == TrafficState.IDLE  # type: ignore[arg-type]
+                    traffic_state_of(conn_or_pool) is TrafficState.IDLE  # type: ignore[arg-type]
                     and obj_id in self._container
                 ):
                     return
 
+            before = asyncio.get_running_loop().time()
             await asyncio.sleep(0.001)
-            combined_wait += 0.001
+            combined_wait += asyncio.get_running_loop().time() - before
 
             if timeout is not None and combined_wait >= combined_wait:
                 raise TimeoutError(
@@ -193,7 +203,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     conn_or_pool = self._map[k]
                     # this method may be subject to quick states mutation
                     # due to the (internal) map independent lock
-                    if hasattr(conn_or_pool, "is_idle") and conn_or_pool.is_idle:
+                    if conn_or_pool.is_idle is True:
                         continue
 
                     any_match = True
@@ -217,17 +227,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
     async def kill_cursor(self) -> None:
         """In case there is no other way, a conn or pool may be unusable and should be destroyed.
         This make the scheduler forget about it."""
-        if self._cursor is None:
+        active_cursor = self._cursor
+
+        if active_cursor is None:
             return
 
-        obj_id, conn_or_pool = self._cursor
+        self._map_clear(active_cursor.conn_or_pool)
 
-        self._map_clear(conn_or_pool)
-
-        del self._registry[obj_id]
+        del self._registry[active_cursor.obj_id]
 
         try:
-            await conn_or_pool.close()
+            await active_cursor.conn_or_pool.close()
         except Exception:
             pass
 
@@ -245,7 +255,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         for obj_id, conn_or_pool in self._registry.items():
             if (
                 obj_id in self._container
-                and traffic_state_of(conn_or_pool) == TrafficState.IDLE  # type: ignore[arg-type]
+                and traffic_state_of(conn_or_pool) is TrafficState.IDLE  # type: ignore[arg-type]
             ):
                 eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
                 break
@@ -264,7 +274,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
             return
 
         raise OverwhelmedTraffic(
-            "Cannot select a disposable connection to ease the charge"
+            "Cannot select a disposable connection to ease the charge. "
+            "This usually means that your pool sizing is insufficient, "
+            "please increase your pool maxsize appropriately. "
+            f"Currently set at maxsize={self.maxsize}. Usually you "
+            "want as much as the number of active tasks/connections."
         )
 
     async def iter_idle(self) -> typing.AsyncGenerator[T, None]:
@@ -276,29 +290,27 @@ class AsyncTrafficPolice(typing.Generic[T]):
             )
 
         if len(self._container) > 0:
-            obj_id, conn_or_pool = None, None
+            idle_targets: list[tuple[int, T]] = []
 
             for cur_obj_id, cur_conn_or_pool in self._container.items():
-                if traffic_state_of(cur_conn_or_pool) != TrafficState.IDLE:  # type: ignore[arg-type]
+                if traffic_state_of(cur_conn_or_pool) is not TrafficState.IDLE:  # type: ignore[arg-type]
                     continue
 
-                obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
-                break
+                idle_targets.append((cur_obj_id, cur_conn_or_pool))
 
-            if obj_id is not None:
-                self._container.pop(obj_id)
+            for obj_id, conn_or_pool in idle_targets:
+                del self._container[obj_id]
 
-            if obj_id is not None and conn_or_pool is not None:
-                self._set_cursor((obj_id, conn_or_pool))
+                if obj_id is not None and conn_or_pool is not None:
+                    self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
-                if self.concurrency is True:
-                    new_container = {obj_id: conn_or_pool}
-                    new_container.update(self._container)
-                    self._container = new_container
+                    if self.concurrency is True:
+                        self._container[obj_id] = conn_or_pool
 
-                yield conn_or_pool
-
-                self.release()
+                    try:
+                        yield conn_or_pool
+                    finally:
+                        self.release()
 
     async def put(
         self,
@@ -327,27 +339,33 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         if registered_conn_or_pool:
             if obj_id in self._container:
+                # calling twice put? for the same conn_or_pool[...]
+                # we remain conservative here on purpose. BC constraints with upstream.
                 return
-            if self._cursor is not None:
-                taken_obj_id, taken_conn_or_pool = self._cursor
-                if taken_obj_id == obj_id:
+
+            active_cursor = self._cursor
+
+            if active_cursor is not None:
+                if active_cursor.obj_id != obj_id:
+                    raise AtomicTraffic(
+                        "You must release the previous connection prior to this."
+                    )
+
+                active_cursor.depth -= 1
+
+                if active_cursor.depth == 0:
                     self._set_cursor(None)
         else:
             self._registry[obj_id] = conn_or_pool
 
         if not immediately_unavailable:
-            new_container = {obj_id: conn_or_pool}
-            new_container.update(self._container)
-
-            self._container = new_container
+            if self._cursor is None:
+                self._container[obj_id] = conn_or_pool
         else:
-            self._set_cursor((obj_id, conn_or_pool))
+            self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
             if self.concurrency is True:
-                new_container = {obj_id: conn_or_pool}
-                new_container.update(self._container)
-
-                self._container = new_container
+                self._container[obj_id] = conn_or_pool
 
         if traffic_indicators:
             for indicator in traffic_indicators:
@@ -371,8 +389,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
     ) -> T | None:
         conn_or_pool = None
 
-        if timeout is not None:
-            self._set_wait_clock(0.0)
+        wait_clock: float = 0.0
 
         while True:
             if self._cursor is not None:
@@ -392,45 +409,42 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if non_saturated_only:
                     obj_id, conn_or_pool = None, None
                     for cur_obj_id, cur_conn_or_pool in self._container.items():
-                        if traffic_state_of(cur_conn_or_pool) == TrafficState.SATURATED:  # type: ignore[arg-type]
+                        if traffic_state_of(cur_conn_or_pool) is TrafficState.SATURATED:  # type: ignore[arg-type]
                             continue
                         obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
                         break
                     if obj_id is not None:
-                        self._container.pop(obj_id)
+                        del self._container[obj_id]
                 else:
                     if not not_idle_only:
                         obj_id, conn_or_pool = self._container.popitem()
                     else:
                         obj_id, conn_or_pool = None, None
                         for cur_obj_id, cur_conn_or_pool in self._container.items():
-                            if traffic_state_of(cur_conn_or_pool) == TrafficState.IDLE:  # type: ignore[arg-type]
+                            if traffic_state_of(cur_conn_or_pool) is TrafficState.IDLE:  # type: ignore[arg-type]
                                 continue
                             obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
                             break
                         if obj_id is not None:
-                            self._container.pop(obj_id)
+                            del self._container[obj_id]
 
                 if obj_id is not None and conn_or_pool is not None:
-                    self._set_cursor((obj_id, conn_or_pool))
+                    self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
                     if self.concurrency is True:
-                        new_container = {obj_id: conn_or_pool}
-                        new_container.update(self._container)
-                        self._container = new_container
+                        self._container[obj_id] = conn_or_pool
 
                     break
 
             if conn_or_pool is None:
                 if block is True:
+                    before = asyncio.get_running_loop().time()
                     await asyncio.sleep(0.001)
 
                     if timeout is not None:
-                        assert self._wait_clock is not None
-                        self._set_wait_clock(self._wait_clock + 0.001)
+                        wait_clock += asyncio.get_running_loop().time() - before
 
-                        if self._wait_clock >= timeout:
-                            self._set_wait_clock(None)
+                        if wait_clock >= timeout:
                             raise UnavailableTraffic(
                                 f"No connection available within {timeout} second(s)"
                             )
@@ -439,19 +453,19 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                 raise UnavailableTraffic("No connection available")
 
-        if timeout is not None:
-            self._set_wait_clock(None)
-
         return conn_or_pool
 
     def memorize(
         self, traffic_indicator: MappableTraffic, conn_or_pool: T | None = None
     ) -> None:
-        if conn_or_pool is None and self._cursor is None:
+        active_cursor = self._cursor
+
+        if conn_or_pool is None and active_cursor is None:
             raise AtomicTraffic("No connection active on the current task")
 
         if conn_or_pool is None:
-            obj_id, conn_or_pool = self._cursor  # type: ignore[misc]
+            assert active_cursor is not None
+            obj_id, conn_or_pool = active_cursor.obj_id, active_cursor.conn_or_pool
         else:
             obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
 
@@ -478,8 +492,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if key not in self._map:
             return
 
-        self._map.pop(key)
-        self._map_types.pop(key)
+        del self._map[key]
+        del self._map_types[key]
 
     async def locate(
         self,
@@ -487,8 +501,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
     ) -> T | None:
-        if timeout is not None and self._wait_clock is None:
-            self._set_wait_clock(0.0)
+        wait_clock: float = 0.0
 
         if not isinstance(traffic_indicator, type):
             key: PoolKey | int = (
@@ -519,11 +532,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
             return None
 
         while True:
-            if self._cursor is not None:
-                cursor_obj_id, cursor_conn_or_pool = self._cursor
+            active_cursor = self._cursor
 
-                if cursor_obj_id == obj_id:
-                    return cursor_conn_or_pool
+            if active_cursor is not None:
+                if active_cursor.obj_id == obj_id:
+                    active_cursor.depth += 1
+                    return active_cursor.conn_or_pool
                 raise AtomicTraffic(
                     "Seeking to locate a connection when having another one used, did you forget a call to release?"
                 )
@@ -533,23 +547,22 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     raise UnavailableTraffic("Unavailable connection")
             else:
                 if self.concurrency is False:
-                    self._container.pop(obj_id)
+                    del self._container[obj_id]
 
-                self._set_cursor((obj_id, conn_or_pool))
-
-                if timeout is not None:
-                    self._set_wait_clock(None)
+                self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
                 return conn_or_pool
+
+            before = asyncio.get_running_loop().time()
 
             await asyncio.sleep(
                 0.001
             )  # 1ms is the minimum-reasonable sleep time across OSes. Will not be exactly 1ms.
 
             if timeout is not None:
-                assert self._wait_clock is not None
-                self._set_wait_clock(self._wait_clock + 0.001)
-                if self._wait_clock >= timeout:
+                wait_clock += asyncio.get_running_loop().time() - before
+
+                if wait_clock >= timeout:
                     raise TimeoutError(
                         "Timed out while waiting for conn_or_pool to become available"
                     )
@@ -569,22 +582,19 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                     if conn_or_pool:
                         obj_id = id(conn_or_pool)
+                        active_cursor = self._cursor
 
-                        if self._cursor is not None:
-                            (
-                                cursor_obj_id,
-                                cursor_conn_or_pool,
-                            ) = self._cursor
-
-                            if cursor_obj_id != obj_id:
+                        if active_cursor is not None:
+                            if active_cursor.obj_id != obj_id:
                                 raise AtomicTraffic(
                                     "Seeking to locate a connection when having another one used, did you forget a call to release?"
                                 )
+                            active_cursor.depth += 1
+                        else:
+                            self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
-                        if self.concurrency is False:
-                            self._container.pop(obj_id)
-
-                        self._set_cursor((obj_id, conn_or_pool))
+                            if self.concurrency is False:
+                                del self._container[obj_id]
                 else:
                     conn_or_pool = await self.locate(
                         traffic_indicator, block=block, timeout=timeout
@@ -593,7 +603,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 # simulate reentrant lock/borrow
                 # get_response PM -> get_response HPM -> read R
                 if self._cursor is not None:
-                    obj_id, conn_or_pool = self._cursor
+                    active_cursor = self._cursor
+                    active_cursor.depth += 1
+                    obj_id, conn_or_pool = (
+                        active_cursor.obj_id,
+                        active_cursor.conn_or_pool,
+                    )
                 else:
                     conn_or_pool = await self.get(
                         block=block, timeout=timeout, not_idle_only=not_idle_only
@@ -609,27 +624,27 @@ class AsyncTrafficPolice(typing.Generic[T]):
             self.release()
 
     def release(self) -> None:
-        if self._cursor is not None:
-            obj_id, conn_or_pool = self._cursor
+        active_cursor = self._cursor
 
-            if self.concurrency is False:
-                new_container = {obj_id: conn_or_pool}
-                new_container.update(self._container)
+        if active_cursor is not None:
+            active_cursor.depth -= 1
 
-                self._container = new_container
+            if active_cursor.depth == 0:
+                if self.concurrency is False:
+                    self._container[active_cursor.obj_id] = active_cursor.conn_or_pool
 
-            self._set_cursor(None)
+                self._set_cursor(None)
 
     async def clear(self) -> None:
         """Shutdown traffic pool."""
         planned_removal = []
 
         for obj_id in self._container:
-            if traffic_state_of(self._container[obj_id]) == TrafficState.IDLE:  # type: ignore[arg-type]
+            if traffic_state_of(self._container[obj_id]) is TrafficState.IDLE:  # type: ignore[arg-type]
                 planned_removal.append(obj_id)
 
         for obj_id in planned_removal:
-            self._container.pop(obj_id)
+            del self._container[obj_id]
 
         # if we can't shut down them all, we need to toggle the shutdown bit to collect and close remaining connections.
         if len(self._registry) > len(planned_removal):
@@ -640,16 +655,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             try:
                 await conn_or_pool.close()
-            except (
-                Exception
-            ):  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
+            except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
                 pass
 
             self._map_clear(conn_or_pool)
 
-        if self._cursor is not None:
-            cursor_obj_id, conn_or_pool = self._cursor
-            if cursor_obj_id in planned_removal:
+        active_cursor = self._cursor
+
+        if active_cursor is not None:
+            if active_cursor.obj_id in planned_removal:
                 self._set_cursor(None)
 
     def qsize(self) -> int:

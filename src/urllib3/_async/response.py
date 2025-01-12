@@ -119,7 +119,9 @@ class AsyncHTTPResponse(HTTPResponse):
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
 
-        self._police_officer: AsyncTrafficPolice[AsyncHTTPConnection] | None = police_officer  # type: ignore[assignment]
+        self._police_officer: AsyncTrafficPolice[AsyncHTTPConnection] | None = (
+            police_officer  # type: ignore[assignment]
+        )
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
@@ -382,7 +384,7 @@ class AsyncHTTPResponse(HTTPResponse):
                 if 0 < amt <= len(self._decoded_buffer):
                     return self._decoded_buffer.get(amt)
 
-            if self._police_officer is not None and not self._police_officer.busy:
+            if self._police_officer is not None:
                 async with self._police_officer.borrow(self):
                     data = await self._raw_read(amt)
             else:
@@ -421,10 +423,7 @@ class AsyncHTTPResponse(HTTPResponse):
                     # TODO make sure to initially read enough data to get past the headers
                     # For example, the GZ file header takes 10 bytes, we don't want to read
                     # it one byte at a time
-                    if (
-                        self._police_officer is not None
-                        and not self._police_officer.busy
-                    ):
+                    if self._police_officer is not None:
                         async with self._police_officer.borrow(self):
                             data = await self._raw_read(amt)
                     else:
@@ -449,8 +448,6 @@ class AsyncHTTPResponse(HTTPResponse):
                     or self._fp._dsa.closed is True
                 ):
                     self._police_officer.forget(self)
-                    if self._police_officer.busy:
-                        self._police_officer.release()
                     self._police_officer = None
 
     async def stream(  # type: ignore[override]

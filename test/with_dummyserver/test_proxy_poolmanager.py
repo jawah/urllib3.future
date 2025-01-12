@@ -178,7 +178,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
 
     def test_oldapi(self) -> None:
         with ProxyManager(
-            connection_from_url(self.proxy_url), ca_certs=DEFAULT_CA  # type: ignore[arg-type]
+            connection_from_url(self.proxy_url),  # type: ignore[arg-type]
+            ca_certs=DEFAULT_CA,
         ) as http:
             r = http.request("GET", f"{self.http_url}/")
             assert r.status == 200
@@ -207,6 +208,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
 
             conn = https_pool._new_conn()
             assert conn.__class__ == VerifiedHTTPSConnection
+            https_pool.pool.put(conn)  # type: ignore[union-attr]
+
             https_pool.request("GET", "/")  # Should succeed without exceptions.
 
             https_pool.close()

@@ -31,7 +31,7 @@ jobs:
 
       - name: "Undo Docker Config: docker-py"
         if: matrix.downstream == 'docker'
-        run: | 
+        run: |
           docker logout
           rm -rf ~/.docker
 

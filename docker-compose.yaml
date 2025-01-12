@@ -69,7 +69,7 @@ services:
 
   # haproxy is one of the very few
   # capable of handling RFC8441 natively.
-  # todo: wait for Traefik to implement RFC8441, Caddy is almost ready (v2.9).
+  # todo: wait for Traefik to implement RFC8441, Caddy is ready (v2.9).
   #       golang stdlib is ready for it.
   haproxy:
     image: haproxy:3.1-alpine
