@@ -11,7 +11,7 @@ from urllib3.response import HTTPResponse
 
 
 @pytest.fixture()
-def pool() -> typing.Generator[HTTPConnectionPool]:
+def pool() -> typing.Generator[HTTPConnectionPool, None, None]:
     server.setup_class()
 
     with HTTPConnectionPool(server.host, server.port) as pool:

@@ -24,7 +24,7 @@ class AsyncExtensionFromHTTP(metaclass=ABCMeta):
         self._police_officer: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
 
     @asynccontextmanager
-    async def _read_error_catcher(self) -> typing.AsyncGenerator[None]:
+    async def _read_error_catcher(self) -> typing.AsyncGenerator[None, None]:
         """
         Catch low-level python exceptions, instead re-raising urllib3
         variants, so that low-level exceptions are not leaked in the
@@ -78,7 +78,7 @@ class AsyncExtensionFromHTTP(metaclass=ABCMeta):
                     await self.close()
 
     @asynccontextmanager
-    async def _write_error_catcher(self) -> typing.AsyncGenerator[None]:
+    async def _write_error_catcher(self) -> typing.AsyncGenerator[None, None]:
         """
         Catch low-level python exceptions, instead re-raising urllib3
         variants, so that low-level exceptions are not leaked in the

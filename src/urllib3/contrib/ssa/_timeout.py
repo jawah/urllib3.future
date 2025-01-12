@@ -76,7 +76,7 @@ class Timeout:
         info_str = " ".join(info)
         return f"<Timeout [{self._state.value}]{info_str}>"
 
-    async def __aenter__(self) -> Timeout:
+    async def __aenter__(self) -> "Timeout":
         if self._state is not _State.CREATED:
             raise RuntimeError("Timeout has already been entered")
         task = tasks.current_task()

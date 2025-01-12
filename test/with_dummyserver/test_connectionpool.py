@@ -364,7 +364,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         with HTTPConnectionPool(self.host, port) as pool:
             with pytest.raises(MaxRetryError) as e:
                 pool.request("GET", "/", retries=Retry(connect=3))
-            assert type(e.value.reason) is NewConnectionError
+            assert type(e.value.reason) == NewConnectionError
 
     def test_timeout_success(self) -> None:
         timeout = Timeout(connect=3, read=5, total=None)
@@ -496,7 +496,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         with HTTPConnectionPool("badhost.invalid", self.port) as pool:
             with pytest.raises(MaxRetryError) as e:
                 pool.request("GET", "/", retries=5)
-            assert type(e.value.reason) is NameResolutionError
+            assert type(e.value.reason) == NameResolutionError
 
     def test_keepalive(self) -> None:
         with HTTPConnectionPool(self.host, self.port, block=True, maxsize=1) as pool:

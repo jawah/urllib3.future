@@ -24,7 +24,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
         self._police_officer: TrafficPolice | None = None  # type: ignore[type-arg]
 
     @contextmanager
-    def _read_error_catcher(self) -> typing.Generator[None]:
+    def _read_error_catcher(self) -> typing.Generator[None, None, None]:
         """
         Catch low-level python exceptions, instead re-raising urllib3
         variants, so that low-level exceptions are not leaked in the
@@ -78,7 +78,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
                     self.close()
 
     @contextmanager
-    def _write_error_catcher(self) -> typing.Generator[None]:
+    def _write_error_catcher(self) -> typing.Generator[None, None, None]:
         """
         Catch low-level python exceptions, instead re-raising urllib3
         variants, so that low-level exceptions are not leaked in the

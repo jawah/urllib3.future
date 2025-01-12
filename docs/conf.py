@@ -23,7 +23,7 @@ if "READTHEDOCS" in os.environ:
             ["towncrier", "--yes", "--date", "not released yet"], cwd="..", check=True
         )
 
-import urllib3  # noqa: E402
+import urllib3
 
 # -- General configuration -----------------------------------------------------
 
@@ -83,7 +83,7 @@ html_favicon = "images/favicon.png"
 html_static_path = ["_static"]
 html_theme_options = {
     "announcement": """
-        <a style=\"text-decoration: none; color: white;\"
+        <a style=\"text-decoration: none; color: white;\" 
            href=\"https://github.com/sponsors/Ousret\">
            <img src=\"/en/latest/_static/favicon.png\"/> Support urllib3.future on GitHub Sponsors
         </a>

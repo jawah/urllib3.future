@@ -301,7 +301,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
     """
 
     scheme = "http"
-    ConnectionCls: type[HTTPConnection] | type[HTTPSConnection] = HTTPConnection
+    ConnectionCls: (type[HTTPConnection] | type[HTTPSConnection]) = HTTPConnection
 
     def __init__(
         self,
@@ -1103,7 +1103,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         extension: ExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[True],
-    ) -> ResponsePromise: ...
+    ) -> ResponsePromise:
+        ...
 
     @typing.overload
     def _make_request(
@@ -1126,7 +1127,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         extension: ExtensionFromHTTP | None = ...,
         *,
         multiplexed: Literal[False] = ...,
-    ) -> HTTPResponse: ...
+    ) -> HTTPResponse:
+        ...
 
     def _make_request(
         self,
@@ -1450,7 +1452,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         *,
         multiplexed: Literal[False] = ...,
         **response_kw: typing.Any,
-    ) -> HTTPResponse: ...
+    ) -> HTTPResponse:
+        ...
 
     @typing.overload
     def urlopen(
@@ -1477,7 +1480,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         *,
         multiplexed: Literal[True],
         **response_kw: typing.Any,
-    ) -> ResponsePromise: ...
+    ) -> ResponsePromise:
+        ...
 
     def urlopen(
         self,
@@ -2319,11 +2323,13 @@ def connection_from_url(url: str, **kw: typing.Any) -> HTTPConnectionPool:
 
 
 @typing.overload
-def _normalize_host(host: None, scheme: str | None) -> None: ...
+def _normalize_host(host: None, scheme: str | None) -> None:
+    ...
 
 
 @typing.overload
-def _normalize_host(host: str, scheme: str | None) -> str: ...
+def _normalize_host(host: str, scheme: str | None) -> str:
+    ...
 
 
 def _normalize_host(host: str | None, scheme: str | None) -> str | None:

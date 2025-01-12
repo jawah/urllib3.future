@@ -145,9 +145,9 @@ class AsyncResolverDescription(ResolverDescription):
                 username = username.strip("'\"")
                 password = password.strip("'\"")
 
-                kwargs["headers"]["Authorization"] = (
-                    f"Basic {b64encode(f'{username}:{password}'.encode()).decode()}"
-                )
+                kwargs["headers"][
+                    "Authorization"
+                ] = f"Basic {b64encode(f'{username}:{password}'.encode()).decode()}"
             else:
                 kwargs["headers"]["Authorization"] = f"Bearer {parsed_url.auth}"
 

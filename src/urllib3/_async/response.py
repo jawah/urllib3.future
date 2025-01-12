@@ -119,9 +119,7 @@ class AsyncHTTPResponse(HTTPResponse):
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
 
-        self._police_officer: AsyncTrafficPolice[AsyncHTTPConnection] | None = (
-            police_officer  # type: ignore[assignment]
-        )
+        self._police_officer: AsyncTrafficPolice[AsyncHTTPConnection] | None = police_officer  # type: ignore[assignment]
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
@@ -137,7 +135,7 @@ class AsyncHTTPResponse(HTTPResponse):
             return len(temp)
 
     @asynccontextmanager
-    async def _error_catcher(self) -> typing.AsyncGenerator[None]:  # type: ignore[override]
+    async def _error_catcher(self) -> typing.AsyncGenerator[None, None]:  # type: ignore[override]
         """
         Catch low-level python exceptions, instead re-raising urllib3
         variants, so that low-level exceptions are not leaked in the
@@ -452,7 +450,7 @@ class AsyncHTTPResponse(HTTPResponse):
 
     async def stream(  # type: ignore[override]
         self, amt: int | None = 2**16, decode_content: bool | None = None
-    ) -> typing.AsyncGenerator[bytes]:
+    ) -> typing.AsyncGenerator[bytes, None]:
         if self._fp is None:
             return
         while not is_fp_closed(self._fp) or len(self._decoded_buffer) > 0:

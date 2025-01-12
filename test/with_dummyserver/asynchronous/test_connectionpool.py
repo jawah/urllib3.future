@@ -427,7 +427,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool(self.host, port) as pool:
             with pytest.raises(MaxRetryError) as e:
                 await pool.request("GET", "/", retries=Retry(connect=3))
-            assert type(e.value.reason) is NewConnectionError
+            assert type(e.value.reason) == NewConnectionError
 
     async def test_timeout_success(self) -> None:
         timeout = Timeout(connect=3, read=5, total=None)
@@ -578,7 +578,7 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool("badhost.invalid", self.port) as pool:
             with pytest.raises(MaxRetryError) as e:
                 await pool.request("GET", "/", retries=5)
-            assert type(e.value.reason) is NameResolutionError
+            assert type(e.value.reason) == NameResolutionError
 
     async def test_keepalive(self) -> None:
         async with AsyncHTTPConnectionPool(

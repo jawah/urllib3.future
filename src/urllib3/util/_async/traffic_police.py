@@ -75,9 +75,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self._shutdown: bool = False
 
-        self.__ctx_cursor: contextvars.ContextVar[ActiveCursor[T] | None] = (
-            contextvars.ContextVar("cursor", default=None)
-        )
+        self.__ctx_cursor: contextvars.ContextVar[
+            ActiveCursor[T] | None
+        ] = contextvars.ContextVar("cursor", default=None)
 
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
@@ -281,7 +281,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
             "want as much as the number of active tasks/connections."
         )
 
-    async def iter_idle(self) -> typing.AsyncGenerator[T]:
+    async def iter_idle(self) -> typing.AsyncGenerator[T, None]:
         """Iterate over idle conn contained in the container bag."""
         if self.busy:
             raise AtomicTraffic(
@@ -574,7 +574,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
         not_idle_only: bool = False,
-    ) -> typing.AsyncGenerator[T]:
+    ) -> typing.AsyncGenerator[T, None]:
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -655,7 +655,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             try:
                 await conn_or_pool.close()
-            except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
+            except (
+                Exception
+            ):  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
                 pass
 
             self._map_clear(conn_or_pool)

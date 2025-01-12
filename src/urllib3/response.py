@@ -677,7 +677,7 @@ class HTTPResponse(io.IOBase):
         return length
 
     @contextmanager
-    def _error_catcher(self) -> typing.Generator[None]:
+    def _error_catcher(self) -> typing.Generator[None, None, None]:
         """
         Catch low-level python exceptions, instead re-raising urllib3
         variants, so that low-level exceptions are not leaked in the
@@ -941,7 +941,7 @@ class HTTPResponse(io.IOBase):
 
     def stream(
         self, amt: int | None = 2**16, decode_content: bool | None = None
-    ) -> typing.Generator[bytes]:
+    ) -> typing.Generator[bytes, None, None]:
         """
         A generator wrapper for the read() method. A call will block until
         ``amt`` bytes have been read from the connection or until the

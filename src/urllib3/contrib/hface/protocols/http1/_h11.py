@@ -302,9 +302,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     )
                 else:
                     last_event = DataReceived(
-                        self._current_stream_id,
-                        b"",
-                        self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
+                        self._current_stream_id, b"", self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL  # type: ignore[attr-defined]
                     )
                 a(last_event)
                 self._maybe_start_next_cycle()

@@ -121,10 +121,12 @@ class SSLTransport:
     @typing.overload
     def getpeercert(
         self, binary_form: Literal[False] = ...
-    ) -> _TYPE_PEER_CERT_RET_DICT | None: ...
+    ) -> _TYPE_PEER_CERT_RET_DICT | None:
+        ...
 
     @typing.overload
-    def getpeercert(self, binary_form: Literal[True]) -> bytes | None: ...
+    def getpeercert(self, binary_form: Literal[True]) -> bytes | None:
+        ...
 
     def getpeercert(self, binary_form: bool = False) -> _TYPE_PEER_CERT_RET:
         return self.sslobj.getpeercert(binary_form)  # type: ignore[return-value]
@@ -167,11 +169,13 @@ class SSLTransport:
 
     # func is sslobj.do_handshake or sslobj.unwrap
     @typing.overload
-    def _ssl_io_loop(self, func: typing.Callable[[], None]) -> None: ...
+    def _ssl_io_loop(self, func: typing.Callable[[], None]) -> None:
+        ...
 
     # func is sslobj.write, arg1 is data
     @typing.overload
-    def _ssl_io_loop(self, func: typing.Callable[[bytes], int], arg1: bytes) -> int: ...
+    def _ssl_io_loop(self, func: typing.Callable[[bytes], int], arg1: bytes) -> int:
+        ...
 
     # func is sslobj.read, arg1 is len, arg2 is buffer
     @typing.overload
@@ -180,7 +184,8 @@ class SSLTransport:
         func: typing.Callable[[int, bytearray | None], bytes],
         arg1: int,
         arg2: bytearray | None,
-    ) -> bytes: ...
+    ) -> bytes:
+        ...
 
     def _ssl_io_loop(
         self,

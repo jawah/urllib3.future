@@ -210,7 +210,8 @@ class TestChunkedTransfer(SocketDummyServerTestCase):
 
                 if i == 0:
                     sock.sendall(
-                        b"HTTP/1.1 301 Moved Permanently\r\nLocation: /redirect\r\n\r\n"
+                        b"HTTP/1.1 301 Moved Permanently\r\n"
+                        b"Location: /redirect\r\n\r\n"
                     )
                 else:
                     sock.sendall(b"HTTP/1.1 200 OK\r\n\r\n")

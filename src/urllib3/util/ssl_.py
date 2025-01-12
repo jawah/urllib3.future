@@ -320,7 +320,8 @@ def resolve_ssl_version(
     candidate: None | int | str,
     *,
     mitigate_tls_version: typing.Literal[True] = True,
-) -> ssl.TLSVersion: ...
+) -> ssl.TLSVersion:
+    ...
 
 
 @typing.overload
@@ -328,7 +329,8 @@ def resolve_ssl_version(
     candidate: None | int | str,
     *,
     mitigate_tls_version: typing.Literal[False] = False,
-) -> int: ...
+) -> int:
+    ...
 
 
 def resolve_ssl_version(
@@ -537,7 +539,8 @@ def ssl_wrap_socket(
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
     sharable_ssl_context: dict[str, typing.Any] | None = ...,
-) -> ssl.SSLSocket: ...
+) -> ssl.SSLSocket:
+    ...
 
 
 @typing.overload
@@ -559,7 +562,8 @@ def ssl_wrap_socket(
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
     sharable_ssl_context: dict[str, typing.Any] | None = ...,
-) -> ssl.SSLSocket | SSLTransportType: ...
+) -> ssl.SSLSocket | SSLTransportType:
+    ...
 
 
 def ssl_wrap_socket(

@@ -111,13 +111,10 @@ class AsyncLowLevelResponse:
     """Implemented for backward compatibility purposes. It is there to impose http.client like
     basic response object. So that we don't have to change urllib3 tested behaviors."""
 
-    __internal_read_st: (
-        typing.Callable[
-            [int | None, int | None],
-            typing.Awaitable[tuple[bytes, bool, HTTPHeaderDict | None]],
-        ]
-        | None
-    )
+    __internal_read_st: typing.Callable[
+        [int | None, int | None],
+        typing.Awaitable[tuple[bytes, bool, HTTPHeaderDict | None]],
+    ] | None
 
     def __init__(
         self,

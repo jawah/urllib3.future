@@ -33,11 +33,13 @@ def server_client_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
 
 
 @typing.overload
-def sample_request(binary: Literal[True] = ...) -> bytes: ...
+def sample_request(binary: Literal[True] = ...) -> bytes:
+    ...
 
 
 @typing.overload
-def sample_request(binary: Literal[False]) -> str: ...
+def sample_request(binary: Literal[False]) -> str:
+    ...
 
 
 def sample_request(binary: bool = True) -> bytes | str:
@@ -59,15 +61,18 @@ def validate_request(
 
 
 @typing.overload
-def sample_response(binary: Literal[True] = ...) -> bytes: ...
+def sample_response(binary: Literal[True] = ...) -> bytes:
+    ...
 
 
 @typing.overload
-def sample_response(binary: Literal[False]) -> str: ...
+def sample_response(binary: Literal[False]) -> str:
+    ...
 
 
 @typing.overload
-def sample_response(binary: bool = ...) -> bytes | str: ...
+def sample_response(binary: bool = ...) -> bytes | str:
+    ...
 
 
 def sample_response(binary: bool = True) -> bytes | str:
@@ -85,11 +90,11 @@ def validate_response(
 
 def validate_peercert(ssl_socket: SSLTransport) -> None:
     binary_cert = ssl_socket.getpeercert(binary_form=True)
-    assert type(binary_cert) is bytes
+    assert type(binary_cert) == bytes
     assert len(binary_cert) > 0
 
     cert = ssl_socket.getpeercert()
-    assert type(cert) is dict
+    assert type(cert) == dict
     assert "serialNumber" in cert
     assert cert["serialNumber"] != ""
 
@@ -206,7 +211,7 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
             sock, self.client_context, server_hostname="localhost"
         ) as ssock:
             cipher = ssock.cipher()
-            assert type(cipher) is tuple
+            assert type(cipher) == tuple
 
             # No chosen protocol through ALPN or NPN.
             assert ssock.selected_alpn_protocol() is None

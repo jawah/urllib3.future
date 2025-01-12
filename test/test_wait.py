@@ -23,7 +23,7 @@ TYPE_WAIT_FOR = typing.Callable[..., bool]
 
 
 @pytest.fixture
-def spair() -> typing.Generator[TYPE_SOCKET_PAIR]:
+def spair() -> typing.Generator[TYPE_SOCKET_PAIR, None, None]:
     a, b = socketpair()
     yield a, b
     a.close()
