@@ -1,6 +1,6 @@
 FROM python:3.7.2-alpine3.7
 
-RUN apk add build-base libffi-dev
+RUN apk add build-base libffi-dev linux-headers
 
 WORKDIR /app
 
