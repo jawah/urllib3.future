@@ -40,6 +40,8 @@ with the proxy:
 
 from __future__ import annotations
 
+import warnings
+
 #: We purposely want to support PySocks[...] due to our shadowing of the legacy "urllib3". "Dot not disturb" policy.
 BYPASS_SOCKS_LEGACY: bool = False
 
@@ -54,8 +56,6 @@ try:
 
     from ._socks_override import AsyncioProxy
 except ImportError:
-    import warnings
-
     from ..exceptions import DependencyWarning
 
     try:
@@ -182,12 +182,20 @@ if not BYPASS_SOCKS_LEGACY:
                     timing_hook=lambda _: setattr(self, "_connect_timings", _),
                 )
 
-                return p.connect(
-                    self.host,
-                    self.port,
-                    self.timeout,
-                    _socket=_socket,
-                )
+                # our dependency started to deprecate passing "_socket"
+                # which is ... vital for our integration. We'll start by silencing the warning.
+                # then we'll think on how to proceed.
+                #   A) the maintainer agrees to revert https://github.com/romis2012/python-socks/commit/173a7390469c06aa033f8dca67c827854b462bc3#diff-e4086fa970d1c98b1eb341e58cb70e9ceffe7391b2feecc4b66c7e92ea2de76fR64
+                #   B) the maintainer pursue the removal -> do we vendor our copy of python-socks? is there an alternative?
+                with warnings.catch_warnings(
+                    action="ignore", category=DeprecationWarning
+                ):
+                    return p.connect(
+                        self.host,
+                        self.port,
+                        self.timeout,
+                        _socket=_socket,
+                    )
             except (SocketTimeout, ProxyTimeoutError) as e:
                 raise ConnectTimeoutError(
                     self,
