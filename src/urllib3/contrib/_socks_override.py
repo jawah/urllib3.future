@@ -117,9 +117,8 @@ class AsyncioProxy:
                 # then we'll think on how to proceed.
                 #   A) the maintainer agrees to revert https://github.com/romis2012/python-socks/commit/173a7390469c06aa033f8dca67c827854b462bc3#diff-e4086fa970d1c98b1eb341e58cb70e9ceffe7391b2feecc4b66c7e92ea2de76fR64
                 #   B) the maintainer pursue the removal -> do we vendor our copy of python-socks? is there an alternative?
-                with warnings.catch_warnings(
-                    action="ignore", category=DeprecationWarning
-                ):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
                     return await self._connect(
                         dest_host=dest_host,
                         dest_port=dest_port,
