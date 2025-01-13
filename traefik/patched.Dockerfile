@@ -1,4 +1,4 @@
-FROM winamd64/golang:1.21-nanoserver as build
+FROM winamd64/golang:1.23-nanoserver-ltsc2022 as build
 
 WORKDIR /go/src/github.com/mccutchen/go-httpbin
 

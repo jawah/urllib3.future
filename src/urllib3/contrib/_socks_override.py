@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import typing
+import warnings
 
 from python_socks import _abc as abc
 
@@ -28,20 +29,6 @@ from python_socks._types import ProxyType
 
 from .ssa import AsyncSocket
 from .ssa._timeout import timeout as timeout_
-
-import warnings
-
-# our dependency started to deprecate passing "_socket"
-# which is ... vital for our integration. We'll start by silencing the warning.
-# then we'll think on how to proceed.
-#   A) the maintainer agrees to revert https://github.com/romis2012/python-socks/commit/173a7390469c06aa033f8dca67c827854b462bc3#diff-e4086fa970d1c98b1eb341e58cb70e9ceffe7391b2feecc4b66c7e92ea2de76fR64
-#   B) the maintainer pursue the removal -> do we vendor our copy of python-socks? is there an alternative?
-warnings.filterwarnings(
-    "ignore",
-    "The '_socket' argument is deprecated and will be removed in the future",
-    DeprecationWarning,
-    module="python_socks",
-)
 
 
 class Resolver(abc.AsyncResolver):
@@ -125,11 +112,18 @@ class AsyncioProxy:
 
         try:
             async with timeout_(timeout):
-                return await self._connect(
-                    dest_host=dest_host,
-                    dest_port=dest_port,
-                    _socket=_socket,  # type: ignore[arg-type]
-                )
+                # our dependency started to deprecate passing "_socket"
+                # which is ... vital for our integration. We'll start by silencing the warning.
+                # then we'll think on how to proceed.
+                #   A) the maintainer agrees to revert https://github.com/romis2012/python-socks/commit/173a7390469c06aa033f8dca67c827854b462bc3#diff-e4086fa970d1c98b1eb341e58cb70e9ceffe7391b2feecc4b66c7e92ea2de76fR64
+                #   B) the maintainer pursue the removal -> do we vendor our copy of python-socks? is there an alternative?
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    return await self._connect(
+                        dest_host=dest_host,
+                        dest_port=dest_port,
+                        _socket=_socket,  # type: ignore[arg-type]
+                    )
         except asyncio.TimeoutError as e:
             raise ProxyTimeoutError(f"Proxy connection timed out: {timeout}") from e
 
