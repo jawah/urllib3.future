@@ -1,3 +1,8 @@
+2.12.908 (2024-01-13)
+=====================
+
+- Fixed silencing the deprecation warning coming from python_socks about the "_socket" parameter.
+
 2.12.907 (2024-01-12)
 =====================
 
