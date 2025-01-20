@@ -140,7 +140,7 @@ jobs:
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        uses: douglascamata/setup-docker-macos-action@4fe96839fcba8a2d746e020d00a89a37afbc7dc9
+        uses: douglascamata/setup-docker-macos-action@f2b307ddc57e8b9d3f9761f3cafa8883b2cdffd4
         with:
           colima-network-address: true
 
