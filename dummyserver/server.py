@@ -276,9 +276,11 @@ def _run_and_close_tornado(
     try:
         return asyncio.run(inner_fn())
     finally:
+        # AttributeError -> Python 3.14!
+        # todo: investigate...
         try:
             tornado_loop.close(all_fds=True)  # type: ignore[union-attr]
-        except (ValueError, OSError):
+        except (ValueError, OSError, AttributeError):
             pass  # can fail needlessly with "Invalid file descriptor". Ignore!
 
 
