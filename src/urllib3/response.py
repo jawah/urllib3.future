@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 import typing
+import warnings
 import zlib
 from contextlib import contextmanager
 from socket import timeout as SocketTimeout
@@ -834,6 +835,35 @@ class HTTPResponse(io.IOBase):
 
         return data
 
+    def read1(
+        self,
+        amt: int | None = None,
+        decode_content: bool | None = None,
+    ) -> bytes:
+        """
+        Similar to ``http.client.HTTPResponse.read1`` and documented
+        in :meth:`io.BufferedReader.read1`, but with an additional parameter:
+        ``decode_content``.
+
+        :param amt:
+            How much of the content to read.
+
+        :param decode_content:
+            If True, will attempt to decode the body based on the
+            'content-encoding' header.
+        """
+
+        data = self.read(
+            amt=amt or -1,
+            decode_content=decode_content,
+        )
+
+        if amt is not None and len(data) > amt:
+            self._decoded_buffer.put(data)
+            return self._decoded_buffer.get(amt)
+
+        return data
+
     def read(
         self,
         amt: int | None = None,
@@ -1036,6 +1066,25 @@ class HTTPResponse(io.IOBase):
     @url.setter
     def url(self, url: str) -> None:
         self._request_url = url
+
+    # Compatibility methods for http.client.HTTPResponse
+    def getheaders(self) -> HTTPHeaderDict:
+        warnings.warn(
+            "HTTPResponse.getheaders() is deprecated and will be removed "
+            "in a future version of urllib3(-future). Instead access HTTPResponse.headers directly.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.headers
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        warnings.warn(
+            "HTTPResponse.getheader() is deprecated and will be removed "
+            "in a future version of urllib3(-future). Instead use HTTPResponse.headers.get(name, default).",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.headers.get(name, default)
 
     def __iter__(self) -> typing.Iterator[bytes]:
         buffer: list[bytes] = []
