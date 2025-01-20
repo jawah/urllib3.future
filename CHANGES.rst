@@ -3,9 +3,10 @@
 
 - Fixed compatibility with upstream urllib3 when third party program invoke deprecated ``HTTPResponse.getheader`` or
   ``HTTPResponse.getheaders``. Those methods were planned to be removed in 2.1 (they still have a pending deprecation
-  that mention 2.1 target in the 2.3 version). As such we immediately restore the methods.
+  that mention 2.1 target in the 2.3 version). As such we immediately restore the methods. (#203)
 - Implemented our copy of ``HTTPResponse.read1`` heavily simplified as we do already support ``HTTPResponse.read(-1)``.
   Also mirrored in ``AsyncHTTPResponse.read1``.
+- Automatically grab ``qh3`` for X86 based processors.
 
 2.12.908 (2024-01-13)
 =====================
