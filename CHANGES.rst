@@ -6,7 +6,9 @@
   that mention 2.1 target in the 2.3 version). As such we immediately restore the methods. (#203)
 - Implemented our copy of ``HTTPResponse.read1`` heavily simplified as we do already support ``HTTPResponse.read(-1)``.
   Also mirrored in ``AsyncHTTPResponse.read1``.
-- Automatically grab ``qh3`` for X86 based processors.
+- Automatically grab ``qh3`` for X86 based processors (e.g. win32).
+- Fixed the aggressive exception in our native websocket implementation when a server responded positively to an upgrade
+  request without the required http header. Instead of ``RuntimeError``, now raises ``ProtocolError``.
 
 2.12.908 (2024-01-13)
 =====================
