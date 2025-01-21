@@ -108,9 +108,9 @@ log_level = "DEBUG"
 filterwarnings = [
     "error",
     '''ignore:.*iscoroutinefunction.*:DeprecationWarning''',
-    '''ignore:.*get_event_loop_policy.*:DeprecationWarning''',
-    '''ignore:.*set_event_loop_policy.*:DeprecationWarning''',
-    '''ignore:.*DefaultEventLoopPolicy.*:DeprecationWarning''',
+    '''ignore:.*get_event_loop.*:DeprecationWarning''',
+    '''ignore:.*set_event_loop.*:DeprecationWarning''',
+    '''ignore:.*EventLoopPolicy.*:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLS is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1 is deprecated:DeprecationWarning''',
     '''default:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
