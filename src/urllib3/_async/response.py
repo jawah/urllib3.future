@@ -364,6 +364,35 @@ class AsyncHTTPResponse(HTTPResponse):
 
         return data
 
+    async def read1(  # type: ignore[override]
+        self,
+        amt: int | None = None,
+        decode_content: bool | None = None,
+    ) -> bytes:
+        """
+        Similar to ``http.client.HTTPResponse.read1`` and documented
+        in :meth:`io.BufferedReader.read1`, but with an additional parameter:
+        ``decode_content``.
+
+        :param amt:
+            How much of the content to read.
+
+        :param decode_content:
+            If True, will attempt to decode the body based on the
+            'content-encoding' header.
+        """
+
+        data = await self.read(
+            amt=amt or -1,
+            decode_content=decode_content,
+        )
+
+        if amt is not None and len(data) > amt:
+            self._decoded_buffer.put(data)
+            return self._decoded_buffer.get(amt)
+
+        return data
+
     async def read(  # type: ignore[override]
         self,
         amt: int | None = None,

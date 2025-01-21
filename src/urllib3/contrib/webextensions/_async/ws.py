@@ -48,7 +48,7 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         accept_token: str | None = response.headers.get("Sec-Websocket-Accept")
 
         if accept_token is None:
-            raise RuntimeError(
+            raise ProtocolError(
                 "The WebSocket HTTP extension requires 'Sec-Websocket-Accept' header in the server response but was not present."
             )
 
@@ -128,8 +128,6 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._response is not None:
             if self._police_officer is not None:
                 self._police_officer.forget(self._response)
-                if self._police_officer.busy:
-                    self._police_officer.release()
             else:
                 await self._response.close()
             self._response = None
