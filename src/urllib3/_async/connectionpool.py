@@ -436,6 +436,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             self._keepalive_idle_window = MINIMAL_KEEPALIVE_IDLE_WINDOW
         self._background_monitoring: asyncio.Task | None = None  # type: ignore[type-arg]
 
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} host={self.host!r} port={self.port} timeout={self.timeout}>"
+
     @property
     def is_idle(self) -> bool:
         return self.pool is None or self.pool.bag_only_idle
