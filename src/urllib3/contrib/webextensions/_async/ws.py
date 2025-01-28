@@ -116,11 +116,11 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                             data_to_send: bytes = self._protocol.send(
                                 CloseConnection(0)
                             )
-                        except WebSocketProtocolError as e:
-                            await self.close()
-                            raise ProtocolError from e
-                        async with self._write_error_catcher():
-                            await self._dsa.sendall(data_to_send)
+                        except WebSocketProtocolError:
+                            pass
+                        else:
+                            async with self._write_error_catcher():
+                                await self._dsa.sendall(data_to_send)
                     await self._dsa.close()
                     self._dsa = None
             else:
