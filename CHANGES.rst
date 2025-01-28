@@ -1,3 +1,9 @@
+2.12.910 (2024-01-28)
+=====================
+
+- Fixed a rare issue where the closing of the WebSocket extension would lead to a ``RecursionError``.
+  This happen when the WebSocket state machine ends in a broken state.
+
 2.12.909 (2024-01-20)
 =====================
 
