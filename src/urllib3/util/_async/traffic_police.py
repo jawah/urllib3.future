@@ -79,6 +79,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
             contextvars.ContextVar("cursor", default=None)
         )
 
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} max_size={self.maxsize} concurrency={self.concurrency}>"
+
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
         try:

@@ -174,6 +174,9 @@ class AsyncPoolManager(AsyncRequestMethods):
             else resolver
         )
 
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} num_pools={self._num_pools}>"
+
     async def __aenter__(self: _SelfT) -> _SelfT:
         return self
 
