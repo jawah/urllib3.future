@@ -334,11 +334,16 @@ def _idna_encode(name: str) -> bytes:
         # immediately try idna native package
         # if not available.
         try:
-            from qh3._hazmat import idna_encode
+            from qh3._hazmat import idna_encode as hazmat_idna
         except ImportError:
-            pass
+            hazmat_idna = None
         else:
-            return idna_encode(name.lower())
+            try:
+                return hazmat_idna(name.lower())
+            except UnicodeEncodeError as e:
+                raise LocationParseError(
+                    f"Name '{name}' is not a valid IDNA label"
+                ) from None
 
         try:
             import idna
