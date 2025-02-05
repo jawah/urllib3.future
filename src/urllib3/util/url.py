@@ -330,6 +330,16 @@ def _normalize_host(host: str | None, scheme: str | None) -> str | None:
 
 def _idna_encode(name: str) -> bytes:
     if not name.isascii():
+        # attempt to use qh3 (v1.4+) internal idna
+        # immediately try idna native package
+        # if not available.
+        try:
+            from qh3._hazmat import idna_encode
+        except ImportError:
+            pass
+        else:
+            return idna_encode(name.lower())
+
         try:
             import idna
         except ImportError:
