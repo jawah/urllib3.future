@@ -336,11 +336,13 @@ def _idna_encode(name: str) -> bytes:
         try:
             from qh3._hazmat import idna_encode as hazmat_idna
         except ImportError:
-            hazmat_idna = None
+            pass  # just ignore it and try native idna package
         else:
             try:
                 return hazmat_idna(name.lower())
-            except UnicodeEncodeError as e:
+            except (ValueError, TypeError):
+                # TypeError in qh3 1.4.0 (due to an internal binding call error)
+                # ValueError >= 1.4.1 (correct one)
                 raise LocationParseError(
                     f"Name '{name}' is not a valid IDNA label"
                 ) from None
