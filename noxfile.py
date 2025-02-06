@@ -371,6 +371,7 @@ def downstream_requests(session: nox.Session) -> None:
 
     for patch in [
         "0004-Requests-ChunkedEncodingError.patch",
+        "0006-Requests-Qh3-IDNA.patch",
     ]:
         session.run("git", "apply", f"{root}/ci/{patch}", external=True)
 
