@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v3.3.1
+    image: traefik:v3.3.3
     restart: unless-stopped
     depends_on:
       httpbin:
@@ -86,7 +86,7 @@ services:
       - ./traefik:/usr/local/etc/haproxy
 
   httpbin:
-    image: mccutchen/go-httpbin:v2.15.0
+    image: mccutchen/go-httpbin:v2.16.0
     restart: unless-stopped
     labels:
       - traefik.enable=true

@@ -330,19 +330,43 @@ def _normalize_host(host: str | None, scheme: str | None) -> str | None:
 
 def _idna_encode(name: str) -> bytes:
     if not name.isascii():
+        # we can do IDNA encoding using
+        # two solutions.
+        #   A) native IDNA package
+        #   B) qh3 internal hazmat idna encoder
+        # we keep IDNA package try first for
+        # backward compatibility.
+        # qh3 idna encoder is less strict (browser like)
+        # regarding labels. So it may be a surprise to see
+        # some label not raising an exception when it is
+        # clearly expected.
         try:
             import idna
+        except ImportError:
+            pass
+        else:
+            try:
+                return idna.encode(name.lower(), strict=True, std3_rules=True)
+            except idna.IDNAError:
+                raise LocationParseError(
+                    f"Name '{name}' is not a valid IDNA label"
+                ) from None
+
+        try:
+            from qh3._hazmat import idna_encode as hazmat_idna
         except ImportError:
             raise LocationParseError(
                 "Unable to parse URL without the 'idna' module"
             ) from None
-
-        try:
-            return idna.encode(name.lower(), strict=True, std3_rules=True)
-        except idna.IDNAError:
-            raise LocationParseError(
-                f"Name '{name}' is not a valid IDNA label"
-            ) from None
+        else:
+            try:
+                return hazmat_idna(name.lower())
+            except (ValueError, TypeError):
+                # TypeError in qh3 1.4.0 (due to an internal binding call error)
+                # ValueError >= 1.4.1 (correct one)
+                raise LocationParseError(
+                    f"Name '{name}' is not a valid IDNA label"
+                ) from None
 
     return name.lower().encode("ascii")
 

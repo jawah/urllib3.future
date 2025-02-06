@@ -1,3 +1,9 @@
+2.12.911 (2024-02-05)
+=====================
+
+- Support for IDNA encode via ``qh3`` utils. This allows you to use international domain names without the
+  ``idna`` package. Thus avoiding an extra dependency. This is made possible from ``qh3>=1.4``.
+
 2.12.910 (2024-01-28)
 =====================
 
