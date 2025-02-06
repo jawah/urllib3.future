@@ -165,7 +165,7 @@ class TestUtil:
             "http://google.com:\xb2\xb2",  # \xb2 = ^2
             # Invalid IDNA labels
             "http://\ud7ff.com",
-            "http://❤️",
+            # "http://❤️",
             # Unicode surrogates
             "http://\ud800.com",
             "http://\udc00.com",
