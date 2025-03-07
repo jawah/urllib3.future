@@ -69,6 +69,8 @@ class AsyncHTTPResponse(HTTPResponse):
         self._request_url: str | None = request_url
         self._retries: Retry | None = None
 
+        self._extension: AsyncExtensionFromHTTP | None = None  # type: ignore[assignment]
+
         self.retries = retries
 
         self.chunked = False
@@ -125,8 +127,6 @@ class AsyncHTTPResponse(HTTPResponse):
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
-
-        self._extension: AsyncExtensionFromHTTP | None = None  # type: ignore[assignment]
 
     async def readinto(self, b: bytearray) -> int:  # type: ignore[override]
         temp = await self.read(len(b))

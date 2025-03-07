@@ -367,6 +367,8 @@ class HTTPResponse(io.IOBase):
         self._request_url: str | None = request_url
         self._retries: Retry | None = None
 
+        self._extension: ExtensionFromHTTP | None = None
+
         self.retries = retries
 
         self.chunked = False
@@ -418,8 +420,6 @@ class HTTPResponse(io.IOBase):
         # If requested, preload the body.
         if preload_content and not self._body:
             self._body = self.read(decode_content=decode_content)
-
-        self._extension: ExtensionFromHTTP | None = None
 
     def is_from_promise(self, promise: ResponsePromise) -> bool:
         """
