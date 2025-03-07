@@ -62,11 +62,16 @@ def load_cert_chain(
 
         buf_name = create_string_buffer(unique_name.encode())
 
-        fd = _shm_open(
-            buf_name,
-            c_int(os.O_RDWR | os.O_CREAT),
-            c_ushort(stat.S_IRUSR | stat.S_IWUSR),
-        )
+        try:
+            fd = _shm_open(
+                buf_name,
+                c_int(os.O_RDWR | os.O_CREAT),
+                c_ushort(stat.S_IRUSR | stat.S_IWUSR),
+            )
+        except SystemError as e:
+            raise UnsupportedOperation(
+                f"Unable to provide support for in-memory client certificate: {e}"
+            )
 
         if fd == -1:
             raise UnsupportedOperation(
