@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os.path
+import platform
 import shutil
 import ssl
 import sys
@@ -173,6 +174,11 @@ class TestHTTPS(HTTPSDummyServerTestCase):
     @notWindows()
     @notMacOS()
     def test_in_memory_client_intermediate(self) -> None:
+        if sys.implementation.name == "pypy" and platform.python_version().startswith(
+            "3.11"
+        ):
+            pytest.skip("PyPy 3.11 libffi does not implement _shm_open!")
+
         with open(os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_KEY)) as fp_key_data:
             with open(
                 os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_PEM)

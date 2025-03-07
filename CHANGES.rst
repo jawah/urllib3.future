@@ -1,3 +1,12 @@
+2.12.912 (2024-02-07)
+=====================
+
+- Automatically grab ``qh3`` for HTTP/3 support with PyPy 3.11
+- Fixed error while attempting to close a broken ``HTTPResponse`` starting from Python 3.14
+  If the Content-Type is invalid or malformed, the constructor stopped initializing some members
+  that are required in the closing procedure. (e.g. using ctx)
+- Fixed an error when libffi does not support in-memory I/O handler. Seen so far with PyPy 3.11 beta.
+
 2.12.911 (2024-02-05)
 =====================
 
