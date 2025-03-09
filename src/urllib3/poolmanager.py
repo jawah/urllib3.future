@@ -916,6 +916,15 @@ class PoolManager(RequestMethods):
         response.drain_conn()
         return self.urlopen(method, redirect_location, **kw)  # type: ignore[no-any-return]
 
+    def __repr__(self) -> str:
+        with self.pools._lock:
+            inner_repr = "; ".join(repr(p) for p in self.pools._registry.values())
+
+            if inner_repr:
+                inner_repr += " "
+
+            return f"<PoolManager {inner_repr}{self.pools}>"
+
 
 class ProxyManager(PoolManager):
     """
@@ -1095,6 +1104,15 @@ class ProxyManager(PoolManager):
             kw["headers"] = self._set_proxy_headers(url, headers)
 
         return super().urlopen(method, url, redirect=redirect, **kw)  # type: ignore[no-any-return]
+
+    def __repr__(self) -> str:
+        with self.pools._lock:
+            inner_repr = "; ".join(repr(p) for p in self.pools._registry.values())
+
+            if inner_repr:
+                inner_repr += " "
+
+            return f"<ProxyManager {self.proxy} {inner_repr}{self.pools}>"
 
 
 def proxy_from_url(url: str, **kw: typing.Any) -> ProxyManager:

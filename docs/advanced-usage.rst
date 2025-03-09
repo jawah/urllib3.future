@@ -1637,3 +1637,27 @@ did simple http request.
 
 In opposition to WebSocket, the method ``next_payload()`` output an object. The event fully parsed.
 If you wanted to get the raw event, untouched, as unicode string, add the kwarg ``raw=True`` into the method ``next_payload()``.
+
+Debug your pool state
+---------------------
+
+Ever wondered what is inside your ``PoolManager`` or ``AsyncPoolManager``?
+Wonder no more! starting from urllib3-future 2.12.913+ you can have a proper representation of those objects.
+
+.. code-block:: python
+
+    import urllib3
+
+    if __name__ == "__main__":
+
+        with urllib3.PoolManager() as pm:
+            r = pm.urlopen("GET", "https://httpbingo.org/get)
+            print(pm)  # <PoolManager <HTTPSConnectionPool "httpbingo.org:443" <TrafficPolice 1/10 (Idle)>> <TrafficPolice 1/10 (Idle)>>
+
+.. note:: TrafficPolice is the inner task/thread safety container. The representation is as follow: used/maxsize (status).
+
+.. note:: TrafficPolice is either 'idle', 'used' or 'saturated'.
+
+.. warning:: Both ``PoolManager`` and ``ConnectionPool`` have a ``TrafficPolice`` inside them.
+
+.. danger:: Calling ``repr`` here is highly discouraged at a high frequency. Do it for debug purposes only.

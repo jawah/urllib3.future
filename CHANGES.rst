@@ -1,3 +1,8 @@
+2.12.913 (2024-02-10)
+=====================
+
+- Added useful repr for ``PoolManager``, ``ConnectionPool`` and ``TrafficPolice`` (async counterpart included).
+
 2.12.912 (2024-02-07)
 =====================
 

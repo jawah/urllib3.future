@@ -1976,6 +1976,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         return response
 
+    def __repr__(self) -> str:
+        return f"<AsyncHTTPConnection {self.host}:{self.port or 80} {self.pool or '(Closed)'}>"
+
 
 class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
     """
@@ -2361,6 +2364,9 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                 ),
                 InsecureRequestWarning,
             )
+
+    def __repr__(self) -> str:
+        return f"<AsyncHTTPSConnection {self.host}:{self.port or 443} {self.pool or '(Closed)'}>"
 
 
 def connection_from_url(url: str, **kw: typing.Any) -> AsyncHTTPConnectionPool:
