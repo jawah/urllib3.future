@@ -173,12 +173,16 @@ class TestHTTPS(HTTPSDummyServerTestCase):
 
     @notWindows()
     @notMacOS()
+    @pytest.mark.xfail(
+        sys.implementation.name == "pypy"
+        and (
+            platform.python_version().startswith("3.11")
+            or platform.python_version().startswith("3.10")
+        ),
+        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        strict=False,
+    )
     def test_in_memory_client_intermediate(self) -> None:
-        if sys.implementation.name == "pypy" and platform.python_version().startswith(
-            "3.11"
-        ):
-            pytest.skip("PyPy 3.11 libffi does not implement _shm_open!")
-
         with open(os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_KEY)) as fp_key_data:
             with open(
                 os.path.join(self.certs_dir, CLIENT_INTERMEDIATE_PEM)
@@ -228,6 +232,15 @@ class TestHTTPS(HTTPSDummyServerTestCase):
 
     @notWindows()
     @notMacOS()
+    @pytest.mark.xfail(
+        sys.implementation.name == "pypy"
+        and (
+            platform.python_version().startswith("3.11")
+            or platform.python_version().startswith("3.10")
+        ),
+        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        strict=False,
+    )
     def test_in_memory_client_key_password(self) -> None:
         with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)) as fp_key_data:
             with open(os.path.join(self.certs_dir, CLIENT_CERT)) as fp_cert_data:
