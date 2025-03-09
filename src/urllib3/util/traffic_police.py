@@ -731,3 +731,19 @@ class TrafficPolice(typing.Generic[T]):
                 return key in self._map
 
         return self._find_by(traffic_indicator) is not None
+
+    def __repr__(self) -> str:
+        with self._lock:
+            is_saturated = self.bag_only_saturated
+            is_idle = not is_saturated and self.bag_only_idle
+
+            status: str
+
+            if is_saturated:
+                status = "Saturated"
+            elif is_idle:
+                status = "Idle"
+            else:
+                status = "Used"
+
+            return f"<TrafficPolice {self.rsize()}/{self.maxsize} ({status})>"

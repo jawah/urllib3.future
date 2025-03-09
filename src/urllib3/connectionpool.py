@@ -1934,6 +1934,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         return response
 
+    def __repr__(self) -> str:
+        return f'<HTTPConnectionPool "{self.host}:{self.port or 80}" {self.pool or "(Closed)"}>'
+
 
 class HTTPSConnectionPool(HTTPConnectionPool):
     """
@@ -2287,6 +2290,9 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                 ),
                 InsecureRequestWarning,
             )
+
+    def __repr__(self) -> str:
+        return f'<HTTPSConnectionPool "{self.host}:{self.port or 443}" {self.pool or "(Closed)"}>'
 
 
 def connection_from_url(url: str, **kw: typing.Any) -> HTTPConnectionPool:

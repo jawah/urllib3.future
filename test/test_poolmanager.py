@@ -30,15 +30,33 @@ class TestPoolManager:
         p = PoolManager(1)
 
         conn1 = p.connection_from_url("http://localhost:8081/foo")
+
+        assert (
+            repr(p)
+            == '<PoolManager <HTTPConnectionPool "localhost:8081" (Closed)> <TrafficPolice 1/1 (Idle)>>'
+        )
+
         conn2 = p.connection_from_url("http://localhost:8081/bar")
+
+        assert (
+            repr(p)
+            == '<PoolManager <HTTPConnectionPool "localhost:8081" (Closed)> <TrafficPolice 1/1 (Idle)>>'
+        )
 
         assert conn1 == conn2
 
         # Ensure that FQDNs are handled separately from relative domains
         p = PoolManager(2)
 
+        assert repr(p) == "<PoolManager <TrafficPolice 0/2 (Idle)>>"
+
         conn1 = p.connection_from_url("http://localhost.:8081/foo")
         conn2 = p.connection_from_url("http://localhost:8081/bar")
+
+        assert (
+            repr(p)
+            == '<PoolManager <HTTPConnectionPool "localhost.:8081" (Closed)>; <HTTPConnectionPool "localhost:8081" (Closed)> <TrafficPolice 2/2 (Idle)>>'
+        )
 
         assert conn1 != conn2
 

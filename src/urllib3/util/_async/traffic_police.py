@@ -681,3 +681,18 @@ class AsyncTrafficPolice(typing.Generic[T]):
             )
             return key in self._map
         return await self._find_by(traffic_indicator) is not None
+
+    def __repr__(self) -> str:
+        is_saturated = self.bag_only_saturated
+        is_idle = not is_saturated and self.bag_only_idle
+
+        status: str
+
+        if is_saturated:
+            status = "Saturated"
+        elif is_idle:
+            status = "Idle"
+        else:
+            status = "Used"
+
+        return f"<AsyncTrafficPolice {self.rsize()}/{self.maxsize} ({status})>"

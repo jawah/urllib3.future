@@ -783,6 +783,14 @@ class AsyncPoolManager(AsyncRequestMethods):
         await response.drain_conn()
         return await self.urlopen(method, redirect_location, **kw)  # type: ignore[no-any-return]
 
+    def __repr__(self) -> str:
+        inner_repr = "; ".join(repr(p) for p in self.pools._registry.values())
+
+        if inner_repr:
+            inner_repr += " "
+
+        return f"<AsyncPoolManager {inner_repr}{self.pools}>"
+
 
 class AsyncProxyManager(AsyncPoolManager):
     """
@@ -957,6 +965,14 @@ class AsyncProxyManager(AsyncPoolManager):
             kw["headers"] = self._set_proxy_headers(url, headers)
 
         return await super().urlopen(method, url, redirect=redirect, **kw)  # type: ignore[no-any-return]
+
+    def __repr__(self) -> str:
+        inner_repr = "; ".join(repr(p) for p in self.pools._registry.values())
+
+        if inner_repr:
+            inner_repr += " "
+
+        return f"<AsyncProxyManager {self.proxy} {inner_repr}{self.pools}>"
 
 
 def proxy_from_url(url: str, **kw: typing.Any) -> AsyncProxyManager:
