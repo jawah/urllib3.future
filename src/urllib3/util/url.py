@@ -423,10 +423,6 @@ def parse_url(url: str) -> Url:
         # Empty
         return Url()
 
-    # some legacy app may pass down a bytes url[...]
-    if isinstance(url, bytes):
-        url = url.decode()
-
     source_url = url
     if not _SCHEME_RE.search(url):
         url = "//" + url
