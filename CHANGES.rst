@@ -1,7 +1,10 @@
-2.12.913 (2024-02-10)
+2.12.913 (2024-03-21)
 =====================
 
 - Added useful repr for ``PoolManager``, ``ConnectionPool`` and ``TrafficPolice`` (async counterpart included).
+- Fixed ``KeyError`` upon parsing X509 certificate pulled from the QUIC layer when the certificate contain an unexpected
+  rfc4514 attribute. (https://github.com/jawah/urllib3.future/issues/217)
+- Fixed a rare error when passing an url as ``bytes`` instead of ``str`` (support for legacy programs).
 
 2.12.912 (2024-02-07)
 =====================
