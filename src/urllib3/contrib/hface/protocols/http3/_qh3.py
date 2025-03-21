@@ -371,9 +371,12 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "C": "countryName",
             "STREET": "streetAddress",
             "DC": "domainComponent",
+            "E": "email",
         }
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
+            if rfc4514_attribute_name not in _short_name_assoc:
+                continue
             issuer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -384,6 +387,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
+            if rfc4514_attribute_name not in _short_name_assoc:
+                continue
             issuer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -440,9 +445,12 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "C": "countryName",
             "STREET": "streetAddress",
             "DC": "domainComponent",
+            "E": "email",
         }
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
+            if rfc4514_attribute_name not in _short_name_assoc:
+                continue
             peer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -453,6 +461,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
+            if rfc4514_attribute_name not in _short_name_assoc:
+                continue
             peer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
