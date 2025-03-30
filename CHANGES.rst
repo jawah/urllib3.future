@@ -1,3 +1,13 @@
+2.12.914 (2024-03-30)
+=====================
+
+- Fixed a rare thread safety issue when the size of PoolManager is inferior to the thread count. An edge case permitted
+  the creation of two ``ConnectionPool`` for the same ``PoolKey``.
+- Changed the default behavior of threads management to not raise an exception if the thread count is greater than
+  the pool size. Making it that way better align with upstream, our initial decision revealed itself to cause
+  confusions for some of our users. No longer will urllib3-future raise ``OverwhelmedTraffic`` in default configuration.
+- Fixed an error when ``happy_eyeballs=True`` is set with more tasks or threads than the pool size.
+
 2.12.913 (2024-03-21)
 =====================
 
