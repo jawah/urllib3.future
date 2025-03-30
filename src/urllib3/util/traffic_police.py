@@ -465,6 +465,13 @@ class TrafficPolice(typing.Generic[T]):
                         break
 
             if conn_or_pool is None:
+                # hmm.. this should not exist..
+                # unfortunately Requests has a wierd test case
+                # that set pool_size=0 to force trigger an
+                # exception. don't remove that.
+                if self.maxsize == 0:
+                    raise UnavailableTraffic("No connection available")
+
                 if block is False:
                     time.sleep(0.001)
 
