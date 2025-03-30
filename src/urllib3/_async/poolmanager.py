@@ -351,18 +351,21 @@ class AsyncPoolManager(AsyncRequestMethods):
         if self.pools.busy:
             self.pools.release()
 
-        pool = await self.pools.locate(pool_key, block=False)
+        async with self.pools.locate_or_hold(pool_key) as swapper_or_pool:
+            if not hasattr(swapper_or_pool, "is_idle"):
+                # Make a fresh ConnectionPool of the desired type
+                scheme = request_context["scheme"]
+                host = request_context["host"]
+                port = request_context["port"]
+                pool = self._new_pool(
+                    scheme, host, port, request_context=request_context
+                )
 
-        if pool:
-            return pool
+                await self.pools.wait_for_idle_or_available_slot()
 
-        # Make a fresh ConnectionPool of the desired type
-        scheme = request_context["scheme"]
-        host = request_context["host"]
-        port = request_context["port"]
-        pool = self._new_pool(scheme, host, port, request_context=request_context)
-        await self.pools.wait_for_idle_or_available_slot()
-        await self.pools.put(pool, pool_key, immediately_unavailable=True)
+                await swapper_or_pool(pool)
+            else:
+                pool = swapper_or_pool  # type: ignore[assignment]
 
         return pool
 
