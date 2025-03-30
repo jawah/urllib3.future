@@ -34,6 +34,17 @@ class TrafficState(int, Enum):
     SATURATED = 2
 
 
+class ItemPlaceholder:
+    """A dummy placeholder to be inserted for spot reservation into the TrafficPolice."""
+
+    @property
+    def is_saturated(self) -> typing.Literal[True]:
+        return True
+
+    def close(self) -> None:
+        pass
+
+
 class TrafficPoliceFine(Exception): ...
 
 
@@ -328,7 +339,9 @@ class TrafficPolice(typing.Generic[T]):
                         "You must release the previous connection in order to acquire a new one."
                     )
 
-                if self.concurrency is True:
+                if self.concurrency is True and not isinstance(
+                    conn_or_pool, ItemPlaceholder
+                ):
                     self._container[obj_id] = conn_or_pool
 
         if traffic_indicators:
@@ -401,7 +414,9 @@ class TrafficPolice(typing.Generic[T]):
                 # This part is ugly but set for backward compatibility
                 # urllib3 used to fill the bag with 'None'. This simulates that
                 # old and bad behavior.
-                if not self._container and self.maxsize is not None:
+                if (
+                    not self._container or self.bag_only_saturated
+                ) and self.maxsize is not None:
                     if self.maxsize > len(self._registry):
                         return None
 
@@ -450,7 +465,7 @@ class TrafficPolice(typing.Generic[T]):
                         break
 
             if conn_or_pool is None:
-                if block is True:
+                if block is False:
                     time.sleep(0.001)
 
                     if timeout is not None:
@@ -511,6 +526,56 @@ class TrafficPolice(typing.Generic[T]):
             del self._map[key]
             del self._map_types[key]
 
+    @contextlib.contextmanager
+    def locate_or_hold(
+        self,
+        traffic_indicator: MappableTraffic | None = None,
+    ) -> typing.Generator[typing.Callable[[T], None] | T]:
+        """Reserve a spot into the TrafficPolice instance while you construct your conn_or_pool.
+
+        Creating a conn_or_pool may or may not take significant time, in order
+        to avoid having many thread racing for TrafficPolice insert, we must
+        have a way to instantly reserve a spot meanwhile we built what
+        is required.
+        """
+        if traffic_indicator is not None:
+            conn_or_pool = self.locate(traffic_indicator=traffic_indicator)
+
+            if conn_or_pool is not None:
+                yield conn_or_pool
+                return
+
+        traffic_indicators = []
+
+        if traffic_indicator is not None:
+            traffic_indicators.append(traffic_indicator)
+
+        self.put(
+            ItemPlaceholder(),  # type: ignore[arg-type]
+            *traffic_indicators,
+            immediately_unavailable=True,
+        )
+
+        swap_made: bool = False
+
+        def inner_swap(swappable_conn_or_pool: T) -> None:
+            nonlocal swap_made
+
+            swap_made = True
+
+            with self._lock:
+                self.kill_cursor()
+                self.put(
+                    swappable_conn_or_pool,
+                    *traffic_indicators,
+                    immediately_unavailable=True,
+                )
+
+        yield inner_swap
+
+        if not swap_made:
+            self.kill_cursor()
+
     def locate(
         self,
         traffic_indicator: MappableTraffic,
@@ -521,35 +586,51 @@ class TrafficPolice(typing.Generic[T]):
         wait_clock = 0.0
         conn_or_pool: T | None
 
-        if not isinstance(traffic_indicator, type):
-            key: PoolKey | int = (
-                traffic_indicator
-                if isinstance(traffic_indicator, tuple)
-                else id(traffic_indicator)
-            )
-
+        while True:
             with self._lock:
-                if key not in self._map:
-                    # we must fallback on beacon (sub police officer if any)
-                    conn_or_pool, obj_id = None, None
+                if not isinstance(traffic_indicator, type):
+                    key: PoolKey | int = (
+                        traffic_indicator
+                        if isinstance(traffic_indicator, tuple)
+                        else id(traffic_indicator)
+                    )
+
+                    if key not in self._map:
+                        # we must fallback on beacon (sub police officer if any)
+                        conn_or_pool, obj_id = None, None
+                    else:
+                        conn_or_pool = self._map[key]
+                        obj_id = id(conn_or_pool)
                 else:
-                    conn_or_pool = self._map[key]
-                    obj_id = id(conn_or_pool)
-        else:
-            raise ValueError("unsupported traffic_indicator")
+                    raise ValueError("unsupported traffic_indicator")
 
-        if conn_or_pool is None and obj_id is None:
-            with self._lock:
-                for r_obj_id, r_conn_or_pool in self._registry.items():
-                    if hasattr(r_conn_or_pool, "pool") and isinstance(
-                        r_conn_or_pool.pool, TrafficPolice
-                    ):
-                        if r_conn_or_pool.pool.beacon(traffic_indicator):
-                            conn_or_pool, obj_id = r_conn_or_pool, r_obj_id
-                            break
+                if (
+                    conn_or_pool is None
+                    and obj_id is None
+                    and not isinstance(traffic_indicator, tuple)
+                ):
+                    for r_obj_id, r_conn_or_pool in self._registry.items():
+                        if hasattr(r_conn_or_pool, "pool") and isinstance(
+                            r_conn_or_pool.pool, TrafficPolice
+                        ):
+                            if r_conn_or_pool.pool.beacon(traffic_indicator):
+                                conn_or_pool, obj_id = r_conn_or_pool, r_obj_id
+                                break
 
-        if conn_or_pool is None or obj_id is None:
-            return None
+                if conn_or_pool is None or obj_id is None:
+                    return None
+
+                if not isinstance(conn_or_pool, ItemPlaceholder):
+                    break
+
+            time.sleep(0.001)
+
+            if timeout is not None:
+                wait_clock += 0.001
+                if wait_clock >= timeout:
+                    raise TimeoutError(
+                        "Timed out while waiting for conn_or_pool to become available"
+                    )
 
         cursor_key = current_thread().name
 

@@ -478,22 +478,34 @@ class PoolManager(RequestMethods):
         objects. At a minimum it must have the ``scheme``, ``host``, and
         ``port`` fields.
         """
-        # If the scheme, host, or port doesn't match existing open
-        # connections, open a new ConnectionPool.
+
+        # those two lines are there for compatibility purposes
+        # urllib3-future has to be a "perfect" drop-in solution for
+        # urllib3. here the explanation for them:
+        # some programs may just invoke connection_from_xxx directly and
+        # handle the underlying pool manually, thus bypassing the
+        # internal lifecycle intended. this just make sure we declare
+        # not using anything prior to what's next.
+        # this constraint appeared after introducing TrafficPolice.
         if self.pools.busy:
             self.pools.release()
 
-        pool = self.pools.locate(pool_key, block=False)
+        with self.pools.locate_or_hold(pool_key) as swapper_or_pool:
+            # If the scheme, host, or port doesn't match existing open
+            # connections, open a new ConnectionPool.
+            if not hasattr(swapper_or_pool, "is_idle"):
+                # Make a fresh ConnectionPool of the desired type
+                scheme = request_context["scheme"]
+                host = request_context["host"]
+                port = request_context["port"]
 
-        if pool:
-            return pool
+                pool = self._new_pool(
+                    scheme, host, port, request_context=request_context
+                )
 
-        # Make a fresh ConnectionPool of the desired type
-        scheme = request_context["scheme"]
-        host = request_context["host"]
-        port = request_context["port"]
-        pool = self._new_pool(scheme, host, port, request_context=request_context)
-        self.pools.put(pool, pool_key, immediately_unavailable=True)
+                swapper_or_pool(pool)
+            else:
+                pool = swapper_or_pool  # type: ignore[assignment]
 
         return pool
 
