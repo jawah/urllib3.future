@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import collections
 import io
 import json as _json
 import logging
@@ -50,7 +49,7 @@ from .exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from .util.response import is_fp_closed
+from .util.response import is_fp_closed, BytesQueueBuffer
 from .util.retry import Retry
 
 if typing.TYPE_CHECKING:
@@ -219,65 +218,6 @@ def _get_decoder(mode: str) -> ContentDecoder:
         return ZstdDecoder()
 
     return DeflateDecoder()
-
-
-class BytesQueueBuffer:
-    """Memory-efficient bytes buffer
-
-    To return decoded data in read() and still follow the BufferedIOBase API, we need a
-    buffer to always return the correct amount of bytes.
-
-    This buffer should be filled using calls to put()
-
-    Our maximum memory usage is determined by the sum of the size of:
-
-     * self.buffer, which contains the full data
-     * the largest chunk that we will copy in get()
-
-    The worst case scenario is a single chunk, in which case we'll make a full copy of
-    the data inside get().
-    """
-
-    def __init__(self) -> None:
-        self.buffer: typing.Deque[bytes] = collections.deque()
-        self._size: int = 0
-
-    def __len__(self) -> int:
-        return self._size
-
-    def put(self, data: bytes) -> None:
-        self.buffer.append(data)
-        self._size += len(data)
-
-    def get(self, n: int) -> bytes:
-        if n == 0:
-            return b""
-        elif not self.buffer:
-            raise RuntimeError("buffer is empty")
-        elif n < 0:
-            raise ValueError("n should be > 0")
-
-        fetched = 0
-        ret = io.BytesIO()
-        while fetched < n:
-            remaining = n - fetched
-            chunk = self.buffer.popleft()
-            chunk_length = len(chunk)
-            if remaining < chunk_length:
-                left_chunk, right_chunk = chunk[:remaining], chunk[remaining:]
-                ret.write(left_chunk)
-                self.buffer.appendleft(right_chunk)
-                self._size -= remaining
-                break
-            else:
-                ret.write(chunk)
-                self._size -= chunk_length
-            fetched += chunk_length
-
-            if not self.buffer:
-                break
-
-        return ret.getvalue()
 
 
 class HTTPResponse(io.IOBase):
