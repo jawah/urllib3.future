@@ -20,8 +20,8 @@ from ..exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from ..response import BytesQueueBuffer, ContentDecoder, HTTPResponse
-from ..util.response import is_fp_closed
+from ..response import ContentDecoder, HTTPResponse
+from ..util.response import is_fp_closed, BytesQueueBuffer
 from ..util.retry import Retry
 from .connection import AsyncHTTPConnection
 

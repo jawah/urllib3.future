@@ -16,6 +16,7 @@ if typing.TYPE_CHECKING:
 
 from .._collections import HTTPHeaderDict
 from .._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
+from ..util.response import BytesQueueBuffer
 
 
 class HttpVersion(str, enum.Enum):
@@ -265,7 +266,7 @@ class LowLevelResponse:
 
         self._stream_id = stream_id
 
-        self.__buffer_excess: bytes = b""
+        self.__buffer_excess: BytesQueueBuffer = BytesQueueBuffer()
         self.__promise: ResponsePromise | None = None
 
         self.trailers: HTTPHeaderDict | None = None
@@ -337,36 +338,24 @@ class LowLevelResponse:
                 __size, self._stream_id
             )
 
-            # that's awkward, but rather no choice. the state machine
-            # consume and render event regardless of your amt !
-            if self.__buffer_excess:
-                data = (  # Defensive: Difficult to put in place a scenario that verify this
-                    self.__buffer_excess + data
-                )
-                self.__buffer_excess = b""  # Defensive:
-        else:
-            if __size is None:
-                data = self.__buffer_excess
-                self.__buffer_excess = b""
-            else:
-                data = self.__buffer_excess[:__size]
-                self.__buffer_excess = self.__buffer_excess[__size:]
+            self.__buffer_excess.put(data)
 
-        if __size is not None and (0 < __size < len(data)):
-            self.__buffer_excess = data[__size:]
-            data = data[:__size]
+        buf_capacity = len(self.__buffer_excess)
+        data = self.__buffer_excess.get(
+            __size if __size is not None and __size > 0 else buf_capacity
+        )
 
-        if self._eot and len(self.__buffer_excess) == 0:
+        size_in = len(data)
+
+        buf_capacity -= size_in
+
+        if self._eot and buf_capacity == 0:
             self._stream_abort = None
             self.closed = True
             self._sock = None
 
-        size_in = len(data)
-
         if self.chunked:
-            self.chunk_left = (
-                len(self.__buffer_excess) if self.__buffer_excess else None
-            )
+            self.chunk_left = buf_capacity if buf_capacity else None
         elif self.length is not None:
             self.length -= size_in
 

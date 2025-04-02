@@ -5,6 +5,7 @@ import typing
 from ..._collections import HTTPHeaderDict
 from ...contrib.ssa import AsyncSocket, SSLAsyncSocket
 from .._base import BaseBackend, ResponsePromise
+from ...util.response import BytesQueueBuffer
 
 
 class AsyncDirectStreamAccess:
@@ -176,7 +177,7 @@ class AsyncLowLevelResponse:
 
         self._stream_id = stream_id
 
-        self.__buffer_excess: bytes = b""
+        self.__buffer_excess: BytesQueueBuffer = BytesQueueBuffer()
         self.__promise: ResponsePromise | None = None
         self._dsa = dsa
         self._stream_abort = stream_abort
@@ -226,35 +227,24 @@ class AsyncLowLevelResponse:
                 __size, self._stream_id
             )
 
-            # that's awkward, but rather no choice. the state machine
-            # consume and render event regardless of your amt !
-            if self.__buffer_excess:
-                data = (  # Defensive: Difficult to put in place a scenario that verify this
-                    self.__buffer_excess + data
-                )
-                self.__buffer_excess = b""  # Defensive:
-        else:
-            if __size is None:
-                data = self.__buffer_excess
-                self.__buffer_excess = b""
-            else:
-                data = self.__buffer_excess[:__size]
-                self.__buffer_excess = self.__buffer_excess[__size:]
+            self.__buffer_excess.put(data)
 
-        if __size is not None and (0 < __size < len(data)):
-            self.__buffer_excess = data[__size:]
-            data = data[:__size]
-
-        if self._eot and len(self.__buffer_excess) == 0:
-            self._stream_abort = None
-            self.closed = True
+        buf_capacity = len(self.__buffer_excess)
+        data = self.__buffer_excess.get(
+            __size if __size is not None and __size > 0 else buf_capacity
+        )
 
         size_in = len(data)
 
+        buf_capacity -= size_in
+
+        if self._eot and buf_capacity == 0:
+            self._stream_abort = None
+            self.closed = True
+            self._sock = None
+
         if self.chunked:
-            self.chunk_left = (
-                len(self.__buffer_excess) if self.__buffer_excess else None
-            )
+            self.chunk_left = buf_capacity if buf_capacity else None
         elif self.length is not None:
             self.length -= size_in
 
