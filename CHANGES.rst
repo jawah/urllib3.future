@@ -1,3 +1,9 @@
+2.12.915 (2024-04-02)
+=====================
+
+- Fixed a performance issue when streaming download by chunk (size) not in phase with incoming packets size.
+  See https://github.com/jawah/niquests/issues/236
+
 2.12.914 (2024-03-30)
 =====================
 
