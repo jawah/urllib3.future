@@ -86,6 +86,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             secrets_log_file=open(keylogfile_path, "w") if keylogfile_path else None,  # type: ignore[arg-type]
             quic_logger=QuicFileLogger(qlogdir_path) if qlogdir_path else None,
             idle_timeout=tls_config.idle_timeout,
+            max_data=2**24,
+            max_stream_data=2**24,
         )
 
         if tls_config.ciphers:
