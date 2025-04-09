@@ -132,6 +132,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
         self._open_stream_count: int = 0
         self._connection.initiate_connection()
+        self._connection.increment_flow_control_window(2**24)
         self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
         self._goaway_to_honor: bool = False
@@ -172,6 +173,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
         self._connection.send_headers(stream_id, headers, end_stream)
+        self._connection.increment_flow_control_window(2**24, stream_id=stream_id)
         self._open_stream_count += 1
 
     def submit_data(

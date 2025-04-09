@@ -1,3 +1,8 @@
+2.12.916 (2024-04-09)
+=====================
+
+- Set a bigger initial window size for HTTP/2, and HTTP/3 streams. This improves data streaming performances.
+
 2.12.915 (2024-04-02)
 =====================
 
