@@ -200,6 +200,7 @@ async def idle_conn_watch_task(
                                 if idle_delay >= keepalive_idle_window:
                                     pool.num_pings += 1
                                     await conn.ping()
+                                    await conn.peek_and_react(expect_frame=True)
             except AttributeError:
                 return
     except (ReferenceError, asyncio.CancelledError):

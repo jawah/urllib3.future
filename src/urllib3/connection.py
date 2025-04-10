@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import socket
+import time
 import typing
 import warnings
 from datetime import datetime, timedelta
@@ -297,6 +298,13 @@ class HTTPConnection(HfaceBackend):
         # with GoAway for example.
         if self._promises or self._pending_responses:
             return True
+        # consider the conn dead after our keep alive delay passed.
+        if (
+            self._keepalive_delay is not None
+            and self.connected_at is not None
+            and time.monotonic() - self.connected_at >= self._keepalive_delay
+        ):
+            return False
         return self._protocol is not None and self._protocol.has_expired() is False
 
     @property
