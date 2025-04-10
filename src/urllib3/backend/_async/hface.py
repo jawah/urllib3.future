@@ -750,7 +750,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         bck_timeout = self.sock.gettimeout()
         # either there is data ready for us, or there's nothing and we stop waiting
         # almost instantaneously.
-        self.sock.settimeout(0.001 if expect_frame is False else 0.1)
+        self.sock.settimeout(0.001 if not expect_frame else 0.1)
 
         try:
             peek_data = await self.sock.recv(self.blocksize)

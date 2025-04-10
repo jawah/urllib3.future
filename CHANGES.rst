@@ -1,7 +1,7 @@
 2.12.917 (2024-04-10)
 =====================
 
-- Improve keepalive handling for connections. We know listen for an incoming pong frame after emitting a ping frame.
+- Improve keepalive handling for connections. We now listen for an incoming pong frame after emitting a ping frame.
   Moreover we ensure better strictness around set ``keepalive_delay`` and consider every connection dropped after set delay.
 
 2.12.916 (2024-04-09)
