@@ -788,7 +788,7 @@ class HfaceBackend(BaseBackend):
         self._protocol = None
         self._protocol_factory = None
 
-    def peek_and_react(self) -> bool:
+    def peek_and_react(self, expect_frame: bool = False) -> bool:
         """This method should be called by a thread using TrafficPolice when it is idle.
         Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
         or when reaching a WebSocket.
@@ -805,7 +805,7 @@ class HfaceBackend(BaseBackend):
 
         bck_timeout = self.sock.gettimeout()
 
-        self.sock.settimeout(0.001)
+        self.sock.settimeout(0.001 if not expect_frame else 0.1)
 
         try:
             peek_data = self.sock.recv(self.blocksize)

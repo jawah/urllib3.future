@@ -732,7 +732,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._protocol = None
         self._protocol_factory = None
 
-    async def peek_and_react(self) -> bool:
+    async def peek_and_react(self, expect_frame: bool = False) -> bool:
         """This method should be called by a thread using TrafficPolice when it is idle.
         Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
         or when reaching a WebSocket.
@@ -750,7 +750,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         bck_timeout = self.sock.gettimeout()
         # either there is data ready for us, or there's nothing and we stop waiting
         # almost instantaneously.
-        self.sock.settimeout(0.001)
+        self.sock.settimeout(0.001 if not expect_frame else 0.1)
 
         try:
             peek_data = await self.sock.recv(self.blocksize)
