@@ -156,6 +156,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 and self._quic._close_event is not None
             ):
                 self._events.extend(self._map_quic_event(self._quic._close_event))
+                self._terminated = True
         return self._terminated or self._goaway_to_honor
 
     @property
