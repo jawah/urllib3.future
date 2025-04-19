@@ -46,8 +46,7 @@ jobs:
         os:
           - macos-13
           - windows-2022
-          - ubuntu-20.04  # OpenSSL 1.1.1
-          - ubuntu-22.04  # OpenSSL 3.0
+          - ubuntu-22.04
         nox-session: ['']
         include:
           - experimental: false
@@ -66,11 +65,6 @@ jobs:
             nox-session: test_ssl_large_resources-3.13
             python-version: "3.13"
             os: windows-2022
-            experimental: false
-          - traefik-server: false
-            nox-session: test_ssl_large_resources-3.7
-            python-version: "3.7"
-            os: ubuntu-20.04
             experimental: false
           - traefik-server: false
             nox-session: test_ssl_large_resources-3.9
@@ -122,11 +116,6 @@ jobs:
             os: ubuntu-22.04
             experimental: false
             nox-session: test_brotlipy
-          # Test CPython with a broken hostname_checks_common_name (the fix is in 3.9.3)
-          - python-version: "3.9.2"
-            os: ubuntu-20.04  # CPython 3.9.2 is not available for ubuntu-22.04.
-            experimental: false
-            nox-session: test-3.9
         exclude:
           # Ubuntu 22.04 comes with OpenSSL 3.0, so only CPython 3.9+ is compatible with it
           # https://github.com/python/cpython/issues/83001
@@ -136,7 +125,7 @@ jobs:
             os: ubuntu-22.04
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-13":"macOS","windows-2022":"Windows","ubuntu-20.04":"Ubuntu 20.04 (OpenSSL 1.1.1)","ubuntu-22.04":"Ubuntu 22 (OpenSSL 3+)"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-13":"macOS","windows-2022":"Windows","ubuntu-22.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 60
     steps:
@@ -145,7 +134,7 @@ jobs:
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        uses: douglascamata/setup-docker-macos-action@f2b307ddc57e8b9d3f9761f3cafa8883b2cdffd4
+        uses: douglascamata/setup-docker-macos-action@e2e1549b0c687dfa1ba2805a97d7855461e70fbd
         with:
           colima-network-address: true
 
