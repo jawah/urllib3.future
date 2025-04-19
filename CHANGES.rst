@@ -1,3 +1,8 @@
+2.12.918 (2024-04-19)
+=====================
+
+- Fixed http3 QUIC idle timeout did not force the connection to be dropped by the pool.
+
 2.12.917 (2024-04-10)
 =====================
 
