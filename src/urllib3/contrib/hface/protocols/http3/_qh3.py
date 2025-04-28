@@ -262,12 +262,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._quic.connect(self._remote_address, now=now)
             self._http = H3Connection(self._quic)
 
-        packets = list(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
-        self._packets.extend(packets)
+        # the QUIC state machine returns datagrams (addr, packet)
+        # the client never have to worry about the destination
+        # unless server yield a preferred address?
+        self._packets.extend(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
 
         if not self._packets:
             return b""
 
+        # it is absolutely crucial to return one at a time
+        # because UDP don't support sending more than
+        # MTU (to be more precise, lowest MTU in the network path from A (you) to B (server))
         return self._packets.popleft()
 
     def _fetch_events(self) -> None:
