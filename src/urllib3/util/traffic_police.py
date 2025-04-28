@@ -508,9 +508,10 @@ class TrafficPolice(typing.Generic[T]):
                 obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
 
                 if obj_id not in self._registry:
-                    raise UnavailableTraffic(
-                        "Cannot memorize traffic indicator upon unknown connection"
-                    )
+                    # we raised an exception before
+                    # after consideration, it's best just
+                    # to ignore!
+                    return
 
             if isinstance(traffic_indicator, tuple):
                 self._map[traffic_indicator] = conn_or_pool
