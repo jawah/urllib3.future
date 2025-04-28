@@ -116,6 +116,8 @@ class TrafficPolice(typing.Generic[T]):
         #: this toggle act the progressive disposal of all conn_or_pool registered.
         self._shutdown: bool = False
 
+        self.parent: TrafficPolice | None = None  # type: ignore[type-arg]
+
     @property
     def busy(self) -> bool:
         """Determine if the current thread hold a conn_or_pool that must be released asap."""
@@ -532,6 +534,12 @@ class TrafficPolice(typing.Generic[T]):
 
             del self._map[key]
             del self._map_types[key]
+
+        if self.parent is not None:
+            try:
+                self.parent.forget(traffic_indicator)
+            except UnavailableTraffic:
+                pass
 
     @contextlib.contextmanager
     def locate_or_hold(

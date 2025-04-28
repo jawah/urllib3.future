@@ -507,6 +507,11 @@ class PoolManager(RequestMethods):
             else:
                 pool = swapper_or_pool  # type: ignore[assignment]
 
+        # make the lower level PoliceTraffic aware
+        # of his parent PoliceTraffic
+        assert pool.pool is not None
+        pool.pool.parent = self.pools
+
         return pool
 
     def connection_from_url(
@@ -865,7 +870,6 @@ class PoolManager(RequestMethods):
         else:
             response = conn.urlopen(method, u.request_uri, **kw)
 
-        self.pools.memorize(response, conn)
         self.pools.release()
 
         if "multiplexed" in kw and kw["multiplexed"]:

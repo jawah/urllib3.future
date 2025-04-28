@@ -125,8 +125,13 @@ class AsyncHTTPResponse(HTTPResponse):
             police_officer  # type: ignore[assignment]
         )
 
+        self._preloaded_content: bool = preload_content
+
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
+            # we can utilize a ConnectionPool without level-0 PoolManager!
+            if self._police_officer.parent is not None:
+                self._police_officer.parent.memorize(self, self._pool)
 
     async def readinto(self, b: bytearray) -> int:  # type: ignore[override]
         temp = await self.read(len(b))

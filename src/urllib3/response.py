@@ -356,6 +356,10 @@ class HTTPResponse(io.IOBase):
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
+            if self._police_officer.parent is not None:
+                self._police_officer.parent.memorize(self, self._pool)
+
+        self._preloaded_content = preload_content
 
         # If requested, preload the body.
         if preload_content and not self._body:
