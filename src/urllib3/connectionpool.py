@@ -1824,7 +1824,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 and isinstance(response, ResponsePromise) is True
             ):
                 self.pool.memorize(response, conn)  # type: ignore[union-attr]
-                self.pool.parent.memorize(response, self)  # type: ignore[union-attr]
+                if self.pool.parent is not None:  # type: ignore[union-attr]
+                    self.pool.parent.memorize(response, self)  # type: ignore[union-attr]
 
             if (
                 release_this_conn is True and self.pool is not None
