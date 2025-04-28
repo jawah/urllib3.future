@@ -108,6 +108,10 @@ class AsyncPoolManager(AsyncRequestMethods):
 
         self._num_pools = num_pools
 
+        self.block = (
+            False if "block" not in connection_pool_kw else connection_pool_kw["block"]
+        )
+
         self.pools: AsyncTrafficPolice[AsyncHTTPConnectionPool] = AsyncTrafficPolice(
             num_pools, concurrency=True
         )
@@ -351,7 +355,9 @@ class AsyncPoolManager(AsyncRequestMethods):
         if self.pools.busy:
             self.pools.release()
 
-        async with self.pools.locate_or_hold(pool_key) as swapper_or_pool:
+        async with self.pools.locate_or_hold(
+            pool_key, block=self.block
+        ) as swapper_or_pool:
             if not hasattr(swapper_or_pool, "is_idle"):
                 # Make a fresh ConnectionPool of the desired type
                 scheme = request_context["scheme"]
@@ -361,11 +367,12 @@ class AsyncPoolManager(AsyncRequestMethods):
                     scheme, host, port, request_context=request_context
                 )
 
-                await self.pools.wait_for_idle_or_available_slot()
-
                 await swapper_or_pool(pool)
             else:
                 pool = swapper_or_pool  # type: ignore[assignment]
+
+        assert pool.pool is not None
+        pool.pool.parent = self.pools
 
         return pool
 
@@ -723,7 +730,6 @@ class AsyncPoolManager(AsyncRequestMethods):
         else:
             response = await conn.urlopen(method, u.request_uri, **kw)
 
-        self.pools.memorize(response, conn)
         self.pools.release()
 
         if "multiplexed" in kw and kw["multiplexed"]:

@@ -9,6 +9,13 @@ from .events import Event
 class StreamMatrix:
     """Efficient way to store events for concurrent streams."""
 
+    __slots__ = (
+        "_matrix",
+        "_count",
+        "_event_cursor_id",
+        "_streams",
+    )
+
     def __init__(self) -> None:
         self._matrix: dict[int | None, deque[Event]] = {}
         self._count: int = 0
@@ -25,10 +32,7 @@ class StreamMatrix:
     def streams(self) -> list[int]:
         if self._streams is not None:
             return self._streams
-        available_streams: list[int] = [
-            i for i in self._matrix.keys() if isinstance(i, int)
-        ]
-        self._streams = list(sorted(available_streams))
+        self._streams = sorted(i for i in self._matrix.keys() if isinstance(i, int))
         return self._streams
 
     def append(self, event: Event) -> None:
@@ -130,3 +134,20 @@ class StreamMatrix:
             if excl_event is None
             else [e for e in self._matrix[stream_id] if not isinstance(e, excl_event)]
         )
+
+    def has(
+        self,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> bool:
+        if stream_id is None:
+            return True if self._count else False
+        if stream_id not in self._matrix:
+            return False
+
+        if excl_event is not None:
+            return any(
+                e for e in self._matrix[stream_id] if not isinstance(e, excl_event)
+            )
+
+        return True if self._matrix[stream_id] else False

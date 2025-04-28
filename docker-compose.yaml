@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v3.4.0-rc1
+    image: traefik:v3.4.0-rc2
     restart: unless-stopped
     depends_on:
       httpbin:
@@ -88,8 +88,6 @@ services:
   httpbin:
     image: mccutchen/go-httpbin:v2.17.0
     restart: unless-stopped
-    deploy:
-      replicas: 6
     labels:
       - traefik.enable=true
       - traefik.http.routers.httpbin-http.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)

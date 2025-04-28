@@ -252,7 +252,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         stream_id: int | None = None,
         excl_event: tuple[type[Event], ...] | None = None,
     ) -> bool:
-        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
+        return self._events.has(stream_id=stream_id, excl_event=excl_event)
 
     def _h11_submit(self, h11_event: h11.Event) -> None:
         chunks = self._connection.send_with_data_passthrough(h11_event)

@@ -42,6 +42,7 @@ from qh3 import (
     quic_events,
 )
 from qh3.h3.connection import FrameType
+from qh3.quic.connection import QuicConnectionState
 
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
@@ -150,7 +151,16 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def has_expired(self) -> bool:
         if not self._terminated and not self._goaway_to_honor:
-            self._quic.handle_timer(monotonic())
+            now = monotonic()
+            self._quic.handle_timer(now)
+            self._packets.extend(
+                map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
+            )
+            if self._quic._state in {
+                QuicConnectionState.CLOSING,
+                QuicConnectionState.TERMINATED,
+            }:
+                self._terminated = True
             if (
                 hasattr(self._quic, "_close_event")
                 and self._quic._close_event is not None
@@ -207,7 +217,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         stream_id: int | None = None,
         excl_event: tuple[type[Event], ...] | None = None,
     ) -> bool:
-        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
+        return self._events.has(stream_id=stream_id, excl_event=excl_event)
 
     @property
     def connection_ids(self) -> Sequence[bytes]:
@@ -262,12 +272,17 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._quic.connect(self._remote_address, now=now)
             self._http = H3Connection(self._quic)
 
-        packets = list(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
-        self._packets.extend(packets)
+        # the QUIC state machine returns datagrams (addr, packet)
+        # the client never have to worry about the destination
+        # unless server yield a preferred address?
+        self._packets.extend(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
 
         if not self._packets:
             return b""
 
+        # it is absolutely crucial to return one at a time
+        # because UDP don't support sending more than
+        # MTU (to be more precise, lowest MTU in the network path from A (you) to B (server))
         return self._packets.popleft()
 
     def _fetch_events(self) -> None:

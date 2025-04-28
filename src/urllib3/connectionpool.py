@@ -1824,6 +1824,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 and isinstance(response, ResponsePromise) is True
             ):
                 self.pool.memorize(response, conn)  # type: ignore[union-attr]
+                if self.pool.parent is not None:  # type: ignore[union-attr]
+                    self.pool.parent.memorize(response, self)  # type: ignore[union-attr]
 
             if (
                 release_this_conn is True and self.pool is not None
@@ -2061,7 +2063,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             actual_host = self.proxy.host
             actual_port = self.proxy.port
 
-        with self.pool.locate_or_hold() as swapper:
+        with self.pool.locate_or_hold(block=self.block) as swapper:
             conn = None
 
             if self.happy_eyeballs:

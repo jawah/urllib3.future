@@ -1,3 +1,11 @@
+2.12.919 (2024-04-28)
+=====================
+
+- Fixed http3 has_expired logic to take into account "client side abort without close event". https://github.com/jawah/niquests/issues/240
+- Improved performances in our state machine protocols.
+- Fixed PoolManager allocation when maxsize is reached (async). https://github.com/jawah/niquests/issues/247
+- Fixed PoolManager response mapping per pool memory leak.
+
 2.12.918 (2024-04-19)
 =====================
 

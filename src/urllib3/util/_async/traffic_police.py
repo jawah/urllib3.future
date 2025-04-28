@@ -80,6 +80,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
             contextvars.ContextVar("cursor", default=None)
         )
 
+        self.parent: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
+
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
         try:
@@ -244,35 +246,41 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self._set_cursor(None)
 
-    async def _sacrifice_first_idle(self) -> None:
+    async def _sacrifice_first_idle(self, block: bool = False) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
         This method try its best to find the most appropriate idle item and removes it.
         """
         eligible_obj_id, eligible_conn_or_pool = None, None
 
-        if len(self._registry) == 0:
+        if not self._registry:
             return
 
-        for obj_id, conn_or_pool in self._registry.items():
-            if (
-                obj_id in self._container
-                and traffic_state_of(conn_or_pool) is TrafficState.IDLE  # type: ignore[arg-type]
-            ):
-                eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
+        while True:
+            for obj_id, conn_or_pool in self._registry.items():
+                if (
+                    obj_id in self._container
+                    and traffic_state_of(conn_or_pool) is TrafficState.IDLE  # type: ignore[arg-type]
+                ):
+                    eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
+                    break
+
+            if eligible_obj_id is not None and eligible_conn_or_pool is not None:
+                self._map_clear(eligible_conn_or_pool)
+
+                del self._registry[eligible_obj_id]
+                del self._container[eligible_obj_id]
+
+                try:
+                    await eligible_conn_or_pool.close()
+                except Exception:
+                    pass
+
+                return
+
+            if block:
                 break
 
-        if eligible_obj_id is not None and eligible_conn_or_pool is not None:
-            self._map_clear(eligible_conn_or_pool)
-
-            del self._registry[eligible_obj_id]
-            del self._container[eligible_obj_id]
-
-            try:
-                await eligible_conn_or_pool.close()
-            except Exception:
-                pass
-
-            return
+            await asyncio.sleep(0)
 
         raise OverwhelmedTraffic(
             "Cannot select a disposable connection to ease the charge. "
@@ -333,7 +341,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
             and len(self._registry) >= self.maxsize
             and id(conn_or_pool) not in self._registry
         ):
-            await self._sacrifice_first_idle()
+            await self._sacrifice_first_idle(block=block)
 
         obj_id = id(conn_or_pool)
         registered_conn_or_pool = obj_id in self._registry
@@ -475,9 +483,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
             obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
 
             if obj_id not in self._registry:
-                raise UnavailableTraffic(
-                    "Cannot memorize traffic indicator upon unknown connection"
-                )
+                # we raised an exception before
+                # after consideration, it's best just
+                # to ignore!
+                return
 
         if isinstance(traffic_indicator, tuple):
             self._map[traffic_indicator] = conn_or_pool
@@ -500,10 +509,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
         del self._map[key]
         del self._map_types[key]
 
+        if self.parent is not None:
+            try:
+                self.parent.forget(traffic_indicator)
+            except UnavailableTraffic:
+                pass
+
     @contextlib.asynccontextmanager
     async def locate_or_hold(
         self,
         traffic_indicator: MappableTraffic | None = None,
+        block: bool = False,
     ) -> typing.AsyncGenerator[typing.Callable[[T], typing.Awaitable[None]] | T]:
         """Reserve a spot into the TrafficPolice instance while you construct your conn_or_pool.
 
@@ -513,7 +529,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
         is required.
         """
         if traffic_indicator is not None:
-            conn_or_pool = await self.locate(traffic_indicator=traffic_indicator)
+            conn_or_pool = await self.locate(
+                traffic_indicator=traffic_indicator, block=block
+            )
 
             if conn_or_pool is not None:
                 yield conn_or_pool
@@ -524,10 +542,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if traffic_indicator is not None:
             traffic_indicators.append(traffic_indicator)
 
+        await self.wait_for_idle_or_available_slot()
+
         await self.put(
             ItemPlaceholder(),  # type: ignore[arg-type]
             *traffic_indicators,
             immediately_unavailable=True,
+            block=block,
         )
 
         swap_made: bool = False
@@ -537,11 +558,19 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             swap_made = True
 
-            await self.kill_cursor()
+            active_cursor = self._cursor
+
+            if active_cursor is None:
+                raise AtomicTraffic()
+
+            del self._registry[active_cursor.obj_id]
+            self._set_cursor(None)
+
             await self.put(
                 swappable_conn_or_pool,
                 *traffic_indicators,
                 immediately_unavailable=True,
+                block=False,
             )
 
         yield inner_swap

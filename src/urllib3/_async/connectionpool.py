@@ -1856,22 +1856,26 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     conn = None
                 release_this_conn = True
 
-            if (
-                clean_exit is True
-                and conn is not None
-                and isinstance(response, ResponsePromise) is True
-            ):
-                self.pool.memorize(response, conn)
+            if self.pool is not None:
+                if (
+                    clean_exit is True
+                    and conn is not None
+                    and isinstance(response, ResponsePromise) is True
+                ):
+                    self.pool.memorize(response, conn)
+                    # we can always use ConnectionPool without PoolManager!
+                    if self.pool.parent is not None:
+                        self.pool.parent.memorize(response, self)
 
-            if release_this_conn is True:
-                if conn is not None:
-                    # Put the connection back to be reused. If the connection is
-                    # expired then it will be None, which will get replaced with a
-                    # fresh connection during _get_conn.
-                    if self.pool.is_held(conn) is True:
-                        await self._put_conn(conn)
-                else:
-                    await self.pool.kill_cursor()
+                if release_this_conn is True:
+                    if conn is not None:
+                        # Put the connection back to be reused. If the connection is
+                        # expired then it will be None, which will get replaced with a
+                        # fresh connection during _get_conn.
+                        if self.pool.is_held(conn) is True:
+                            await self._put_conn(conn)
+                    else:
+                        await self.pool.kill_cursor()
 
         if not conn:
             # Try again
@@ -2118,7 +2122,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
 
         conn = None
 
-        async with self.pool.locate_or_hold() as swapper:
+        async with self.pool.locate_or_hold(block=self.block) as swapper:
             if self.happy_eyeballs:
                 # Taking this path forward will establish a connection (aka. connect) prior to what usually
                 # take place. This is the only place where it is the most convenient.
