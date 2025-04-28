@@ -194,7 +194,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         stream_id: int | None = None,
         excl_event: tuple[type[Event], ...] | None = None,
     ) -> bool:
-        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
+        return self._events.has(stream_id=stream_id, excl_event=excl_event)
 
     def _map_events(self, h2_events: list[jh2.events.Event]) -> Iterator[Event]:
         for e in h2_events:

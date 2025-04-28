@@ -134,3 +134,20 @@ class StreamMatrix:
             if excl_event is None
             else [e for e in self._matrix[stream_id] if not isinstance(e, excl_event)]
         )
+
+    def has(
+        self,
+        stream_id: int | None = None,
+        excl_event: tuple[type[Event], ...] | None = None,
+    ) -> bool:
+        if stream_id is None:
+            return True if self._count else False
+        if stream_id not in self._matrix:
+            return False
+
+        if excl_event is not None:
+            return any(
+                e for e in self._matrix[stream_id] if not isinstance(e, excl_event)
+            )
+
+        return True if self._matrix[stream_id] else False

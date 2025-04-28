@@ -217,7 +217,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         stream_id: int | None = None,
         excl_event: tuple[type[Event], ...] | None = None,
     ) -> bool:
-        return self._events.count(stream_id=stream_id, excl_event=excl_event) > 0
+        return self._events.has(stream_id=stream_id, excl_event=excl_event)
 
     @property
     def connection_ids(self) -> Sequence[bytes]:
