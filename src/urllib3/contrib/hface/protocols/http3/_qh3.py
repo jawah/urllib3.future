@@ -42,6 +42,7 @@ from qh3 import (
     quic_events,
 )
 from qh3.h3.connection import FrameType
+from qh3.quic.connection import QuicConnectionState
 
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
@@ -150,7 +151,16 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def has_expired(self) -> bool:
         if not self._terminated and not self._goaway_to_honor:
-            self._quic.handle_timer(monotonic())
+            now = monotonic()
+            self._quic.handle_timer(now)
+            self._packets.extend(
+                map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
+            )
+            if self._quic._state in {
+                QuicConnectionState.CLOSING,
+                QuicConnectionState.TERMINATED,
+            }:
+                self._terminated = True
             if (
                 hasattr(self._quic, "_close_event")
                 and self._quic._close_event is not None
