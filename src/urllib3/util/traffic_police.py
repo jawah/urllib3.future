@@ -220,55 +220,64 @@ class TrafficPolice(typing.Generic[T]):
 
             del self._cursor[cursor_key]
 
-    def _sacrifice_first_idle(self) -> None:
+    def _sacrifice_first_idle(self, block: bool = False) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
         This method try its best to find the most appropriate idle item and removes it.
         """
         eligible_obj_id, eligible_conn_or_pool = None, None
 
-        with self._lock:
-            if self.busy is True:
-                cursor_key = current_thread().name
-                active_cursor = self._cursor[cursor_key]
+        while True:
+            with self._lock:
+                if self.busy is True:
+                    cursor_key = current_thread().name
+                    active_cursor = self._cursor[cursor_key]
 
-                assert active_cursor is not None
+                    assert active_cursor is not None
 
-                if traffic_state_of(active_cursor.conn_or_pool) is TrafficState.IDLE:
-                    self._map_clear(active_cursor.conn_or_pool)
+                    if (
+                        traffic_state_of(active_cursor.conn_or_pool)
+                        is TrafficState.IDLE
+                    ):
+                        self._map_clear(active_cursor.conn_or_pool)
 
-                    del self._registry[active_cursor.obj_id]
+                        del self._registry[active_cursor.obj_id]
+
+                        try:
+                            active_cursor.conn_or_pool.close()
+                        except Exception:
+                            pass
+
+                        del self._cursor[cursor_key]
+                        return
+
+                if not self._registry:
+                    return
+
+                for obj_id, conn_or_pool in self._registry.items():
+                    if (
+                        obj_id in self._container
+                        and traffic_state_of(conn_or_pool) is TrafficState.IDLE
+                    ):
+                        eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
+                        break
+
+                if eligible_obj_id is not None and eligible_conn_or_pool is not None:
+                    self._map_clear(eligible_conn_or_pool)
+
+                    del self._registry[eligible_obj_id]
+                    del self._container[eligible_obj_id]
 
                     try:
-                        active_cursor.conn_or_pool.close()
+                        eligible_conn_or_pool.close()
                     except Exception:
                         pass
 
-                    del self._cursor[cursor_key]
                     return
 
-            if not self._registry:
-                return
+            if block:
+                break
 
-            for obj_id, conn_or_pool in self._registry.items():
-                if (
-                    obj_id in self._container
-                    and traffic_state_of(conn_or_pool) is TrafficState.IDLE
-                ):
-                    eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
-                    break
-
-            if eligible_obj_id is not None and eligible_conn_or_pool is not None:
-                self._map_clear(eligible_conn_or_pool)
-
-                del self._registry[eligible_obj_id]
-                del self._container[eligible_obj_id]
-
-                try:
-                    eligible_conn_or_pool.close()
-                except Exception:
-                    pass
-
-                return
+            time.sleep(0.001)
 
         raise OverwhelmedTraffic(
             "Cannot select a disposable connection to ease the charge. "
@@ -286,25 +295,32 @@ class TrafficPolice(typing.Generic[T]):
         immediately_unavailable: bool = False,
     ) -> None:
         """Register and/or store the conn_or_pool into the TrafficPolice container."""
+
+        cursor_key = current_thread().name
+
+        self._lock.acquire()
+
+        # clear was called, each conn/pool that gets back must be destroyed appropriately.
+        if self._shutdown is True:
+            self.kill_cursor()
+            # Cleanup was completed, no need to act like this anymore.
+            if not self._registry:
+                self._shutdown = False
+            self._lock.release()
+            return
+
+        # we want to dispose of conn_or_pool surplus as soon as possible
+        if (
+            self.maxsize is not None
+            and len(self._registry) >= self.maxsize
+            and id(conn_or_pool) not in self._registry
+        ):
+            self._lock.release()
+            self._sacrifice_first_idle(block=block)
+        else:
+            self._lock.release()
+
         with self._lock:
-            cursor_key = current_thread().name
-
-            # clear was called, each conn/pool that gets back must be destroyed appropriately.
-            if self._shutdown is True:
-                self.kill_cursor()
-                # Cleanup was completed, no need to act like this anymore.
-                if not self._registry:
-                    self._shutdown = False
-                return
-
-            # we want to dispose of conn_or_pool surplus as soon as possible
-            if (
-                self.maxsize is not None
-                and len(self._registry) >= self.maxsize
-                and id(conn_or_pool) not in self._registry
-            ):
-                self._sacrifice_first_idle()
-
             obj_id = id(conn_or_pool)
             registered_conn_or_pool = obj_id in self._registry
 
@@ -546,6 +562,7 @@ class TrafficPolice(typing.Generic[T]):
     def locate_or_hold(
         self,
         traffic_indicator: MappableTraffic | None = None,
+        block: bool = False,
     ) -> typing.Generator[typing.Callable[[T], None] | T]:
         """Reserve a spot into the TrafficPolice instance while you construct your conn_or_pool.
 
@@ -555,7 +572,7 @@ class TrafficPolice(typing.Generic[T]):
         is required.
         """
         if traffic_indicator is not None:
-            conn_or_pool = self.locate(traffic_indicator=traffic_indicator)
+            conn_or_pool = self.locate(traffic_indicator=traffic_indicator, block=block)
 
             if conn_or_pool is not None:
                 yield conn_or_pool
@@ -570,6 +587,7 @@ class TrafficPolice(typing.Generic[T]):
             ItemPlaceholder(),  # type: ignore[arg-type]
             *traffic_indicators,
             immediately_unavailable=True,
+            block=block,
         )
 
         swap_made: bool = False
@@ -585,6 +603,7 @@ class TrafficPolice(typing.Generic[T]):
                     swappable_conn_or_pool,
                     *traffic_indicators,
                     immediately_unavailable=True,
+                    block=False,
                 )
 
         yield inner_swap

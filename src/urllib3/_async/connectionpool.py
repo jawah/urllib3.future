@@ -2122,7 +2122,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
 
         conn = None
 
-        async with self.pool.locate_or_hold() as swapper:
+        async with self.pool.locate_or_hold(block=self.block) as swapper:
             if self.happy_eyeballs:
                 # Taking this path forward will establish a connection (aka. connect) prior to what usually
                 # take place. This is the only place where it is the most convenient.

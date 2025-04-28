@@ -243,6 +243,10 @@ class PoolManager(RequestMethods):
 
         self._num_pools = num_pools
 
+        self.block = (
+            False if "block" not in connection_pool_kw else connection_pool_kw["block"]
+        )
+
         self.pools: TrafficPolice[HTTPConnectionPool] = TrafficPolice(
             num_pools, concurrency=True
         )
@@ -490,7 +494,7 @@ class PoolManager(RequestMethods):
         if self.pools.busy:
             self.pools.release()
 
-        with self.pools.locate_or_hold(pool_key) as swapper_or_pool:
+        with self.pools.locate_or_hold(pool_key, block=self.block) as swapper_or_pool:
             # If the scheme, host, or port doesn't match existing open
             # connections, open a new ConnectionPool.
             if not hasattr(swapper_or_pool, "is_idle"):
