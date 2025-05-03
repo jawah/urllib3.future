@@ -124,7 +124,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self.__custom_tls_settings: QuicTLSConfig | None = None
         self.__alt_authority: tuple[str, int] | None = None
         self.__origin_port: int | None = None
-        self.__session_ticket: typing.Any | None = None
 
         # automatic upgrade shield against errors!
         self._max_tolerable_delay_for_upgrade: float | None = None
@@ -346,7 +345,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             cadata=ca_cert_data.encode()
             if isinstance(ca_cert_data, str)
             else ca_cert_data,
-            session_ticket=self.__session_ticket,  # going to be set after first successful quic handshake
             # mTLS start
             certfile=cert_file,
             keyfile=key_file,
@@ -632,9 +630,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self.conn_info.issuer_certificate_der = self._protocol.getissuercert(
                 binary_form=True
             )
-
-            # save the quic ticket for session resumption
-            self.__session_ticket = self._protocol.session_ticket
 
         if (
             self.conn_info.certificate_der
