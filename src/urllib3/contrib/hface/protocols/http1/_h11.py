@@ -294,7 +294,15 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     )
                 )
             elif ev_type is h11.Data:
-                a(DataReceived(self._current_stream_id, bytes(h11_event.data)))  # type: ignore[union-attr]
+                # officially h11 typed data as "bytes"
+                # but we... found that it store bytearray sometime.
+                payload = h11_event.data  # type: ignore[union-attr]
+                a(
+                    DataReceived(
+                        self._current_stream_id,
+                        bytes(payload) if payload.__class__ is bytearray else payload,
+                    )
+                )
             elif ev_type is h11.EndOfMessage:
                 # HTTP/2 and HTTP/3 send END_STREAM flag with HEADERS and DATA frames.
                 # We emulate similar behavior for HTTP/1.
