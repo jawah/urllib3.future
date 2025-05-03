@@ -1,3 +1,11 @@
+2.12.920 (2024-05-03)
+=====================
+
+- Removed the persisting session ticket after first QUIC handshake. In a effort to be stricter with security and align
+  with our TLS 1.2 and 1.3 ``OP_NO_TICKET`` parameter.
+- Improved performance in our event unpacking logic inside state machine protocols. (micro-scale improvements)
+- Improved our RDATA (DNS) parsing for HTTPS records toward our ECH (Encrypted Client Hello) support coming soon.
+
 2.12.919 (2024-04-28)
 =====================
 
