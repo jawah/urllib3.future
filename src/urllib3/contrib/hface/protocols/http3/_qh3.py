@@ -59,6 +59,13 @@ from ...events import HeadersReceived, StreamResetReceived
 from .._protocols import HTTP3Protocol
 
 
+QUIC_RELEVANT_EVENT_TYPES = {
+    quic_events.HandshakeCompleted,
+    quic_events.ConnectionTerminated,
+    quic_events.StreamReset,
+}
+
+
 class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     implementation: str = "qh3"
 
@@ -297,39 +304,51 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._events.extend(self._map_quic_event(self._quic._close_event))
 
     def _map_quic_event(self, quic_event: quic_events.QuicEvent) -> Iterable[Event]:
-        if isinstance(quic_event, quic_events.HandshakeCompleted):
-            yield _HandshakeCompleted(quic_event.alpn_protocol)
-        elif isinstance(quic_event, quic_events.ConnectionTerminated):
-            if quic_event.frame_type == FrameType.GOAWAY.value:
+        ev_type = quic_event.__class__
+
+        # fastest path execution, most of the time we don't have those
+        # 3 event types.
+        if ev_type not in QUIC_RELEVANT_EVENT_TYPES:
+            return
+
+        if ev_type is quic_events.HandshakeCompleted:
+            yield _HandshakeCompleted(quic_event.alpn_protocol)  # type: ignore[attr-defined]
+        elif ev_type is quic_events.ConnectionTerminated:
+            if quic_event.frame_type == FrameType.GOAWAY.value:  # type: ignore[attr-defined]
                 self._goaway_to_honor = True
                 stream_list: list[int] = [
                     e for e in self._events._matrix.keys() if e is not None
                 ]
-                yield GoawayReceived(stream_list[-1], quic_event.error_code)
+                yield GoawayReceived(stream_list[-1], quic_event.error_code)  # type: ignore[attr-defined]
             else:
                 self._terminated = True
                 yield ConnectionTerminated(
-                    quic_event.error_code, quic_event.reason_phrase
+                    quic_event.error_code,  # type: ignore[attr-defined]
+                    quic_event.reason_phrase,  # type: ignore[attr-defined]
                 )
-        elif isinstance(quic_event, quic_events.StreamReset):
+        elif ev_type is quic_events.StreamReset:
             self._open_stream_count -= 1
-            yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)
+            yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)  # type: ignore[attr-defined]
 
     def _map_h3_event(self, h3_event: h3_events.H3Event) -> Iterable[Event]:
-        if isinstance(h3_event, h3_events.HeadersReceived):
-            if h3_event.stream_ended:
+        ev_type = h3_event.__class__
+
+        if ev_type is h3_events.HeadersReceived:
+            if h3_event.stream_ended:  # type: ignore[attr-defined]
                 self._open_stream_count -= 1
             yield HeadersReceived(
-                h3_event.stream_id, h3_event.headers, h3_event.stream_ended
+                h3_event.stream_id,  # type: ignore[attr-defined]
+                h3_event.headers,  # type: ignore[attr-defined]
+                h3_event.stream_ended,  # type: ignore[attr-defined]
             )
-        elif isinstance(h3_event, h3_events.DataReceived):
-            if h3_event.stream_ended:
+        elif ev_type is h3_events.DataReceived:
+            if h3_event.stream_ended:  # type: ignore[attr-defined]
                 self._open_stream_count -= 1
-            yield DataReceived(h3_event.stream_id, h3_event.data, h3_event.stream_ended)
-        elif isinstance(h3_event, h3_events.InformationalHeadersReceived):
+            yield DataReceived(h3_event.stream_id, h3_event.data, h3_event.stream_ended)  # type: ignore[attr-defined]
+        elif ev_type is h3_events.InformationalHeadersReceived:
             yield EarlyHeadersReceived(
-                h3_event.stream_id,
-                h3_event.headers,
+                h3_event.stream_id,  # type: ignore[attr-defined]
+                h3_event.headers,  # type: ignore[attr-defined]
             )
 
     def should_wait_remote_flow_control(

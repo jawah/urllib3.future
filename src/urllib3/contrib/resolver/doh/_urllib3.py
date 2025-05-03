@@ -17,7 +17,7 @@ from ..protocols import (
     ProtocolResolver,
     SupportedQueryType,
 )
-from ..utils import is_ipv4, is_ipv6, validate_length_of
+from ..utils import is_ipv4, is_ipv6, validate_length_of, parse_https_rdata
 
 
 class HTTPSResolver(BaseResolver):
@@ -433,7 +433,9 @@ class HTTPSResolver(BaseResolver):
                             except ValueError:
                                 raw_record = b""
 
-                            if b"h3" not in raw_record:
+                            https_record = parse_https_rdata(raw_record)
+
+                            if "h3" not in https_record["alpn"]:
                                 continue
 
                             remote_preemptive_quic_rr = True
@@ -520,9 +522,12 @@ class HTTPSResolver(BaseResolver):
 
                 for record in dns_resp.records:
                     if record[0] == SupportedQueryType.HTTPS:
-                        if "h3" in record[-1]:
+                        assert isinstance(record[-1], dict)
+                        if "h3" in record[-1]["alpn"]:
                             remote_preemptive_quic_rr = True
                         continue
+
+                    assert not isinstance(record[-1], dict)
 
                     inet_type = (
                         socket.AF_INET

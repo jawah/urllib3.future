@@ -784,3 +784,39 @@ def test_recycle_in_memory_with_mock() -> None:
     assert "localhost" in rr._hosts  # type: ignore[attr-defined]
     assert "local" in rr._hosts  # type: ignore[attr-defined]
     assert rr._maxsize == 8  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "rdata, expected",
+    [
+        (
+            b"\x00\x01\x00\x00\x01\x00\x06\x02h3\x02h2\x00\x04\x00\x08"
+            b"\x01\x01\x01\x01\x01\x00\x00\x01\x00\x06\x00 &\x06G\x00G"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11&\x06G\x00G"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x01",
+            {
+                "priority": 1,
+                "target": ".",
+                "alpn": ["h3", "h2"],
+                "ipv4hint": ["1.1.1.1", "1.0.0.1"],
+                "ipv6hint": ["2606:4700:4700::1111", "2606:4700:4700::1001"],
+                "echconfig": [],
+            },
+        ),
+        (
+            b"\x00\x01\x00\x00\x01\x00\x06\x02h3\x02h2\x00\x04\x00\x08\xbcr`\x02\xbcra\x02\x00\x05\x00G\x00E\xfe\r\x00A\xa7\x00 \x00 <\x10 \xae\xf8\xd0\x02hqi\xfb)ff|\xeao\xe6\xdfW+\xcb\x81\xa1bs6\xa0AHDU\x00\x04\x00\x01\x00\x01\x00\x12cloudflare-ech.com\x00\x00\x00\x06\x00 *\x06\x98\xc11 \x00\x00\x00\x00\x00\x00\x00\x00\x00\x02*\x06\x98\xc11!\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            {
+                "priority": 1,
+                "target": ".",
+                "alpn": ["h3", "h2"],
+                "ipv4hint": ["188.114.96.2", "188.114.97.2"],
+                "ipv6hint": ["2a06:98c1:3120::2", "2a06:98c1:3121::2"],
+                "echconfig": [
+                    "AEGnACAAIDwQIK740AJocWn7KWZmfOpv5t9XK8uBoWJzNqBBSERVAAQAAQABABJjbG91ZGZsYXJlLWVjaC5jb20AAA=="
+                ],
+            },
+        ),
+    ],
+)
+def test_parse_rdata(rdata: bytes, expected: dict[str, list[str] | int | str]) -> None:
+    pass

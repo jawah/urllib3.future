@@ -16,7 +16,10 @@ from ...exceptions import LocationParseError
 from ...util.connection import _set_socket_options, allowed_gai_family
 from ...util.ssl_match_hostname import CertificateError, match_hostname
 from ...util.timeout import _DEFAULT_TIMEOUT
-from .utils import inet4_ntoa, inet6_ntoa
+from .utils import inet4_ntoa, inet6_ntoa, parse_https_rdata
+
+if typing.TYPE_CHECKING:
+    from .utils import HttpsRecord
 
 
 class ProtocolResolver(str, Enum):
@@ -579,7 +582,7 @@ class DomainNameServerReturn:
 
                 idx += c + 1
 
-            self._records: list[tuple[SupportedQueryType, int, str]] = []
+            self._records: list[tuple[SupportedQueryType, int, str | HttpsRecord]] = []
 
             if self._an_count:
                 idx += 4
@@ -591,16 +594,11 @@ class DomainNameServerReturn:
                     data = payload[idx + 12 : idx + 12 + entry_size]
 
                     if len(data) == 4:
-                        decoded_data = inet4_ntoa(data)
+                        decoded_data: str | HttpsRecord = inet4_ntoa(data)
                     elif len(data) == 16:
                         decoded_data = inet6_ntoa(data)
                     else:
-                        alpn = []
-                        if b"h2" in data:
-                            alpn.append("h2")
-                        if b"h3" in data:
-                            alpn.append("h3")
-                        decoded_data = f"alpn={','.join(alpn)}"
+                        decoded_data = parse_https_rdata(data)
 
                     try:
                         self._records.append(
@@ -625,7 +623,7 @@ class DomainNameServerReturn:
         return self._hostname
 
     @property
-    def records(self) -> list[tuple[SupportedQueryType, int, str]]:
+    def records(self) -> list[tuple[SupportedQueryType, int, str | HttpsRecord]]:
         return self._records
 
     @property
