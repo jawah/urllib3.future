@@ -90,9 +90,9 @@ class StreamMatrix:
         if self._count == 0:
             return None
 
-        have_global_event: bool = None in self._matrix and len(self._matrix[None]) > 0
+        have_global_event: bool = None in self._matrix and bool(self._matrix[None])
 
-        if stream_id is None and self.streams and self.count(self.streams[0]) > 0:
+        if stream_id is None and self.streams and self.has(self.streams[0]):
             stream_id = self.streams[0]
 
         if (
@@ -113,7 +113,7 @@ class StreamMatrix:
         if ev is not None:
             self._count -= 1
 
-            if stream_id is not None and len(self._matrix[stream_id]) == 0:
+            if stream_id is not None and not self._matrix[stream_id]:
                 del self._matrix[stream_id]
                 self._streams = None
 
