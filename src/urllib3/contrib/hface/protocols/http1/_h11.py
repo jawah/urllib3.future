@@ -271,33 +271,45 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             except h11.RemoteProtocolError as e:
                 a(self._connection_terminated(e.error_status_hint, str(e)))
                 break
+
+            ev_type = h11_event.__class__
+
             if h11_event is h11.NEED_DATA or h11_event is h11.PAUSED:
                 if h11.MUST_CLOSE == self._connection.their_state:
                     a(self._connection_terminated())
                 else:
                     break
-            elif isinstance(h11_event, h11.Response):
+            elif ev_type is h11.Response:
                 a(
                     HeadersReceived(
-                        self._current_stream_id, headers_from_response(h11_event)
+                        self._current_stream_id,
+                        headers_from_response(h11_event),  # type: ignore[arg-type]
                     )
                 )
-            elif isinstance(h11_event, h11.InformationalResponse):
+            elif ev_type is h11.InformationalResponse:
                 a(
                     EarlyHeadersReceived(
                         stream_id=self._current_stream_id,
-                        headers=headers_from_response(h11_event),
+                        headers=headers_from_response(h11_event),  # type: ignore[arg-type]
                     )
                 )
-            elif isinstance(h11_event, h11.Data):
-                a(DataReceived(self._current_stream_id, bytes(h11_event.data)))
-            elif isinstance(h11_event, h11.EndOfMessage):
+            elif ev_type is h11.Data:
+                # officially h11 typed data as "bytes"
+                # but we... found that it store bytearray sometime.
+                payload = h11_event.data  # type: ignore[union-attr]
+                a(
+                    DataReceived(
+                        self._current_stream_id,
+                        bytes(payload) if payload.__class__ is bytearray else payload,
+                    )
+                )
+            elif ev_type is h11.EndOfMessage:
                 # HTTP/2 and HTTP/3 send END_STREAM flag with HEADERS and DATA frames.
                 # We emulate similar behavior for HTTP/1.
-                if h11_event.headers:
+                if h11_event.headers:  # type: ignore[union-attr]
                     last_event: HeadersReceived | DataReceived = HeadersReceived(
                         self._current_stream_id,
-                        h11_event.headers,
+                        h11_event.headers,  # type: ignore[union-attr]
                         self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
                     )
                 else:
@@ -308,7 +320,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     )
                 a(last_event)
                 self._maybe_start_next_cycle()
-            elif isinstance(h11_event, h11.ConnectionClosed):
+            elif ev_type is h11.ConnectionClosed:
                 a(self._connection_terminated())
 
     def _connection_terminated(

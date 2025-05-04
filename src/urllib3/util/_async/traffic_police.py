@@ -298,7 +298,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 "Call release prior to calling this method."
             )
 
-        if len(self._container) > 0:
+        if self._container:
             idle_targets: list[tuple[int, T]] = []
 
             for cur_obj_id, cur_conn_or_pool in self._container.items():
@@ -332,7 +332,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if self._shutdown:
             await self.kill_cursor()
             # Cleanup was completed, no need to act like this anymore.
-            if len(self._registry) == 0:
+            if not self._registry:
                 self._shutdown = False
             return
 

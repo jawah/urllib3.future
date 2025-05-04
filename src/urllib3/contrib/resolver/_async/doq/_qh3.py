@@ -379,9 +379,12 @@ class QUICResolver(PlainResolver):
 
             for record in response.records:
                 if record[0] == SupportedQueryType.HTTPS:
-                    if "h3" in record[-1]:
+                    assert isinstance(record[-1], dict)
+                    if "h3" in record[-1]["alpn"]:
                         remote_preemptive_quic_rr = True
                     continue
+
+                assert not isinstance(record[-1], dict)
 
                 inet_type = (
                     socket.AF_INET

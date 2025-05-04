@@ -109,6 +109,12 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
         return [], events
 
 
+HEADER_OR_TRAILER_TYPE_SET = {
+    jh2.events.ResponseReceived,
+    jh2.events.TrailersReceived,
+}
+
+
 class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     implementation: str = "h2"
 
@@ -198,20 +204,16 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     def _map_events(self, h2_events: list[jh2.events.Event]) -> Iterator[Event]:
         for e in h2_events:
-            if isinstance(
-                e,
-                (
-                    jh2.events.ResponseReceived,
-                    jh2.events.TrailersReceived,
-                ),
-            ):
+            ev_type = e.__class__
+
+            if ev_type in HEADER_OR_TRAILER_TYPE_SET:
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
                     stream = self._connection.streams.pop(e.stream_id)
                     self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield HeadersReceived(e.stream_id, e.headers, end_stream=end_stream)
-            elif isinstance(e, jh2.events.DataReceived):
+            elif ev_type is jh2.events.DataReceived:
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
@@ -221,19 +223,19 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     e.flow_controlled_length, e.stream_id
                 )
                 yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
-            elif isinstance(e, jh2.events.InformationalResponseReceived):
+            elif ev_type is jh2.events.InformationalResponseReceived:
                 yield EarlyHeadersReceived(
                     e.stream_id,
                     e.headers,
                 )
-            elif isinstance(e, jh2.events.StreamReset):
+            elif ev_type is jh2.events.StreamReset:
                 self._open_stream_count -= 1
                 # event StreamEnded may occur before StreamReset
                 if e.stream_id in self._connection.streams:
                     stream = self._connection.streams.pop(e.stream_id)
                     self._connection._closed_streams[e.stream_id] = stream.closed_by
                 yield StreamResetReceived(e.stream_id, e.error_code)
-            elif isinstance(e, jh2.events.ConnectionTerminated):
+            elif ev_type is jh2.events.ConnectionTerminated:
                 # ConnectionTerminated from h2 means that GOAWAY was received.
                 # A server can send GOAWAY for graceful shutdown, where clients
                 # do not open new streams, but inflight requests can be completed.
@@ -246,7 +248,10 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 else:
                     self._terminated = True
                     yield ConnectionTerminated(e.error_code, None)
-            elif isinstance(e, jh2.events.SettingsAcknowledged):
+            elif ev_type in {
+                jh2.events.SettingsAcknowledged,
+                jh2.events.RemoteSettingsChanged,
+            }:
                 yield HandshakeCompleted(alpn_protocol="h2")
 
     def connection_lost(self) -> None:
