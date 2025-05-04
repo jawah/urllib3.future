@@ -248,7 +248,10 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 else:
                     self._terminated = True
                     yield ConnectionTerminated(e.error_code, None)
-            elif ev_type is jh2.events.SettingsAcknowledged:
+            elif ev_type in {
+                jh2.events.SettingsAcknowledged,
+                jh2.events.RemoteSettingsChanged,
+            }:
                 yield HandshakeCompleted(alpn_protocol="h2")
 
     def connection_lost(self) -> None:
