@@ -44,28 +44,68 @@ class _OpenSSL:
             elif arch_size.startswith("32"):
                 suffix = "x86"
             else:
-                raise UnsupportedOperation(f"Platform {arch_size} unsupported")
+                suffix = None
 
             # names we saw in the import table
-            dll_names = [f"libssl-1_1-{suffix}.dll", f"libssl-3-{suffix}.dll"]
+            ssl_dll_names = [
+                "libssl-3.dll",
+                "libssl-1_1.dll",
+            ]
 
-            potential_match = None
+            crypto_dll_names = ["libcrypto-3.dll", "libcrypto-1_1.dll"]
+
+            if suffix is not None:
+                ssl_dll_names.extend(
+                    [
+                        f"libssl-3-{suffix}.dll",
+                        f"libssl-1_1-{suffix}.dll",
+                    ]
+                )
+                crypto_dll_names.extend(
+                    [f"libcrypto-3-{suffix}.dll", f"libcrypto-1_1-{suffix}.dll"]
+                )
+
+            ssl_potential_match = None
+            crypto_potential_match = None
 
             for d in candidates:
-                for name in dll_names:
+                for name in ssl_dll_names:
                     path = os.path.join(d, name)
                     if os.path.exists(path):
-                        potential_match = path
+                        ssl_potential_match = path
+                        break
+                if ssl_potential_match:
+                    break
 
-            if not potential_match:
+            for d in candidates:
+                for name in crypto_dll_names:
+                    path = os.path.join(d, name)
+                    if os.path.exists(path):
+                        crypto_potential_match = path
+                        break
+                if crypto_potential_match:
+                    break
+
+            if not ssl_potential_match:
                 raise UnsupportedOperation(
                     "Could not locate OpenSSL DLL next to Python; "
                     "check your /DLLs folder or your PATH."
                 )
 
-            self._lib = ctypes.CDLL(potential_match)
+            if not crypto_potential_match:
+                raise UnsupportedOperation(
+                    "Could not locate Crypto DLL next to Python; "
+                    "check your /DLLs folder or your PATH."
+                )
+
+            self._ssl = ctypes.CDLL(ssl_potential_match)
+            self._crypto = ctypes.CDLL(crypto_potential_match)
         else:
-            self._lib = ctypes.CDLL(ssl._ssl.__file__)
+            # that's the most common path
+            # ssl built in module already loaded both crypto and ssl
+            # symbols.
+            self._ssl = ctypes.CDLL(ssl._ssl.__file__)
+            self._crypto = self._ssl
 
         self._name = ssl.OPENSSL_VERSION
 
@@ -75,6 +115,13 @@ class _OpenSSL:
             "SSL_CTX_use_certificate",
             "SSL_CTX_check_private_key",
             "SSL_CTX_use_PrivateKey",
+        ]:
+            if not hasattr(self._ssl, required_symbol):
+                raise UnsupportedOperation(
+                    f"Python interpreter built against '{self._name}' is unsupported. (libssl) {required_symbol} is not present."
+                )
+
+        for required_symbol in [
             "BIO_free",
             "BIO_new_mem_buf",
             "PEM_read_bio_X509",
@@ -82,31 +129,31 @@ class _OpenSSL:
             "ERR_get_error",
             "ERR_error_string",
         ]:
-            if not hasattr(self._lib, required_symbol):
+            if not hasattr(self._crypto, required_symbol):
                 raise UnsupportedOperation(
-                    f"Python interpreter built against '{self._name}' is unsupported. {required_symbol} is not present."
+                    f"Python interpreter built against '{self._name}' is unsupported. (libcrypto) {required_symbol} is not present."
                 )
 
         # https://docs.openssl.org/3.0/man3/SSL_CTX_use_certificate/
-        self.SSL_CTX_use_certificate = self._lib.SSL_CTX_use_certificate
+        self.SSL_CTX_use_certificate = self._ssl.SSL_CTX_use_certificate
         self.SSL_CTX_use_certificate.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self.SSL_CTX_use_certificate.restype = ctypes.c_int
 
-        self.SSL_CTX_check_private_key = self._lib.SSL_CTX_check_private_key
+        self.SSL_CTX_check_private_key = self._ssl.SSL_CTX_check_private_key
         self.SSL_CTX_check_private_key.argtypes = [ctypes.c_void_p]
         self.SSL_CTX_check_private_key.restype = ctypes.c_int
 
         # https://docs.openssl.org/3.0/man3/BIO_new/
-        self.BIO_free = self._lib.BIO_free
+        self.BIO_free = self._crypto.BIO_free
         self.BIO_free.argtypes = [ctypes.c_void_p]
         self.BIO_free.restype = None
 
-        self.BIO_new_mem_buf = self._lib.BIO_new_mem_buf
+        self.BIO_new_mem_buf = self._crypto.BIO_new_mem_buf
         self.BIO_new_mem_buf.argtypes = [ctypes.c_void_p, ctypes.c_int]
         self.BIO_new_mem_buf.restype = ctypes.c_void_p
 
         # https://docs.openssl.org/3.0/man3/PEM_read_bio_PrivateKey/
-        self.PEM_read_bio_X509 = self._lib.PEM_read_bio_X509
+        self.PEM_read_bio_X509 = self._crypto.PEM_read_bio_X509
         self.PEM_read_bio_X509.argtypes = [
             ctypes.c_void_p,
             ctypes.c_void_p,
@@ -115,7 +162,7 @@ class _OpenSSL:
         ]
         self.PEM_read_bio_X509.restype = ctypes.c_void_p
 
-        self.PEM_read_bio_PrivateKey = self._lib.PEM_read_bio_PrivateKey
+        self.PEM_read_bio_PrivateKey = self._crypto.PEM_read_bio_PrivateKey
         self.PEM_read_bio_PrivateKey.argtypes = [
             ctypes.c_void_p,
             ctypes.c_void_p,
@@ -125,44 +172,43 @@ class _OpenSSL:
         self.PEM_read_bio_PrivateKey.restype = ctypes.c_void_p
 
         # https://docs.openssl.org/3.0/man3/SSL_CTX_use_certificate/
-        self.SSL_CTX_use_PrivateKey = self._lib.SSL_CTX_use_PrivateKey
+        self.SSL_CTX_use_PrivateKey = self._ssl.SSL_CTX_use_PrivateKey
         self.SSL_CTX_use_PrivateKey.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self.SSL_CTX_use_PrivateKey.restype = ctypes.c_int
 
-        self.ERR_get_error = self._lib.ERR_get_error
+        self.ERR_get_error = self._crypto.ERR_get_error
         self.ERR_get_error.argtypes = []
         self.ERR_get_error.restype = ctypes.c_ulong
 
-        self.ERR_error_string = self._lib.ERR_error_string
+        self.ERR_error_string = self._crypto.ERR_error_string
         self.ERR_error_string.argtypes = [ctypes.c_ulong, ctypes.c_char_p]
         self.ERR_error_string.restype = ctypes.c_char_p
 
-        if hasattr(self._lib, "SSL_CTX_get_options"):
-            self.SSL_CTX_get_options = self._lib.SSL_CTX_get_options
+        if hasattr(self._ssl, "SSL_CTX_get_options"):
+            self.SSL_CTX_get_options = self._ssl.SSL_CTX_get_options
             self.SSL_CTX_get_options.argtypes = [ctypes.c_void_p]
             self.SSL_CTX_get_options.restype = (
                 ctypes.c_long
             )  # OpenSSL's options are long
-        else:
+        elif hasattr(self._ssl, "SSL_CTX_ctrl"):
             # some old build inline SSL_CTX_get_options (mere C define)
             # define SSL_CTX_get_options(ctx) SSL_CTX_ctrl((ctx),SSL_CTRL_OPTIONS,0,NULL)
             # define SSL_CTRL_OPTIONS                        32
 
-            if hasattr(self._lib, "SSL_CTX_ctrl"):
-                self.SSL_CTX_ctrl = self._lib.SSL_CTX_ctrl
-                self.SSL_CTX_ctrl.argtypes = [
-                    ctypes.c_void_p,
-                    ctypes.c_int,
-                    ctypes.c_int,
-                    ctypes.c_void_p,
-                ]
-                self.SSL_CTX_ctrl.restype = ctypes.c_long
+            self.SSL_CTX_ctrl = self._ssl.SSL_CTX_ctrl
+            self.SSL_CTX_ctrl.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_void_p,
+            ]
+            self.SSL_CTX_ctrl.restype = ctypes.c_long
 
-                self.SSL_CTX_get_options = lambda ctx: self.SSL_CTX_ctrl(  # type: ignore[assignment]
-                    ctx, 32, 0, None
-                )
-            else:
-                self.SSL_CTX_get_options = None  # type: ignore[assignment]
+            self.SSL_CTX_get_options = lambda ctx: self.SSL_CTX_ctrl(  # type: ignore[assignment]
+                ctx, 32, 0, None
+            )
+        else:
+            raise UnsupportedOperation()
 
     def pull_error(self) -> typing.NoReturn:
         raise self.ssl.SSLError(
