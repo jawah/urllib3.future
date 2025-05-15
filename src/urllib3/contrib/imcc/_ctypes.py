@@ -13,6 +13,11 @@ class _OpenSSL:
     """Access hazardous material from CPython OpenSSL (or compatible SSL) implementation."""
 
     def __init__(self) -> None:
+        import platform
+
+        if platform.python_implementation() != "CPython":
+            raise UnsupportedOperation("Only CPython is supported")
+
         import ssl
 
         self.ssl = ssl
@@ -100,8 +105,18 @@ class _OpenSSL:
                 ctypes.c_long
             )  # OpenSSL's options are long
         else:
-            # todo: should we find a safety alternative that works on old Python build too?
-            self.SSL_CTX_get_options = None  # type: ignore[assignment]
+            # some old build inline SSL_CTX_get_options (mere C define)
+            # define SSL_CTX_get_options(ctx) SSL_CTX_ctrl((ctx),SSL_CTRL_OPTIONS,0,NULL)
+            # define SSL_CTRL_OPTIONS                        32
+
+            if hasattr(self._lib, "SSL_CTX_ctrl"):
+                self.SSL_CTX_ctrl = self._lib.SSL_CTX_ctrl
+                self.SSL_CTX_ctrl.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+                self.SSL_CTX_ctrl.restype = ctypes.c_long
+
+                self.SSL_CTX_get_options = lambda ctx: self.SSL_CTX_ctrl(ctx, 32, 0, None)
+            else:
+                self.SSL_CTX_get_options = None  # type: ignore[assignment]
 
     def pull_error(self) -> typing.NoReturn:
         raise self.ssl.SSLError(
