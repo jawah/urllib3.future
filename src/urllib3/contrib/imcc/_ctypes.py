@@ -18,7 +18,9 @@ class _OpenSSL:
         self.ssl = ssl
 
         if not hasattr(ssl, "_ssl"):
-            raise UnsupportedOperation("Unsupported interpreter due to missing private ssl module")
+            raise UnsupportedOperation(
+                "Unsupported interpreter due to missing private ssl module"
+            )
 
         self._lib = ctypes.CDLL(ssl._ssl.__file__)
         self._name = ssl.OPENSSL_VERSION
@@ -61,11 +63,21 @@ class _OpenSSL:
 
         # https://docs.openssl.org/3.0/man3/PEM_read_bio_PrivateKey/
         self.PEM_read_bio_X509 = self._lib.PEM_read_bio_X509
-        self.PEM_read_bio_X509.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        self.PEM_read_bio_X509.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
         self.PEM_read_bio_X509.restype = ctypes.c_void_p
 
         self.PEM_read_bio_PrivateKey = self._lib.PEM_read_bio_PrivateKey
-        self.PEM_read_bio_PrivateKey.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        self.PEM_read_bio_PrivateKey.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
         self.PEM_read_bio_PrivateKey.restype = ctypes.c_void_p
 
         # https://docs.openssl.org/3.0/man3/SSL_CTX_use_certificate/
@@ -81,11 +93,12 @@ class _OpenSSL:
         self.ERR_error_string.argtypes = [ctypes.c_ulong, ctypes.c_char_p]
         self.ERR_error_string.restype = ctypes.c_char_p
 
-
         if hasattr(self._lib, "SSL_CTX_get_options"):
             self.SSL_CTX_get_options = self._lib.SSL_CTX_get_options
             self.SSL_CTX_get_options.argtypes = [ctypes.c_void_p]
-            self.SSL_CTX_get_options.restype = ctypes.c_long  # OpenSSL's options are long
+            self.SSL_CTX_get_options.restype = (
+                ctypes.c_long
+            )  # OpenSSL's options are long
         else:
             # todo: should we find a safety alternative that works on old Python build too?
             self.SSL_CTX_get_options = None  # type: ignore[assignment]
@@ -93,10 +106,10 @@ class _OpenSSL:
     def pull_error(self) -> typing.NoReturn:
         raise self.ssl.SSLError(
             self.ERR_error_string(
-                self.ERR_get_error(),
-                ctypes.create_string_buffer(256)
+                self.ERR_get_error(), ctypes.create_string_buffer(256)
             ).decode()
         )
+
 
 _head_extra_fields = []
 
@@ -104,10 +117,8 @@ if sys.flags.debug:
     # In debug builds (_POSIX_C_SOURCE or Py_DEBUG is defined), PyObject_HEAD
     # is preceded by _PyObject_HEAD_EXTRA, which typically consists of
     # two pointers (_ob_next, _ob_prev).
-    _head_extra_fields = [
-        ('_ob_next', ctypes.c_void_p),
-        ('_ob_prev', ctypes.c_void_p)
-    ]
+    _head_extra_fields = [("_ob_next", ctypes.c_void_p), ("_ob_prev", ctypes.c_void_p)]
+
 
 # Define the PySSLContext C structure using ctypes.
 # This definition assumes that 'SSL_CTX *ctx' is the first member
@@ -123,9 +134,9 @@ if sys.flags.debug:
 #
 class PySSLContextStruct(ctypes.Structure):
     _fields_ = _head_extra_fields + [
-        ('ob_refcnt', ctypes.c_ssize_t),  # Py_ssize_t ob_refcnt;
-        ('ob_type', ctypes.c_void_p),  # PyTypeObject *ob_type;
-        ('ssl_ctx', ctypes.c_void_p)  # SSL_CTX *ctx; (this is the pointer we want)
+        ("ob_refcnt", ctypes.c_ssize_t),  # Py_ssize_t ob_refcnt;
+        ("ob_type", ctypes.c_void_p),  # PyTypeObject *ob_type;
+        ("ssl_ctx", ctypes.c_void_p),  # SSL_CTX *ctx; (this is the pointer we want)
         # If there were other C members between ob_type and ssl_ctx,
         # they would need to be defined here with their correct types and padding.
     ]
@@ -179,7 +190,9 @@ def load_cert_chain(
         expected_options = ctx.options
 
         if bypass_options != expected_options:
-            raise UnsupportedOperation("CPython internal SSL_CTX changed! Cannot pursue safely.")
+            raise UnsupportedOperation(
+                "CPython internal SSL_CTX changed! Cannot pursue safely."
+            )
 
     # normalize inputs
     if isinstance(certdata, str):
@@ -252,5 +265,6 @@ def load_cert_chain(
     # see: https://docs.openssl.org/master/man3/SSL_CTX_add_extra_chain_cert/#notes
     if len(client_chain) > 1:
         ctx.load_verify_locations(cadata=(b"\n".join(client_chain[1:])).decode())
+
 
 __all__ = ("load_cert_chain",)
