@@ -660,7 +660,7 @@ def ssl_wrap_socket(
                     context.load_cert_chain(certfile, keyfile)
                 else:
                     context.load_cert_chain(certfile, keyfile, key_password)
-            elif certdata:
+            elif certdata and keydata:
                 try:
                     _ctx_load_cert_chain(context, certdata, keydata, key_password)
                 except io.UnsupportedOperation as e:

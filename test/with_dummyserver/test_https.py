@@ -12,8 +12,6 @@ from test import (
     LONG_TIMEOUT,
     SHORT_TIMEOUT,
     TARPIT_HOST,
-    notMacOS,
-    notWindows,
     requires_network,
     resolvesLocalhostFQDN,
 )
@@ -171,8 +169,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             subject = r.json()
             assert subject["organizationalUnitName"].startswith("Testing cert")
 
-    @notWindows()
-    @notMacOS()
     @pytest.mark.xfail(
         sys.implementation.name == "pypy"
         and (
@@ -230,8 +226,6 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             subject = r.json()
             assert subject["organizationalUnitName"].startswith("Testing cert")
 
-    @notWindows()
-    @notMacOS()
     @pytest.mark.xfail(
         sys.implementation.name == "pypy"
         and (
