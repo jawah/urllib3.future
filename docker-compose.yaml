@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: traefik:v3.4.0-rc2
+    image: traefik:v3.4.0
     restart: unless-stopped
     depends_on:
       httpbin:
