@@ -1,3 +1,10 @@
+2.12.921 (2024-05-15)
+=====================
+
+- Extended in-memory mTLS loading support to every major platforms.
+- Added support for built-in zstandard starting from Python 3.14 onward.
+- Improved test suite execution speed using pytest-xdist.
+
 2.12.920 (2024-05-04)
 =====================
 
