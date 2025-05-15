@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 import typing
 from io import UnsupportedOperation
@@ -27,7 +28,45 @@ class _OpenSSL:
                 "Unsupported interpreter due to missing private ssl module"
             )
 
-        self._lib = ctypes.CDLL(ssl._ssl.__file__)
+        if platform.system() == "Windows":
+            # possible search locations
+            candidates = {
+                os.path.dirname(ssl._ssl.__file__),
+                os.path.dirname(sys.executable),
+                os.path.join(sys.prefix, "DLLs"),
+                sys.prefix,
+            }
+
+            arch_size, _ = platform.architecture()
+
+            if arch_size.startswith("64"):
+                suffix = "x64"
+            elif arch_size.startswith("32"):
+                suffix = "x86"
+            else:
+                raise UnsupportedOperation(f"Platform {arch_size} unsupported")
+
+            # names we saw in the import table
+            dll_names = [f"libssl-1_1-{suffix}.dll", f"libssl-3-{suffix}.dll"]
+
+            potential_match = None
+
+            for d in candidates:
+                for name in dll_names:
+                    path = os.path.join(d, name)
+                    if os.path.exists(path):
+                        potential_match = path
+
+            if not potential_match:
+                raise UnsupportedOperation(
+                    "Could not locate OpenSSL DLL next to Python; "
+                    "check your /DLLs folder or your PATH."
+                )
+
+            self._lib = ctypes.CDLL(potential_match)
+        else:
+            self._lib = ctypes.CDLL(ssl._ssl.__file__)
+
         self._name = ssl.OPENSSL_VERSION
 
         # we want to ensure a minimal set of symbols
