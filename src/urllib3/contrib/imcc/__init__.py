@@ -47,7 +47,8 @@ def load_cert_chain(
             )
             return
         except UnsupportedOperation as e:
-            err = e
+            if err is None:
+                err = e
 
     if err is not None:
         raise err
