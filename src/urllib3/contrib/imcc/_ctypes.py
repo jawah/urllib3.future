@@ -111,10 +111,17 @@ class _OpenSSL:
 
             if hasattr(self._lib, "SSL_CTX_ctrl"):
                 self.SSL_CTX_ctrl = self._lib.SSL_CTX_ctrl
-                self.SSL_CTX_ctrl.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+                self.SSL_CTX_ctrl.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_void_p,
+                ]
                 self.SSL_CTX_ctrl.restype = ctypes.c_long
 
-                self.SSL_CTX_get_options = lambda ctx: self.SSL_CTX_ctrl(ctx, 32, 0, None)
+                self.SSL_CTX_get_options = lambda ctx: self.SSL_CTX_ctrl(  # type: ignore[assignment]
+                    ctx, 32, 0, None
+                )
             else:
                 self.SSL_CTX_get_options = None  # type: ignore[assignment]
 
