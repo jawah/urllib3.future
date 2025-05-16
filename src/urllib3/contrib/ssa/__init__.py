@@ -432,6 +432,10 @@ class SSLAsyncSocket(AsyncSocket):
         )
 
     @property
+    def context(self) -> ssl.SSLContext:
+        return self.sslobj.context
+
+    @property
     def _sslobj(self) -> ssl.SSLSocket | ssl.SSLObject:
         return self.sslobj
 
