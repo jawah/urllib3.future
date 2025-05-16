@@ -98,6 +98,9 @@ class _OpenSSL:
                     "check your /DLLs folder or your PATH."
                 )
 
+            print(ssl_potential_match)
+            print(crypto_potential_match)
+
             self._ssl = ctypes.CDLL(ssl_potential_match)
             self._crypto = ctypes.CDLL(crypto_potential_match)
         else:
