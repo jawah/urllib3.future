@@ -215,7 +215,7 @@ def tests_impl(
             ),
             "pytest",
             "-n",
-            "4",
+            "2",
             "-v",
             "-ra",
             f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
