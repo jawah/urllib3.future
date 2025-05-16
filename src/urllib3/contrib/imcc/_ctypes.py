@@ -21,6 +21,13 @@ class _OpenSSL:
 
         import ssl
 
+        self._name = ssl.OPENSSL_VERSION
+
+        if "OpenSSL" not in self._name:
+            raise UnsupportedOperation("Only CPython bound to OpenSSL is supported")
+
+        major_openssl = ssl.OPENSSL_VERSION_INFO[0]
+
         self.ssl = ssl
 
         if not hasattr(ssl, "_ssl"):
@@ -37,53 +44,27 @@ class _OpenSSL:
                 sys.prefix,
             }
 
-            arch_size, _ = platform.architecture()
-
-            if arch_size.startswith("64"):
-                suffix = "x64"
-            elif arch_size.startswith("32"):
-                suffix = "x86"
-            else:
-                suffix = None
-
             # names we saw in the import table
-            ssl_dll_names = [
-                "libssl-3.dll",
-                "libssl-1_1.dll",
-            ]
-
-            crypto_dll_names = ["libcrypto-3.dll", "libcrypto-1_1.dll"]
-
-            if suffix is not None:
-                ssl_dll_names.extend(
-                    [
-                        f"libssl-3-{suffix}.dll",
-                        f"libssl-1_1-{suffix}.dll",
-                    ]
-                )
-                crypto_dll_names.extend(
-                    [f"libcrypto-3-{suffix}.dll", f"libcrypto-1_1-{suffix}.dll"]
-                )
+            if major_openssl == 3:
+                ssl_dll_name = "libssl-3.dll"
+                crypto_dll_name = "libcrypto-3.dll"
+            else:
+                ssl_dll_name = "libssl-1_1.dll"
+                crypto_dll_name = "libcrypto-1_1.dll"
 
             ssl_potential_match = None
             crypto_potential_match = None
 
             for d in candidates:
-                for name in ssl_dll_names:
-                    path = os.path.join(d, name)
-                    if os.path.exists(path):
-                        ssl_potential_match = path
-                        break
-                if ssl_potential_match:
+                path = os.path.join(d, ssl_dll_name)
+                if os.path.exists(path):
+                    ssl_potential_match = path
                     break
 
             for d in candidates:
-                for name in crypto_dll_names:
-                    path = os.path.join(d, name)
-                    if os.path.exists(path):
-                        crypto_potential_match = path
-                        break
-                if crypto_potential_match:
+                path = os.path.join(d, crypto_dll_name)
+                if os.path.exists(path):
+                    crypto_potential_match = path
                     break
 
             if not ssl_potential_match:
@@ -109,8 +90,6 @@ class _OpenSSL:
             # symbols.
             self._ssl = ctypes.CDLL(ssl._ssl.__file__)
             self._crypto = self._ssl
-
-        self._name = ssl.OPENSSL_VERSION
 
         # we want to ensure a minimal set of symbols
         # are present. CPython should have at least:
