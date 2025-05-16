@@ -1,4 +1,4 @@
-2.12.921 (2024-05-15)
+2.12.921 (2024-05-16)
 =====================
 
 - Extended in-memory mTLS loading support to every major platforms.
