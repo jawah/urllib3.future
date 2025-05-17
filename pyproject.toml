@@ -108,6 +108,7 @@ log_level = "DEBUG"
 filterwarnings = [
     "error",
     '''ignore:.*iscoroutinefunction.*:DeprecationWarning''',
+    '''ignore:rsyncdirs config variable are deprecated:DeprecationWarning''',
     '''ignore:.*get_event_loop.*:DeprecationWarning''',
     '''ignore:.*set_event_loop.*:DeprecationWarning''',
     '''ignore:.*EventLoopPolicy.*:DeprecationWarning''',
