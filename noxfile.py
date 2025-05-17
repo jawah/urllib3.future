@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import os
 import platform
+import random
 import shutil
+import string
 import subprocess
 import time
 import typing
@@ -197,31 +199,17 @@ def tests_impl(
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
         session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
 
-        if tracemalloc_enable is False:
-            # add a pth runtime script
-            # to circumvent coverage limitation
-            # can't get workers to measure coverage!
-            session.install("coverage-enable-subprocess==1.0")
-
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step
         session.run(
             "python",
             *(("-bb",) if byte_string_comparisons else ()),
             "-m",
-            *(
-                (
-                    "coverage",
-                    "run",
-                    "--parallel-mode",
-                    "-m",
-                )
-                if tracemalloc_enable is False
-                else ()
-            ),
             "pytest",
             "-n",
-            "2",
+            "2" if os.environ.get("CI") else "4",
+            "--cov",
+            "urllib3",
             "-v",
             "-ra",
             f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
@@ -236,6 +224,9 @@ def tests_impl(
                 "PYTHONTRACEMALLOC": "25" if tracemalloc_enable else "",
             },
         )
+
+    suffix = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(8))
+    os.rename(".coverage", f".coverage.{suffix}")
 
 
 @nox.session(

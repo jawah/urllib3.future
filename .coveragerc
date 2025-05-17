@@ -3,8 +3,6 @@ source =
     urllib3
 # Needed for Python 3.11 and lower
 disable_warnings = no-sysmon
-parallel = True
-branch = True
 
 [paths]
 source =
