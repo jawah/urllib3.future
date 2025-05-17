@@ -417,4 +417,5 @@ def coverage_process(worker_id: str) -> None:
     if worker_id != "master":
         if not os.environ.get("PYTHONTRACEMALLOC"):
             import coverage
+
             coverage.process_startup()
