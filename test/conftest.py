@@ -410,3 +410,11 @@ def requires_http3(for_async: bool = False) -> None:
 
     if _TARGET_METHOD() is False:
         pytest.skip("Test requires HTTP/3 support")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def coverage_process(worker_id: str) -> None:
+    if worker_id != "master":
+        if not os.environ.get("PYTHONTRACEMALLOC"):
+            import coverage
+            coverage.process_startup()
