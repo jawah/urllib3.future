@@ -50,6 +50,9 @@ class _OpenSSL:
             crypto_potential_match = None
 
             for d in candidates:
+                if not os.path.exists(d):
+                    continue
+
                 for filename in os.listdir(d):
                     if ssl_potential_match is None:
                         if filename.startswith("libssl") and filename.endswith(".dll"):
