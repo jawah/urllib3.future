@@ -148,6 +148,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
 
+      - name: Set up Docker Buildx
+        if: ${{ matrix.traefik-server && contains(matrix.os, 'windows') }}
+        uses: docker/setup-buildx-action@v3
+
       - name: "Install dependencies"
         run: python -m pip install --upgrade pip setuptools nox
 
