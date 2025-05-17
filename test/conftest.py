@@ -416,6 +416,6 @@ def requires_http3(for_async: bool = False) -> None:
 def coverage_process(worker_id: str) -> None:
     if worker_id != "master":
         if not os.environ.get("PYTHONTRACEMALLOC"):
-            import coverage
+            import coverage  # type: ignore[import-not-found]
 
             coverage.process_startup()
