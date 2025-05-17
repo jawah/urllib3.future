@@ -225,7 +225,10 @@ def tests_impl(
             },
         )
 
-    suffix = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(8))
+    suffix = "".join(
+        random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits)
+        for _ in range(8)
+    )
     os.rename(".coverage", f".coverage.{suffix}")
 
 

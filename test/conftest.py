@@ -410,4 +410,3 @@ def requires_http3(for_async: bool = False) -> None:
 
     if _TARGET_METHOD() is False:
         pytest.skip("Test requires HTTP/3 support")
-
