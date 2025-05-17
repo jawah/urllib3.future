@@ -836,6 +836,15 @@ class HTTPSConnection(HTTPConnection):
                 cert_data=self.cert_data,
                 key_data=self.key_data,
             )
+
+            # we want the http3 upgrade to behave
+            # exactly as http1/http2 ssl handshake
+            # configuration CAstore wise for example
+            if self.ssl_context is None:
+                # only if not using tls in tls
+                if hasattr(sock_and_verified.socket, "context"):
+                    self.ssl_context = sock_and_verified.socket.context
+
             self.sock = sock_and_verified.socket  # type: ignore[assignment]
 
             # Forwarding proxies can never have a verified target since

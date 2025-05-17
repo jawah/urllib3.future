@@ -51,7 +51,7 @@ brotli = [
   "brotlicffi>=0.8.0; platform_python_implementation != 'CPython'"
 ]
 zstd = [
-  "zstandard>=0.18.0",
+  "zstandard>=0.18.0; python_version < '3.14'",
 ]
 secure = []
 socks = [
@@ -108,6 +108,7 @@ log_level = "DEBUG"
 filterwarnings = [
     "error",
     '''ignore:.*iscoroutinefunction.*:DeprecationWarning''',
+    '''ignore:.*rsyncdirs.*:DeprecationWarning''',
     '''ignore:.*get_event_loop.*:DeprecationWarning''',
     '''ignore:.*set_event_loop.*:DeprecationWarning''',
     '''ignore:.*EventLoopPolicy.*:DeprecationWarning''',

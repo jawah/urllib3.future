@@ -127,7 +127,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ fromJson('{"macos-13":"macOS","windows-2022":"Windows","ubuntu-22.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"

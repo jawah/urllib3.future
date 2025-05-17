@@ -33,7 +33,10 @@ try:
         zstd = None
 
 except (AttributeError, ImportError, ValueError):  # Defensive:
-    zstd = None
+    try:
+        from compression import zstd  # type: ignore[import-not-found]
+    except ImportError:
+        zstd = None
 
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
@@ -161,10 +164,16 @@ if brotli is not None:
 
 
 if zstd is not None:
+    # help distinguish external library from stdlib one
+    _zstd_native = not hasattr(zstd.ZstdDecompressor, "decompressobj")
 
     class ZstdDecoder(ContentDecoder):
         def __init__(self) -> None:
-            self._obj = zstd.ZstdDecompressor().decompressobj()
+            self._obj = (
+                zstd.ZstdDecompressor().decompressobj()
+                if not _zstd_native
+                else zstd.ZstdDecompressor()
+            )
 
         def decompress(self, data: bytes) -> bytes:
             if not data:
@@ -172,7 +181,11 @@ if zstd is not None:
             data_parts = [self._obj.decompress(data)]
             while self._obj.eof and self._obj.unused_data:
                 unused_data = self._obj.unused_data
-                self._obj = zstd.ZstdDecompressor().decompressobj()
+                self._obj = (
+                    zstd.ZstdDecompressor().decompressobj()
+                    if not _zstd_native
+                    else zstd.ZstdDecompressor()
+                )
                 data_parts.append(self._obj.decompress(unused_data))
             return b"".join(data_parts)
 

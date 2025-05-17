@@ -1,3 +1,12 @@
+2.12.921 (2024-05-17)
+=====================
+
+- Extended in-memory mTLS loading support to every major platforms.
+- Added support for built-in zstandard starting from Python 3.14 onward.
+- Improved test suite execution speed using pytest-xdist.
+- Fixed a rare edge case where the CAStore would be empty after upgrade to a HTTP/3 connection when no CA bundle are given before.
+  This error occurred due to load_default_certs not being applied for the QUIC connection.
+
 2.12.920 (2024-05-04)
 =====================
 
