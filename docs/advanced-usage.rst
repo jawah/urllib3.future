@@ -789,8 +789,6 @@ In-memory client (mTLS) certificate
 Using newly added ``cert_data`` and ``key_data`` arguments in ``HTTPSConnection``, ``HTTPSPoolConnection`` and ``PoolManager``.
 you will be capable of passing the certificate along with its key without getting nowhere near your filesystem.
 
-.. warning:: When connected to a TLS over TCP, this is only supported with Linux, FreeBSD, and OpenBSD. When connected over QUIC (e.g. HTTP/3) it is broadly supported.
-
 This feature compensate for the complete removal of ``pyOpenSSL``.
 
 You may give your certificate to urllib3.future this way::
