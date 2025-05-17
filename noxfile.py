@@ -197,6 +197,12 @@ def tests_impl(
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
         session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
 
+        if tracemalloc_enable is False:
+            # add a pth runtime script
+            # to circumvent coverage limitation
+            # can't get workers to measure coverage!
+            session.install("coverage-enable-subprocess==1.0")
+
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step
         session.run(
