@@ -190,6 +190,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                     cert_data=fp_cert_data.read(),
                     ca_certs=DEFAULT_CA,
                     ssl_minimum_version=self.tls_version(),
+                    retries=False,
                 ) as https_pool:
                     r = https_pool.request("GET", "/certificate")
                     subject = r.json()
@@ -246,6 +247,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                     cert_data=fp_cert_data.read(),
                     key_password="letmein",
                     ssl_minimum_version=self.tls_version(),
+                    retries=False,
                 ) as https_pool:
                     r = https_pool.request("GET", "/certificate")
                     subject = r.json()
