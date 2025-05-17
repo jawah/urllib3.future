@@ -22,13 +22,13 @@ class _OpenSSL:
         import ssl
 
         self._name = ssl.OPENSSL_VERSION
-
-        if "OpenSSL" not in self._name:
-            raise UnsupportedOperation("Only CPython bound to OpenSSL is supported")
-
-        major_openssl = ssl.OPENSSL_VERSION_INFO[0]
-
         self.ssl = ssl
+
+        # bug seen in Windows + CPython < 3.11
+        # where CPython official API for options
+        # cast OpenSSL get_options to SIGNED long
+        # where we want UNSIGNED long.
+        _ssl_options_signed_long_bug = False
 
         if not hasattr(ssl, "_ssl"):
             raise UnsupportedOperation(
@@ -44,43 +44,31 @@ class _OpenSSL:
                 sys.prefix,
             }
 
-            # names we saw in the import table
-            if major_openssl == 3:
-                ssl_dll_name = "libssl-3.dll"
-                crypto_dll_name = "libcrypto-3.dll"
-            else:
-                ssl_dll_name = "libssl-1_1.dll"
-                crypto_dll_name = "libcrypto-1_1.dll"
+            _ssl_options_signed_long_bug = sys.version_info < (3, 11)
 
             ssl_potential_match = None
             crypto_potential_match = None
 
             for d in candidates:
-                path = os.path.join(d, ssl_dll_name)
-                if os.path.exists(path):
-                    ssl_potential_match = path
+                for filename in os.listdir(d):
+                    if ssl_potential_match is None:
+                        if filename.startswith("libssl") and filename.endswith(".dll"):
+                            ssl_potential_match = os.path.join(d, filename)
+
+                    if crypto_potential_match is None:
+                        if filename.startswith("libcrypto") and filename.endswith(
+                            ".dll"
+                        ):
+                            crypto_potential_match = os.path.join(d, filename)
+
+                if crypto_potential_match and ssl_potential_match:
                     break
 
-            for d in candidates:
-                path = os.path.join(d, crypto_dll_name)
-                if os.path.exists(path):
-                    crypto_potential_match = path
-                    break
-
-            if not ssl_potential_match:
+            if not ssl_potential_match or not crypto_potential_match:
                 raise UnsupportedOperation(
-                    "Could not locate OpenSSL DLL next to Python; "
+                    "Could not locate OpenSSL DLLs next to Python; "
                     "check your /DLLs folder or your PATH."
                 )
-
-            if not crypto_potential_match:
-                raise UnsupportedOperation(
-                    "Could not locate Crypto DLL next to Python; "
-                    "check your /DLLs folder or your PATH."
-                )
-
-            print(ssl_potential_match)
-            print(crypto_potential_match)
 
             self._ssl = ctypes.CDLL(ssl_potential_match)
             self._crypto = ctypes.CDLL(crypto_potential_match)
@@ -170,7 +158,7 @@ class _OpenSSL:
             self.SSL_CTX_get_options = self._ssl.SSL_CTX_get_options
             self.SSL_CTX_get_options.argtypes = [ctypes.c_void_p]
             self.SSL_CTX_get_options.restype = (
-                ctypes.c_long
+                ctypes.c_ulong if not _ssl_options_signed_long_bug else ctypes.c_long
             )  # OpenSSL's options are long
         elif hasattr(self._ssl, "SSL_CTX_ctrl"):
             # some old build inline SSL_CTX_get_options (mere C define)
@@ -184,7 +172,9 @@ class _OpenSSL:
                 ctypes.c_int,
                 ctypes.c_void_p,
             ]
-            self.SSL_CTX_ctrl.restype = ctypes.c_long
+            self.SSL_CTX_ctrl.restype = (
+                ctypes.c_ulong if not _ssl_options_signed_long_bug else ctypes.c_long
+            )
 
             self.SSL_CTX_get_options = lambda ctx: self.SSL_CTX_ctrl(  # type: ignore[assignment]
                 ctx, 32, 0, None
@@ -276,11 +266,11 @@ def load_cert_chain(
     # and compare it with the official ctx property.
     if lib.SSL_CTX_get_options is not None:
         bypass_options = lib.SSL_CTX_get_options(ssl_ctx_address)
-        expected_options = ctx.options
+        expected_options = int(ctx.options)
 
         if bypass_options != expected_options:
             raise UnsupportedOperation(
-                "CPython internal SSL_CTX changed! Cannot pursue safely."
+                f"CPython internal SSL_CTX changed! Cannot pursue safely. Expected = {expected_options:x} Actual = {bypass_options:x}"
             )
 
     # normalize inputs
