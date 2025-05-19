@@ -779,14 +779,38 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
                 cert_reqs = resolve_cert_reqs(None)
         self.cert_reqs = cert_reqs
 
+        #: used to store the last used/working ssl context
+        self._upgrade_ctx: ssl.SSLContext | None = None
+
     async def connect(self) -> None:
         sock: AsyncSocket | SSLAsyncSocket
         self.sock = sock = await self._new_conn()
 
+        for_quic_ctx: ssl.SSLContext | None
+
+        # we need to have a usable configuration in case
+        # one decide to jump directly to the QUIC layer
+        # without any CA configured
+        if (
+            self.ca_certs is None
+            and self.ca_cert_dir is None
+            and self.ca_cert_data is None
+            and self.ssl_context is None
+            and self._upgrade_ctx is None
+        ):
+            self._upgrade_ctx = create_urllib3_context()
+
+            if hasattr(self._upgrade_ctx, "load_default_certs"):
+                self._upgrade_ctx.load_default_certs()
+
+            for_quic_ctx = self._upgrade_ctx
+        else:
+            for_quic_ctx = self.ssl_context
+
         # the protocol/state-machine may also ship with an external TLS Engine.
         if (
             self._custom_tls(
-                self.ssl_context,
+                for_quic_ctx,
                 self.ca_certs,
                 self.ca_cert_dir,
                 self.ca_cert_data,
@@ -863,10 +887,9 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
             # we want the http3 upgrade to behave
             # exactly as http1/http2 ssl handshake
             # configuration CAstore wise for example
-            if self.ssl_context is None:
-                # only if not using tls in tls
-                if hasattr(sock_and_verified.socket, "context"):
-                    self.ssl_context = sock_and_verified.socket.context
+            # only if not using tls in tls
+            if hasattr(sock_and_verified.socket, "context"):
+                self._upgrade_ctx = sock_and_verified.socket.context
 
             self.sock = sock_and_verified.socket
 

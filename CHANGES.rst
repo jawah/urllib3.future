@@ -1,3 +1,8 @@
+2.12.922 (2024-05-19)
+=====================
+
+- Fixed a minor performance regression when reopening or upgrading a HTTPS connection.
+
 2.12.921 (2024-05-17)
 =====================
 
