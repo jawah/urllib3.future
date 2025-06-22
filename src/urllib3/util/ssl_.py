@@ -431,6 +431,11 @@ def create_urllib3_context(
     if SSLContext is None:
         raise TypeError("Can't create an SSLContext object without an ssl module")
 
+    if caller_id is None:
+        # a version of Requests attempted the ssl_ctx caching from globals in adapters.py
+        # calling this function directly... Requests regretted that change.
+        caller_id = _caller_id()
+
     # This means 'ssl_version' was specified as an exact value.
     if ssl_version not in (None, PROTOCOL_TLS, PROTOCOL_TLS_CLIENT):
         # Disallow setting 'ssl_version' and 'ssl_minimum|maximum_version'

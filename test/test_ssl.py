@@ -135,7 +135,7 @@ class TestSSL:
         context.options = 0
         monkeypatch.setattr(ssl_, "SSLContext", lambda *_, **__: context)
 
-        ssl_.create_urllib3_context()
+        ssl_.create_urllib3_context(caller_id=ssl_._KnownCaller.NIQUESTS)
 
         context.set_ciphers.assert_called_once_with(MOZ_INTERMEDIATE_CIPHERS)
 
