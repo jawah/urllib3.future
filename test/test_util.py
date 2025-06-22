@@ -1007,6 +1007,7 @@ class TestUtilSSL:
     def test_ssl_wrap_socket_loads_the_cert_chain(self) -> None:
         socket = Mock()
         mock_context = Mock()
+        mock_context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
         ssl_wrap_socket(
             ssl_context=mock_context, sock=socket, certfile="/path/to/certfile"
         )
@@ -1056,6 +1057,7 @@ class TestUtilSSL:
         self, sock: socket.socket, server_hostname: str | None
     ) -> tuple[Mock, MagicMock]:
         mock_context = Mock()
+        mock_context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
         with patch("warnings.warn") as warn:
             ssl_wrap_socket(
                 ssl_context=mock_context,

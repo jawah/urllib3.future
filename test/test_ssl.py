@@ -67,6 +67,7 @@ class TestSSL:
     def test_wrap_socket_given_context_no_load_default_certs(self) -> None:
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
+        context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
 
         sock = mock.Mock()
         ssl_.ssl_wrap_socket(sock, ssl_context=context)

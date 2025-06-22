@@ -9,6 +9,8 @@
 - Fixed a rare bug causing the connection to improperly upgrade to QUIC when no ssl ca are given.
 - Updated the low bound version requirement for ``qh3`` to v1.5.3 due to some significant improvement toward
   unifying PKI validation behaviors with Python default expectation (w/ OpenSSL).
+- Changed default behavior when passing a SSLContext with no loaded CA in store. Previously we did not called
+  ``load_default_certs``. We now check if the store is empty, then we load the default certs.
 
 2.12.922 (2024-05-19)
 =====================
