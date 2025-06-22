@@ -773,7 +773,6 @@ class HTTPSConnection(HTTPConnection):
             and self.ca_cert_dir is None
             and self.ca_cert_data is None
             and self.ssl_context is None
-            and self._upgrade_ctx is None
         ):
             self._upgrade_ctx = create_urllib3_context()
 
