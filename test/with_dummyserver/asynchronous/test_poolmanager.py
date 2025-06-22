@@ -155,6 +155,24 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             pool = await http.connection_from_host(self.host, self.port)
             assert pool.num_connections == 1
 
+        # Check when retries are configured for the pool manager.
+        async with AsyncPoolManager(retries=1) as http:
+            with pytest.raises(MaxRetryError):
+                await http.request(
+                    "GET",
+                    f"{self.base_url}/redirect",
+                    fields={"target": f"/redirect?target={self.base_url}/"},
+                )
+
+            # Here we allow more retries for the request.
+            response = await http.request(
+                "GET",
+                f"{self.base_url}/redirect",
+                fields={"target": f"/redirect?target={self.base_url}/"},
+                retries=2,
+            )
+            assert response.status == 200
+
     async def test_redirect_cross_host_remove_headers(self) -> None:
         async with AsyncPoolManager() as http:
             r = await http.request(
