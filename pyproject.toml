@@ -31,6 +31,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
@@ -40,7 +41,7 @@ classifiers = [
 requires-python = ">=3.7"
 dynamic = ["version"]
 dependencies = [
-  "qh3>=1.2.0,<2.0.0; (platform_python_implementation != 'CPython' or python_full_version > '3.7.10') and (platform_system == 'Darwin' or platform_system == 'Windows' or platform_system == 'Linux') and (platform_machine == 'x86_64' or platform_machine == 's390x' or platform_machine == 'armv7l' or platform_machine == 'ppc64le' or platform_machine == 'ppc64' or platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ARM64' or platform_machine == 'x86' or platform_machine == 'i686') and (platform_python_implementation == 'CPython' or (platform_python_implementation == 'PyPy' and python_version < '3.12'))",
+  "qh3>=1.5.3,<2.0.0; (platform_python_implementation != 'CPython' or python_full_version > '3.7.10') and (platform_system == 'Darwin' or platform_system == 'Windows' or platform_system == 'Linux') and (platform_machine == 'x86_64' or platform_machine == 's390x' or platform_machine == 'armv7l' or platform_machine == 'ppc64le' or platform_machine == 'ppc64' or platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ARM64' or platform_machine == 'x86' or platform_machine == 'i686') and (platform_python_implementation == 'CPython' or (platform_python_implementation == 'PyPy' and python_version < '3.12'))",
   "h11>=0.11.0,<1.0.0",
   "jh2>=5.0.3,<6.0.0",
 ]
@@ -58,7 +59,7 @@ socks = [
   "python-socks>=2.0,<=2.6.1",
 ]
 qh3 = [
-  "qh3>=1.2.0,<2.0.0",
+  "qh3>=1.5.3,<2.0.0",
 ]
 ws = [
   "wsproto>=1.2,<2",
@@ -112,6 +113,7 @@ filterwarnings = [
     '''ignore:.*get_event_loop.*:DeprecationWarning''',
     '''ignore:.*set_event_loop.*:DeprecationWarning''',
     '''ignore:.*EventLoopPolicy.*:DeprecationWarning''',
+    '''ignore:.*but not measured.*:coverage.exceptions.CoverageWarning''',
     '''default:ssl\.PROTOCOL_TLS is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1 is deprecated:DeprecationWarning''',
     '''default:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',

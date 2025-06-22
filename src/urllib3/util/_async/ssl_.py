@@ -113,14 +113,20 @@ async def ssl_wrap_socket(
                 )
 
             if ca_certs or ca_cert_dir or ca_cert_data:
+                # SSLContext does not support bytes for cadata[...]
+                if ca_cert_data and isinstance(ca_cert_data, bytes):
+                    ca_cert_data = ca_cert_data.decode()
+
                 try:
                     context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
                 except OSError as e:
                     raise SSLError(e) from e
 
-            elif ssl_context is None and hasattr(context, "load_default_certs"):
+            elif hasattr(context, "load_default_certs"):
+                store_stats = context.cert_store_stats()
                 # try to load OS default certs; works well on Windows.
-                context.load_default_certs()
+                if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
+                    context.load_default_certs()
 
             # Attempt to detect if we get the goofy behavior of the
             # keyfile being encrypted and OpenSSL asking for the

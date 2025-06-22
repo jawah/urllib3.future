@@ -67,6 +67,7 @@ class TestSSL:
     def test_wrap_socket_given_context_no_load_default_certs(self) -> None:
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
+        context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
 
         sock = mock.Mock()
         ssl_.ssl_wrap_socket(sock, ssl_context=context)
@@ -135,7 +136,7 @@ class TestSSL:
         context.options = 0
         monkeypatch.setattr(ssl_, "SSLContext", lambda *_, **__: context)
 
-        ssl_.create_urllib3_context()
+        ssl_.create_urllib3_context(caller_id=ssl_._KnownCaller.NIQUESTS)
 
         context.set_ciphers.assert_called_once_with(MOZ_INTERMEDIATE_CIPHERS)
 

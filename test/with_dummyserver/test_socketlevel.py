@@ -1634,6 +1634,7 @@ class TestSSL(SocketDummyServerTestCase):
 
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
+        context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
         context.options = 0
 
         with mock.patch("urllib3.util.ssl_.SSLContext", lambda *_, **__: context):

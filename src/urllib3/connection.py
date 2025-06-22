@@ -773,7 +773,6 @@ class HTTPSConnection(HTTPConnection):
             and self.ca_cert_dir is None
             and self.ca_cert_data is None
             and self.ssl_context is None
-            and self._upgrade_ctx is None
         ):
             self._upgrade_ctx = create_urllib3_context()
 
@@ -999,19 +998,6 @@ def _ssl_wrap_socket_and_match_hostname(
         or not ssl_.HAS_NEVER_CHECK_COMMON_NAME
     ):
         context.check_hostname = False
-
-    # Try to load OS default certs if none are given.
-    # We need to do the hasattr() check for our custom
-    # pyOpenSSL and SecureTransport SSLContext objects
-    # because neither support load_default_certs().
-    if (
-        not ca_certs
-        and not ca_cert_dir
-        and not ca_cert_data
-        and default_ssl_context
-        and hasattr(context, "load_default_certs")
-    ):
-        context.load_default_certs()
 
     # Ensure that IPv6 addresses are in the proper format and don't have a
     # scope ID. Python's SSL module fails to recognize scoped IPv6 addresses

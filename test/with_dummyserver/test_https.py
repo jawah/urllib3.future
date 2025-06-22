@@ -1058,6 +1058,96 @@ class TestHTTPS_Hostname:
             r = https_pool.request("GET", "/")
             assert r.status == 200
 
+    def test_ensure_validation_chain_incomplete(
+        self, broken_intermediate_server: ServerConfig
+    ) -> None:
+        with HTTPSConnectionPool(
+            broken_intermediate_server.host,
+            broken_intermediate_server.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=broken_intermediate_server.ca_certs,
+            retries=False,
+        ) as https_pool:
+            with pytest.raises(SSLError):
+                https_pool.request("GET", "/")
+
+    def test_ensure_validation_chain_rebuilt(
+        self, broken_intermediate_server: ServerConfig
+    ) -> None:
+        with HTTPSConnectionPool(
+            broken_intermediate_server.host,
+            broken_intermediate_server.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=broken_intermediate_server.ca_certs,
+            ca_cert_data=broken_intermediate_server.intermediate,
+            retries=False,
+        ) as https_pool:
+            r = https_pool.request("GET", "/")
+            assert r.status == 200
+
+    def test_ensure_validation_chain_missing_anchor(
+        self, broken_intermediate_server: ServerConfig
+    ) -> None:
+        with HTTPSConnectionPool(
+            broken_intermediate_server.host,
+            broken_intermediate_server.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_cert_data=broken_intermediate_server.intermediate,
+            retries=False,
+        ) as https_pool:
+            with pytest.raises(SSLError, match="issuer"):
+                https_pool.request("GET", "/")
+
+        with HTTPSConnectionPool(
+            broken_intermediate_server.host,
+            broken_intermediate_server.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_cert_data=broken_intermediate_server.intermediate,
+            retries=False,
+        ) as https_pool:
+            with pytest.raises(SSLError, match="issuer"):
+                https_pool.request("GET", "/")
+
+        assert broken_intermediate_server.intermediate is not None
+
+        with HTTPSConnectionPool(
+            broken_intermediate_server.host,
+            broken_intermediate_server.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_cert_data=f"""-----BEGIN CERTIFICATE-----
+MIIEkTCCA3mgAwIBAgIERWtQVDANBgkqhkiG9w0BAQUFADCBsDELMAkGA1UEBhMC
+VVMxFjAUBgNVBAoTDUVudHJ1c3QsIEluYy4xOTA3BgNVBAsTMHd3dy5lbnRydXN0
+Lm5ldC9DUFMgaXMgaW5jb3Jwb3JhdGVkIGJ5IHJlZmVyZW5jZTEfMB0GA1UECxMW
+KGMpIDIwMDYgRW50cnVzdCwgSW5jLjEtMCsGA1UEAxMkRW50cnVzdCBSb290IENl
+cnRpZmljYXRpb24gQXV0aG9yaXR5MB4XDTA2MTEyNzIwMjM0MloXDTI2MTEyNzIw
+NTM0MlowgbAxCzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1FbnRydXN0LCBJbmMuMTkw
+NwYDVQQLEzB3d3cuZW50cnVzdC5uZXQvQ1BTIGlzIGluY29ycG9yYXRlZCBieSBy
+ZWZlcmVuY2UxHzAdBgNVBAsTFihjKSAyMDA2IEVudHJ1c3QsIEluYy4xLTArBgNV
+BAMTJEVudHJ1c3QgUm9vdCBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBALaVtkNC+sZtKm9I35RMOVcF7sN5EUFo
+Nu3s/poBj6E4KPz3EEZmLk0eGrEaTsbRwJWIsMn/MYszA9u3g3s+IIRe7bJWKKf4
+4LlAcTfFy0cOlypowCKVYhXbR9n10Cv/gkvJrT7eTNuQgFA/CYqEAOwwCj0Yzfv9
+KlmaI5UXLEWeH25DeW0MXJj+SKfFI0dcXv1u5x609mhF0YaDW6KKjbHjKYD+JXGI
+rb68j6xSlkuqUY3kEzEZ6E5Nn9uss2rVvDlUccp6en+Q3X0dgNmBu1kmwhH+5pPi
+94DkZfs0Nw4pgHBNrziGLp5/V6+eF67rHMsoIV+2HNjnogQi+dPa2MsCAwEAAaOB
+sDCBrTAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zArBgNVHRAEJDAi
+gA8yMDA2MTEyNzIwMjM0MlqBDzIwMjYxMTI3MjA1MzQyWjAfBgNVHSMEGDAWgBRo
+kORnpKZTgMeGZqTx90tD+4S9bTAdBgNVHQ4EFgQUaJDkZ6SmU4DHhmak8fdLQ/uE
+vW0wHQYJKoZIhvZ9B0EABBAwDhsIVjcuMTo0LjADAgSQMA0GCSqGSIb3DQEBBQUA
+A4IBAQCT1DCw1wMgKtD5Y+iRDAUgqV8ZyntyTtSx29CW+1RaGSwMCPeyvIWonX9t
+O1KzKtvn1ISMY/YPyyYBkVBs9F8U4pN0wBOeMDpQ47RgxRzwIkSNcUesyBrJ6Zua
+AGAT/3B+XxFNSRuzFVJ7yVTav52Vr2ua2J7p8eRDjeIRRDq/r72DQnNSi6q7pynP
+9WQcCk3RvKqsnyrQ/39/2n3qse0wJcGE2jTSW3iDVuycNsMm4hH2Z0kdkquM++v/
+eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
+0vdXcDazv/wor3ElhVsT/h5/WrQ8
+-----END CERTIFICATE-----
+{broken_intermediate_server.intermediate.decode()}
+""",
+            retries=False,
+        ) as https_pool:
+            with pytest.raises(SSLError, match="issuer"):
+                https_pool.request("GET", "/")
+
     def test_common_name_without_san_fails(self, no_san_server: ServerConfig) -> None:
         with HTTPSConnectionPool(
             no_san_server.host,

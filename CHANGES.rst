@@ -1,3 +1,17 @@
+2.13.900 (2024-06-22)
+=====================
+
+- Fixed passing ``ca_cert_data`` as ``bytes`` instead of ``str``.
+- Backported Security fix CVE-2025-50181 (5.3 Medium, GHSA-pq67-6m6q-mj2v) from upstream urllib3 v2.5.0
+- Fixed backward incompatible change on the ssl configuration when urllib3-future is invoked by other than Niquests.
+  The default cipher list will fallback to system's default when Niquests is not the invoker. Also stop setting
+  ``OP_NO_RENEGOTIATION`` in ssl_options when it's not Niquests.
+- Fixed a rare bug causing the connection to improperly upgrade to QUIC when no ssl ca are given.
+- Updated the low bound version requirement for ``qh3`` to v1.5.3 due to some significant improvement toward
+  unifying PKI validation behaviors with Python default expectation (w/ OpenSSL).
+- Changed default behavior when passing a SSLContext with no loaded CA in store. Previously we did not called
+  ``load_default_certs``. We now check if the store is empty, then we load the default certs.
+
 2.12.922 (2024-05-19)
 =====================
 
