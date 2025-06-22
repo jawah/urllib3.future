@@ -29,6 +29,7 @@ class ServerConfig(typing.NamedTuple):
     host: str
     port: int
     ca_certs: str | None
+    intermediate: bytes | None
 
     @property
     def base_url(self) -> str:
@@ -56,6 +57,7 @@ def run_server_in_thread(
     tmpdir: Path | None,
     ca: trustme.CA | None,
     server_cert: trustme.LeafCert | None,
+    intermediate: trustme.CA | None = None,
 ) -> typing.Generator[ServerConfig, None, None]:
     if ca is not None and server_cert is not None and tmpdir is not None:
         ca_cert_path = str(tmpdir / "ca.pem")
@@ -77,7 +79,13 @@ def run_server_in_thread(
             run_app(),
             io_loop.asyncio_loop,  # type: ignore[attr-defined]
         ).result()
-        yield ServerConfig(scheme, host, port, ca_cert_path)
+        yield ServerConfig(
+            scheme,
+            host,
+            port,
+            ca_cert_path,
+            None if intermediate is None else intermediate.cert_pem.bytes(),
+        )
 
 
 @contextlib.contextmanager
@@ -100,14 +108,14 @@ def run_server_and_proxy_in_thread(
         async def run_app() -> tuple[ServerConfig, ServerConfig]:
             app = web.Application([(r".*", TestingApp)])
             server_app, port = run_tornado_app(app, server_certs, "https", "localhost")
-            server_config = ServerConfig("https", "localhost", port, ca_cert_path)
+            server_config = ServerConfig("https", "localhost", port, ca_cert_path, None)
 
             proxy = web.Application([(r".*", ProxyHandler)])
             proxy_app, proxy_port = run_tornado_app(
                 proxy, proxy_certs, proxy_scheme, proxy_host
             )
             proxy_config = ServerConfig(
-                proxy_scheme, proxy_host, proxy_port, ca_cert_path
+                proxy_scheme, proxy_host, proxy_port, ca_cert_path, None
             )
             return proxy_config, server_config
 
@@ -136,6 +144,23 @@ def san_server(
     server_cert = ca.issue_cert(loopback_host)
 
     with run_server_in_thread("https", loopback_host, tmpdir, ca, server_cert) as cfg:
+        yield cfg
+
+
+@pytest.fixture()
+def broken_intermediate_server(
+    loopback_host: str, tmp_path_factory: pytest.TempPathFactory
+) -> typing.Generator[ServerConfig, None, None]:
+    tmpdir = tmp_path_factory.mktemp("certs")
+    ca = trustme.CA()
+
+    intermediate = ca.create_child_ca()
+
+    server_cert = intermediate.issue_cert(loopback_host)
+
+    with run_server_in_thread(
+        "https", loopback_host, tmpdir, ca, server_cert, intermediate
+    ) as cfg:
         yield cfg
 
 
