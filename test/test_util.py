@@ -33,6 +33,7 @@ from urllib3.util.ssl_ import (
     resolve_cert_reqs,
     resolve_ssl_version,
     ssl_wrap_socket,
+    _KnownCaller,
 )
 from urllib3.util.timeout import _DEFAULT_TIMEOUT, Timeout
 from urllib3.util.url import Url, _encode_invalid_chars, parse_url
@@ -1019,7 +1020,9 @@ class TestUtilSSL:
         socket = Mock()
         ssl_wrap_socket(socket, cert_reqs=ssl.CERT_REQUIRED)
 
-        create_urllib3_context.assert_called_once_with(None, 2, ciphers=None)
+        create_urllib3_context.assert_called_once_with(
+            None, 2, ciphers=None, caller_id=_KnownCaller.OTHER
+        )
 
     def test_ssl_wrap_socket_loads_verify_locations(self) -> None:
         socket = Mock()

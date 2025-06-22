@@ -10,6 +10,8 @@ import sys
 import threading
 import typing
 import warnings
+import enum
+import traceback
 from binascii import unhexlify
 
 from .._constant import MOZ_INTERMEDIATE_CIPHERS
@@ -36,6 +38,25 @@ HASHFUNC_MAP = {
         (64, "sha256"),
     )
 }
+
+
+class _KnownCaller(enum.Enum):
+    REQUESTS = "Requests"
+    NIQUESTS = "Niquests"
+    OTHER = "Other"
+
+
+def _caller_id() -> _KnownCaller:
+    for frame in traceback.extract_stack():
+        module_path = frame.filename
+
+        if frame.filename.endswith("adapters.py"):
+            if "requests" in module_path:
+                return _KnownCaller.REQUESTS
+            elif "niquests" in module_path:
+                return _KnownCaller.NIQUESTS
+
+    return _KnownCaller.OTHER
 
 
 def _compute_key_ctx_build(
@@ -379,6 +400,7 @@ def create_urllib3_context(
     ciphers: str | None = None,
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
+    caller_id: _KnownCaller | None = None,
 ) -> ssl.SSLContext:
     """Creates and configures an :class:`ssl.SSLContext` instance for use with urllib3.
 
@@ -449,10 +471,13 @@ def create_urllib3_context(
     if ciphers:
         context.set_ciphers(ciphers)
     else:
-        # avoid relying on cpython default cipher list
-        # and instead retrieve OpenSSL own default. This should make
-        # urllib3.future less flagged by basic firewall anti-bot rules.
-        context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
+        # Only apply if Niquests or direct urllib3-future usage
+        # Don't bother other or Requests.
+        if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
+            # avoid relying on cpython default cipher list
+            # and instead retrieve OpenSSL own default. This should make
+            # urllib3.future less flagged by basic firewall anti-bot rules.
+            context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
 
     # Setting the default here, as we may have no ssl module on import
     cert_reqs = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
@@ -472,11 +497,14 @@ def create_urllib3_context(
         # if the server is not rotating its ticketing keys properly.
         options |= OP_NO_TICKET
 
-        # Disable renegotiation as it was proven to be weak and dangerous.
-        if (
-            OP_NO_RENEGOTIATION is not None
-        ):  # Not always available depending on your interpreter.
-            options |= OP_NO_RENEGOTIATION
+        # Only apply if Niquests or direct urllib3-future usage
+        # Don't bother other or Requests.
+        if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
+            # Disable renegotiation as it was proven to be weak and dangerous.
+            if (
+                OP_NO_RENEGOTIATION is not None
+            ):  # Not always available depending on your interpreter.
+                options |= OP_NO_RENEGOTIATION
 
     context.options |= options
 
@@ -611,6 +639,7 @@ def ssl_wrap_socket(
         Specify an in-memory client intermediary key for mTLS.
     """
     context = ssl_context
+    caller_id = _caller_id()
 
     with _SSLContextCache.lock(
         keyfile,
@@ -626,6 +655,7 @@ def ssl_wrap_socket(
         keydata,
         key_password,
         ca_cert_data,
+        caller_id.value,
     ):
         cached_ctx = (
             _SSLContextCache.get() if sharable_ssl_context is not None else None
@@ -636,7 +666,10 @@ def ssl_wrap_socket(
                 # Note: This branch of code and all the variables in it are only used in tests.
                 # We should consider deprecating and removing this code.
                 context = create_urllib3_context(
-                    ssl_version, cert_reqs, ciphers=ciphers
+                    ssl_version,
+                    cert_reqs,
+                    ciphers=ciphers,
+                    caller_id=caller_id,
                 )
 
             if ca_certs or ca_cert_dir or ca_cert_data:
