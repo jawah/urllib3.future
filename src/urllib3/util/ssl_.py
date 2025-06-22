@@ -640,6 +640,10 @@ def ssl_wrap_socket(
                 )
 
             if ca_certs or ca_cert_dir or ca_cert_data:
+                # SSLContext does not support bytes for cadata[...]
+                if ca_cert_data and isinstance(ca_cert_data, bytes):
+                    ca_cert_data = ca_cert_data.decode()
+
                 try:
                     context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)
                 except OSError as e:
