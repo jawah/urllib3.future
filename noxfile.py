@@ -210,7 +210,7 @@ def tests_impl(
             "-m",
             "pytest",
             "-n",
-            "0" if os.environ.get("CI") else "4",
+            "2" if os.environ.get("CI") else "4",
             "--cov",
             "urllib3",
             "-v",
