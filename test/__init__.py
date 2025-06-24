@@ -29,10 +29,37 @@ try:
 except ImportError:
     zstd = None
 
-from urllib3 import util
-from urllib3.connectionpool import ConnectionPool
-from urllib3.exceptions import HTTPWarning
-from urllib3.util import ssl_
+
+TARGET_PACKAGE: str = (
+    "urllib3_future" if "URLLIB3_NO_OVERRIDE" in os.environ else "urllib3"
+)
+USING_SECONDARY_ENTRYPOINT: bool = TARGET_PACKAGE == "urllib3_future"
+
+# we want OS package maintainer to be able to run
+# the test suite using the URLLIB3_NO_OVERRIDE environment
+# variable.
+if USING_SECONDARY_ENTRYPOINT:
+    import sys
+    import urllib3_future  # type: ignore[import-not-found]
+
+    sys.modules["urllib3"] = urllib3_future
+
+    import pkgutil
+
+    for module_info in pkgutil.walk_packages(
+        urllib3_future.__path__, urllib3_future.__name__ + "."
+    ):
+        y_submodule = "urllib3" + module_info.name[len("urllib3_future") :]
+        try:
+            x_submod = __import__(module_info.name, fromlist=[""])
+            sys.modules[y_submodule] = x_submod
+        except ImportError:
+            pass  # Ignore missing submodules
+
+from urllib3 import util  # noqa: E402
+from urllib3.connectionpool import ConnectionPool  # noqa: E402
+from urllib3.exceptions import HTTPWarning  # noqa: E402
+from urllib3.util import ssl_  # noqa: E402
 
 if typing.TYPE_CHECKING:
     import ssl
