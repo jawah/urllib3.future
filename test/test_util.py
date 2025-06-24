@@ -39,7 +39,7 @@ from urllib3.util.timeout import _DEFAULT_TIMEOUT, Timeout
 from urllib3.util.url import Url, _encode_invalid_chars, parse_url
 from urllib3.util.util import to_bytes, to_str
 
-from . import clear_warnings
+from . import clear_warnings, USING_SECONDARY_ENTRYPOINT
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -628,7 +628,9 @@ class TestUtil:
 
     def test_add_stderr_logger(self) -> None:
         handler = add_stderr_logger(level=logging.INFO)  # Don't actually print debug
-        logger = logging.getLogger("urllib3")
+        logger = logging.getLogger(
+            "urllib3" if not USING_SECONDARY_ENTRYPOINT else "urllib3_future"
+        )
         assert handler in logger.handlers
 
         logger.debug("Testing add_stderr_logger")

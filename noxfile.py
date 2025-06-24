@@ -189,6 +189,9 @@ def tests_impl(
     session.install("-U", "pip", "setuptools", silent=False)
     session.install("-r", "dev-requirements.txt", silent=False)
 
+    if "URLLIB3_NO_OVERRIDE" in os.environ:
+        session.run("pip", "uninstall", "-y", "urllib3")
+
     with traefik_boot(session, *session.posargs):
         session.install(f".[{extras}]", silent=False)
 
@@ -207,7 +210,7 @@ def tests_impl(
             "-m",
             "pytest",
             "-n",
-            "2" if os.environ.get("CI") else "4",
+            "0" if os.environ.get("CI") else "4",
             "--cov",
             "urllib3",
             "-v",
