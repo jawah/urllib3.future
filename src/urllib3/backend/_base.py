@@ -333,14 +333,19 @@ class LowLevelResponse:
         if __size == 0:
             return b""  # Defensive: This is unreachable, this case is already covered higher in the stack.
 
-        if self._eot is False:
+        buf_capacity = len(self.__buffer_excess)
+        data_ready_to_go = (
+            __size is not None and buf_capacity > 0 and buf_capacity >= __size
+        )
+
+        if self._eot is False and not data_ready_to_go:
             data, self._eot, self.trailers = self.__internal_read_st(
                 __size, self._stream_id
             )
 
             self.__buffer_excess.put(data)
+            buf_capacity = len(self.__buffer_excess)
 
-        buf_capacity = len(self.__buffer_excess)
         data = self.__buffer_excess.get(
             __size if __size is not None and __size > 0 else buf_capacity
         )
