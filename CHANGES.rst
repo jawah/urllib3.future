@@ -1,3 +1,9 @@
+2.13.901 (2024-08-02)
+=====================
+
+- Fixed a memory leakage when downloading large content and specifying a chunk size
+  that is lower than your regular incoming chunk size. (https://github.com/jawah/niquests/issues/270)
+
 2.13.900 (2024-06-22)
 =====================
 
