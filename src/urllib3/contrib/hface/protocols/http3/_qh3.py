@@ -548,6 +548,14 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         peer_info["crlDistributionPoints"] = []
 
+        # may not be available[...]
+        if hasattr(x509_certificate, "get_crl_endpoints"):
+            for endpoint in x509_certificate.get_crl_endpoints():
+                decoded_endpoint = endpoint.decode()
+                peer_info["crlDistributionPoints"].append(  # type: ignore[attr-defined]
+                    decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
+                )
+
         pop_keys = []
 
         for k in peer_info:
