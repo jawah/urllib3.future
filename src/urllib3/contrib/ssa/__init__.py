@@ -431,6 +431,9 @@ class SSLAsyncSocket(AsyncSocket):
             '"ssl_object" could not be extracted from this SslAsyncSock instance'
         )
 
+    def version(self) -> str | None:
+        return self.sslobj.version()
+
     @property
     def context(self) -> ssl.SSLContext:
         return self.sslobj.context
