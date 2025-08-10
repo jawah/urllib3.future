@@ -4,6 +4,7 @@
 - Fixed long standing missing ``ciphers`` kwargs that can be propagated without a
   custom ``ssl.SSLContext`` via ``(Async)PoolManager`` and others.
 - Fixed a bug the connection was not properly closed (underlying fd) when fingerprint matching failed in async.
+- Fixed missing ``crlDistributionPoints`` not extracted from cert in ``ConnectionInfo`` (QUIC layer only).
 
 2.13.901 (2024-08-02)
 =====================
