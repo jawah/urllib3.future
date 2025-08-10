@@ -1,3 +1,9 @@
+2.13.902 (2024-08-06)
+=====================
+
+- Fixed long standing missing ``ciphers`` kwargs that can be propagated without a
+  custom ``ssl.SSLContext`` via ``(Async)PoolManager`` and others.
+
 2.13.901 (2024-08-02)
 =====================
 
