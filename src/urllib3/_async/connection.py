@@ -698,6 +698,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
     key_password: str | None = None
     cert_data: str | bytes | None = None
     key_data: str | bytes | None = None
+    ciphers: str | None = None
 
     def __init__(
         self,
@@ -732,6 +733,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
         key_password: str | None = None,
         cert_data: str | bytes | None = None,
         key_data: str | bytes | None = None,
+        ciphers: str | None = None,
     ) -> None:
         if not is_capable_for_quic(ssl_context, ssl_maximum_version):
             if disabled_svn is None:
@@ -770,6 +772,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
         self.ca_certs = ca_certs and os.path.expanduser(ca_certs)
         self.ca_cert_dir = ca_cert_dir and os.path.expanduser(ca_cert_dir)
         self.ca_cert_data = ca_cert_data
+        self.ciphers = ciphers
 
         # cert_reqs depends on ssl_context so calculate last.
         if cert_reqs is None:
@@ -881,6 +884,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
                 alpn_protocols=alpn_protocols or None,
                 cert_data=self.cert_data,
                 key_data=self.key_data,
+                ciphers=self.ciphers,
             )
 
             # we want the http3 upgrade to behave
@@ -944,6 +948,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
             ssl_context=ssl_context,
             assert_hostname=proxy_config.assert_hostname,
             assert_fingerprint=proxy_config.assert_fingerprint,
+            ciphers=self.ciphers,
             # Features that aren't implemented for proxies yet:
             cert_file=None,
             key_file=None,
@@ -988,6 +993,7 @@ async def _ssl_wrap_socket_and_match_hostname(
     alpn_protocols: list[str] | None = None,
     cert_data: str | bytes | None = None,
     key_data: str | bytes | None = None,
+    ciphers: str | None = None,
 ) -> _WrappedAndVerifiedSocket:
     """Logic for constructing an SSLContext from all TLS parameters, passing
     that down into ssl_wrap_socket, and then doing certificate verification
@@ -1052,6 +1058,7 @@ async def _ssl_wrap_socket_and_match_hostname(
         certdata=cert_data,
         keydata=key_data,
         sharable_ssl_context=sharable_ext_options if default_ssl_context else None,
+        ciphers=ciphers,
     )
 
     try:

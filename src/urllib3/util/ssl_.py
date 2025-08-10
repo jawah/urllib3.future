@@ -721,6 +721,9 @@ def ssl_wrap_socket(
             ):  # Defensive: in CI, we always have set_alpn_protocols
                 pass
 
+            if ciphers:
+                context.set_ciphers(ciphers)
+
             if sharable_ssl_context is not None:
                 _SSLContextCache.save(context)
         else:
@@ -794,22 +797,6 @@ def is_capable_for_quic(
                 ctx.maximum_version != ssl.TLSVersion.MAXIMUM_SUPPORTED
                 and ctx.maximum_version <= ssl.TLSVersion.TLSv1_2
             ):
-                quic_disable = True
-        else:
-            any_capable_cipher: bool = False
-            for cipher_dict in ctx.get_ciphers():
-                if cipher_dict["name"] in [
-                    "TLS_AES_128_GCM_SHA256",
-                    "TLS_AES_256_GCM_SHA384",
-                    "TLS_CHACHA20_POLY1305_SHA256",
-                    # Alias-cipher
-                    "CHACHA20-POLY1305-SHA256",
-                    "AES-256-GCM-SHA384",
-                    "AES-128-GCM-SHA256",
-                ]:
-                    any_capable_cipher = True
-                    break
-            if not any_capable_cipher:
                 quic_disable = True
 
     if ssl_maximum_version and ssl_maximum_version <= ssl.TLSVersion.TLSv1_2:

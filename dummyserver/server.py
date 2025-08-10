@@ -191,6 +191,7 @@ def ssl_options_to_context(  # type: ignore[no-untyped-def]
 
     ctx.load_cert_chain(certfile, keyfile)
     ctx.verify_mode = cert_reqs
+
     if ctx.verify_mode != cert_none:
         ctx.load_verify_locations(cafile=ca_certs)
     if alpn_protocols and hasattr(ctx, "set_alpn_protocols"):

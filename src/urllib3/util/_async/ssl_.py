@@ -156,6 +156,9 @@ async def ssl_wrap_socket(
             ):  # Defensive: in CI, we always have set_alpn_protocols
                 pass
 
+            if ciphers:
+                context.set_ciphers(ciphers)
+
             if sharable_ssl_context is not None:
                 _SSLContextCache.save(context)
         else:

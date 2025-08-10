@@ -8,6 +8,8 @@ import sys
 import tempfile
 import warnings
 from pathlib import Path
+from ssl import TLSVersion
+
 from test import (
     LONG_TIMEOUT,
     SHORT_TIMEOUT,
@@ -30,7 +32,7 @@ from dummyserver.server import (
     encrypt_key_pem,
 )
 from dummyserver.testcase import HTTPSDummyServerTestCase
-from urllib3 import HTTPSConnectionPool
+from urllib3 import HTTPSConnectionPool, ConnectionInfo
 from urllib3.connection import HTTPSConnection, VerifiedHTTPSConnection
 from urllib3.exceptions import (
     ConnectTimeoutError,
@@ -767,6 +769,42 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         ) as https_pool:
             r = https_pool.request("GET", "/")
             assert r.status == 200
+
+    def test_ciphers_ssl_connection(self) -> None:
+        if self.tls_version() is not TLSVersion.TLSv1_2:
+            pytest.skip("set ciphers test for TLSv1.2 only")
+
+        conn_info: ConnectionInfo | None = None
+
+        def _retrieve_conn_info(info):
+            nonlocal conn_info
+            conn_info = info
+
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=DEFAULT_CA,
+            ciphers="ECDHE-RSA-AES128-GCM-SHA256",
+            ssl_minimum_version=self.tls_version(),
+        ) as https_pool:
+            r = https_pool.request("GET", "/", on_post_connection=_retrieve_conn_info)
+            assert r.status == 200
+            assert conn_info is not None
+            assert conn_info.cipher == "ECDHE-RSA-AES128-GCM-SHA256"
+
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            cert_reqs="CERT_REQUIRED",
+            ca_certs=DEFAULT_CA,
+            ciphers="ECDHE-RSA-AES256-GCM-SHA384",
+            ssl_minimum_version=self.tls_version(),
+        ) as https_pool:
+            r = https_pool.request("GET", "/", on_post_connection=_retrieve_conn_info)
+            assert r.status == 200
+            assert conn_info is not None
+            assert conn_info.cipher == "ECDHE-RSA-AES256-GCM-SHA384"
 
     def test_ssl_correct_system_time(self) -> None:
         # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
