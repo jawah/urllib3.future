@@ -432,7 +432,8 @@ def downstream_sphinx(session: nox.Session) -> None:
     session.chdir("sphinx")
 
     session.run("git", "rev-parse", "HEAD", external=True)
-    session.install(".[test]", silent=False)
+    session.install("-U", "pip")  # ensure we can use dependency groups
+    session.install(".", "--group", "test", silent=False)
 
     session.cd(root)
     session.install(".", silent=False)
