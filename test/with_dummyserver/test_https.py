@@ -776,7 +776,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
 
         conn_info: ConnectionInfo | None = None
 
-        def _retrieve_conn_info(info):
+        def _retrieve_conn_info(info: ConnectionInfo) -> None:
             nonlocal conn_info
             conn_info = info
 
