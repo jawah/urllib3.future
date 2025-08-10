@@ -1992,6 +1992,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         ca_cert_data: None | str | bytes = None,
         cert_data: str | bytes | None = None,
         key_data: str | bytes | None = None,
+        ciphers: str | None = None,
         **conn_kw: typing.Any,
     ) -> None:
         super().__init__(
@@ -2019,6 +2020,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         self.ssl_version = ssl_version
         self.ssl_minimum_version = ssl_minimum_version
         self.ssl_maximum_version = ssl_maximum_version
+        self.ciphers = ciphers
         self.assert_hostname = assert_hostname
         self.assert_fingerprint = assert_fingerprint
 
@@ -2179,6 +2181,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                                 ssl_maximum_version=self.ssl_maximum_version,
                                 cert_data=self.cert_data,
                                 key_data=self.key_data,
+                                ciphers=self.ciphers,
                                 **conn_kw,
                             )
                         )
@@ -2278,6 +2281,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                     ssl_maximum_version=self.ssl_maximum_version,
                     cert_data=self.cert_data,
                     key_data=self.key_data,
+                    ciphers=self.ciphers,
                     **self.conn_kw,
                 )
 

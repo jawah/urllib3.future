@@ -66,6 +66,7 @@ SSL_KEYWORDS = (
     "server_hostname",
     "cert_data",
     "key_data",
+    "ciphers",
 )
 
 _SelfT = typing.TypeVar("_SelfT")
@@ -98,6 +99,7 @@ class PoolKey(typing.NamedTuple):
     key_ca_cert_dir: str | None
     key_ca_cert_data: str | bytes | None
     key_ssl_context: ssl.SSLContext | None
+    key_ciphers: str | None
     key_maxsize: int | None
     key_headers: frozenset[tuple[str, str]] | None
     key__proxy: Url | None

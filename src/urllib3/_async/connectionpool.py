@@ -2035,6 +2035,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         ca_cert_data: None | str | bytes = None,
         cert_data: str | bytes | None = None,
         key_data: str | bytes | None = None,
+        ciphers: str | None = None,
         **conn_kw: typing.Any,
     ) -> None:
         super().__init__(
@@ -2064,6 +2065,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         self.ssl_maximum_version = ssl_maximum_version
         self.assert_hostname = assert_hostname
         self.assert_fingerprint = assert_fingerprint
+        self.ciphers = ciphers
 
     async def _prepare_proxy(self, conn: AsyncHTTPSConnection) -> None:  # type: ignore[override]
         """Establishes a tunnel connection through HTTP CONNECT."""
@@ -2268,6 +2270,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                                 ssl_maximum_version=self.ssl_maximum_version,
                                 cert_data=self.cert_data,
                                 key_data=self.key_data,
+                                ciphers=self.ciphers,
                                 **conn_kw,
                             )
                         )
@@ -2354,6 +2357,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                     ssl_maximum_version=self.ssl_maximum_version,
                     cert_data=self.cert_data,
                     key_data=self.key_data,
+                    ciphers=self.ciphers,
                     **self.conn_kw,
                 )
 
