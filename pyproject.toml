@@ -114,6 +114,7 @@ filterwarnings = [
     '''ignore:.*set_event_loop.*:DeprecationWarning''',
     '''ignore:.*EventLoopPolicy.*:DeprecationWarning''',
     '''ignore:.*but not measured.*:coverage.exceptions.CoverageWarning''',
+    '''ignore:.*No data was collected*.:coverage.exceptions.CoverageWarning''',
     '''default:ssl\.PROTOCOL_TLS is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1 is deprecated:DeprecationWarning''',
     '''default:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
