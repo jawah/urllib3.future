@@ -3,6 +3,7 @@
 
 - Fixed long standing missing ``ciphers`` kwargs that can be propagated without a
   custom ``ssl.SSLContext`` via ``(Async)PoolManager`` and others.
+- Fixed a bug the connection was not properly closed (underlying fd) when fingerprint matching failed in async.
 
 2.13.901 (2024-08-02)
 =====================
