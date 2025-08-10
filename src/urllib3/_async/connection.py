@@ -1096,6 +1096,7 @@ async def _ssl_wrap_socket_and_match_hostname(
         )
     except BaseException:
         ssl_sock.close()
+        await ssl_sock.wait_for_close()
         raise
 
 
