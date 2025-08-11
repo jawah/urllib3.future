@@ -1,3 +1,8 @@
+2.13.903 (2024-08-11)
+=====================
+
+- Bumped lower bound of qh3. The ``crlDistributionPoints`` getter is now officially implemented in qh3 >= 1.5.4.
+
 2.13.902 (2024-08-10)
 =====================
 
