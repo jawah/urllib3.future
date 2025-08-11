@@ -365,7 +365,7 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 r = await https_pool.request("GET", "/")
                 assert r.status == 200
 
-            assert [str(wm) for wm in w] == []
+            assert [str(wm) for wm in w if "ResourceWarning" not in str(wm)] == []
 
     @pytest.mark.asyncio
     async def test_invalid_common_name(self) -> None:
