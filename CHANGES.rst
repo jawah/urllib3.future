@@ -1,3 +1,10 @@
+2.13.904 (2024-08-19)
+=====================
+
+- Improved performance when creating TLS connection. We removed a redundant ssl_ctx creation due to our
+  caching / reusability for ssl.SSLContext.
+- Fixed forcing disabling SSL renegotiation when explicitly setting ``@SECLEVEL=0`` in the cipher suite.
+
 2.13.903 (2024-08-11)
 =====================
 
