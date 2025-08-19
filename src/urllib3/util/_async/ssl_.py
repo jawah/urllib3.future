@@ -118,6 +118,8 @@ async def ssl_wrap_socket(
                     cert_reqs,
                     ciphers=ciphers,
                     caller_id=_KnownCaller.NIQUESTS,
+                    ssl_minimum_version=ssl_minimum_version,
+                    ssl_maximum_version=ssl_maximum_version,
                 )
 
             if cert_reqs is not None:

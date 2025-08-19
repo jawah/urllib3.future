@@ -112,8 +112,10 @@ class _CacheableSSLContext:
         key = _compute_key_ctx_build(*args)
         with self._lock:
             self._cursor = key
-            yield
-            self._cursor = None
+            try:
+                yield
+            finally:
+                self._cursor = None
 
     def get(self) -> ssl.SSLContext | None:
         with self._lock:
