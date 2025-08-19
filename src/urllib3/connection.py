@@ -10,6 +10,8 @@ import warnings
 from datetime import datetime, timedelta
 from socket import timeout as SocketTimeout
 
+from urllib3.util import ssl_
+
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
@@ -47,7 +49,7 @@ from .exceptions import (
     ProxyError,
     ResponseNotReady,
 )
-from .util import SKIP_HEADER, SKIPPABLE_HEADERS, ssl_
+from .util import SKIP_HEADER, SKIPPABLE_HEADERS
 from .util.request import body_to_chunks
 from .util.ssl_ import assert_fingerprint as _assert_fingerprint
 from .util.ssl_ import (
@@ -973,26 +975,14 @@ def _ssl_wrap_socket_and_match_hostname(
     that both proxies and targets have the same behavior when connecting via TLS.
     """
     default_ssl_context = False
-    sharable_ext_options: dict[str, int | str | None] = {
-        "ssl_version": resolve_ssl_version(ssl_version, mitigate_tls_version=True),
-        "ssl_minimum_version": ssl_minimum_version,
-        "ssl_maximum_version": ssl_maximum_version,
-        "cert_reqs": resolve_cert_reqs(cert_reqs),
-    }
 
     if ssl_context is None:
         default_ssl_context = True
-        context = create_urllib3_context(**sharable_ext_options)  # type: ignore[arg-type]
-        sharable_ext_options.update(
-            {
-                "assert_fingerprint": assert_fingerprint,
-                "assert_hostname": assert_hostname,
-            }
-        )
+        context = None
     else:
         context = ssl_context
 
-    context.verify_mode = sharable_ext_options["cert_reqs"]  # type: ignore[assignment]
+    check_hostname: bool | None = None
 
     # In some cases, we want to verify hostnames ourselves
     if (
@@ -1003,7 +993,7 @@ def _ssl_wrap_socket_and_match_hostname(
         or assert_hostname is False
         or not ssl_.HAS_NEVER_CHECK_COMMON_NAME
     ):
-        context.check_hostname = False
+        check_hostname = False
 
     # Ensure that IPv6 addresses are in the proper format and don't have a
     # scope ID. Python's SSL module fails to recognize scoped IPv6 addresses
@@ -1029,9 +1019,15 @@ def _ssl_wrap_socket_and_match_hostname(
         alpn_protocols=alpn_protocols,
         certdata=cert_data,
         keydata=key_data,
-        sharable_ssl_context=sharable_ext_options if default_ssl_context else None,
         ciphers=ciphers,
+        cert_reqs=resolve_cert_reqs(cert_reqs),
+        check_hostname=check_hostname,
+        ssl_version=resolve_ssl_version(ssl_version, mitigate_tls_version=True),
+        ssl_minimum_version=ssl_minimum_version,
+        ssl_maximum_version=ssl_maximum_version,
     )
+
+    context = ssl_sock.context
 
     try:
         if assert_fingerprint:

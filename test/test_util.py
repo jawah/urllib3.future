@@ -1024,7 +1024,12 @@ class TestUtilSSL:
         ssl_wrap_socket(socket, cert_reqs=ssl.CERT_REQUIRED)
 
         create_urllib3_context.assert_called_once_with(
-            None, 2, ciphers=None, caller_id=_KnownCaller.OTHER
+            None,
+            2,
+            ciphers=None,
+            caller_id=_KnownCaller.OTHER,
+            ssl_minimum_version=None,
+            ssl_maximum_version=None,
         )
 
     def test_ssl_wrap_socket_loads_verify_locations(self) -> None:

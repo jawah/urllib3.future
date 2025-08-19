@@ -569,7 +569,9 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = ...,
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
-    sharable_ssl_context: dict[str, typing.Any] | None = ...,
+    check_hostname: bool | None = ...,
+    ssl_minimum_version: int | None = ...,
+    ssl_maximum_version: int | None = ...,
 ) -> ssl.SSLSocket: ...
 
 
@@ -591,7 +593,9 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = ...,
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
-    sharable_ssl_context: dict[str, typing.Any] | None = ...,
+    check_hostname: bool | None = ...,
+    ssl_minimum_version: int | None = ...,
+    ssl_maximum_version: int | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType: ...
 
 
@@ -612,7 +616,9 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = None,
     certdata: str | bytes | None = None,
     keydata: str | bytes | None = None,
-    sharable_ssl_context: dict[str, typing.Any] | None = None,
+    check_hostname: bool | None = None,
+    ssl_minimum_version: int | None = None,
+    ssl_maximum_version: int | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -644,7 +650,7 @@ def ssl_wrap_socket(
         Specify an in-memory client intermediary key for mTLS.
     """
     context = ssl_context
-    caller_id = _caller_id()
+    cache_disabled: bool = context is not None
 
     with _SSLContextCache.lock(
         keyfile,
@@ -653,18 +659,18 @@ def ssl_wrap_socket(
         ca_certs,
         ssl_version,
         ciphers,
-        sharable_ssl_context,
         ca_cert_dir,
         alpn_protocols,
         certdata,
         keydata,
         key_password,
         ca_cert_data,
-        caller_id.value,
+        os.getenv("SSLKEYLOGFILE", None),
+        ssl_minimum_version,
+        ssl_maximum_version,
+        check_hostname,
     ):
-        cached_ctx = (
-            _SSLContextCache.get() if sharable_ssl_context is not None else None
-        )
+        cached_ctx = _SSLContextCache.get() if not cache_disabled else None
 
         if cached_ctx is None:
             if context is None:
@@ -674,8 +680,16 @@ def ssl_wrap_socket(
                     ssl_version,
                     cert_reqs,
                     ciphers=ciphers,
-                    caller_id=caller_id,
+                    caller_id=_caller_id(),
+                    ssl_minimum_version=ssl_minimum_version,
+                    ssl_maximum_version=ssl_maximum_version,
                 )
+
+            if cert_reqs is not None:
+                context.verify_mode = cert_reqs  # type: ignore[assignment]
+
+            if check_hostname is not None:
+                context.check_hostname = check_hostname
 
             if ca_certs or ca_cert_dir or ca_cert_data:
                 # SSLContext does not support bytes for cadata[...]
@@ -724,7 +738,7 @@ def ssl_wrap_socket(
             if ciphers:
                 context.set_ciphers(ciphers)
 
-            if sharable_ssl_context is not None:
+            if not cache_disabled:
                 _SSLContextCache.save(context)
         else:
             context = cached_ctx

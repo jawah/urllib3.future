@@ -1604,7 +1604,14 @@ class TestSSL(SocketDummyServerTestCase):
                     pool.request("GET", "/", timeout=SHORT_TIMEOUT)
                 context.load_default_certs.assert_called_with()
 
-    def test_ssl_dont_load_default_certs_when_given(self) -> None:
+    def test_ssl_dont_load_default_certs_when_given(self, monkeypatch) -> None:  # type: ignore
+        def forbidden(ctx, *a, **kw):  # type: ignore
+            raise AssertionError(
+                "load_default_certs must not be called in this test run"
+            )
+
+        monkeypatch.setattr(ssl.SSLContext, "load_default_certs", forbidden)
+
         def socket_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
             try:
@@ -1632,24 +1639,23 @@ class TestSSL(SocketDummyServerTestCase):
             ssl_sock.close()
             sock.close()
 
-        context = mock.create_autospec(ssl_.SSLContext)
-        context.load_default_certs = mock.Mock()
-        context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
-        context.options = 0
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cafile=DEFAULT_CA)
 
-        with mock.patch("urllib3.util.ssl_.SSLContext", lambda *_, **__: context):
-            for kwargs in [
-                {"ca_certs": "/a"},
-                {"ca_cert_dir": "/a"},
-                {"ca_certs": "a", "ca_cert_dir": "a"},
-                {"ssl_context": context},
-            ]:
-                self._start_server(socket_handler)
+        with pytest.raises(AssertionError):
+            context.load_default_certs()
 
-                with HTTPSConnectionPool(self.host, self.port, **kwargs) as pool:
-                    with pytest.raises(Exception):
-                        pool.request("GET", "/", timeout=SHORT_TIMEOUT)
-                    context.load_default_certs.assert_not_called()
+        for kwargs in [
+            {"ca_certs": DEFAULT_CA},
+            {"ssl_context": context},
+        ]:
+            self._start_server(socket_handler)
+
+            with HTTPSConnectionPool(  # type: ignore
+                self.host, self.port, retries=False, **kwargs
+            ) as pool:
+                r = pool.request("GET", "/", timeout=LONG_TIMEOUT)
+                assert r.status == 200
 
     def test_load_verify_locations_exception(self) -> None:
         """

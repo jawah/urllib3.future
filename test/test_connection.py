@@ -248,6 +248,7 @@ class TestConnection:
         context.wrap_socket.return_value.getpeercert.return_value = {
             "subjectAltName": (("DNS", "google.com"),)
         }
+        context.wrap_socket.return_value.context = context
         conn = HTTPSConnection(
             "google.com", port=443, assert_hostname="example.com", ssl_context=context
         )
