@@ -505,9 +505,15 @@ def create_urllib3_context(
         # Only apply if Niquests or direct urllib3-future usage
         # Don't bother other or Requests.
         if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
+            # some may want to still enable the renegotiation due to
+            # compatibility issue. we found some old IIS server rejecting HTTP
+            # request (with close conn) when this setting is set...!
+            weak_security_set = ciphers is not None and ciphers.upper().endswith(
+                "@SECLEVEL=0"
+            )
             # Disable renegotiation as it was proven to be weak and dangerous.
             if (
-                OP_NO_RENEGOTIATION is not None
+                OP_NO_RENEGOTIATION is not None and weak_security_set is False
             ):  # Not always available depending on your interpreter.
                 options |= OP_NO_RENEGOTIATION
 
