@@ -464,11 +464,14 @@ def create_urllib3_context(
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)
 
+    default_tlsv1_2: bool = False
+
     if SUPPORT_MIN_MAX_TLS_VERSION:
         if ssl_minimum_version is not None:
             context.minimum_version = ssl_minimum_version
         else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
             context.minimum_version = TLSVersion.TLSv1_2
+            default_tlsv1_2 = True
 
         if ssl_maximum_version is not None:
             context.maximum_version = ssl_maximum_version
@@ -477,7 +480,7 @@ def create_urllib3_context(
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
     if ciphers:
         context.set_ciphers(ciphers)
-    else:
+    elif default_tlsv1_2:  # we should not set recommended ciphers if not TLS1.2 min!
         # Only apply if Niquests or direct urllib3-future usage
         # Don't bother other or Requests.
         if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
