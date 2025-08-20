@@ -53,7 +53,7 @@ from ..exceptions import (  # noqa: F401
     NewConnectionError,
     ResponseNotReady,
 )
-from ..util import SKIP_HEADER, SKIPPABLE_HEADERS, ssl_
+from ..util import SKIP_HEADER, SKIPPABLE_HEADERS
 from ..util._async.ssl_ import ssl_wrap_socket
 from ..util.request import body_to_chunks
 from ..util.ssl_ import assert_fingerprint as _assert_fingerprint
@@ -63,6 +63,7 @@ from ..util.ssl_ import (
     is_ipaddress,
     resolve_cert_reqs,
     resolve_ssl_version,
+    HAS_NEVER_CHECK_COMMON_NAME,
 )
 from ..util.url import Url
 
@@ -1001,26 +1002,14 @@ async def _ssl_wrap_socket_and_match_hostname(
     that both proxies and targets have the same behavior when connecting via TLS.
     """
     default_ssl_context = False
-    sharable_ext_options: dict[str, int | str | None] = {
-        "ssl_version": resolve_ssl_version(ssl_version, mitigate_tls_version=True),
-        "ssl_minimum_version": ssl_minimum_version,
-        "ssl_maximum_version": ssl_maximum_version,
-        "cert_reqs": resolve_cert_reqs(cert_reqs),
-    }
 
     if ssl_context is None:
         default_ssl_context = True
-        context = create_urllib3_context(**sharable_ext_options)  # type: ignore[arg-type]
-        sharable_ext_options.update(
-            {
-                "assert_fingerprint": assert_fingerprint,
-                "assert_hostname": assert_hostname,
-            }
-        )
+        context = None
     else:
         context = ssl_context
 
-    context.verify_mode = sharable_ext_options["cert_reqs"]  # type: ignore[assignment]
+    check_hostname: bool | None = None
 
     # In some cases, we want to verify hostnames ourselves
     if (
@@ -1029,9 +1018,9 @@ async def _ssl_wrap_socket_and_match_hostname(
         or assert_hostname
         # assert_hostname can be set to False to disable hostname checking
         or assert_hostname is False
-        or not ssl_.HAS_NEVER_CHECK_COMMON_NAME
+        or not HAS_NEVER_CHECK_COMMON_NAME
     ):
-        context.check_hostname = False
+        check_hostname = False
 
     # Ensure that IPv6 addresses are in the proper format and don't have a
     # scope ID. Python's SSL module fails to recognize scoped IPv6 addresses
@@ -1057,9 +1046,15 @@ async def _ssl_wrap_socket_and_match_hostname(
         alpn_protocols=alpn_protocols,
         certdata=cert_data,
         keydata=key_data,
-        sharable_ssl_context=sharable_ext_options if default_ssl_context else None,
         ciphers=ciphers,
+        cert_reqs=resolve_cert_reqs(cert_reqs),
+        ssl_version=resolve_ssl_version(ssl_version, mitigate_tls_version=True),
+        ssl_minimum_version=ssl_minimum_version,
+        ssl_maximum_version=ssl_maximum_version,
+        check_hostname=check_hostname,
     )
+
+    context = ssl_sock.context
 
     try:
         if assert_fingerprint:

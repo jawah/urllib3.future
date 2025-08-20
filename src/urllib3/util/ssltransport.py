@@ -135,6 +135,10 @@ class SSLTransport:
     def cipher(self) -> tuple[str, str, int] | None:
         return self.sslobj.cipher()
 
+    @property
+    def context(self) -> ssl.SSLContext:
+        return self.sslobj.context
+
     def selected_alpn_protocol(self) -> str | None:
         return self.sslobj.selected_alpn_protocol()
 

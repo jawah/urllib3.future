@@ -13,6 +13,7 @@ import warnings
 import enum
 import traceback
 from binascii import unhexlify
+from pathlib import Path
 
 from .._constant import MOZ_INTERMEDIATE_CIPHERS
 from ..contrib.imcc import load_cert_chain as _ctx_load_cert_chain
@@ -60,7 +61,7 @@ def _caller_id() -> _KnownCaller:
 
 
 def _compute_key_ctx_build(
-    *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None,
+    *args: str | bytes | int | Path | list[str] | bool | dict[str, typing.Any] | None,
 ) -> int:
     """We want a dedicated hashing technics to cache ssl ctx, so that they are reusable across the runtime."""
     key: str = ""
@@ -78,6 +79,27 @@ def _compute_key_ctx_build(
         ):
             key += str(hash(arg))
             continue
+        if isinstance(arg, Path):
+            # a file/directory may change at any moment
+            # we must have a clue if the key cache
+            # must be invalidated.
+            key += str(arg)
+            if arg.is_dir():
+                try:
+                    key += str(
+                        max(
+                            [arg.stat().st_mtime]
+                            + [p.stat().st_mtime for p in arg.iterdir()],
+                            default=arg.stat().st_mtime,
+                        )
+                    )
+                except OSError:
+                    pass  # Defensive: race condition possible
+            else:
+                try:
+                    key += str(Path(arg).stat().st_mtime)
+                except OSError:
+                    pass  # Defensive: race condition possible
         if isinstance(arg, (int, bool)):
             key += str(arg)
             continue
@@ -107,13 +129,23 @@ class _CacheableSSLContext:
 
     @contextlib.contextmanager
     def lock(
-        self, *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None
+        self,
+        *args: str
+        | bytes
+        | Path
+        | int
+        | list[str]
+        | bool
+        | dict[str, typing.Any]
+        | None,
     ) -> typing.Generator[None]:
         key = _compute_key_ctx_build(*args)
         with self._lock:
             self._cursor = key
-            yield
-            self._cursor = None
+            try:
+                yield
+            finally:
+                self._cursor = None
 
     def get(self) -> ssl.SSLContext | None:
         with self._lock:
@@ -462,11 +494,14 @@ def create_urllib3_context(
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)
 
+    default_tlsv1_2: bool = False
+
     if SUPPORT_MIN_MAX_TLS_VERSION:
         if ssl_minimum_version is not None:
             context.minimum_version = ssl_minimum_version
         else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
             context.minimum_version = TLSVersion.TLSv1_2
+            default_tlsv1_2 = True
 
         if ssl_maximum_version is not None:
             context.maximum_version = ssl_maximum_version
@@ -475,7 +510,7 @@ def create_urllib3_context(
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
     if ciphers:
         context.set_ciphers(ciphers)
-    else:
+    elif default_tlsv1_2:  # we should not set recommended ciphers if not TLS1.2 min!
         # Only apply if Niquests or direct urllib3-future usage
         # Don't bother other or Requests.
         if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
@@ -505,9 +540,15 @@ def create_urllib3_context(
         # Only apply if Niquests or direct urllib3-future usage
         # Don't bother other or Requests.
         if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
+            # some may want to still enable the renegotiation due to
+            # compatibility issue. we found some old IIS server rejecting HTTP
+            # request (with close conn) when this setting is set...!
+            weak_security_set = ciphers is not None and ciphers.upper().endswith(
+                "@SECLEVEL=0"
+            )
             # Disable renegotiation as it was proven to be weak and dangerous.
             if (
-                OP_NO_RENEGOTIATION is not None
+                OP_NO_RENEGOTIATION is not None and weak_security_set is False
             ):  # Not always available depending on your interpreter.
                 options |= OP_NO_RENEGOTIATION
 
@@ -569,7 +610,9 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = ...,
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
-    sharable_ssl_context: dict[str, typing.Any] | None = ...,
+    check_hostname: bool | None = ...,
+    ssl_minimum_version: int | None = ...,
+    ssl_maximum_version: int | None = ...,
 ) -> ssl.SSLSocket: ...
 
 
@@ -591,7 +634,9 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = ...,
     certdata: str | bytes | None = ...,
     keydata: str | bytes | None = ...,
-    sharable_ssl_context: dict[str, typing.Any] | None = ...,
+    check_hostname: bool | None = ...,
+    ssl_minimum_version: int | None = ...,
+    ssl_maximum_version: int | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType: ...
 
 
@@ -612,7 +657,9 @@ def ssl_wrap_socket(
     alpn_protocols: list[str] | None = None,
     certdata: str | bytes | None = None,
     keydata: str | bytes | None = None,
-    sharable_ssl_context: dict[str, typing.Any] | None = None,
+    check_hostname: bool | None = None,
+    ssl_minimum_version: int | None = None,
+    ssl_maximum_version: int | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -644,27 +691,27 @@ def ssl_wrap_socket(
         Specify an in-memory client intermediary key for mTLS.
     """
     context = ssl_context
-    caller_id = _caller_id()
+    cache_disabled: bool = context is not None
 
     with _SSLContextCache.lock(
         keyfile,
-        certfile,
+        certfile if certfile is None else Path(certfile),
         cert_reqs,
         ca_certs,
         ssl_version,
         ciphers,
-        sharable_ssl_context,
-        ca_cert_dir,
+        ca_cert_dir if ca_cert_dir is None else Path(ca_cert_dir),
         alpn_protocols,
         certdata,
         keydata,
         key_password,
         ca_cert_data,
-        caller_id.value,
+        os.getenv("SSLKEYLOGFILE", None),
+        ssl_minimum_version,
+        ssl_maximum_version,
+        check_hostname,
     ):
-        cached_ctx = (
-            _SSLContextCache.get() if sharable_ssl_context is not None else None
-        )
+        cached_ctx = _SSLContextCache.get() if not cache_disabled else None
 
         if cached_ctx is None:
             if context is None:
@@ -674,8 +721,16 @@ def ssl_wrap_socket(
                     ssl_version,
                     cert_reqs,
                     ciphers=ciphers,
-                    caller_id=caller_id,
+                    caller_id=_caller_id(),
+                    ssl_minimum_version=ssl_minimum_version,
+                    ssl_maximum_version=ssl_maximum_version,
                 )
+
+            if cert_reqs is not None:
+                context.verify_mode = cert_reqs  # type: ignore[assignment]
+
+            if check_hostname is not None:
+                context.check_hostname = check_hostname
 
             if ca_certs or ca_cert_dir or ca_cert_data:
                 # SSLContext does not support bytes for cadata[...]
@@ -724,7 +779,7 @@ def ssl_wrap_socket(
             if ciphers:
                 context.set_ciphers(ciphers)
 
-            if sharable_ssl_context is not None:
+            if not cache_disabled:
                 _SSLContextCache.save(context)
         else:
             context = cached_ctx
