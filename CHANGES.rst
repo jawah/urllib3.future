@@ -4,6 +4,7 @@
 - Improved performance when creating TLS connection. We removed a redundant ssl_ctx creation due to our
   caching / reusability for ssl.SSLContext.
 - Fixed forcing disabling SSL renegotiation when explicitly setting ``@SECLEVEL=0`` in the cipher suite.
+- Fixed ssl_ctx caching invalidation when ca_certs and/or ca_cert_dir file/directory changed.
 
 2.13.903 (2024-08-11)
 =====================

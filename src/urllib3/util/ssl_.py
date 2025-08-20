@@ -13,6 +13,7 @@ import warnings
 import enum
 import traceback
 from binascii import unhexlify
+from pathlib import Path
 
 from .._constant import MOZ_INTERMEDIATE_CIPHERS
 from ..contrib.imcc import load_cert_chain as _ctx_load_cert_chain
@@ -60,7 +61,7 @@ def _caller_id() -> _KnownCaller:
 
 
 def _compute_key_ctx_build(
-    *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None,
+    *args: str | bytes | int | Path | list[str] | bool | dict[str, typing.Any] | None,
 ) -> int:
     """We want a dedicated hashing technics to cache ssl ctx, so that they are reusable across the runtime."""
     key: str = ""
@@ -78,6 +79,27 @@ def _compute_key_ctx_build(
         ):
             key += str(hash(arg))
             continue
+        if isinstance(arg, Path):
+            # a file/directory may change at any moment
+            # we must have a clue if the key cache
+            # must be invalidated.
+            key += str(arg)
+            if arg.is_dir():
+                try:
+                    key += str(
+                        max(
+                            [arg.stat().st_mtime]
+                            + [p.stat().st_mtime for p in arg.iterdir()],
+                            default=arg.stat().st_mtime,
+                        )
+                    )
+                except OSError:
+                    pass  # Defensive: race condition possible
+            else:
+                try:
+                    key += str(Path(arg).stat().st_mtime)
+                except OSError:
+                    pass  # Defensive: race condition possible
         if isinstance(arg, (int, bool)):
             key += str(arg)
             continue
@@ -107,7 +129,15 @@ class _CacheableSSLContext:
 
     @contextlib.contextmanager
     def lock(
-        self, *args: str | bytes | int | list[str] | bool | dict[str, typing.Any] | None
+        self,
+        *args: str
+        | bytes
+        | Path
+        | int
+        | list[str]
+        | bool
+        | dict[str, typing.Any]
+        | None,
     ) -> typing.Generator[None]:
         key = _compute_key_ctx_build(*args)
         with self._lock:
@@ -665,12 +695,12 @@ def ssl_wrap_socket(
 
     with _SSLContextCache.lock(
         keyfile,
-        certfile,
+        certfile if certfile is None else Path(certfile),
         cert_reqs,
         ca_certs,
         ssl_version,
         ciphers,
-        ca_cert_dir,
+        ca_cert_dir if ca_cert_dir is None else Path(ca_cert_dir),
         alpn_protocols,
         certdata,
         keydata,

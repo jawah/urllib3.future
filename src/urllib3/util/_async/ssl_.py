@@ -4,6 +4,7 @@ import io
 import os
 import typing
 import warnings
+from pathlib import Path
 
 if typing.TYPE_CHECKING:
     import ssl
@@ -93,12 +94,12 @@ async def ssl_wrap_socket(
 
     with _SSLContextCache.lock(
         keyfile,
-        certfile,
+        certfile if certfile is None else Path(certfile),
         cert_reqs,
         ca_certs,
         ssl_version,
         ciphers,
-        ca_cert_dir,
+        ca_cert_dir if ca_cert_dir is None else Path(ca_cert_dir),
         alpn_protocols,
         certdata,
         keydata,
