@@ -1,4 +1,4 @@
-2.13.904 (2024-08-19)
+2.13.904 (2024-08-20)
 =====================
 
 - Improved performance when creating TLS connection. We removed a redundant ssl_ctx creation due to our
