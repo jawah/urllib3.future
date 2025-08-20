@@ -84,10 +84,10 @@ class TestSSL:
         monkeypatch.setattr(ssl_, "SSLContext", lambda *_, **__: context)
 
         sock = mock.Mock()
-        ssl_.ssl_wrap_socket(sock, ca_certs="/tmp/fake-file")
+        ssl_.ssl_wrap_socket(sock, ca_certs="/tmp/fake-file-1")
 
         context.load_default_certs.assert_not_called()
-        context.load_verify_locations.assert_called_with("/tmp/fake-file", None, None)
+        context.load_verify_locations.assert_called_with("/tmp/fake-file-1", None, None)
 
     def test_wrap_socket_default_loads_default_certs(
         self, monkeypatch: pytest.MonkeyPatch
