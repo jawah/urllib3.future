@@ -334,6 +334,23 @@ class HfaceBackend(BaseBackend):
 
         allow_insecure: bool = False
 
+        if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
+            allow_insecure = True
+
+        if (
+            not allow_insecure
+            and ca_certs is None
+            and ca_cert_dir is None
+            and ca_cert_data is None
+            and ssl_context is None
+        ):
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+            if hasattr(ssl_context, "load_default_certs"):
+                ssl_context.load_default_certs()
+            else:
+                ssl_context = None
+
         if ssl_context:
             cert_use_common_name = (
                 getattr(ssl_context, "hostname_checks_common_name", False) or False
@@ -356,9 +373,6 @@ class HfaceBackend(BaseBackend):
                 and ssl_context.check_hostname is False
             ):
                 assert_hostname = False
-
-        if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
-            allow_insecure = True
 
         self.__custom_tls_settings = QuicTLSConfig(
             insecure=allow_insecure,

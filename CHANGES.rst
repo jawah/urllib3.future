@@ -1,3 +1,10 @@
+2.13.905 (2024-08-23)
+=====================
+
+- Fixed rare edge cases where upgrading or forcing HTTP/3 over QUIC with zero SSL configuration would lead
+  to an error validating the chain of certificate. This would also trigger needlessly a ``load_default_certs``
+  when not needed.
+
 2.13.904 (2024-08-20)
 =====================
 
