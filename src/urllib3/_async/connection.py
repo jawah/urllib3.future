@@ -58,7 +58,6 @@ from ..util._async.ssl_ import ssl_wrap_socket
 from ..util.request import body_to_chunks
 from ..util.ssl_ import assert_fingerprint as _assert_fingerprint
 from ..util.ssl_ import (
-    create_urllib3_context,
     is_capable_for_quic,
     is_ipaddress,
     resolve_cert_reqs,
@@ -790,30 +789,10 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
         sock: AsyncSocket | SSLAsyncSocket
         self.sock = sock = await self._new_conn()
 
-        for_quic_ctx: ssl.SSLContext | None
-
-        # we need to have a usable configuration in case
-        # one decide to jump directly to the QUIC layer
-        # without any CA configured
-        if (
-            self.ca_certs is None
-            and self.ca_cert_dir is None
-            and self.ca_cert_data is None
-            and self.ssl_context is None
-        ):
-            self._upgrade_ctx = create_urllib3_context()
-
-            if hasattr(self._upgrade_ctx, "load_default_certs"):
-                self._upgrade_ctx.load_default_certs()
-
-            for_quic_ctx = self._upgrade_ctx
-        else:
-            for_quic_ctx = self.ssl_context
-
         # the protocol/state-machine may also ship with an external TLS Engine.
         if (
             self._custom_tls(
-                for_quic_ctx,
+                self.ssl_context,
                 self.ca_certs,
                 self.ca_cert_dir,
                 self.ca_cert_data,

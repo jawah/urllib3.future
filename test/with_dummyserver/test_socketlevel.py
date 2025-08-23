@@ -1594,6 +1594,10 @@ class TestSSL(SocketDummyServerTestCase):
         context.load_default_certs = mock.Mock()
         context.options = 0
 
+        from urllib3.util.ssl_ import _SSLContextCache
+
+        _SSLContextCache.clear()
+
         with mock.patch("urllib3.util.ssl_.SSLContext", lambda *_, **__: context):
             self._start_server(socket_handler)
             with HTTPSConnectionPool(self.host, self.port) as pool:
@@ -1649,6 +1653,10 @@ class TestSSL(SocketDummyServerTestCase):
             {"ca_certs": DEFAULT_CA},
             {"ssl_context": context},
         ]:
+            from urllib3.util.ssl_ import _SSLContextCache
+
+            _SSLContextCache.clear()
+
             self._start_server(socket_handler)
 
             with HTTPSConnectionPool(  # type: ignore
