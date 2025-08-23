@@ -10,7 +10,7 @@ import warnings
 from datetime import datetime, timedelta
 from socket import timeout as SocketTimeout
 
-from urllib3.util import ssl_
+from .util import ssl_
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
