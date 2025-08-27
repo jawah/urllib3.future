@@ -767,7 +767,7 @@ class HTTPSConnection(HTTPConnection):
         # the protocol/state-machine may also ship with an external TLS Engine.
         if (
             self._custom_tls(
-                self.ssl_context,
+                self.ssl_context or self._upgrade_ctx,
                 self.ca_certs,
                 self.ca_cert_dir,
                 self.ca_cert_data,
