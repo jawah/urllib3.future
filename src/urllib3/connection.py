@@ -475,10 +475,7 @@ class HTTPConnection(HfaceBackend):
                 if isinstance(value_lower, bytes):
                     value_lower = value_lower.decode()
                     value = value.decode()
-                if "charset" not in value_lower:
-                    value = value.strip("; ")
-                    value = f"{value}; charset=utf-8"
-                else:
+                if "charset" in value_lower:
                     if (
                         "utf-8" not in value_lower
                         and "utf_8" not in value_lower

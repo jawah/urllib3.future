@@ -28,6 +28,9 @@ class TestPostBody(TraefikTestCase):
 
             assert resp.status == 200
             assert "Content-Length" in resp.json()["headers"]
+            assert (
+                resp.json()["headers"]["Content-Type"][0] == "text/plain; charset=utf-8"
+            )
             assert resp.json()["headers"]["Content-Length"][0] == "4"
 
     def test_overrule_unicode_content_length_with_bytes_content_type(
@@ -43,15 +46,13 @@ class TestPostBody(TraefikTestCase):
                 "POST",
                 "/post",
                 body="🚀",
-                headers={"Content-Length": "1", "Content-Type": b"plain/text"},  # type: ignore[dict-item]
+                headers={"Content-Length": "1", "Content-Type": b"text/plain"},  # type: ignore[dict-item]
             )
 
             assert resp.status == 200
             assert "Content-Length" in resp.json()["headers"]
             assert "Content-Type" in resp.json()["headers"]
-            assert (
-                resp.json()["headers"]["Content-Type"][0] == "plain/text; charset=utf-8"
-            )
+            assert resp.json()["headers"]["Content-Type"][0] == "text/plain"
             assert resp.json()["headers"]["Content-Length"][0] == "4"
 
     @pytest.mark.parametrize(
