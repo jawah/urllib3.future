@@ -2703,7 +2703,7 @@ class TestContentFraming(SocketDummyServerTestCase):
 
         sent_bytes = bytes(buffer)
 
-        assert b"Content-Type: application/json; charset=utf-8\r\n" in sent_bytes
+        assert b"Content-Type: application/json\r\n" in sent_bytes
 
     def test_partial_overrule_bytes_content_type(self) -> None:
         buffer = bytearray()
@@ -2740,7 +2740,7 @@ class TestContentFraming(SocketDummyServerTestCase):
 
         sent_bytes = bytes(buffer)
 
-        assert b"Content-Type: application/json; charset=utf-8\r\n" in sent_bytes
+        assert b"Content-Type: application/json\r\n" in sent_bytes
 
     def test_no_overrule_str_content_type(self) -> None:
         buffer = bytearray()

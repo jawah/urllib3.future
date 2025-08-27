@@ -1,3 +1,10 @@
+2.13.906 (2024-08-27)
+=====================
+
+- Fixed charset transparency setter to not enforce ``charset=utf-8`` in Content-Type anymore due to incompatibilities found
+  in widely requested servers that still don't parse HTTP headers appropriately. We saw a 3rd party report that
+  a server rejected a request because it expected Content-Type to be exactly "X" and not "X; charset=utf-8".
+
 2.13.905 (2024-08-23)
 =====================
 
