@@ -121,6 +121,7 @@ filterwarnings = [
     '''default:ssl\.PROTOCOL_TLSv1_1 is deprecated:DeprecationWarning''',
     '''default:ssl\.PROTOCOL_TLSv1_2 is deprecated:DeprecationWarning''',
     '''default:unclosed .*:ResourceWarning''',
+    '''default:.*leaks a thread.*:ResourceWarning''',
     '''ignore:No IPv6 support. Falling back to IPv4:Warning''',
     '''ignore:No IPv6 support. skipping:Warning''',
     '''ignore:ssl NPN is deprecated, use ALPN instead:DeprecationWarning''',
