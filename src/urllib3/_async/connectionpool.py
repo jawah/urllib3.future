@@ -2371,10 +2371,6 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         """
         await super()._validate_conn(conn)
 
-        # Force connect early to allow us to validate the connection.
-        if conn.is_closed:
-            await conn.connect()
-
         if not conn.is_verified and not conn.proxy_is_verified:
             warnings.warn(
                 (
