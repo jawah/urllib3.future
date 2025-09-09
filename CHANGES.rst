@@ -1,3 +1,11 @@
+2.13.907 (2024-09-09)
+=====================
+
+- Fixed unhandled error in HTTP/3 upgrade (TCP+TLS to QUIC) procedure that mainly affect Windows users.
+  If your network silently filter QUIC packets or UDP is unreliable outside of your local network the
+  upgrade procedure could raise an exception instead of silently giving up on QUIC.
+- Fixed the accidental leaking of ``MustRedialException`` error in the consumption of the response (including WS or SEE).
+
 2.13.906 (2024-08-27)
 =====================
 
