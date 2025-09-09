@@ -11,7 +11,13 @@ if typing.TYPE_CHECKING:
     from ....backend._async._base import AsyncDirectStreamAccess
     from ....util._async.traffic_police import AsyncTrafficPolice
 
-from ....exceptions import BaseSSLError, ProtocolError, ReadTimeoutError, SSLError
+from ....exceptions import (
+    BaseSSLError,
+    ProtocolError,
+    ReadTimeoutError,
+    SSLError,
+    MustRedialError,
+)
 
 
 class AsyncExtensionFromHTTP(metaclass=ABCMeta):
@@ -60,7 +66,7 @@ class AsyncExtensionFromHTTP(metaclass=ABCMeta):
                 )
                 raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
 
-            except OSError as e:
+            except (OSError, MustRedialError) as e:
                 # This includes IncompleteRead.
                 raise ProtocolError(f"Connection broken: {e!r}", e) from e
 

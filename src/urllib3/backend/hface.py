@@ -916,6 +916,19 @@ class HfaceBackend(BaseBackend):
                     ):
                         raise e
                     data_in = b""
+                except OSError as e:
+                    # Windows raises OSError target does not listen on given addr:port
+                    # when using UDP sock. We want to translate the OSError into ConnResetError
+                    # so that we can properly trigger the downgrade procedure anyway. (QUIC -> TCP)
+                    if self.sock.type is socket.SOCK_DGRAM and (
+                        event_type is HandshakeCompleted
+                        or (
+                            isinstance(event_type, tuple)
+                            and HandshakeCompleted in event_type
+                        )
+                    ):
+                        raise ConnectionResetError() from e
+                    raise
 
                 reach_socket = True
 

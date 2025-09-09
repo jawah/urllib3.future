@@ -338,6 +338,8 @@ class AsyncSocket:
                     except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
                         self._reader_semaphore.release()
                         raise StandardTimeoutError from e
+                    except OSError as e:  # Defensive: treat any OSError as ConnReset!
+                        raise ConnectionResetError() from e
                 return await self._reader.read(n=size)
             finally:
                 self._reader_semaphore.release()
@@ -354,6 +356,11 @@ class AsyncSocket:
                     raise StandardTimeoutError from e
 
             return await asyncio.get_running_loop().sock_recv(self._sock, size)
+        except OSError as e:
+            # Windows raises OSError target does not listen on given addr:port
+            # when using UDP sock. We want to translate the OSError into ConnResetError
+            # so that we can properly trigger the downgrade procedure anyway. (QUIC -> TCP)
+            raise ConnectionResetError() from e
         finally:
             self._reader_semaphore.release()
 

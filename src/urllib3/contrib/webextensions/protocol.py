@@ -11,7 +11,13 @@ if typing.TYPE_CHECKING:
     from ...response import HTTPResponse
     from ...util.traffic_police import TrafficPolice
 
-from ...exceptions import BaseSSLError, ProtocolError, ReadTimeoutError, SSLError
+from ...exceptions import (
+    BaseSSLError,
+    ProtocolError,
+    ReadTimeoutError,
+    SSLError,
+    MustRedialError,
+)
 
 
 class ExtensionFromHTTP(metaclass=ABCMeta):
@@ -60,7 +66,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
                 )
                 raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
 
-            except OSError as e:
+            except (OSError, MustRedialError) as e:
                 # This includes IncompleteRead.
                 raise ProtocolError(f"Connection broken: {e!r}", e) from e
 
