@@ -19,6 +19,7 @@ from ..exceptions import (
     ReadTimeoutError,
     ResponseNotReady,
     SSLError,
+    MustRedialError,
 )
 from ..response import ContentDecoder, HTTPResponse
 from ..util.response import is_fp_closed, BytesQueueBuffer
@@ -169,7 +170,7 @@ class AsyncHTTPResponse(HTTPResponse):
 
                 raise ReadTimeoutError(self._pool, None, "Read timed out.") from e  # type: ignore[arg-type]
 
-            except OSError as e:
+            except (OSError, MustRedialError) as e:
                 # This includes IncompleteRead.
                 raise ProtocolError(f"Connection broken: {e!r}", e) from e
 
