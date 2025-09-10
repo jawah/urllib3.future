@@ -913,6 +913,27 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if event.error_code == 0 and self._response is not None:
                         self._protocol = None
                         await self.close()
+
+                        # A server may end the transmission without error
+                        # to mark the end of SSE for example. While it's not ideal
+                        # it's not forbidden either.
+                        if stream_id is not None and (
+                            event_type is DataReceived
+                            or (
+                                isinstance(event_type, tuple)
+                                and DataReceived in event_type
+                            )
+                        ):
+                            events.append(
+                                DataReceived(
+                                    stream_id,
+                                    b"",
+                                    end_stream=True,
+                                )
+                            )
+
+                            return events
+
                         raise MustRedialError(
                             f"Remote peer just closed our connection, probably for not answering to unsolicited packet. ({event.message})"
                         )
