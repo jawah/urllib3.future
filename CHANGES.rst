@@ -1,3 +1,9 @@
+2.13.908 (2024-09-10)
+=====================
+
+- Fixed an edge case where a server would interrupt a SSE without error by closing the connection instead of using the FIN bit
+  on the last data chunk.
+
 2.13.907 (2024-09-09)
 =====================
 
