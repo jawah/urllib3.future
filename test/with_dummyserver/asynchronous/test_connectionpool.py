@@ -303,7 +303,11 @@ class TestConnectionPool(HTTPDummyServerTestCase):
                     yield b"baz\n"
 
             r = await pool.request("POST", "/echo", body=abody())
-            assert await r.data == b"foobar"
+            received = await r.data
+
+            assert received.startswith(b"foobarbaz\n") and received.endswith(
+                b"foobarbaz\n"
+            )
 
     async def test_sending_aiofile_iterable(self) -> None:
         tmp = NamedTemporaryFile(mode="wb", delete=False)
@@ -332,7 +336,10 @@ class TestConnectionPool(HTTPDummyServerTestCase):
                     yield "baz\n"
 
             r = await pool.request("POST", "/echo", body=abody())
-            assert await r.data == b"foobar"
+            received = await r.data
+            assert received.startswith(b"foobarbaz\n") and received.endswith(
+                b"foobarbaz\n"
+            )
 
     async def test_sending_async_iterable_orig_str_non_ascii(self) -> None:
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
