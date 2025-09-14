@@ -1,10 +1,16 @@
-2.13.908 (2024-09-10)
+2.13.909 (2025-09-14)
+=====================
+
+- Fixed handling async iterable as body for upload. The logic for chunking the body into socket "blocksize" had a
+  flaw.
+
+2.13.908 (2025-09-10)
 =====================
 
 - Fixed an edge case where a server would interrupt a SSE without error by closing the connection instead of using the FIN bit
   on the last data chunk.
 
-2.13.907 (2024-09-09)
+2.13.907 (2025-09-09)
 =====================
 
 - Fixed unhandled error in HTTP/3 upgrade (TCP+TLS to QUIC) procedure that mainly affect Windows users.
@@ -12,21 +18,21 @@
   upgrade procedure could raise an exception instead of silently giving up on QUIC.
 - Fixed the accidental leaking of ``MustRedialException`` error in the consumption of the response (including WS or SEE).
 
-2.13.906 (2024-08-27)
+2.13.906 (2025-08-27)
 =====================
 
 - Fixed charset transparency setter to not enforce ``charset=utf-8`` in Content-Type anymore due to incompatibilities found
   in widely requested servers that still don't parse HTTP headers appropriately. We saw a 3rd party report that
   a server rejected a request because it expected Content-Type to be exactly "X" and not "X; charset=utf-8".
 
-2.13.905 (2024-08-23)
+2.13.905 (2025-08-23)
 =====================
 
 - Fixed rare edge cases where upgrading or forcing HTTP/3 over QUIC with zero SSL configuration would lead
   to an error validating the chain of certificate. This would also trigger needlessly a ``load_default_certs``
   when not needed.
 
-2.13.904 (2024-08-20)
+2.13.904 (2025-08-20)
 =====================
 
 - Improved performance when creating TLS connection. We removed a redundant ssl_ctx creation due to our
@@ -34,12 +40,12 @@
 - Fixed forcing disabling SSL renegotiation when explicitly setting ``@SECLEVEL=0`` in the cipher suite.
 - Fixed ssl_ctx caching invalidation when ca_certs and/or ca_cert_dir file/directory changed.
 
-2.13.903 (2024-08-11)
+2.13.903 (2025-08-11)
 =====================
 
 - Bumped lower bound of qh3. The ``crlDistributionPoints`` getter is now officially implemented in qh3 >= 1.5.4.
 
-2.13.902 (2024-08-10)
+2.13.902 (2025-08-10)
 =====================
 
 - Fixed long standing missing ``ciphers`` kwargs that can be propagated without a
@@ -47,13 +53,13 @@
 - Fixed a bug the connection was not properly closed (underlying fd) when fingerprint matching failed in async.
 - Fixed missing ``crlDistributionPoints`` not extracted from cert in ``ConnectionInfo`` (QUIC layer only).
 
-2.13.901 (2024-08-02)
+2.13.901 (2025-08-02)
 =====================
 
 - Fixed a memory leakage when downloading large content and specifying a chunk size
   that is lower than your regular incoming chunk size. (https://github.com/jawah/niquests/issues/270)
 
-2.13.900 (2024-06-22)
+2.13.900 (2025-06-22)
 =====================
 
 - Fixed passing ``ca_cert_data`` as ``bytes`` instead of ``str``.
@@ -67,12 +73,12 @@
 - Changed default behavior when passing a SSLContext with no loaded CA in store. Previously we did not called
   ``load_default_certs``. We now check if the store is empty, then we load the default certs.
 
-2.12.922 (2024-05-19)
+2.12.922 (2025-05-19)
 =====================
 
 - Fixed a minor performance regression when reopening or upgrading a HTTPS connection.
 
-2.12.921 (2024-05-17)
+2.12.921 (2025-05-17)
 =====================
 
 - Extended in-memory mTLS loading support to every major platforms.
@@ -81,7 +87,7 @@
 - Fixed a rare edge case where the CAStore would be empty after upgrade to a HTTP/3 connection when no CA bundle are given before.
   This error occurred due to load_default_certs not being applied for the QUIC connection.
 
-2.12.920 (2024-05-04)
+2.12.920 (2025-05-04)
 =====================
 
 - Removed the persisting session ticket after first QUIC handshake. In a effort to be stricter with security and align
@@ -90,7 +96,7 @@
 - Improved our RDATA (DNS) parsing for HTTPS records toward our ECH (Encrypted Client Hello) support coming soon.
 - Fixed a rare HTTP/2 compatibility issue with servers that don't acknowledge our settings (missing ACK frame).
 
-2.12.919 (2024-04-28)
+2.12.919 (2025-04-28)
 =====================
 
 - Fixed http3 has_expired logic to take into account "client side abort without close event". https://github.com/jawah/niquests/issues/240
@@ -98,29 +104,29 @@
 - Fixed PoolManager allocation when maxsize is reached (async). https://github.com/jawah/niquests/issues/247
 - Fixed PoolManager response mapping per pool memory leak.
 
-2.12.918 (2024-04-19)
+2.12.918 (2025-04-19)
 =====================
 
 - Fixed http3 QUIC idle timeout did not force the connection to be dropped by the pool.
 
-2.12.917 (2024-04-10)
+2.12.917 (2025-04-10)
 =====================
 
 - Improve keepalive handling for connections. We now listen for an incoming pong frame after emitting a ping frame.
   Moreover we ensure better strictness around set ``keepalive_delay`` and consider every connection dropped after set delay.
 
-2.12.916 (2024-04-09)
+2.12.916 (2025-04-09)
 =====================
 
 - Set a bigger initial window size for HTTP/2, and HTTP/3 streams. This improves data streaming performances.
 
-2.12.915 (2024-04-02)
+2.12.915 (2025-04-02)
 =====================
 
 - Fixed a performance issue when streaming download by chunk (size) not in phase with incoming packets size.
   See https://github.com/jawah/niquests/issues/236
 
-2.12.914 (2024-03-30)
+2.12.914 (2025-03-30)
 =====================
 
 - Fixed a rare thread safety issue when the size of PoolManager is inferior to the thread count. An edge case permitted
@@ -130,14 +136,14 @@
   confusions for some of our users. No longer will urllib3-future raise ``OverwhelmedTraffic`` in default configuration.
 - Fixed an error when ``happy_eyeballs=True`` is set with more tasks or threads than the pool size.
 
-2.12.913 (2024-03-21)
+2.12.913 (2025-03-21)
 =====================
 
 - Added useful repr for ``PoolManager``, ``ConnectionPool`` and ``TrafficPolice`` (async counterpart included).
 - Fixed ``KeyError`` upon parsing X509 certificate pulled from the QUIC layer when the certificate contain an unexpected
   rfc4514 attribute. (https://github.com/jawah/urllib3.future/issues/217)
 
-2.12.912 (2024-02-07)
+2.12.912 (2025-02-07)
 =====================
 
 - Automatically grab ``qh3`` for HTTP/3 support with PyPy 3.11
@@ -146,19 +152,19 @@
   that are required in the closing procedure. (e.g. using ctx)
 - Fixed an error when libffi does not support in-memory I/O handler. Seen so far with PyPy 3.11 beta.
 
-2.12.911 (2024-02-05)
+2.12.911 (2025-02-05)
 =====================
 
 - Support for IDNA encode via ``qh3`` utils. This allows you to use international domain names without the
   ``idna`` package. Thus avoiding an extra dependency. This is made possible from ``qh3>=1.4``.
 
-2.12.910 (2024-01-28)
+2.12.910 (2025-01-28)
 =====================
 
 - Fixed a rare issue where the closing of the WebSocket extension would lead to a ``RecursionError``.
   This happen when the WebSocket state machine ends in a broken state.
 
-2.12.909 (2024-01-20)
+2.12.909 (2025-01-20)
 =====================
 
 - Fixed compatibility with upstream urllib3 when third party program invoke deprecated ``HTTPResponse.getheader`` or
@@ -170,12 +176,12 @@
 - Fixed the aggressive exception in our native websocket implementation when a server responded positively to an upgrade
   request without the required http header. Instead of ``RuntimeError``, now raises ``ProtocolError``.
 
-2.12.908 (2024-01-13)
+2.12.908 (2025-01-13)
 =====================
 
 - Fixed silencing the deprecation warning coming from python_socks about the "_socket" parameter.
 
-2.12.907 (2024-01-12)
+2.12.907 (2025-01-12)
 =====================
 
 - Fixed our thread safety protection against the experimental freethreaded Python build.
@@ -187,7 +193,7 @@
 - Bumped allowed upper bound for ``python-socks`` to 2.6.1 (we will have to manually increase the upper bound
   each minor/patch version due to our complex integration that invoke private classes/APIs)
 
-2.12.906 (2024-01-03)
+2.12.906 (2025-01-03)
 =====================
 
 - Improved our logic around caching a ssl_context in a concurrent environment.
