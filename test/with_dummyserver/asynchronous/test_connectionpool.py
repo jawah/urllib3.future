@@ -295,24 +295,32 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
 
             async def abody() -> typing.AsyncIterable[bytes]:
-                await asyncio.sleep(0.01)
-                yield b"foo"
-                await asyncio.sleep(0.01)
-                yield b"bar"
+                for _ in range(100):
+                    await asyncio.sleep(0.01)
+                    yield b"foo"
+                    await asyncio.sleep(0.01)
+                    yield b"bar"
+                    yield b"baz\n"
 
             r = await pool.request("POST", "/echo", body=abody())
-            assert await r.data == b"foobar"
+            received = await r.data
+
+            assert received.startswith(b"foobarbaz\n") and received.endswith(
+                b"foobarbaz\n"
+            )
 
     async def test_sending_aiofile_iterable(self) -> None:
         tmp = NamedTemporaryFile(mode="wb", delete=False)
         path_file = tmp.name
-        tmp.write(b"foobar")
+        payload = b"foobarfoobarfoobar\n" * 512 * 3
+        tmp.write(payload)
         tmp.close()
 
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
             async with aiofile.async_open(path_file, "rb") as fp:
                 r = await pool.request("POST", "/echo", body=fp)  # type: ignore[arg-type]
-                assert await r.data == b"foobar"
+                distant_payload = await r.data
+                assert distant_payload == payload
 
         os.remove(path_file)
 
@@ -320,13 +328,18 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
 
             async def abody() -> typing.AsyncIterable[str]:
-                await asyncio.sleep(0.01)
-                yield "foo"
-                await asyncio.sleep(0.01)
-                yield "bar"
+                for _ in range(100):
+                    await asyncio.sleep(0.01)
+                    yield "foo"
+                    await asyncio.sleep(0.01)
+                    yield "bar"
+                    yield "baz\n"
 
             r = await pool.request("POST", "/echo", body=abody())
-            assert await r.data == b"foobar"
+            received = await r.data
+            assert received.startswith(b"foobarbaz\n") and received.endswith(
+                b"foobarbaz\n"
+            )
 
     async def test_sending_async_iterable_orig_str_non_ascii(self) -> None:
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:

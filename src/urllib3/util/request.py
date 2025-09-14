@@ -7,6 +7,7 @@ from enum import Enum
 
 from ..exceptions import UnrewindableBodyError
 from .util import to_bytes
+from .response import BytesQueueBuffer
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Final
@@ -249,19 +250,32 @@ def body_to_chunks(
         assert body is not None and hasattr(body, "__aiter__")
         encode: bool | None = None
 
-        buf = b""
+        if hasattr(body, "read"):
+            while True:
+                block = await body.read(blocksize)
 
-        async for block in body:
-            if encode is None:
-                encode = isinstance(block, str)
-            if len(buf) >= blocksize:
-                yield buf[:blocksize]
-                buf = buf[blocksize:]
-                continue
-            buf += block.encode("utf-8") if encode else block
+                if not block:
+                    break
 
-        if buf:
-            yield buf
+                if encode is None:
+                    encode = isinstance(block, str)
+
+                yield block.encode("utf-8") if encode else block
+        else:
+            # branch for:
+            # async iterable protocol don't support read by blocksize
+            # so we must buffer it. the best we have
+            # at hand is the efficient BytesQueueBuffer.
+            queue = BytesQueueBuffer()
+
+            async for block in body:
+                if encode is None:
+                    encode = isinstance(block, str)
+                queue.put(block.encode("utf-8") if encode else block)
+                yield queue.get(blocksize)
+
+            while queue:
+                yield queue.get(blocksize)
 
     # Bytes or strings become bytes
     if isinstance(body, (str, bytes)):
