@@ -1,0 +1,87 @@
+name: CI for Packaging Check
+
+on:
+  pull_request:
+
+permissions: "read-all"
+
+concurrency:
+  group: ci-packaging-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+
+  mixed-env-a:
+    name: Ensure PTH support
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [ "3.7", "3.13" ]
+        os:
+          - macos-13
+          - windows-2022
+          - ubuntu-22.04
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8"
+
+      - name: "Setup Python"
+        uses: "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        with:
+          python-version: "3.x"
+          cache: "pip"
+
+      - name: "Install legacy urllib3"
+        run: pip install urllib3
+
+      - name: "Install newer package"
+        run: pip install .
+
+      - name: "Test execution"
+        run: python -c "import urllib3; urllib3.PoolManager().urlopen('GET', 'https://httpbingo.org/get')"
+
+      - name: "Assert clean install"
+        run: python -c "import urllib3; assert not hasattr(urllib3, '_base_connection.py'); assert hasattr(urllib3, 'backend')"
+
+
+  mixed-env-bypass:
+    name: Ensure PTH Bypass support
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [ "3.7", "3.13" ]
+        os:
+          - macos-13
+          - windows-2022
+          - ubuntu-22.04
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8"
+
+      - name: "Setup Python"
+        uses: "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        with:
+          python-version: "3.x"
+          cache: "pip"
+
+      - name: "Install newer package"
+        run: pip install .
+        env:
+          URLLIB3_NO_OVERRIDE: "1"
+
+      - name: "Install legacy urllib3"
+        run: pip install urllib3
+
+      - name: "Test execution"
+        run: python -c "import urllib3; urllib3.PoolManager().urlopen('GET', 'https://httpbingo.org/get')"
+
+      - name: "Assert clean install"
+        run: python -c "import urllib3; assert hasattr(urllib3, '_base_connection'); assert not hasattr(urllib3, 'backend')"
