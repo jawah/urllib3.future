@@ -6,7 +6,7 @@ from typing import Any
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-SHOULD_PREVENT_FORK_OVERRIDE = environ.get("URLLIB3_NO_OVERRIDE", None) == "true"
+SHOULD_PREVENT_FORK_OVERRIDE = environ.get("URLLIB3_NO_OVERRIDE", None) is not None
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -21,6 +21,17 @@ class CustomBuildHook(BuildHookInterface):
         #: Aimed at OS package manager, so that they don't override accidentally urllib3.
         if SHOULD_PREVENT_FORK_OVERRIDE and path.exists("./src/urllib3"):
             rmtree("./src/urllib3")
+
+        #: The PTH autorun script is made to ensure consistency / reproducibility
+        #: across many configuration.
+        if (
+            self.target_name != "wheel"
+            or SHOULD_PREVENT_FORK_OVERRIDE
+            or version == "editable"
+        ):
+            return
+
+        build_data["force_include"]["urllib3_future.pth"] = "urllib3_future.pth"
 
     def finalize(
         self, version: str, build_data: dict[str, Any], artifact_path: str
