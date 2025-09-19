@@ -91,6 +91,7 @@ include = [
   "/traefik/certificate.toml",
   "/traefik/patched.Dockerfile",
   "/traefik/haproxy.cfg",
+  "/urllib3_future.pth",
 ]
 
 [tool.hatch.build.targets.wheel]
