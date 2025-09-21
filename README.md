@@ -92,24 +92,13 @@ import urllib3
 
 Or...
 
+```bash
+URLLIB3_NO_OVERRIDE=1 python -m pip install urllib3.future --no-binary urllib3.future
+```
+
 ```python
 import urllib3_future
 ```
-
-Or... upgrade any of your containers with...
-
-```dockerfile
-FROM python:3.12
-
-# ... your installation ...
-RUN pip install .
-# then! (after every other pip call)
-RUN pip install urllib3-future
-# that is it! enjoy a descent http client, as we would expect in late 2025...
-```
-
-Doing `import urllib3_future` is the safest option if you start a project from scratch for you as there is a significant number of projects that
-require `urllib3`.
 
 ## Notes / Frequently Asked Questions
 
@@ -121,7 +110,7 @@ The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node is
 Support for bugs or improvements is served in this repository. We regularly sync this fork
 with the main branch of urllib3/urllib3 against bugfixes and security patches if applicable.
 
-This package is a real drop-in replacement, 100% compatible with its predecessor.
+This package is a real drop-in replacement, 100% compatible with its predecessor. Found anything not compatible? We'll fix it.
 
 - **Why replacing urllib3 when it is maintained?**
 
@@ -185,34 +174,10 @@ Yes! We have some funds coming in regularly to ensure its sustainability.
 
 - **How can I restore urllib3 to the "legacy" version?**
 
-You can easily do so:
-
-```shell
-# remove both
-python -m pip uninstall -y urllib3 urllib3-future
-# reinstate legacy urllib3
-python -m pip install urllib3
-```
-
-OK! How to let them both?
-
-```shell
-# remove both
-python -m pip uninstall -y urllib3 urllib3-future
-# install urllib3-future
-python -m pip install urllib3-future
-# reinstate legacy urllib3
-python -m pip install urllib3
-```
-
-The order is not important.
-
-Super! But how can I do that when installing something that requires somewhere urllib3-future?
-
 Let's say you want to install Niquests and keep BOTH urllib3 and urllib3-future, do:
 
 ```
-URLLIB3_NO_OVERRIDE=true pip install niquests --no-binary urllib3-future
+URLLIB3_NO_OVERRIDE=1 pip install niquests --no-binary urllib3-future
 ```
 
 This applies to every package you wish to install and brings indirectly urllib3-future.
@@ -277,19 +242,33 @@ nox -s lint
 Fellow OS package maintainers, you cannot _just_ build and ship this package to your package registry.
 As it override `urllib3` and due to its current criticality, you'll have to set:
 
-`URLLIB3_NO_OVERRIDE=true python -m build`. Set `URLLIB3_NO_OVERRIDE` variable with "**true**" in it.
+`URLLIB3_NO_OVERRIDE=1 python -m build`. Set `URLLIB3_NO_OVERRIDE` variable with any value.
 
 It will prevent the override.
 
 ## Compatibility with downstream
 
-You should _always_ install the downstream project prior to this fork. It is compatible with any program that use urllib3 directly or indirectly.
+Just adding `urllib3-future` in your dependency is enough.
 
 e.g. I want `requests` to be use this package.
 
 ```shell
 python -m pip install requests
 python -m pip install urllib3.future
+```
+
+or just in your dependencies
+
+```
+[project]
+name = "my-upgraded-project"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "requests",
+    "urllib3-future",
+]
 ```
 
 Nowadays, we suggest using the package [**Niquests**](https://github.com/jawah/niquests) as a drop-in replacement for **Requests**.
