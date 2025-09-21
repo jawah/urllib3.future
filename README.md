@@ -105,7 +105,7 @@ FROM python:3.12
 RUN pip install .
 # then! (after every other pip call)
 RUN pip install urllib3-future
-# that is it! enjoy a descent http client, as we would expect in late 2024...
+# that is it! enjoy a descent http client, as we would expect in late 2025...
 ```
 
 Doing `import urllib3_future` is the safest option if you start a project from scratch for you as there is a significant number of projects that
@@ -115,11 +115,13 @@ require `urllib3`.
 
 - **It's a fork**
 
-⚠️ Installing urllib3.future shadows the actual urllib3 package (_depending on installation order_).
+⚠️ Installing urllib3.future shadows the actual urllib3 package.
 The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node is always greater or equal to 900.
 
 Support for bugs or improvements is served in this repository. We regularly sync this fork
 with the main branch of urllib3/urllib3 against bugfixes and security patches if applicable.
+
+This package is a real drop-in replacement, 100% compatible with its predecessor.
 
 - **Why replacing urllib3 when it is maintained?**
 
@@ -203,7 +205,7 @@ python -m pip install urllib3-future
 python -m pip install urllib3
 ```
 
-The order is (actually) important.
+The order is not important.
 
 Super! But how can I do that when installing something that requires somewhere urllib3-future?
 

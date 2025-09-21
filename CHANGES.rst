@@ -1,3 +1,12 @@
+2.14.900 (2025-09-21)
+=====================
+
+- Fixed the determinism for the presence of this package. ``urllib3-future`` automatically takes precedence over
+  upstream ``urllib3`` no matter the order of installation. This also fix the issue where a package manager would
+  concurrently and blindly install both. Installing your dependencies like ``URLLIB3_NO_OVERRIDE=true pip install niquests --no-binary urllib3-future``
+  will not trigger the post-install procedure (ie. ``urllib3-future`` automatically takes precedence).
+  This will bring higher confidence of reproducibility, especially when the project relies on a ``lock`` file.
+
 2.13.909 (2025-09-14)
 =====================
 

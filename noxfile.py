@@ -434,6 +434,8 @@ def downstream_sphinx(session: nox.Session) -> None:
     session.run("git", "rev-parse", "HEAD", external=True)
     session.install("-U", "pip")  # ensure we can use dependency groups
     session.install(".", "--group", "test", silent=False)
+    # docutils 0.22 break two unit test of sphinx
+    session.install("docutils==0.21")
 
     session.cd(root)
     session.install(".", silent=False)
