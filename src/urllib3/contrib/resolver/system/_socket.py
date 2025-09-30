@@ -54,7 +54,8 @@ class SystemResolver(BaseResolver):
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
-        return socket.getaddrinfo(
+        # we only support IPv4/IPv6 socket here, so tuple[int, bytes] should not reach us.
+        return socket.getaddrinfo(  # type: ignore[return-value]
             host=host,
             port=port,
             family=family,

@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from secrets import token_bytes
-from typing import Iterator
+from typing import Iterator, TYPE_CHECKING
 
 import jh2.config  # type: ignore
 import jh2.connection  # type: ignore
@@ -40,6 +40,9 @@ from ...events import (
     StreamResetSent,
 )
 from .._protocols import HTTP2Protocol
+
+if TYPE_CHECKING:
+    pass
 
 
 class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
@@ -296,7 +299,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
-    ) -> bool | None:
+    ) -> bool:
         flow_remaining_bytes: int = self._connection.local_flow_control_window(
             stream_id
         )

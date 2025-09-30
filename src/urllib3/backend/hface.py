@@ -19,9 +19,9 @@ except (ImportError, AttributeError):
 
 
 try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    from _ssl import Certificate  # type: ignore[import-not-found]
+    from _ssl import Certificate
 except (ImportError, AttributeError):
-    Certificate = None
+    Certificate = None  # type: ignore[misc,assignment]
 
 from .._collections import HTTPHeaderDict
 from .._constant import (
@@ -327,8 +327,8 @@ class HfaceBackend(BaseBackend):
         cert_reqs: int | str | None = None,
     ) -> bool:
         """Meant to support TLS over QUIC meanwhile cpython does not ship with its native implementation."""
-        if self._svn != HttpVersion.h3:
-            return NotImplemented
+        if self._svn is not HttpVersion.h3:
+            return False
 
         cert_use_common_name = False
 
@@ -558,7 +558,7 @@ class HfaceBackend(BaseBackend):
                         self.conn_info.issuer_certificate_der = (
                             ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
                         )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
+                        self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             elif hasattr(self.sock, "getpeercert"):
                 self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
@@ -592,7 +592,7 @@ class HfaceBackend(BaseBackend):
                         self.conn_info.issuer_certificate_der = (
                             ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
                         )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
+                        self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]

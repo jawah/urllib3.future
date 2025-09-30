@@ -450,7 +450,11 @@ class HTTPResponse(io.IOBase):
     @retries.setter
     def retries(self, retries: Retry | None) -> None:
         # Override the request_url if retries has a redirect location.
-        if retries is not None and retries.history:
+        if (
+            retries is not None
+            and retries.history
+            and retries.history[-1].redirect_location is not None
+        ):
             self.url = retries.history[-1].redirect_location
         self._retries = retries
 

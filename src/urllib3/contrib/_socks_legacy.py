@@ -41,7 +41,7 @@ with the proxy:
 from __future__ import annotations
 
 try:
-    import socks  # type: ignore[import-not-found]
+    import socks
 except ImportError:
     import warnings
 
@@ -113,13 +113,13 @@ class SOCKSConnection(HTTPConnection):
         try:
             conn = socks.create_connection(
                 (self.host, self.port),
-                proxy_type=self._socks_options["socks_version"],
+                proxy_type=self._socks_options["socks_version"],  # type: ignore[arg-type]
                 proxy_addr=self._socks_options["proxy_host"],
-                proxy_port=self._socks_options["proxy_port"],
+                proxy_port=self._socks_options["proxy_port"],  # type: ignore[arg-type]
                 proxy_username=self._socks_options["username"],
                 proxy_password=self._socks_options["password"],
                 proxy_rdns=self._socks_options["rdns"],
-                timeout=self.timeout,
+                timeout=self.timeout,  # type: ignore[arg-type]
                 **extra_kw,
             )
 

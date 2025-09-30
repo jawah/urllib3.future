@@ -353,7 +353,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
-    ) -> bool | None:
+    ) -> bool:
         return self._data_in_flight
 
     @typing.overload

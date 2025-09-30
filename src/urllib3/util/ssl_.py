@@ -255,7 +255,7 @@ try:  # Do we have ssl at all?
     try:
         from ssl import OP_NO_RENEGOTIATION
     except ImportError:
-        OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
+        OP_NO_RENEGOTIATION = None  # type: ignore[misc, assignment]
 
     PROTOCOL_SSLv23 = PROTOCOL_TLS
 
@@ -297,13 +297,13 @@ try:  # Do we have ssl at all?
             IS_FIPS = 32 not in HASHFUNC_MAP
 
 except ImportError:
-    OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]
-    OP_NO_TICKET = 0x4000  # type: ignore[assignment]
-    OP_NO_SSLv2 = 0x1000000  # type: ignore[assignment]
-    OP_NO_SSLv3 = 0x2000000  # type: ignore[assignment]
-    PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
-    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS
-    OP_NO_RENEGOTIATION = None  # type: ignore[assignment]
+    OP_NO_COMPRESSION = 0x20000  # type: ignore[misc,assignment]
+    OP_NO_TICKET = 0x4000  # type: ignore[misc,assignment]
+    OP_NO_SSLv2 = 0x1000000  # type: ignore[misc,assignment]
+    OP_NO_SSLv3 = 0x2000000  # type: ignore[misc,assignment]
+    PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[misc,assignment]
+    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS  # type: ignore[misc]
+    OP_NO_RENEGOTIATION = None  # type: ignore[misc,assignment]
     SUPPORT_MIN_MAX_TLS_VERSION = False
     IS_FIPS = False
 

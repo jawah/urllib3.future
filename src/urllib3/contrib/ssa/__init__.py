@@ -60,11 +60,18 @@ class AsyncSocket:
     def __init__(
         self,
         family: socket.AddressFamily = socket.AF_INET,
-        type: socket.SocketKind = socket.SOCK_STREAM,
+        type: socket.SocketKind | typing.Literal[-1] = socket.SOCK_STREAM,
         proto: int = -1,
         fileno: int | None = None,
     ) -> None:
         self.family: socket.AddressFamily = family
+
+        if type == -1:
+            type = socket.SocketKind.SOCK_STREAM
+
+        if not isinstance(type, socket.SocketKind):
+            type = socket.SocketKind(type)
+
         self.type: socket.SocketKind = type
         self.proto: int = proto
         self._fileno: int | None = fileno
@@ -264,7 +271,7 @@ class AsyncSocket:
         else:
             await asyncio.get_running_loop().sock_connect(self._sock, addr)
 
-        if self.type == socket.SOCK_STREAM or self.type == -1:
+        if self.type is socket.SOCK_STREAM:
             self._reader, self._writer = await asyncio.open_connection(sock=self._sock)
             # will become an asyncio.TransportSocket
             self._sock = self._writer.get_extra_info("socket", self._sock)

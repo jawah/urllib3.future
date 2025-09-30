@@ -59,7 +59,7 @@ except ImportError:
     from ..exceptions import DependencyWarning
 
     try:
-        import socks  # type: ignore  # noqa
+        import socks  # noqa
     except ImportError:
         warnings.warn(
             (

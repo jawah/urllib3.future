@@ -443,7 +443,7 @@ class HTTPSResolver(AsyncBaseResolver):
                             remote_preemptive_quic_rr = True
                         else:
                             rr_decode: dict[str, str] = dict(
-                                tuple(_.lower().split("=", 1))
+                                tuple(_.lower().split("=", 1))  # type: ignore[misc]
                                 for _ in rr.split(" ")
                                 if "=" in _
                             )

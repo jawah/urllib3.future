@@ -107,7 +107,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
     @property
     def bag_only_idle(self) -> bool:
         return all(
-            traffic_state_of(_) is TrafficState.IDLE for _ in self._registry.values()
+            traffic_state_of(_) is TrafficState.IDLE  # type: ignore[arg-type]
+            for _ in self._registry.values()
         )
 
     @property
@@ -116,7 +117,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if not self._registry:
             return False
         return all(
-            traffic_state_of(_) is TrafficState.SATURATED
+            traffic_state_of(_) is TrafficState.SATURATED  # type: ignore[arg-type]
             for _ in self._registry.values()
         )
 
