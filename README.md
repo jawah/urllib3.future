@@ -174,13 +174,78 @@ Yes! We have some funds coming in regularly to ensure its sustainability.
 
 - **How can I restore urllib3 to the "legacy" version?**
 
+You still have a choice on your best discretion.
 Let's say you want to install Niquests and keep BOTH urllib3 and urllib3-future, do:
 
-```
+<details>
+  <summary>👆 <b>pip</b></summary>
+
+```shell
 URLLIB3_NO_OVERRIDE=1 pip install niquests --no-binary urllib3-future
 ```
 
+</details>
+
+<details>
+  <summary>👆 <b>Poetry</b></summary>
+
+```shell
+export URLLIB3_NO_OVERRIDE=1
+poetry config --local installer.no-binary urllib3-future
+poetry add niquests
+```
+
+or in a one-liner shortcut:
+
+```shell
+URLLIB3_NO_OVERRIDE=1 POETRY_INSTALLER_NO_BINARY=urllib3-future poetry add niquests
+```
+
+</details>
+
+<details>
+  <summary>👆 <b>PDM</b></summary>
+
+```shell
+URLLIB3_NO_OVERRIDE=1 PDM_NO_BINARY=urllib3-future pdm add niquests
+```
+
+or with a persistent configuration (via pyproject.toml):
+
+```toml
+[tool.pdm.resolution]
+no-binary = "urllib3-future"
+```
+
+then:
+
+```shell
+export URLLIB3_NO_OVERRIDE=1
+pdm add niquests
+```
+</details>
+
+<details>
+  <summary>👆 <b>UV</b></summary>
+
+Add to your pyproject.toml:
+
+```toml
+[tool.uv]
+no-binary-package = ["urllib3-future"]
+```
+
+then:
+
+```shell
+export URLLIB3_NO_OVERRIDE=1
+uv add niquests  # sync / pip / ...
+```
+</details>
+
 This applies to every package you wish to install and brings indirectly urllib3-future.
+This enforces strict separation between urllib3 and urllib3-future.
+You will lose the perfect in-place backward compatibility without further deep compatibility hacks.
 
 - **Can you guarantee us that everything will go smooth?**
 
