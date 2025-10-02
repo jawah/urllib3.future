@@ -711,6 +711,7 @@ class HfaceBackend(BaseBackend):
             self.conn_info.certificate_der
             and hasattr(self, "_connect_timings")
             and not self.conn_info.tls_handshake_latency
+            and self._connect_timings
         ):
             self.conn_info.tls_handshake_latency = (
                 datetime.now(tz=timezone.utc) - self._connect_timings[-1]
