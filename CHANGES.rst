@@ -1,3 +1,9 @@
+2.14.901 (2025-10-02)
+=====================
+
+- Fixed support for ``PySocks`` socks legacy proxy connector (#271).
+- Removed warning yielded in ``contrib.socks`` inviting to use python-socks instead of PySocks.
+
 2.14.900 (2025-09-21)
 =====================
 

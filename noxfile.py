@@ -284,6 +284,44 @@ def test_ssl_large_resources(session: nox.Session) -> None:
     )
 
 
+@nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"])
+def test_pysocks(session: nox.Session) -> None:
+    # Install deps and the package itself.
+    session.install("-U", "pip", "setuptools", silent=False)
+    session.install("-r", "dev-requirements.txt", silent=False)
+    session.install(".", silent=False)
+    session.run("pip", "uninstall", "-y", "python-socks")
+    session.install("pysocks")
+
+    # Show the pip version.
+    session.run("pip", "--version")
+    # Print the Python version and bytesize.
+    session.run("python", "--version")
+    session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
+    session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
+
+    session.run(
+        "python",
+        "-m",
+        "coverage",
+        "run",
+        "--parallel-mode",
+        "-m",
+        "pytest",
+        "-v",
+        "-ra",
+        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
+        "--tb=native",
+        "--strict-config",
+        "--strict-markers",
+        "test/contrib/test_socks.py",
+        env={
+            "PYTHONWARNINGS": "always::DeprecationWarning",
+            "COVERAGE_CORE": "sysmon",
+        },
+    )
+
+
 @nox.session(python=["3"])
 def test_brotlipy(session: nox.Session) -> None:
     """Check that if 'brotlipy' is installed instead of 'brotli' or

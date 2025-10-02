@@ -116,6 +116,16 @@ jobs:
             os: ubuntu-22.04
             experimental: false
             nox-session: test_brotlipy
+          - traefik-server: false
+            nox-session: test_pysocks-3.9
+            python-version: "3.9"
+            os: ubuntu-22.04
+            experimental: false
+          - traefik-server: false
+            nox-session: test_pysocks-3.10
+            python-version: "3.10"
+            os: ubuntu-22.04
+            experimental: false
         exclude:
           # Ubuntu 22.04 comes with OpenSSL 3.0, so only CPython 3.9+ is compatible with it
           # https://github.com/python/cpython/issues/83001

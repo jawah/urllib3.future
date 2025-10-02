@@ -27,6 +27,14 @@ except ImportError:
     HAS_SSL = False
 
 
+try:
+    import python_socks  # noqa: F401
+
+    HAS_LEGACY = False
+except ImportError:
+    HAS_LEGACY = True
+
+
 SOCKS_NEGOTIATION_NONE = b"\x00"
 SOCKS_NEGOTIATION_PASSWORD = b"\x02"
 
@@ -106,7 +114,7 @@ def _set_up_fake_getaddrinfo(monkeypatch: pytest.MonkeyPatch) -> None:
     # can't affect PySocks retries via its API. Instead, we monkeypatch PySocks so that
     # it only sees a single address, which effectively disables retries.
     def fake_getaddrinfo(
-        host: str, port: int, family: int, type: int, proto: int, flags: int
+        host: str, port: int, family: int, type: int, proto: int = 0, flags: int = 0
     ) -> list[
         tuple[
             socket.AddressFamily,
@@ -362,7 +370,11 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
                 )
             event.set()
 
-    @patch("urllib3.contrib.resolver.BaseResolver.create_connection")
+    @patch(
+        "urllib3.contrib.resolver.BaseResolver.create_connection"
+        if not HAS_LEGACY
+        else "socks.create_connection"
+    )
     def test_socket_timeout(self, create_connection: Mock) -> None:
         create_connection.side_effect = SocketTimeout()
         proxy_url = f"socks5h://{self.host}:{self.port}"
@@ -501,7 +513,8 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
             proxy_url, username="user", password="badpass"
         ) as pm:
             with pytest.raises(
-                NewConnectionError, match="Username and password authentication failure"
+                NewConnectionError,
+                match="(Username and password authentication failure)|(SOCKS5 authentication failed)",
             ):
                 pm.request("GET", "http://example.com", retries=False)
 
