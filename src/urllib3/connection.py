@@ -302,8 +302,7 @@ class HTTPConnection(HfaceBackend):
         # consider the conn dead after our keep alive delay passed.
         if (
             self._keepalive_delay is not None
-            and self.connected_at is not None
-            and time.monotonic() - self.connected_at >= self._keepalive_delay
+            and time.monotonic() - self._last_used_at >= self._keepalive_delay
         ):
             return False
         return self._protocol is not None and self._protocol.has_expired() is False
