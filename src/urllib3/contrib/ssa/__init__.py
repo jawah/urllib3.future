@@ -219,8 +219,18 @@ class AsyncSocket:
     def setsockopt(self, __level: int, __optname: int, __value: int | bytes) -> None:
         self._sock.setsockopt(__level, __optname, __value)
 
-    def getsockopt(self, __level: int, __optname: int) -> int:
-        return self._sock.getsockopt(__level, __optname)
+    @typing.overload
+    def getsockopt(self, __level: int, __optname: int) -> int: ...
+
+    @typing.overload
+    def getsockopt(self, __level: int, __optname: int, buflen: int) -> bytes: ...
+
+    def getsockopt(
+        self, __level: int, __optname: int, buflen: int | None = None
+    ) -> int | bytes:
+        if buflen is None:
+            return self._sock.getsockopt(__level, __optname)
+        return self._sock.getsockopt(__level, __optname, buflen)
 
     def should_connect(self) -> bool:
         return self._connect_called is False
