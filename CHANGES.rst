@@ -1,3 +1,10 @@
+2.14.902 (2025-10-05)
+=====================
+
+- Fixed rare edge case where a server would close the socket after executing a request, thus misleading our implementation to retry. (#280)
+- Changed the keepalive connection dismiss to be based from the last used timepoint instead of the initial connection timepoint. (#281)
+- Changed ``qh3`` dependency definition constraint to include the RISCV64 platform by default.
+
 2.14.901 (2025-10-02)
 =====================
 
