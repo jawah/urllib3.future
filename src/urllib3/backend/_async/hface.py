@@ -939,9 +939,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         )
 
                     # we can receive a zero-length payload, that usually means the remote closed the socket.
-                    # but we should be able to redial. we only attempt this when we've just sent a request.
-                    # this cond. requires to have one successful response out of this conn, that demonstrate
-                    # the connection is usable. (avoid loop in retries)
+                    # while we could retry this, we should not as some servers can have tricky edge cases
+                    # where a request could actually be executed without you knowing so.
+                    # see https://github.com/jawah/urllib3.future/issues/280 for the rationale behind this change.
                     if (
                         reach_socket is True
                         and data_in == b""
@@ -957,8 +957,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     ):
                         self._protocol = None
                         await self.close()
-                        raise MustRedialError(
-                            "Server unexpectedly closed the connection in-flight (connection dropped)"
+                        raise ProtocolError(
+                            "Remote end closed connection without response"
                         )
 
                     if (
