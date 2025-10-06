@@ -10,8 +10,8 @@ if typing.TYPE_CHECKING:
     from ..util.ssltransport import SSLTransport
 
 IS_NT = sys.platform in {"win32", "cygwin", "msys"}
-IS_DARWIN = not IS_NT and sys.platform == "darwin"
-IS_LINUX_OR_BSD = not IS_DARWIN and (sys.platform == "linux" or "bsd" in sys.platform)
+IS_DARWIN_OR_BSD = not IS_NT and (sys.platform == "darwin" or "bsd" in sys.platform)
+IS_LINUX = not IS_DARWIN_OR_BSD and sys.platform == "linux"
 
 # Of course, Windows don't have any nice shortcut
 # through getsockopt, why make it simple when a
@@ -90,18 +90,33 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     if sock.type is socket.SOCK_DGRAM:
         return True
 
-    if IS_DARWIN:
-        TCP_CONNECTION_INFO = getattr(socket, "TCP_CONNECTION_INFO", 0x106)
+    if IS_DARWIN_OR_BSD:
+        if sys.platform == "darwin":
+            TCP_CONNECTION_INFO = getattr(socket, "TCP_CONNECTION_INFO", 0x106)
+        else:
+            TCP_CONNECTION_INFO = getattr(socket, "TCP_INFO", 11)
 
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_CONNECTION_INFO, 1024)
         except OSError:
             return True
 
-        state: int = struct.unpack("I", info[4:8])[0]
+        state: int = struct.unpack("I", info[0:1])[0]
 
+        # macOS/BSD TCP states:
+        # TCPS_CLOSED      = 0
+        # TCPS_LISTEN      = 1
+        # TCPS_SYN_SENT    = 2
+        # TCPS_SYN_RCVD    = 3
+        # TCPS_ESTABLISHED = 4
+        # TCPS_CLOSE_WAIT  = 5
+        # TCPS_FIN_WAIT_1  = 6
+        # TCPS_CLOSING     = 7
+        # TCPS_LAST_ACK    = 8
+        # TCPS_FIN_WAIT_2  = 9
+        # TCPS_TIME_WAIT   = 10
         return state == 4
-    elif IS_LINUX_OR_BSD:
+    elif IS_LINUX:
         TCP_INFO = getattr(socket, "TCP_INFO", 11)
 
         try:
@@ -111,6 +126,20 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
 
         state = struct.unpack("B", info[0:1])[0]
 
+        # linux header
+        # enum {
+        #     TCP_ESTABLISHED = 1,
+        #     TCP_SYN_SENT    = 2,
+        #     TCP_SYN_RECV    = 3,
+        #     TCP_FIN_WAIT1   = 4,
+        #     TCP_FIN_WAIT2   = 5,
+        #     TCP_TIME_WAIT   = 6,
+        #     TCP_CLOSE       = 7,
+        #     TCP_CLOSE_WAIT  = 8,
+        #     TCP_LAST_ACK    = 9,
+        #     TCP_LISTEN      = 10,
+        #     TCP_CLOSING     = 11
+        # };
         return state == 1
     elif IS_NT:
         if WSAIoctl_Fn is None:
