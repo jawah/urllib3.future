@@ -1,8 +1,7 @@
-2.14.902 (2025-10-05)
+2.14.902 (2025-10-06)
 =====================
 
 - Fixed rare edge case where a server would close the socket after executing a request, thus misleading our implementation to retry. (#280)
-- Changed the keepalive connection dismiss to be based from the last used timepoint instead of the initial connection timepoint. (#281)
 - Changed ``qh3`` dependency definition constraint to include the RISCV64 platform by default.
 - Added preemptive detection of closed socket when in TCP mode for most OSes. This avoid to send a request in a pending close socket. (#280) (#281)
 
