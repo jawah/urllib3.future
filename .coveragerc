@@ -15,7 +15,6 @@ omit =
     src/urllib3/contrib/pyopenssl.py
     src/urllib3/contrib/emscripten/*
     src/urllib3/http2/*
-    src/urllib3/contrib/_socks_legacy.py
 
 exclude_lines =
     except ModuleNotFoundError:

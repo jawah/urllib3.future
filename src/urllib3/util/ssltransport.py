@@ -77,6 +77,10 @@ class SSLTransport:
     def fileno(self) -> int:
         return self.socket.fileno()
 
+    @property
+    def type(self) -> socket.SocketKind:
+        return self.socket.type
+
     def read(self, len: int = 1024, buffer: typing.Any | None = None) -> int | bytes:
         return self._wrap_ssl_read(len, buffer)
 
@@ -156,6 +160,19 @@ class SSLTransport:
 
     def gettimeout(self) -> float | None:
         return self.socket.gettimeout()
+
+    @typing.overload
+    def getsockopt(self, __level: int, __optname: int) -> int: ...
+
+    @typing.overload
+    def getsockopt(self, __level: int, __optname: int, buflen: int) -> bytes: ...
+
+    def getsockopt(
+        self, __level: int, __optname: int, buflen: int | None = None
+    ) -> int | bytes:
+        if buflen is None:
+            return self.socket.getsockopt(__level, __optname)
+        return self.socket.getsockopt(__level, __optname, buflen)
 
     def _decref_socketios(self) -> None:
         self.socket._decref_socketios()  # type: ignore[attr-defined]

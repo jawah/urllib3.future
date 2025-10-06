@@ -65,6 +65,7 @@ from ..util.ssl_ import (
     HAS_NEVER_CHECK_COMMON_NAME,
 )
 from ..util.url import Url
+from ..util.socket_state import is_established
 
 # Not a no-op, we're adding this to the namespace so it can be imported.
 ConnectionError = ConnectionError
@@ -285,8 +286,13 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
     def is_connected(self) -> bool:
         if self.sock is None:
             return False
+
+        if self.sock.fileno() == -1 or self._protocol is None:
+            return False
+
         if self._promises or self._pending_responses:
             return True
+
         # consider the conn dead after our keep alive delay passed.
         if (
             self._keepalive_delay is not None
@@ -294,7 +300,11 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             and time.monotonic() - self.connected_at >= self._keepalive_delay
         ):
             return False
-        return self._protocol is not None and self._protocol.has_expired() is False
+
+        if self._protocol.has_expired():
+            return False
+
+        return is_established(self.sock)
 
     @property
     def has_connected_to_proxy(self) -> bool:
