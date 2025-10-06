@@ -101,7 +101,7 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
         except OSError:
             return True
 
-        state: int = struct.unpack("I", info[0:1])[0]
+        state: int = struct.unpack("B", info[0:1])[0]
 
         # macOS/BSD TCP states:
         # TCPS_CLOSED      = 0
