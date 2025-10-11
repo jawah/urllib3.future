@@ -20,6 +20,8 @@ if typing.TYPE_CHECKING:
     ]
     ManageableTraffic: typing.TypeAlias = typing.Union[HTTPConnection, ConnectionPool]
 
+    from ._async.traffic_police import ManageableTraffic as AsyncManageableTraffic
+
     T = typing.TypeVar("T", bound=ManageableTraffic)
 else:
     T = typing.TypeVar("T")
@@ -57,7 +59,9 @@ class UnavailableTraffic(TrafficPoliceFine, queue.Empty): ...
 class AtomicTraffic(TrafficPoliceFine, queue.Empty): ...
 
 
-def traffic_state_of(manageable_traffic: ManageableTraffic) -> TrafficState:
+def traffic_state_of(
+    manageable_traffic: ManageableTraffic | AsyncManageableTraffic,
+) -> TrafficState:
     if getattr(manageable_traffic, "is_saturated", False):
         return TrafficState.SATURATED
     else:

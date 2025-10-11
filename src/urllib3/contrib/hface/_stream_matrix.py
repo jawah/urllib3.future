@@ -32,11 +32,11 @@ class StreamMatrix:
     def streams(self) -> list[int]:
         if self._streams is not None:
             return self._streams
-        self._streams = sorted(i for i in self._matrix.keys() if isinstance(i, int))
+        self._streams = sorted(i for i in self._matrix.keys() if i is not None)
         return self._streams
 
     def append(self, event: Event) -> None:
-        matrix_idx = None if not hasattr(event, "stream_id") else event.stream_id
+        matrix_idx = getattr(event, "stream_id", None)
 
         event._id = self._event_cursor_id
         self._event_cursor_id += 1
@@ -53,7 +53,7 @@ class StreamMatrix:
         triaged_events: dict[int | None, list[Event]] = {}
 
         for event in events:
-            matrix_idx = None if not hasattr(event, "stream_id") else event.stream_id
+            matrix_idx = getattr(event, "stream_id", None)
 
             event._id = self._event_cursor_id
 
@@ -74,7 +74,7 @@ class StreamMatrix:
         self._streams = None
 
     def appendleft(self, event: Event) -> None:
-        matrix_idx = None if not hasattr(event, "stream_id") else event.stream_id
+        matrix_idx = getattr(event, "stream_id", None)
         event._id = self._event_cursor_id
         self._event_cursor_id += 1
 
