@@ -162,7 +162,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if len(self._registry) < self.maxsize:
             return
 
-        if any(traffic_state_of(c) is not TrafficState.SATURATED for c in self._container.values()):
+        if any(
+            traffic_state_of(c) is not TrafficState.SATURATED
+            for c in self._container.values()
+        ):
             return
 
         async with self._any_available:
@@ -676,9 +679,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             before = asyncio.get_running_loop().time()
 
-            await asyncio.sleep(
-                0.001
-            )
+            await asyncio.sleep(0.001)
 
             if timeout is not None:
                 wait_clock += asyncio.get_running_loop().time() - before
@@ -715,9 +716,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             before = asyncio.get_running_loop().time()
 
-            await asyncio.sleep(
-                0.001
-            )
+            await asyncio.sleep(0.001)
 
             if timeout is not None:
                 wait_clock += asyncio.get_running_loop().time() - before
