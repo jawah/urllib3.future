@@ -1,3 +1,9 @@
+2.14.903 (2025-10-11)
+=====================
+
+- Fixed an async performance issue under high task concurrency pressure. The best-effort multiplexing strategy
+  has been significantly improved. Expect better performance in environments with many concurrent tasks.
+
 2.14.902 (2025-10-06)
 =====================
 
