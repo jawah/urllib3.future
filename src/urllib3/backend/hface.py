@@ -1517,6 +1517,11 @@ class HfaceBackend(BaseBackend):
         ):
             raise ResponseNotReady()  # Defensive: Comply with http.client behavior.
 
+        if not self.is_multiplexed:
+            stream_id = self._stream_id
+        else:
+            stream_id = promise.stream_id if promise else None
+
         # Usually, will be a single event in array. We should be able to handle the case >1 too, but we actually don't.
         head_event: HeadersReceived | EarlyHeadersReceived = self.__exchange_until(  # type: ignore[assignment]
             (
@@ -1529,7 +1534,7 @@ class HfaceBackend(BaseBackend):
                 EarlyHeadersReceived,
             ),
             respect_end_stream_signal=False,  # Stop as soon as we get either (collectable) event.
-            stream_id=promise.stream_id if promise else None,
+            stream_id=stream_id,
         ).pop()
 
         # we want to have a view on last conn was used

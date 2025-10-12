@@ -13,14 +13,12 @@ class StreamMatrix:
         "_matrix",
         "_count",
         "_event_cursor_id",
-        "_streams",
     )
 
     def __init__(self) -> None:
         self._matrix: dict[int | None, deque[Event]] = {}
         self._count: int = 0
         self._event_cursor_id: int = 0
-        self._streams: list[int] | None = []
 
     def __len__(self) -> int:
         return self._count
@@ -30,10 +28,7 @@ class StreamMatrix:
 
     @property
     def streams(self) -> list[int]:
-        if self._streams is not None:
-            return self._streams
-        self._streams = sorted(i for i in self._matrix.keys() if i is not None)
-        return self._streams
+        return sorted(i for i in self._matrix.keys() if i is not None)
 
     def append(self, event: Event) -> None:
         matrix_idx = getattr(event, "stream_id", None)
@@ -42,7 +37,6 @@ class StreamMatrix:
         self._event_cursor_id += 1
 
         if matrix_idx not in self._matrix:
-            self._streams = None
             self._matrix[matrix_idx] = deque()
 
         self._matrix[matrix_idx].append(event)
@@ -71,15 +65,12 @@ class StreamMatrix:
 
             self._matrix[k].extend(v)
 
-        self._streams = None
-
     def appendleft(self, event: Event) -> None:
         matrix_idx = getattr(event, "stream_id", None)
         event._id = self._event_cursor_id
         self._event_cursor_id += 1
 
         if matrix_idx not in self._matrix:
-            self._streams = None
             self._matrix[matrix_idx] = deque()
 
         self._matrix[matrix_idx].appendleft(event)
@@ -91,9 +82,17 @@ class StreamMatrix:
             return None
 
         have_global_event: bool = None in self._matrix and bool(self._matrix[None])
+        any_stream_event: bool = (
+            bool(self._matrix) if not have_global_event else len(self._matrix) > 1
+        )
 
-        if stream_id is None and self.streams and self.has(self.streams[0]):
-            stream_id = self.streams[0]
+        if stream_id is None and any_stream_event:
+            matrix_dict_iter = self._matrix.__iter__()
+
+            stream_id = next(matrix_dict_iter)
+
+            if stream_id is None:
+                stream_id = next(matrix_dict_iter)
 
         if (
             stream_id is not None
@@ -115,7 +114,6 @@ class StreamMatrix:
 
             if stream_id is not None and not self._matrix[stream_id]:
                 del self._matrix[stream_id]
-                self._streams = None
 
         return ev
 

@@ -1449,6 +1449,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         headers = HTTPHeaderDict()
         status: int | None = None
 
+        if not self.is_multiplexed:
+            stream_id = self._stream_id
+        else:
+            stream_id = promise.stream_id if promise else None
+
         head_event: HeadersReceived | EarlyHeadersReceived = (
             await self.__exchange_until(  # type: ignore[assignment]
                 (
@@ -1461,7 +1466,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     EarlyHeadersReceived,
                 ),
                 respect_end_stream_signal=False,
-                stream_id=promise.stream_id if promise else None,
+                stream_id=stream_id,
             )
         ).pop()
 

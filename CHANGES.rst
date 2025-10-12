@@ -1,3 +1,8 @@
+2.14.904 (2025-10-12)
+=====================
+
+- Fixed a small performance issue with a non-multiplexed connection (in both sync and async) under concurrent loads.
+
 2.14.903 (2025-10-11)
 =====================
 
