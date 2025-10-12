@@ -72,6 +72,9 @@ class SyncEntrantCondition(asyncio.Condition):
 
         return False
 
+    def anyone_waiting(self) -> bool:
+        return bool(self._waiters)
+
 
 class AsyncTrafficPolice(typing.Generic[T]):
     """Task-safe extended-Queue implementation.
@@ -112,7 +115,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self.parent: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
 
+        # The bellow Condition is for: "A conn_or_pool is in a ready state (ie not saturated)"
         self._any_available: SyncEntrantCondition = SyncEntrantCondition()
+
+        # This condition is a signal whenever a conn_or_pool enter the container.
+        self._container_insert: SyncEntrantCondition = SyncEntrantCondition()
 
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
@@ -152,9 +159,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
             for _ in self._registry.values()
         )
 
-    async def wait_for_unallocated_or_available_slot(
-        self, timeout: float | None = None
-    ) -> None:
+    async def wait_for_unallocated_or_available_slot(self) -> None:
         """Wait for EITHER free slot in the pool OR one conn is not saturated!"""
         if self.maxsize is None:  # case Inf.
             return
@@ -183,15 +188,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if len(self._registry) < self.maxsize:
                 return
 
-            for obj_id, conn_or_pool in self._registry.items():
+            for obj_id, conn_or_pool in self._container.items():
                 if (
                     traffic_state_of(conn_or_pool) is TrafficState.IDLE
-                    and obj_id in self._container
                 ):
                     return
 
             before = asyncio.get_running_loop().time()
-            await asyncio.sleep(0)
+
+            async with self._container_insert:
+                await self._container_insert.wait()
+
             combined_wait += asyncio.get_running_loop().time() - before
 
             if timeout is not None and combined_wait >= combined_wait:
@@ -341,12 +348,18 @@ class AsyncTrafficPolice(typing.Generic[T]):
                         if self.concurrency is True:
                             self._container[obj_id] = conn_or_pool
                             if (
+                                self._any_available.anyone_waiting() and
                                 traffic_state_of(conn_or_pool)
                                 is not TrafficState.SATURATED
                             ):
                                 async with self._any_available:
                                     self._any_available.notify()
                                     should_schedule_another_task = True
+
+                            elif self._container_insert.anyone_waiting():
+                                async with self._container_insert:
+                                    self._container_insert.notify()
+                                should_schedule_another_task = True
 
                         try:
                             yield conn_or_pool
@@ -408,10 +421,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if not immediately_unavailable:
                 if self._cursor is None:
                     self._container[obj_id] = conn_or_pool
-                    if traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
+                    if self._any_available.anyone_waiting() and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
                         async with self._any_available:
                             self._any_available.notify()
                             should_schedule_another_task = True
+                    elif self._container_insert.anyone_waiting():
+                        async with self._container_insert:
+                            self._container_insert.notify()
+                        should_schedule_another_task = True
             else:
                 self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
@@ -419,10 +436,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     conn_or_pool, ItemPlaceholder
                 ):
                     self._container[obj_id] = conn_or_pool
-                    if traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
+                    if self._any_available.anyone_waiting() and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
                         async with self._any_available:
                             self._any_available.notify()
                             should_schedule_another_task = True
+                    elif self._container_insert.anyone_waiting():
+                        async with self._container_insert:
+                            self._container_insert.notify()
+                        should_schedule_another_task = True
 
             if traffic_indicators:
                 for indicator in traffic_indicators:
@@ -497,17 +518,25 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                     if self.concurrency is True:
                         self._container[obj_id] = conn_or_pool
-                        if traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
+                        if self._any_available.anyone_waiting() and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
                             async with self._any_available:
                                 self._any_available.notify()
                                 should_schedule_another_task = True
+                        elif self._container_insert.anyone_waiting():
+                            async with self._container_insert:
+                                self._container_insert.notify()
+                            should_schedule_another_task = True
 
                     break
 
             if conn_or_pool is None:
                 if block is False:
                     before = asyncio.get_running_loop().time()
-                    await asyncio.sleep(0.001)
+
+                    async with self._container_insert:
+                        await self._container_insert.wait()
+
+                    should_schedule_another_task = False
 
                     if timeout is not None:
                         wait_clock += asyncio.get_running_loop().time() - before
@@ -692,39 +721,33 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if conn_or_pool is None or obj_id is None:
             return None
 
-        while True:
-            active_cursor = self._cursor
+        active_cursor = self._cursor
 
-            if active_cursor is not None:
-                if active_cursor.obj_id == obj_id:
-                    active_cursor.depth += 1
-                    return active_cursor.conn_or_pool
-                raise AtomicTraffic(
-                    "Seeking to locate a connection when having another one used, did you forget a call to release?"
-                )
+        if active_cursor is not None:
+            if active_cursor.obj_id == obj_id:
+                active_cursor.depth += 1
+                return active_cursor.conn_or_pool
+            raise AtomicTraffic(
+                "Seeking to locate a connection when having another one used, did you forget a call to release?"
+            )
 
-            if obj_id not in self._container:
-                if block is False:
-                    raise UnavailableTraffic("Unavailable connection")
-            else:
-                if self.concurrency is False:
-                    del self._container[obj_id]
+        if obj_id not in self._container:
+            if block is False:
+                raise UnavailableTraffic("Unavailable connection")
 
-                self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
+            while True:
+                async with self._container_insert:
+                    await self._container_insert.wait()
+                if obj_id in self._container:
+                    break
 
-                return conn_or_pool
+        if self.concurrency is False:
+            del self._container[obj_id]
 
-            before = asyncio.get_running_loop().time()
+        self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
 
-            await asyncio.sleep(0.001)
+        return conn_or_pool
 
-            if timeout is not None:
-                wait_clock += asyncio.get_running_loop().time() - before
-
-                if wait_clock >= timeout:
-                    raise TimeoutError(
-                        "Timed out while waiting for conn_or_pool to become available"
-                    )
 
     @contextlib.asynccontextmanager
     async def borrow(
@@ -792,11 +815,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if self.concurrency is False:
                     self._container[active_cursor.obj_id] = active_cursor.conn_or_pool
                     if (
+                        self._any_available.anyone_waiting() and
                         traffic_state_of(active_cursor.conn_or_pool)
                         is not TrafficState.SATURATED
                     ):
                         with self._any_available:
                             self._any_available.notify()
+                    elif self._container_insert.anyone_waiting():
+                        with self._container_insert:
+                            self._container_insert.notify()
 
                 self._set_cursor(None)
 
