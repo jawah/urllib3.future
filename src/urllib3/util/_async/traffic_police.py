@@ -189,9 +189,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 return
 
             for obj_id, conn_or_pool in self._container.items():
-                if (
-                    traffic_state_of(conn_or_pool) is TrafficState.IDLE
-                ):
+                if traffic_state_of(conn_or_pool) is TrafficState.IDLE:
                     return
 
             before = asyncio.get_running_loop().time()
@@ -348,8 +346,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
                         if self.concurrency is True:
                             self._container[obj_id] = conn_or_pool
                             if (
-                                self._any_available.anyone_waiting() and
-                                traffic_state_of(conn_or_pool)
+                                self._any_available.anyone_waiting()
+                                and traffic_state_of(conn_or_pool)
                                 is not TrafficState.SATURATED
                             ):
                                 async with self._any_available:
@@ -421,7 +419,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if not immediately_unavailable:
                 if self._cursor is None:
                     self._container[obj_id] = conn_or_pool
-                    if self._any_available.anyone_waiting() and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
+                    if (
+                        self._any_available.anyone_waiting()
+                        and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED
+                    ):
                         async with self._any_available:
                             self._any_available.notify()
                             should_schedule_another_task = True
@@ -436,7 +437,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     conn_or_pool, ItemPlaceholder
                 ):
                     self._container[obj_id] = conn_or_pool
-                    if self._any_available.anyone_waiting() and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
+                    if (
+                        self._any_available.anyone_waiting()
+                        and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED
+                    ):
                         async with self._any_available:
                             self._any_available.notify()
                             should_schedule_another_task = True
@@ -518,7 +522,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                     if self.concurrency is True:
                         self._container[obj_id] = conn_or_pool
-                        if self._any_available.anyone_waiting() and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED:
+                        if (
+                            self._any_available.anyone_waiting()
+                            and traffic_state_of(conn_or_pool)
+                            is not TrafficState.SATURATED
+                        ):
                             async with self._any_available:
                                 self._any_available.notify()
                                 should_schedule_another_task = True
@@ -748,7 +756,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         return conn_or_pool
 
-
     @contextlib.asynccontextmanager
     async def borrow(
         self,
@@ -815,8 +822,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if self.concurrency is False:
                     self._container[active_cursor.obj_id] = active_cursor.conn_or_pool
                     if (
-                        self._any_available.anyone_waiting() and
-                        traffic_state_of(active_cursor.conn_or_pool)
+                        self._any_available.anyone_waiting()
+                        and traffic_state_of(active_cursor.conn_or_pool)
                         is not TrafficState.SATURATED
                     ):
                         with self._any_available:
