@@ -25,9 +25,9 @@ except ImportError:
     brotli = None
 
 try:
-    import zstandard as zstd  # type: ignore[import-not-found]
+    import zstandard as zstd
 except ImportError:
-    zstd = None
+    zstd = None  # type: ignore[assignment]
 
 
 TARGET_PACKAGE: str = (

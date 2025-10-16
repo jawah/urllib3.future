@@ -20,7 +20,7 @@ except ImportError:
     brotli = None
 
 try:
-    import zstandard as zstd  # type: ignore[import-not-found]
+    import zstandard as zstd
 
     # The package 'zstandard' added the 'eof' property starting
     # in v0.18.0 which we require to ensure a complete and
@@ -30,13 +30,13 @@ try:
         map(int, re.search(r"^([0-9]+)\.([0-9]+)", zstd.__version__).groups())  # type: ignore[union-attr]
     )
     if _zstd_version < (0, 18):  # Defensive:
-        zstd = None
+        zstd = None  # type: ignore[assignment]
 
 except (AttributeError, ImportError, ValueError):  # Defensive:
     try:
-        from compression import zstd  # type: ignore[import-not-found]
+        from compression import zstd  # type: ignore[no-redef,import-not-found]
     except ImportError:
-        zstd = None
+        zstd = None  # type: ignore[assignment]
 
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
@@ -180,8 +180,8 @@ if zstd is not None:
             if not data:
                 return b""
             data_parts = [self._obj.decompress(data)]
-            while self._obj.eof and self._obj.unused_data:
-                unused_data = self._obj.unused_data
+            while self._obj.eof and self._obj.unused_data:  # type: ignore[union-attr]
+                unused_data = self._obj.unused_data  # type: ignore[union-attr]
                 self._obj = (
                     zstd.ZstdDecompressor().decompressobj()
                     if not _zstd_native
@@ -191,10 +191,10 @@ if zstd is not None:
             return b"".join(data_parts)
 
         def flush(self) -> bytes:
-            ret = self._obj.flush()  # note: this is a no-op
-            if not self._obj.eof:
+            ret = self._obj.flush()  # type: ignore[union-attr]
+            if not self._obj.eof:  # type: ignore[union-attr]
                 raise DecodeError("Zstandard data is incomplete")
-            return ret  # type: ignore[no-any-return]
+            return ret
 
 
 class MultiDecoder(ContentDecoder):
