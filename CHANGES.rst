@@ -1,3 +1,8 @@
+2.14.905 (2025-10-16)
+=====================
+
+- Fixed error when passing a BufferProtocol compatible object as a HTTP request body. (#286)
+
 2.14.904 (2025-10-12)
 =====================
 
