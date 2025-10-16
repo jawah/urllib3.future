@@ -669,7 +669,7 @@ class BaseBackend:
 
     def send(
         self,
-        data: (bytes | typing.IO[typing.Any] | typing.Iterable[bytes] | str),
+        data: bytes | bytearray,
         *,
         eot: bool = False,
     ) -> ResponsePromise | None:

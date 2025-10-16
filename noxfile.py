@@ -461,6 +461,56 @@ def downstream_boto3(session: nox.Session) -> None:
 
 
 @nox.session()
+def downstream_clickhouse_connect(session: nox.Session) -> None:
+    root = os.getcwd()
+    tmp_dir = session.create_tmp()
+
+    session.cd(tmp_dir)
+    git_clone(session, "https://github.com/ClickHouse/clickhouse-connect")
+    session.chdir("clickhouse-connect")
+
+    session.run("git", "rev-parse", "HEAD", external=True)
+    session.install("-r", "tests/test_requirements.txt", silent=False)
+    session.run("python", "setup.py", "build_ext", "--inplace")
+    session.run("python", "setup.py", "develop")
+
+    session.cd(root)
+    session.install(".", silent=False)
+    session.cd(f"{tmp_dir}/clickhouse-connect")
+
+    dc_v2_probe = subprocess.Popen(
+        ["docker", "compose", "up", "-d", "clickhouse"],
+        env={"CLICKHOUSE_CONNECT_TEST_CH_VERSION": "latest"},
+    )
+
+    dc_v2_probe.wait()
+
+    assert dc_v2_probe.returncode == 0
+
+    session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
+
+    # the test tests/integration_tests/test_streaming.py::test_stream_failure
+    # is faulty due to chunk_size = 1024 * 1024
+    # and connection closed without full response
+    # the lib expect stream to yield bytes even if not
+    # chunk size respected.
+    session.run("rm", "-f", "tests/integration_tests/test_streaming.py")
+
+    try:
+        session.run(
+            "pytest",
+            "tests/integration_tests",
+        )
+    finally:
+        dc_v2_probe = subprocess.Popen(
+            ["docker", "compose", "stop"],
+            env={"CLICKHOUSE_CONNECT_TEST_CH_VERSION": "latest"},
+        )
+
+        dc_v2_probe.wait()
+
+
+@nox.session()
 def downstream_sphinx(session: nox.Session) -> None:
     root = os.getcwd()
     tmp_dir = session.create_tmp()

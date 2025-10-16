@@ -1656,7 +1656,7 @@ class HfaceBackend(BaseBackend):
 
     def send(
         self,
-        data: (bytes | typing.IO[typing.Any] | typing.Iterable[bytes] | str),
+        data: bytes | bytearray,
         *,
         eot: bool = False,
     ) -> ResponsePromise | None:
@@ -1675,59 +1675,46 @@ class HfaceBackend(BaseBackend):
             self.__remaining_body_length = self.__expected_body_length
 
         try:
-            if isinstance(
-                data,
-                (
-                    bytes,
-                    bytearray,
-                ),
+            while (
+                self._protocol.should_wait_remote_flow_control(
+                    self._stream_id, len(data)
+                )
+                is True
             ):
-                while (
-                    self._protocol.should_wait_remote_flow_control(
-                        self._stream_id, len(data)
-                    )
-                    is True
+                self._protocol.bytes_received(self.sock.recv(self.blocksize))
+
+                # this is a bad sign. we should stop sending and instead retrieve the response.
+                # we exclude 'EarlyHeadersReceived' event because it is simply expected. e.g. 100-continue!
+                if self._protocol.has_pending_event(
+                    stream_id=self._stream_id, excl_event=(EarlyHeadersReceived,)
                 ):
-                    self._protocol.bytes_received(self.sock.recv(self.blocksize))
+                    if self._start_last_request and self.conn_info:
+                        self.conn_info.request_sent_latency = (
+                            datetime.now(tz=timezone.utc) - self._start_last_request
+                        )
 
-                    # this is a bad sign. we should stop sending and instead retrieve the response.
-                    # we exclude 'EarlyHeadersReceived' event because it is simply expected. e.g. 100-continue!
-                    if self._protocol.has_pending_event(
-                        stream_id=self._stream_id, excl_event=(EarlyHeadersReceived,)
-                    ):
-                        if self._start_last_request and self.conn_info:
-                            self.conn_info.request_sent_latency = (
-                                datetime.now(tz=timezone.utc) - self._start_last_request
-                            )
+                    rp = ResponsePromise(self, self._stream_id, self.__headers)
+                    self._promises[rp.uid] = rp
+                    self._promises_per_stream[rp.stream_id] = rp
 
-                        rp = ResponsePromise(self, self._stream_id, self.__headers)
-                        self._promises[rp.uid] = rp
-                        self._promises_per_stream[rp.stream_id] = rp
+                    raise EarlyResponse(promise=rp)
 
-                        raise EarlyResponse(promise=rp)
+                while True:
+                    data_out = self._protocol.bytes_to_send()
 
-                    while True:
-                        data_out = self._protocol.bytes_to_send()
+                    if not data_out:
+                        break
 
-                        if not data_out:
-                            break
+                    self.sock.sendall(data_out)
 
-                        self.sock.sendall(data_out)
+            if self.__remaining_body_length:
+                self.__remaining_body_length -= len(data)
 
-                if self.__remaining_body_length:
-                    self.__remaining_body_length -= len(data)
-
-                self._protocol.submit_data(
-                    self._stream_id,
-                    data,
-                    end_stream=eot,
-                )
-            else:
-                # urllib3 is supposed to handle every case
-                # and pass down bytes only. This should be unreachable.
-                raise OSError(  # Defensive:
-                    f"unhandled type '{type(data)}' in send method"
-                )
+            self._protocol.submit_data(
+                self._stream_id,
+                data,
+                end_stream=eot,
+            )
 
             if _HAS_SYS_AUDIT:
                 sys.audit("http.client.send", self, data)
