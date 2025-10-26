@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 import platform
 import random
 import shutil
@@ -15,6 +16,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import nox
+
+
+_IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
 
 
 @contextlib.contextmanager
@@ -193,6 +197,11 @@ def tests_impl(
         session.run("pip", "uninstall", "-y", "urllib3")
 
     with traefik_boot(session, *session.posargs):
+        if "brotli" in extras and _IS_GIL_DISABLED:
+            list_of_extras = extras.split(",")
+            # waiting on https://github.com/python-hyper/brotlicffi/pull/205
+            list_of_extras.remove("brotli")
+            extras = ",".join(list_of_extras)
         session.install(f".[{extras}]", silent=False)
 
         # Show the pip version.
@@ -225,6 +234,7 @@ def tests_impl(
                 "PYTHONWARNINGS": "always::DeprecationWarning",
                 "COVERAGE_CORE": "sysmon",
                 "PYTHONTRACEMALLOC": "25" if tracemalloc_enable else "",
+                "PYTHON_GIL": "0" if _IS_GIL_DISABLED else "",
             },
         )
 
@@ -236,7 +246,19 @@ def tests_impl(
 
 
 @nox.session(
-    python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "pypy"]
+    python=[
+        "3.7",
+        "3.8",
+        "3.9",
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.13t",
+        "3.14",
+        "3.14t",
+        "pypy",
+    ]
 )
 def test(session: nox.Session) -> None:
     tests_impl(session)
