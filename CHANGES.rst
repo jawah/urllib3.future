@@ -1,3 +1,9 @@
+2.14.906 (2025-10-26)
+=====================
+
+- Fixed performance scaling issue on the free threaded build when using one or several multiplexed connection.
+- Fixed in-memory client certificate (mTLS) loading on the free threaded build.
+
 2.14.905 (2025-10-16)
 =====================
 
