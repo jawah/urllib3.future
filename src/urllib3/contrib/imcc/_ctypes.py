@@ -193,6 +193,10 @@ class _OpenSSL:
         )
 
 
+_IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
+_IS_LINUX = sys.platform == "linux"
+_FT_HEAD_ADDITIONAL_OFFSET = 1 if _IS_LINUX else 2
+
 _head_extra_fields = []
 
 if sys.flags.debug:
@@ -215,13 +219,23 @@ if sys.flags.debug:
 # } PySSLContextObject;
 #
 class PySSLContextStruct(ctypes.Structure):
-    _fields_ = _head_extra_fields + [
-        ("ob_refcnt", ctypes.c_ssize_t),  # Py_ssize_t ob_refcnt;
-        ("ob_type", ctypes.c_void_p),  # PyTypeObject *ob_type;
-        ("ssl_ctx", ctypes.c_void_p),  # SSL_CTX *ctx; (this is the pointer we want)
-        # If there were other C members between ob_type and ssl_ctx,
-        # they would need to be defined here with their correct types and padding.
-    ]
+    _fields_ = (
+        _head_extra_fields
+        + [
+            ("ob_refcnt", ctypes.c_ssize_t),  # Py_ssize_t ob_refcnt;
+            ("ob_type", ctypes.c_void_p),  # PyTypeObject *ob_type;
+        ]
+        + (
+            [(f"_ob_ft{i}", ctypes.c_void_p) for i in range(_FT_HEAD_ADDITIONAL_OFFSET)]
+            if _IS_GIL_DISABLED
+            else []
+        )
+        + [
+            ("ssl_ctx", ctypes.c_void_p),  # SSL_CTX *ctx; (this is the pointer we want)
+            # If there were other C members between ob_type and ssl_ctx,
+            # they would need to be defined here with their correct types and padding.
+        ]
+    )
 
 
 def _split_client_cert(data: bytes) -> list[bytes]:

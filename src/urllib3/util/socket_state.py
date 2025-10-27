@@ -84,10 +84,8 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     if sock.fileno() == -1:
         return False
 
-    # Well... If we're on UDP, we shall
-    # trust that the QUIC layer is
-    # well-used by both parties.
-    if sock.type is socket.SOCK_DGRAM:
+    # Well... If we're on UDP (or anything else),
+    if sock.type is not socket.SOCK_STREAM:
         return True
 
     if IS_DARWIN_OR_BSD:

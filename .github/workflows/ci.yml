@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
         os:
           - macos-14-large
           - windows-2022
@@ -127,14 +127,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ fromJson('{"macos-14-large":"macOS","windows-2022":"Windows","ubuntu-22.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8"
 
       - name: "Traefik: Prerequisites - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        uses: douglascamata/setup-docker-macos-action@4224de9949c0f4905101285cc94ec59ebfbc1ac3
+        uses: douglascamata/setup-docker-macos-action@de9dc31504356970f7ab9b785d6afee99b994692
         with:
           colima-network-address: true
 

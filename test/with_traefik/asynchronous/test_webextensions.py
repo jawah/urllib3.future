@@ -528,7 +528,7 @@ class TestWebExtensions(TraefikTestCase):
         async with AsyncPoolManager(
             resolver=self.test_async_resolver, ca_certs=self.ca_authority
         ) as pm:
-            resp = await pm.urlopen("GET", target_url + "/websocket/echo")
+            resp = await pm.urlopen("GET", target_url + "/websocket/echo", timeout=2)
 
             # The response SHOULD NOT end with a "101 Switching Protocol"!
             # We don't switch protocol, we only get authorized to R/W in the
