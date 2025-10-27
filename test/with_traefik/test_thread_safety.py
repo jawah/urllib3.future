@@ -8,9 +8,11 @@ from urllib3 import PoolManager, HttpVersion, HTTPResponse
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 
 from . import TraefikTestCase
+from .. import onlyCPython
 
 
 class TestThreadSafety(TraefikTestCase):
+    @onlyCPython()
     @pytest.mark.parametrize(
         "svn_target",
         [

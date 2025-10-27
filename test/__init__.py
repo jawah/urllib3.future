@@ -163,6 +163,13 @@ def notMacOS() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     )
 
 
+def onlyCPython() -> typing.Callable[[_TestFuncT], _TestFuncT]:
+    return pytest.mark.skipif(
+        platform.python_implementation() != "CPython",
+        reason="Test excluded if not CPython",
+    )
+
+
 def onlyBrotli() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     return pytest.mark.skipif(
         brotli is None, reason="only run if brotli library is present"
