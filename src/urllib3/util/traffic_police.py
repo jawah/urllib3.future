@@ -307,6 +307,29 @@ class TrafficPolice(typing.Generic[T]):
 
             del self._cursor[cursor_key]
 
+            # killing the cursor abruptly may result in other thread waiting
+            # for conn_or_pool indefinitely. We must ensure to properly wake
+            # sleeping thread accordingly.
+            signals_to_wake = []
+            edge_case_all_wake = not bool(self._registry)
+
+            for pending_signal in self._signals:
+                if edge_case_all_wake:
+                    signals_to_wake.append(pending_signal)
+                    continue
+
+                if (
+                    pending_signal.target_conn_or_pool is not None
+                    and id(pending_signal.target_conn_or_pool) == active_cursor.obj_id
+                ):
+                    signals_to_wake.append(pending_signal)
+
+            for pending_signal in signals_to_wake:
+                self._signals.remove(pending_signal)
+
+        for pending_signal in signals_to_wake:
+            pending_signal.event.set()
+
     def _sacrifice_first_idle(self, block: bool = False) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
         This method try its best to find the most appropriate idle item and removes it.

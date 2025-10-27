@@ -70,7 +70,11 @@ class TestThreadSafety(TraefikTestCase):
         def fetch_sixteen(s: PoolManager) -> list[HTTPResponse]:
             responses = []
             for _ in range(16):
-                responses.append(s.urlopen("GET", f"{self.https_url}/get"))
+                try:
+                    responses.append(s.urlopen("GET", f"{self.https_url}/get"))
+                except Exception as e:
+                    print(e)
+                    assert False
             return responses
 
         disabled_svn = {

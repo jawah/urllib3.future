@@ -273,6 +273,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self._set_cursor(None)
 
+        # edge case avoid infinite sleeping task
+        if not self._registry:
+            if self._container_insert.anyone_waiting():
+                async with self._container_insert:
+                    self._container_insert.notify_all()
+            if self._any_available.anyone_waiting():
+                async with self._any_available:
+                    self._any_available.notify_all()
+
     async def _sacrifice_first_idle(self, block: bool = False) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
         This method try its best to find the most appropriate idle item and removes it.
