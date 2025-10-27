@@ -520,7 +520,7 @@ class TestWebExtensions(TraefikTestCase):
         target_url = target_url.replace("https://", "wss+rfc8441://")
 
         with PoolManager(resolver=self.test_resolver, ca_certs=self.ca_authority) as pm:
-            resp = pm.urlopen("GET", target_url + "/websocket/echo")
+            resp = pm.urlopen("GET", target_url + "/websocket/echo", timeout=2)
 
             # The response SHOULD NOT end with a "101 Switching Protocol"!
             # We don't switch protocol, we only get authorized to R/W in the

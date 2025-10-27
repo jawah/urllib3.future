@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from urllib3 import PoolManager, HttpVersion, HTTPResponse
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 
 from . import TraefikTestCase
 
@@ -60,6 +61,9 @@ class TestThreadSafety(TraefikTestCase):
             - Responses are not all there
             - At least one response is not HTTP 200 OK
         """
+
+        if svn_target is HttpVersion.h3 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
 
         def fetch_sixteen(s: PoolManager) -> list[HTTPResponse]:
             responses = []
