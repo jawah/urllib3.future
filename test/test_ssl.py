@@ -92,6 +92,10 @@ class TestSSL:
     def test_wrap_socket_default_loads_default_certs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from urllib3.util.ssl_ import _SSLContextCache
+
+        _SSLContextCache.clear()
+
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
         context.options = 0
