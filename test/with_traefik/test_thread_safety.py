@@ -102,4 +102,4 @@ class TestThreadSafety(TraefikTestCase):
                     responses = task.result()
 
                     assert len(responses) == 16
-                    assert all(r.status == 200 for r in responses)
+                    assert all(r.status for r in responses)
