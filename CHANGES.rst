@@ -1,4 +1,4 @@
-2.14.906 (2025-11-02)
+2.14.906 (2025-11-06)
 =====================
 
 - Fixed performance scaling issue on the free threaded build when using one or several multiplexed connection.
