@@ -269,7 +269,7 @@ class TrafficPolice(typing.Generic[T]):
             if v is traffic_type:
                 conn_or_pool = self._map[k]
 
-                if conn_or_pool.is_idle is True:
+                if conn_or_pool.is_idle:
                     continue
                 with self._lock:
                     obj_id = id(conn_or_pool)
@@ -281,13 +281,11 @@ class TrafficPolice(typing.Generic[T]):
         """In case there is no other way, a conn or pool may be unusable and should be destroyed.
         This make the scheduler forget about it."""
         with self._lock:
-            if self.busy is False:
+            if not self.busy:
                 return
 
             cursor_key = get_ident()
             active_cursor = self._cursor[cursor_key]
-
-            assert active_cursor is not None
 
             self._map_clear(active_cursor.conn_or_pool)
 
@@ -301,7 +299,7 @@ class TrafficPolice(typing.Generic[T]):
 
             try:
                 active_cursor.conn_or_pool.close()
-            except Exception:
+            except Exception:  # Defensive: force cleanup phase
                 pass
 
             del self._cursor[cursor_key]
@@ -338,11 +336,9 @@ class TrafficPolice(typing.Generic[T]):
 
         while True:
             with self._lock:
-                if self.busy is True:
+                if self.busy:
                     cursor_key = get_ident()
                     active_cursor = self._cursor[cursor_key]
-
-                    assert active_cursor is not None
 
                     if (
                         traffic_state_of(active_cursor.conn_or_pool)
@@ -354,7 +350,7 @@ class TrafficPolice(typing.Generic[T]):
 
                         try:
                             active_cursor.conn_or_pool.close()
-                        except Exception:
+                        except Exception:  # Defensive: force shutdown
                             pass
 
                         del self._cursor[cursor_key]
@@ -379,7 +375,7 @@ class TrafficPolice(typing.Generic[T]):
 
                     try:
                         eligible_conn_or_pool.close()
-                    except Exception:
+                    except Exception:  # Defensive: force shutdown
                         pass
 
                     return
@@ -413,7 +409,7 @@ class TrafficPolice(typing.Generic[T]):
         self._lock.acquire()
 
         # clear was called, each conn/pool that gets back must be destroyed appropriately.
-        if self._shutdown is True:
+        if self._shutdown:
             self.kill_cursor()
             # Cleanup was completed, no need to act like this anymore.
             if not self._registry:
@@ -437,14 +433,14 @@ class TrafficPolice(typing.Generic[T]):
             registered_conn_or_pool = obj_id in self._registry
 
             # if we have already seen that one beforehand.
-            if registered_conn_or_pool is True:
+            if registered_conn_or_pool:
                 # calling twice put? happen when release_conn=True & calling Response::release_conn() from error handler.
                 if obj_id in self._container:
                     return
             else:  # register it
                 self._registry[obj_id] = conn_or_pool
 
-            if immediately_unavailable is False:  # put back conn
+            if not immediately_unavailable:  # put back conn
                 if not self.busy:
                     # that branch is mostly kept for backward compatibility
                     # with urllib3.
@@ -477,7 +473,7 @@ class TrafficPolice(typing.Generic[T]):
 
     def iter_idle(self) -> typing.Generator[T, None, None]:
         with self._lock:
-            if self.busy is True:
+            if self.busy:
                 raise AtomicTraffic(
                     "One connection/pool active per thread at a given time. "
                     "Call release prior to calling this method."
@@ -503,7 +499,7 @@ class TrafficPolice(typing.Generic[T]):
                         # this branch SHOULD never be evaluated!
                         self._cursor[cursor_key].depth += 1
 
-                    if self.concurrency is True:
+                    if self.concurrency:
                         self._container[obj_id] = conn_or_pool
 
                     try:
@@ -527,7 +523,7 @@ class TrafficPolice(typing.Generic[T]):
         non_saturated_only: bool = False,
         not_idle_only: bool = False,
     ) -> T | None:
-        if self.busy is True:
+        if self.busy:
             raise AtomicTraffic(
                 "One connection/pool active per thread at a given time. "
                 "Call release prior to calling this method."
@@ -547,7 +543,7 @@ class TrafficPolice(typing.Generic[T]):
                     return None
 
             if self._container:
-                if non_saturated_only is True:
+                if non_saturated_only:
                     obj_id, conn_or_pool = None, None
 
                     for cur_obj_id, cur_conn_or_pool in self._container.items():
@@ -580,12 +576,12 @@ class TrafficPolice(typing.Generic[T]):
                     else:
                         self._cursor[cursor_key].depth += 1
 
-                    if self.concurrency is True:
+                    if self.concurrency:
                         self._container[obj_id] = conn_or_pool
 
                     return conn_or_pool
 
-            if block is False:
+            if not block:
                 signal = self._register_signal(
                     None,
                     TrafficState.IDLE,
@@ -604,6 +600,13 @@ class TrafficPolice(typing.Generic[T]):
                 if not signal.event.wait(timeout=timeout):
                     raise UnavailableTraffic(
                         f"No connection available within {timeout} second(s)"
+                    )
+
+                if signal.conn_or_pool is None:
+                    raise UnavailableTraffic(
+                        "The signal was awaken without conn_or_pool assignment. "
+                        "This can be a bug within urllib3-future. "
+                        "You may open a ticket at https://github.com/jawah/urllib3.future for support"
                     )
 
                 return signal.conn_or_pool
@@ -659,7 +662,7 @@ class TrafficPolice(typing.Generic[T]):
             try:
                 self.parent.forget(traffic_indicator)
             except UnavailableTraffic:
-                pass
+                pass  # Defensive:
 
     @contextlib.contextmanager
     def locate_or_hold(
@@ -801,10 +804,10 @@ class TrafficPolice(typing.Generic[T]):
                 )
 
             if obj_id not in self._container:
-                if block is False:
+                if not block:
                     raise UnavailableTraffic("Unavailable connection")
             else:
-                if self.concurrency is False:
+                if not self.concurrency:
                     del self._container[obj_id]
 
                 if cursor_key not in self._cursor:
@@ -819,6 +822,12 @@ class TrafficPolice(typing.Generic[T]):
         if not signal.event.wait(timeout=timeout):
             raise TimeoutError(
                 "Timed out while waiting for conn_or_pool to become available"
+            )
+
+        if signal.conn_or_pool is None:
+            raise UnavailableTraffic(
+                "The signal was awaken without conn_or_pool assignment. "
+                "This means that a connection was broken, presumably in another thread."
             )
 
         return signal.conn_or_pool
@@ -850,7 +859,7 @@ class TrafficPolice(typing.Generic[T]):
                                         "Seeking to locate a connection when having another one used, did you forget a call to release?"
                                     )
 
-                            if self.concurrency is False:
+                            if not self.concurrency:
                                 del self._container[obj_id]
 
                             if cursor_key not in self._cursor:
@@ -902,7 +911,7 @@ class TrafficPolice(typing.Generic[T]):
             active_cursor.depth -= 1
 
             if active_cursor.depth == 0:
-                if self.concurrency is False:
+                if not self.concurrency:
                     self._next_signal_or_container_insert()
                 else:
                     del self._cursor[cursor_key]
