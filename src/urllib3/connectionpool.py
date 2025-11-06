@@ -1349,18 +1349,39 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 )
             conn.timeout = read_timeout
 
+        can_shelve_conn: bool = conn.is_multiplexed and not conn.is_saturated
+
         # Receive the response from the server
         http_vsn_str = (
             conn._http_vsn_str
         )  # keep vsn here, as conn may be upgraded afterward.
 
-        try:
-            response = conn.getresponse(
-                police_officer=self.pool, early_response_callback=on_early_response
-            )
-        except (BaseSSLError, OSError) as e:
-            self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
-            raise
+        if not can_shelve_conn:
+            try:
+                response = conn.getresponse(
+                    police_officer=self.pool, early_response_callback=on_early_response
+                )
+            except (BaseSSLError, OSError) as e:
+                self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
+                raise
+        else:
+            assert self.pool is not None
+            assert rp is not None
+
+            self.pool.memorize(rp, conn)
+            self._put_conn(conn)
+
+            with self.pool.borrow(rp) as conn:
+                try:
+                    response = conn.getresponse(
+                        police_officer=self.pool,
+                        early_response_callback=on_early_response,
+                    )
+                except (BaseSSLError, OSError) as e:
+                    self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
+                    raise
+                finally:
+                    self.pool.forget(rp)
 
         # Set properties that are used by the pooling layer.
         response.retries = retries

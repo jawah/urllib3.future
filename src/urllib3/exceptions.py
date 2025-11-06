@@ -370,4 +370,4 @@ class MustDowngradeError(RecoverableError):
 
 
 class MustRedialError(RecoverableError):
-    """The remote peer closed the connection without error, but expected it to be still open."""
+    """Unused legacy exception. Remove it in a next major."""

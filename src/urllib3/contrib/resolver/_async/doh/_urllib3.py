@@ -16,7 +16,7 @@ from ...protocols import (
     ProtocolResolver,
     SupportedQueryType,
 )
-from ...utils import is_ipv4, is_ipv6, validate_length_of
+from ...utils import is_ipv4, is_ipv6, validate_length_of, parse_https_rdata
 from ..protocols import AsyncBaseResolver
 
 
@@ -437,7 +437,9 @@ class HTTPSResolver(AsyncBaseResolver):
                             except ValueError:
                                 raw_record = b""
 
-                            if b"h3" not in raw_record:
+                            https_record = parse_https_rdata(raw_record)
+
+                            if "h3" not in https_record["alpn"]:
                                 continue
 
                             remote_preemptive_quic_rr = True

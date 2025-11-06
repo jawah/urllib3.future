@@ -49,7 +49,6 @@ from ...exceptions import (
     IncompleteRead,
     InvalidHeader,
     MustDowngradeError,
-    MustRedialError,
     ProtocolError,
     ResponseNotReady,
     SSLError,
@@ -910,33 +909,36 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
-                    if event.error_code == 0 and self._response is not None:
-                        self._protocol = None
-                        await self.close()
-
-                        # A server may end the transmission without error
-                        # to mark the end of SSE for example. While it's not ideal
-                        # it's not forbidden either.
-                        if stream_id is not None and (
+                    # A server may end the transmission without error
+                    # to mark the end of SSE for example. While it's not ideal
+                    # it's not forbidden either.
+                    if (
+                        event.error_code == 0
+                        and stream_id is not None
+                        and (
                             event_type is DataReceived
                             or (
                                 isinstance(event_type, tuple)
                                 and DataReceived in event_type
                             )
-                        ):
-                            events.append(
-                                DataReceived(
-                                    stream_id,
-                                    b"",
-                                    end_stream=True,
-                                )
-                            )
-
-                            return events
-
-                        raise MustRedialError(
-                            f"Remote peer just closed our connection, probably for not answering to unsolicited packet. ({event.message})"
                         )
+                    ):
+                        self._protocol = (
+                            None  # the state machine protocol reached final state and
+                        )
+                        # the close procedure attempt to call close on the said state machine. we
+                        # want to avoid that.
+                        await self.close()
+
+                        events.append(
+                            DataReceived(
+                                stream_id,
+                                b"",
+                                end_stream=True,
+                            )
+                        )
+
+                        return events
 
                     # we can receive a zero-length payload, that usually means the remote closed the socket.
                     # while we could retry this, we should not as some servers can have tricky edge cases
