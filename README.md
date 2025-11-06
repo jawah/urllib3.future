@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://pypi.org/project/urllib3-future"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3-future.svg?maxAge=86400" /></a>
   <a href="https://pypi.org/project/urllib3-future"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3-future.svg?maxAge=86400" /></a>
-  <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (except support is available!)</small>
+  <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (but with available support!)</small>
   <br><small>✨🍰 Enjoy HTTP like its 2025 🍰✨</small>
   <br><small>💰 Promotional offer, get everything and more for <del>40k</del> <b>0</b>$!</small>
   <br><small>Wondering why and how this fork exist? Why urllib3 is stuck? <a href="https://medium.com/@ahmed.tahri/revived-the-promise-made-six-years-ago-for-requests-3-37b440e6a064">Take a peek at this article!</a></small>
@@ -127,7 +127,7 @@ Since Forks are allowed (fortunately for us); It how package manager do things.
 
 We know how sensible this matter is, this is why we are obligated to ensure the highest
 level of compatibility and a fast support in case anything happen. We are probably going to be
-less forgiven in case of bugs than the original urllib3. For good~ish reasons, we know.
+less forgiven in case of bugs than the original urllib3. For understandable reasons, we know.
 
 The matter is taken with utmost seriousness and everyone can inspect this package at will.
 
@@ -143,18 +143,18 @@ We agree that this solution isn't perfect and actually put a lot of pressure on 
 
 Here are some of the reasons (not exhaustive) we choose to work this way:
 
-> A) Some major companies may not be able to touch the production code but can "change/swap" dependencies.
-
-> B) urllib3-future main purpose is to fuel Niquests, which is itself a drop-in replacement of Requests.
-  And there's more than 100 packages commonly used that plug into Requests, but the code (of the packages) invoke urllib3
-  So... We cannot fork those 100+ projects to patch urllib3 usage, it is impossible at the moment, given our means.
-  Requests trapped us, and there should be a way to escape the nonsense "migrate" to another http client that reinvent
-  basic things and interactions.
-
-> C) We don't have to reinvent the wheel.
-
-> D) Some of our partners started noticing that HTTP/1 started to be disabled by some webservices in favor of HTTP/2+
-  So, this fork can unblock them at (almost) zero cost.
+> **A)** Some major companies may not be able to modify production code but can change/swap dependencies.
+>
+> **B)** urllib3-future's main purpose is to fuel Niquests, which is itself a drop-in replacement for Requests.
+> More than 100 commonly used packages plug into Requests, but their code invokes urllib3 directly.
+> We cannot fork those 100+ projects to patch urllib3 usage - it's impossible given our means.
+> Requests trapped us, and there should be a way to escape the "migrate to another HTTP client" cycle
+> that reinvents basic functionality.
+>
+> **C)** We don't have to reinvent the wheel.
+>
+> **D)** Some of our partners noticed that HTTP/1 is being disabled by some web services in favor of HTTP/2+.
+> This fork can unblock them at almost zero cost.
 
 - **OK... then what do I gain from this?**
 
@@ -163,7 +163,7 @@ Here are some of the reasons (not exhaustive) we choose to work this way:
 3. Leveraging recent protocols like http2 and http3 transparently. Code and behaviors does not change one bit.
 4. You do not depend on the standard library to emit http/1 requests, and that is actually a good news. http.client
   has numerous known flaws but cannot be fixed as we speak. (e.g. urllib3 is based on http.client)
-5. There a ton of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
+5. There a tons of other improvement you may leverage, but for that you will need to migrate to Niquests or update your code
   to enable specific capabilities, like but not limited to: "DNS over QUIC, HTTP" / "Happy Eyeballs" / "Native Asyncio" / "Advanced Multiplexing".
 6. Non-blocking IO with concurrent streams/requests. And yes, transparently.
 7. It relaxes some constraints established by upstream in their version 2, thus making it easier to upgrade from version 1.
@@ -260,7 +260,7 @@ Every software is subject to bugs no matter what we do.
 This being said, rest assured, we kept all the tests from urllib3 to ensure that what was
 guaranteed by upstream is also carefully watched down there. See the CI/pipeline for yourself.
 
-In addition to that, we enforced key integration tests to watch how urllib3-future act with some critical projects.
+In addition to that, we enforced key integration tests to watch how urllib3-future acts with some critical projects.
 
 Top-priorities issues are those impacting users with the "shadowing" part. Meaning, if a user is suffering
 an error or something that ends up causing an undesirable outcome from a third-party library that leverage urllib3.
@@ -304,7 +304,7 @@ nox -s lint
 
 - **OS Package Managers, beware!**
 
-Fellow OS package maintainers, you cannot _just_ build and ship this package to your package registry.
+Fellow OS package maintainers: you cannot _simply_ build and ship this package to your package registry.
 As it override `urllib3` and due to its current criticality, you'll have to set:
 
 `URLLIB3_NO_OVERRIDE=1 python -m build`. Set `URLLIB3_NO_OVERRIDE` variable with any value.
