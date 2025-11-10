@@ -168,7 +168,11 @@ async def idle_conn_watch_task(
         while pool.pool is not None:
             pool.num_background_watch_iter += 1
 
-            await asyncio.sleep(waiting_delay)
+            try:
+                await asyncio.sleep(waiting_delay)
+            except Exception as e:  # Defensive: possible rare edge case in Windows
+                # some individual spotted that asyncio.sleep may raise something else..?
+                raise asyncio.CancelledError from e
 
             if pool.pool is None:
                 return
@@ -1445,7 +1449,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         if self._background_monitoring is not None:
             self._background_monitoring.cancel()
-            self._background_monitoring = None
+            try:
+                await self._background_monitoring
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._background_monitoring = None
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
