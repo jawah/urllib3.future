@@ -14,7 +14,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from socket import timeout as SocketTimeout
-from time import sleep
 from types import TracebackType
 from weakref import proxy
 
@@ -158,14 +157,9 @@ def idle_conn_watch_task(
     try:
         while not pool._background_monitoring_stop.is_set():
             pool.num_background_watch_iter += 1
-            slept_period: float = 0.0
 
-            while slept_period < waiting_delay:
-                sleep(MINIMAL_BACKGROUND_WATCH_WINDOW)
-                slept_period += MINIMAL_BACKGROUND_WATCH_WINDOW
-                # was closed properly
-                if pool._background_monitoring_stop.is_set():
-                    return
+            if pool._background_monitoring_stop.wait(timeout=waiting_delay):
+                return
 
             # PyPy gc does not behave like CPython
             # the collect procedure may take longer
