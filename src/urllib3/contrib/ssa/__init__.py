@@ -132,6 +132,16 @@ class AsyncSocket:
         if self._writer is not None:
             self._writer.close()
 
+        edge_case_close_bug_exist = _CPYTHON_SELECTOR_CLOSE_BUG_EXIST
+
+        # Windows + asyncio + asyncio.SelectorEventLoop limits us on how far
+        # we can safely shutdown the socket.
+        if not edge_case_close_bug_exist and platform.system() == "Windows":
+            if hasattr(asyncio, "SelectorEventLoop") and isinstance(
+                asyncio.get_running_loop(), asyncio.SelectorEventLoop
+            ):
+                edge_case_close_bug_exist = True
+
         try:
             # see https://github.com/MagicStack/uvloop/issues/241
             # and https://github.com/jawah/niquests/issues/166
@@ -178,7 +188,7 @@ class AsyncSocket:
             # we have to force call close() on our sock object (even after shutdown).
             # or we'll get a resource warning for sure!
             if isinstance(self._sock, socket.socket) and hasattr(self._sock, "close"):
-                if not uvloop_edge_case_bug and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST:
+                if not uvloop_edge_case_bug and not edge_case_close_bug_exist:
                     try:
                         self._sock.close()
                         close_called = True
@@ -187,10 +197,7 @@ class AsyncSocket:
 
             if not close_called or not shutdown_called:
                 # this branch detect whether we have an asyncio.TransportSocket instead of socket.socket.
-                if (
-                    hasattr(self._sock, "_sock")
-                    and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST
-                ):
+                if hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                     try:
                         self._sock._sock.close()
                     except (AttributeError, OSError):
@@ -204,7 +211,7 @@ class AsyncSocket:
                     self._sock.close()  # don't call close on asyncio.TransportSocket
                 except (OSError, TypeError, AttributeError):
                     pass
-            elif hasattr(self._sock, "_sock") and not _CPYTHON_SELECTOR_CLOSE_BUG_EXIST:
+            elif hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                 try:
                     self._sock._sock.detach()
                 except (AttributeError, OSError):
