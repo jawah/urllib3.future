@@ -1,3 +1,9 @@
+2.14.907 (2025-11-11)
+=====================
+
+- Fixed usage of ``asyncio.SelectEventLoop`` on Windows when the default proactor event loop is left aside.
+- Improved the synchronous background discrete watcher to avoid the usage of syscall sleep in favor of pthread like signal.
+
 2.14.906 (2025-11-06)
 =====================
 
