@@ -478,7 +478,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
 
-        with self.pool.locate_or_hold() as swapper:
+        with self.pool.locate_or_hold(
+            block=self.block, placeholder_set=True
+        ) as swapper:
             self.num_connections += 1
             log.debug(
                 "Starting new HTTP connection (%d): %s:%s",
@@ -2080,7 +2082,13 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             actual_host = self.proxy.host
             actual_port = self.proxy.port
 
-        with self.pool.locate_or_hold(block=self.block) as swapper:
+        # the placeholder is already set earlier
+        # because when we call get() and it returns 'None'
+        # it automatically insert a Placeholder to avoid
+        # concurrent / racing 'believe a spot is free'.
+        with self.pool.locate_or_hold(
+            block=self.block, placeholder_set=True
+        ) as swapper:
             conn = None
 
             if self.happy_eyeballs:
