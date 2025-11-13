@@ -44,7 +44,7 @@ jobs:
       matrix:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
         os:
-          - macos-15-intel
+          - macos-13
           - windows-2025
           - ubuntu-24.04
         nox-session: ['']
@@ -122,10 +122,10 @@ jobs:
           - python-version: "3.8"
             os: ubuntu-24.04
           - python-version: "3.7"
-            os: macos-15-intel
+            os: macos-13
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-15-intel":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-13":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 35
     steps:
@@ -135,10 +135,25 @@ jobs:
       - name: "Traefik: Setup Docker - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
         uses: douglascamata/setup-docker-macos-action@5643cfd7e434881308f89f2f3ae8852da11df909
-        env:
-          LIMA_SSH_PORT_FORWARDER: 'false'
         with:
           colima-network-address: true
+
+      - name: "Get Colima VM IP Address (MacOS)"
+        if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
+        id: colima-ip
+        run: |
+          # Get the IP address from colima list output
+          COLIMA_IP=$(colima list | grep -E "^\s*default\s+" | awk '{print $NF}')
+
+          # Fallback to default if not found
+          if [ -z "$COLIMA_IP" ]; then
+            echo "::warning: could not read IP address from 'colima list'"
+            colima list
+            COLIMA_IP="192.168.65.2"
+          fi
+
+          echo "autodiscover=$COLIMA_IP" >> $GITHUB_OUTPUT
+          echo "Colima VM IP: $COLIMA_IP"
 
       - name: "Setup Python ${{ matrix.python-version }}"
         uses: "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c"
@@ -155,7 +170,7 @@ jobs:
           PYTHON_VERSION: ${{ matrix.python-version }}
           NOX_SESSION: ${{ matrix.nox-session }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
-          TRAEFIK_HTTPBIN_IPV4: '127.0.0.1'
+          TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && steps.colima-ip.outputs.autodiscover || '127.0.0.1' }}
 
       - name: "Upload artifact"
         uses: "actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4"
