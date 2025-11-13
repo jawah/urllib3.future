@@ -435,3 +435,60 @@ def requires_http3(for_async: bool = False) -> None:
 
     if _TARGET_METHOD() is False:
         pytest.skip("Test requires HTTP/3 support")
+
+
+if os.environ.get("XDIST_DEBUG"):
+    from datetime import datetime
+    import signal
+    import threading
+
+    # Global dictionary to track worker states
+    WORKER_STATES: dict[str, dict[str, str]] = {}
+    WORKER_LOCK = threading.Lock()
+
+    def pytest_configure(config):  # type: ignore[no-untyped-def]
+        """Register signal handler for CTRL+C to dump worker states."""
+        if hasattr(config, "workerinput"):
+            # We're in a worker
+            worker_id = config.workerinput.get("workerid", "unknown")
+
+            def signal_handler(signum, frame):  # type: ignore[no-untyped-def]
+                print(
+                    f"\n[{worker_id}] Interrupted! Last known test: {WORKER_STATES.get(worker_id, 'unknown')}"
+                )
+
+            signal.signal(signal.SIGINT, signal_handler)
+
+    def pytest_runtest_logstart(nodeid, location):  # type: ignore[no-untyped-def]
+        """Called when a test starts running."""
+        worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+
+        with WORKER_LOCK:
+            WORKER_STATES[worker_id] = {
+                "test": nodeid,
+                "start_time": datetime.now().isoformat(),
+                "location": location,
+            }
+
+        # Also log to a file for persistent tracking
+        log_file = Path(f".pytest_worker_{worker_id}.log")
+        with open(log_file, "a") as f:
+            f.write(f"{datetime.now().isoformat()} START: {nodeid}\n")
+            f.flush()
+
+    def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
+        """Called when a test finishes."""
+        worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+
+        # Log completion
+        log_file = Path(f".pytest_worker_{worker_id}.log")
+        with open(log_file, "a") as f:
+            f.write(f"{datetime.now().isoformat()} FINISH: {nodeid}\n")
+            f.flush()
+
+    def pytest_sessionfinish(session):  # type: ignore[no-untyped-def]
+        """Clean up log files after session."""
+        worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+        log_file = Path(f".pytest_worker_{worker_id}.log")
+        if log_file.exists():
+            log_file.unlink()
