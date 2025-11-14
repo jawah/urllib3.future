@@ -14,7 +14,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from socket import timeout as SocketTimeout
-from time import sleep
 from types import TracebackType
 from weakref import proxy
 
@@ -158,14 +157,9 @@ def idle_conn_watch_task(
     try:
         while not pool._background_monitoring_stop.is_set():
             pool.num_background_watch_iter += 1
-            slept_period: float = 0.0
 
-            while slept_period < waiting_delay:
-                sleep(MINIMAL_BACKGROUND_WATCH_WINDOW)
-                slept_period += MINIMAL_BACKGROUND_WATCH_WINDOW
-                # was closed properly
-                if pool._background_monitoring_stop.is_set():
-                    return
+            if pool._background_monitoring_stop.wait(timeout=waiting_delay):
+                return
 
             # PyPy gc does not behave like CPython
             # the collect procedure may take longer
@@ -484,7 +478,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
 
-        with self.pool.locate_or_hold() as swapper:
+        with self.pool.locate_or_hold(
+            block=self.block, placeholder_set=True
+        ) as swapper:
             self.num_connections += 1
             log.debug(
                 "Starting new HTTP connection (%d): %s:%s",
@@ -715,7 +711,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             conn = self._new_conn()
             # as this branch is meant for people bypassing our main logic, we have to memorize the conn immediately
             # into our pool of conn.
-            self.pool.put(conn, immediately_unavailable=True)
+            with self.pool._lock:
+                if self.pool.busy_with_placeholder:
+                    self.pool.kill_cursor()
+                self.pool.put(conn, immediately_unavailable=True)
             return conn
 
     def _put_conn(self, conn: HTTPConnection) -> None:
@@ -2086,7 +2085,13 @@ class HTTPSConnectionPool(HTTPConnectionPool):
             actual_host = self.proxy.host
             actual_port = self.proxy.port
 
-        with self.pool.locate_or_hold(block=self.block) as swapper:
+        # the placeholder is already set earlier
+        # because when we call get() and it returns 'None'
+        # it automatically insert a Placeholder to avoid
+        # concurrent / racing 'believe a spot is free'.
+        with self.pool.locate_or_hold(
+            block=self.block, placeholder_set=True
+        ) as swapper:
             conn = None
 
             if self.happy_eyeballs:

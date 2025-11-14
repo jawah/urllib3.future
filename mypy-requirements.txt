@@ -14,3 +14,4 @@ python_socks>=2.0,<3.0
 wsproto>=1.2,<2
 aiofile>=3.9.0,<4
 zstandard>=0.18.0
+wsproto

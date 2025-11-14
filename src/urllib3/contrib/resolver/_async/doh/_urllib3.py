@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import socket
 import typing
+from asyncio import as_completed
 from base64 import b64encode
-from collections import deque
 
 from ....._async.connectionpool import AsyncHTTPSConnectionPool
 from ....._async.response import AsyncHTTPResponse
@@ -135,7 +135,6 @@ class HTTPSResolver(AsyncBaseResolver):
             self._connection_callback = None
 
         self._pool = AsyncHTTPSConnectionPool(self._server, self._port, **kwargs)
-        self._unconsumed: deque[AsyncHTTPResponse] = deque()
 
     async def close(self) -> None:  # type: ignore[override]
         await self._pool.close()
@@ -316,24 +315,19 @@ class HTTPSResolver(AsyncBaseResolver):
                     )
                 )
 
-        no_multiplexing: bool = isinstance(promises[0], AsyncHTTPResponse)
+        tasks = []
+        responses = []
 
-        # This edge case can happen when the initial request is emitted through HTTP/1.1
-        # and a connection upgrade happen just after that (no multiplexing to multiplexing...)
-        if (
-            no_multiplexing
-            and len(promises) > 1
-            and isinstance(promises[1], AsyncHTTPResponse) is False
-        ):
-            force_resolve = []
+        for promise in promises:
+            # already resolved
+            if isinstance(promise, AsyncHTTPResponse):
+                responses.append(promise)
+                continue
+            tasks.append(self._pool.get_response(promise=promise))
 
-            for promise in promises:
-                if isinstance(promise, AsyncHTTPResponse):
-                    force_resolve.append(promise)
-                    continue
-                force_resolve.append(await self._pool.get_response(promise=promise))  # type: ignore[arg-type]
-
-            promises = force_resolve  # type: ignore[assignment]
+        if tasks:
+            for waiting_promise_coro in as_completed(tasks):
+                responses.append(await waiting_promise_coro)  # type: ignore[arg-type]
 
         results: list[
             tuple[
@@ -345,47 +339,7 @@ class HTTPSResolver(AsyncBaseResolver):
             ]
         ] = []
 
-        while promises:
-            response = None
-
-            if no_multiplexing is False:
-                with self._lock:
-                    if self._unconsumed:
-                        for unconsumed in self._unconsumed:
-                            for pending_promise in promises:
-                                if unconsumed.is_from_promise(pending_promise):
-                                    response = unconsumed
-                                    break
-                            if response:
-                                break
-                        if response:
-                            self._unconsumed.remove(response)
-
-                if not response:
-                    response = await self._pool.get_response()
-
-                if response is None:
-                    raise socket.gaierror(
-                        "DNS over HTTPS failed due to a protocol error in urllib3.future or remote peer. Expected a response, got none."
-                    )
-
-                p = None
-
-                for p in promises:
-                    if response.is_from_promise(p):
-                        break
-
-                if p is None:
-                    with self._lock:
-                        self._unconsumed.append(response)
-                    continue
-
-                promises.remove(p)
-            else:
-                response = promises.pop()  # type: ignore[assignment]
-
-            assert response is not None
-
+        for response in responses:
             if response.status >= 300:
                 raise socket.gaierror(
                     f"DNS over HTTPS was unsuccessful, server response status {response.status}."
@@ -538,6 +492,7 @@ class HTTPSResolver(AsyncBaseResolver):
                         if record[0] == SupportedQueryType.A
                         else socket.AF_INET6
                     )
+
                     dst_addr = (
                         (
                             record[-1],

@@ -1445,7 +1445,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         if self._background_monitoring is not None:
             self._background_monitoring.cancel()
-            self._background_monitoring = None
+            try:
+                await self._background_monitoring
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._background_monitoring = None
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():

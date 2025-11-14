@@ -212,6 +212,15 @@ class TrafficPolice(typing.Generic[T]):
         with self._lock:
             return get_ident() in self._cursor
 
+    @property
+    def busy_with_placeholder(self) -> bool:
+        """Determine if the current thread hold a conn_or_pool that must be released asap."""
+        cursor_key = get_ident()
+        with self._lock:
+            return cursor_key in self._cursor and isinstance(
+                self._cursor[cursor_key].conn_or_pool, ItemPlaceholder
+            )
+
     def is_held(self, conn_or_pool: T) -> bool:
         with self._lock:
             cursor_key = get_ident()
@@ -540,6 +549,11 @@ class TrafficPolice(typing.Generic[T]):
                 not self._container or self.bag_only_saturated
             ) and self.maxsize is not None:
                 if self.maxsize > len(self._registry):
+                    self.put(
+                        ItemPlaceholder(),  # type: ignore[arg-type]
+                        immediately_unavailable=True,
+                        block=block,
+                    )
                     return None
 
             if self._container:
@@ -602,11 +616,19 @@ class TrafficPolice(typing.Generic[T]):
                         f"No connection available within {timeout} second(s)"
                     )
 
+                # in a very tight scenario (e.g. maxsize=1 and threads>=2)
+                # a first thread can get 'None' and a reserved spot from get(...)
+                # and the second can register a signal waiting for a conn being inserted
+                # in container. but the first interaction with container will be
+                # hotswapping of the initial "spot reserve" that will trigger
+                # signal with conn_or_pool being None. we can safely go nested call
+                # here.
                 if signal.conn_or_pool is None:
-                    raise UnavailableTraffic(
-                        "The signal was awaken without conn_or_pool assignment. "
-                        "This can be a bug within urllib3-future. "
-                        "You may open a ticket at https://github.com/jawah/urllib3.future for support"
+                    return self.get(
+                        block=block,
+                        timeout=timeout,
+                        non_saturated_only=non_saturated_only,
+                        not_idle_only=not_idle_only,
                     )
 
                 return signal.conn_or_pool
@@ -669,6 +691,7 @@ class TrafficPolice(typing.Generic[T]):
         self,
         traffic_indicator: MappableTraffic | None = None,
         block: bool = False,
+        placeholder_set: bool = False,
     ) -> typing.Generator[typing.Callable[[T], None] | T]:
         """Reserve a spot into the TrafficPolice instance while you construct your conn_or_pool.
 
@@ -693,12 +716,13 @@ class TrafficPolice(typing.Generic[T]):
         if traffic_indicator is not None:
             traffic_indicators.append(traffic_indicator)
 
-        self.put(
-            ItemPlaceholder(),  # type: ignore[arg-type]
-            *traffic_indicators,
-            immediately_unavailable=True,
-            block=block,
-        )
+        if not placeholder_set:
+            self.put(
+                ItemPlaceholder(),  # type: ignore[arg-type]
+                *traffic_indicators,
+                immediately_unavailable=True,
+                block=block,
+            )
 
         if traffic_indicator is not None:
             self._lock.release()
