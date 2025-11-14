@@ -212,6 +212,15 @@ class TrafficPolice(typing.Generic[T]):
         with self._lock:
             return get_ident() in self._cursor
 
+    @property
+    def busy_with_placeholder(self) -> bool:
+        """Determine if the current thread hold a conn_or_pool that must be released asap."""
+        cursor_key = get_ident()
+        with self._lock:
+            return cursor_key in self._cursor and isinstance(
+                self._cursor[cursor_key].conn_or_pool, ItemPlaceholder
+            )
+
     def is_held(self, conn_or_pool: T) -> bool:
         with self._lock:
             cursor_key = get_ident()

@@ -711,7 +711,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             conn = self._new_conn()
             # as this branch is meant for people bypassing our main logic, we have to memorize the conn immediately
             # into our pool of conn.
-            self.pool.put(conn, immediately_unavailable=True)
+            with self.pool._lock:
+                if self.pool.busy_with_placeholder:
+                    self.pool.kill_cursor()
+                self.pool.put(conn, immediately_unavailable=True)
             return conn
 
     def _put_conn(self, conn: HTTPConnection) -> None:
