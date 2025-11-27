@@ -44,7 +44,7 @@ jobs:
       matrix:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
         os:
-          - macos-13
+          - macos-15-intel
           - windows-2025
           - ubuntu-24.04
         nox-session: ['']
@@ -122,10 +122,10 @@ jobs:
           - python-version: "3.8"
             os: ubuntu-24.04
           - python-version: "3.7"
-            os: macos-13
+            os: macos-15-intel
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-13":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-15-intel":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 35
     steps:
@@ -170,7 +170,10 @@ jobs:
           PYTHON_VERSION: ${{ matrix.python-version }}
           NOX_SESSION: ${{ matrix.nox-session }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
-          TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && steps.colima-ip.outputs.autodiscover || '127.0.0.1' }}
+          # todo: wait for colima fix and restore steps.colima-ip.outputs.autodiscover
+          #       see https://github.com/abiosoft/colima/issues/1448
+          #       and https://github.com/douglascamata/setup-docker-macos-action/issues/56
+          TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && '192.168.65.1' || '127.0.0.1' }}
 
       - name: "Upload artifact"
         uses: "actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4"
