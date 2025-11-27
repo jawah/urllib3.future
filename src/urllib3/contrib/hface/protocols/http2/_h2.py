@@ -37,7 +37,6 @@ from ...events import (
     HandshakeCompleted,
     HeadersReceived,
     StreamResetReceived,
-    StreamResetSent,
 )
 from .._protocols import HTTP2Protocol
 
@@ -189,7 +188,6 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
         self._connection.reset_stream(stream_id, error_code)
-        self._events.append(StreamResetSent(stream_id, error_code))
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id=stream_id)

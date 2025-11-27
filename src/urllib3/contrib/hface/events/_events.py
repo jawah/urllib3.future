@@ -114,6 +114,7 @@ class StreamReset(StreamEvent):
 
     #: Reason for closing the stream.
     error_code: int = 0
+    end_stream: bool = True
 
     def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
@@ -126,18 +127,6 @@ class StreamResetReceived(StreamReset):
     One stream of an HTTP connection was reset by the peer.
 
     This probably means that we did something that the peer does not like.
-
-    Extends :class:`.StreamReset`.
-    """
-
-
-@dataclass
-class StreamResetSent(StreamReset):
-    """
-    One stream of an HTTP connection was reset by us.
-
-    This can be explicitly requested by a user, or a protocol
-    implementation can send the reset when a peer misbehaves.
 
     Extends :class:`.StreamReset`.
     """
