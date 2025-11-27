@@ -200,7 +200,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                 if isinstance(buf, str):
                     data_to_send: bytes = self._protocol.send(TextMessage(buf))
                 else:
-                    data_to_send = self._protocol.send(BytesMessage(buf))  # type: ignore[arg-type]
+                    data_to_send = self._protocol.send(BytesMessage(buf))
             except WebSocketProtocolError as e:
                 self.close()
                 raise ProtocolError from e

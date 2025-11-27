@@ -1438,9 +1438,10 @@ class HfaceBackend(BaseBackend):
             except KeyError:
                 pass  # Hmm... this should be impossible.
 
-            # remote can refuse future inquiries, so no need to go further with this conn.
-            if self._protocol.is_idle() and self._protocol.has_expired():  # type: ignore[union-attr]
-                self.close()
+            if self._protocol is not None:
+                # remote can refuse future inquiries, so no need to go further with this conn.
+                if self._protocol.is_idle() and self._protocol.has_expired():
+                    self.close()
             return b"", True, None
 
         eot = False
@@ -1465,12 +1466,13 @@ class HfaceBackend(BaseBackend):
             except KeyError:
                 pass  # Hmm... this should be impossible.
 
-            # remote can refuse future inquiries, so no need to go further with this conn.
-            if self._protocol.is_idle() and self._protocol.has_expired():  # type: ignore[union-attr]
-                self.close()
-            elif self.is_idle:
-                # probe for h3/quic if available, and remember it.
-                self._upgrade()
+            if self._protocol is not None:
+                # remote can refuse future inquiries, so no need to go further with this conn.
+                if self._protocol.is_idle() and self._protocol.has_expired():
+                    self.close()
+                elif self.is_idle:
+                    # probe for h3/quic if available, and remember it.
+                    self._upgrade()
 
         trailers = None
 

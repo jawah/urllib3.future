@@ -167,7 +167,7 @@ class AsyncSocket:
                         # last chance of releasing properly the underlying fd!
                         try:
                             direct_sock = socket.socket(fileno=self._sock.fileno())
-                        except OSError:
+                        except (OSError, ValueError):
                             pass
                         else:
                             try:
@@ -192,7 +192,7 @@ class AsyncSocket:
                     try:
                         self._sock.close()
                         close_called = True
-                    except OSError:
+                    except (OSError, TypeError):
                         pass
 
             if not close_called or not shutdown_called:
@@ -200,7 +200,7 @@ class AsyncSocket:
                 if hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                     try:
                         self._sock._sock.close()
-                    except (AttributeError, OSError):
+                    except (AttributeError, OSError, TypeError):
                         pass
 
         except (
@@ -214,7 +214,7 @@ class AsyncSocket:
             elif hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                 try:
                     self._sock._sock.detach()
-                except (AttributeError, OSError):
+                except (AttributeError, OSError, TypeError):
                     pass
 
         self._connect_called = False

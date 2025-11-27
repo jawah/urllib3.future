@@ -1,3 +1,11 @@
+2.14.908 (2025-11-27)
+=====================
+
+- Fixed the close procedure for webextensions when using HTTP/2 transport.
+- Fixed shutdown procedure when under uvloop.
+- Fixed rare stream read exception when protocol is closed in flight.
+- Fixed DNS-over-HTTPS reliability (non async, under load).
+
 2.14.907 (2025-11-14)
 =====================
 
