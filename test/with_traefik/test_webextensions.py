@@ -154,7 +154,7 @@ class TestWebExtensions(TraefikTestCase):
                 protocol.send(wsproto.events.TextMessage("Hello World!"))
             )
             resp.extension.send_payload(
-                protocol.send(wsproto.events.BytesMessage(b"Foo Bar Baz!"))  # type: ignore[arg-type]
+                protocol.send(wsproto.events.BytesMessage(b"Foo Bar Baz!"))
             )
 
             protocol.receive_data(resp.extension.next_payload())
