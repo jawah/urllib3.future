@@ -1,3 +1,13 @@
+2.15.900 (2025-12-16)
+=====================
+
+- Improved pre-check for socket liveness probe before connection reuse from pool.
+- Backported "HTTPHeaderDict bytes key handling" from upstream https://github.com/urllib3/urllib3/pull/3653
+- Backported "Expand environment variable of SSLKEYLOGFILE" from upstream https://github.com/urllib3/urllib3/pull/3705
+- Backported "Fix redirect handling when an integer is passed to a pool manager" from upstream https://github.com/urllib3/urllib3/pull/3655
+- Backported "Improved the performance of content decoding by optimizing ``BytesQueueBuffer`` class." from upstream https://github.com/urllib3/urllib3/pull/3711
+- Backported "GHSA-gm62-xv2j-4w53" security patch for "attacker could compose an HTTP response with virtually unlimited links in the ``Content-Encoding`` header" from upstream https://github.com/urllib3/urllib3/commit/24d7b67eac89f94e11003424bcf0d8f7b72222a8
+
 2.14.908 (2025-11-27)
 =====================
 
