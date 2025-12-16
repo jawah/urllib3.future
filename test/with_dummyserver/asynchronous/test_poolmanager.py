@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import typing
+
 from test import LONG_TIMEOUT
 
 import pytest
@@ -21,8 +23,12 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
         cls.base_url = f"http://{cls.host}:{cls.port}"
         cls.base_url_alt = f"http://{cls.host_alt}:{cls.port}"
 
-    async def test_redirect(self) -> None:
-        async with AsyncPoolManager() as http:
+    @pytest.mark.parametrize(
+        "pool_manager_kwargs",
+        ({}, {"retries": None}, {"retries": 1}, {"retries": Retry(1)}),
+    )
+    async def test_redirect(self, pool_manager_kwargs: dict[str, typing.Any]) -> None:
+        async with AsyncPoolManager(**pool_manager_kwargs) as http:
             r = await http.request(
                 "GET",
                 f"{self.base_url}/redirect",
@@ -63,8 +69,14 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             assert r.status == 200
             assert await r.data == b"Dummy server!"
 
-    async def test_redirect_twice(self) -> None:
-        async with AsyncPoolManager() as http:
+    @pytest.mark.parametrize(
+        "pool_manager_kwargs",
+        ({}, {"retries": None}, {"retries": 2}, {"retries": Retry(2)}),
+    )
+    async def test_redirect_twice(
+        self, pool_manager_kwargs: dict[str, typing.Any]
+    ) -> None:
+        async with AsyncPoolManager(**pool_manager_kwargs) as http:
             r = await http.request(
                 "GET",
                 f"{self.base_url}/redirect",

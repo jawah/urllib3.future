@@ -44,7 +44,7 @@ jobs:
       matrix:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
         os:
-          - macos-13
+          - macos-14-large
           - windows-2025
           - ubuntu-24.04
         nox-session: ['']
@@ -122,10 +122,12 @@ jobs:
           - python-version: "3.8"
             os: ubuntu-24.04
           - python-version: "3.7"
-            os: macos-13
+            os: macos-14-large
+          - python-version: "3.8"
+            os: macos-14-large
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-13":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-14-large":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 35
     steps:

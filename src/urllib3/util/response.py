@@ -63,13 +63,10 @@ class BytesQueueBuffer:
 
      * self.buffer, which contains the full data
      * the largest chunk that we will copy in get()
-
-    The worst case scenario is a single chunk, in which case we'll make a full copy of
-    the data inside get().
     """
 
     def __init__(self) -> None:
-        self.buffer: typing.Deque[bytes] = collections.deque()
+        self.buffer: typing.Deque[bytes | memoryview[bytes]] = collections.deque()
         self._size: int = 0
 
     def __len__(self) -> int:
@@ -87,6 +84,10 @@ class BytesQueueBuffer:
         elif n < 0:
             raise ValueError("n should be > 0")
 
+        if len(self.buffer[0]) == n and isinstance(self.buffer[0], bytes):
+            self._size -= n
+            return self.buffer.popleft()
+
         fetched = 0
         ret = io.BytesIO()
         while fetched < n:
@@ -94,6 +95,7 @@ class BytesQueueBuffer:
             chunk = self.buffer.popleft()
             chunk_length = len(chunk)
             if remaining < chunk_length:
+                chunk = memoryview(chunk)
                 left_chunk, right_chunk = chunk[:remaining], chunk[remaining:]
                 ret.write(left_chunk)
                 self.buffer.appendleft(right_chunk)

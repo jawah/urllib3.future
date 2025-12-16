@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import sys
 import socket
 import struct
@@ -12,6 +13,17 @@ if typing.TYPE_CHECKING:
 IS_NT = sys.platform in {"win32", "cygwin", "msys"}
 IS_DARWIN_OR_BSD = not IS_NT and (sys.platform == "darwin" or "bsd" in sys.platform)
 IS_LINUX = not IS_DARWIN_OR_BSD and sys.platform == "linux"
+SOCKET_CLOSED_ERRNOS: frozenset[int] = frozenset(
+    filter(
+        None,
+        (
+            getattr(errno, "EBADF", None),
+            getattr(errno, "ENOTSOCK", None),
+            getattr(errno, "EINVAL", None),
+            getattr(errno, "ENOTCONN", None),
+        ),
+    )
+)
 
 # Of course, Windows don't have any nice shortcut
 # through getsockopt, why make it simple when a
@@ -84,6 +96,15 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     if sock.fileno() == -1:
         return False
 
+    # catch earlier the most catastrophic states
+    # this pre-check avoid wasting time on TCP probing
+    try:
+        err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if err != 0:
+            return False
+    except OSError:
+        return False
+
     # Well... If we're on UDP (or anything else),
     if sock.type is not socket.SOCK_STREAM:
         return True
@@ -96,7 +117,11 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
 
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_CONNECTION_INFO, 1024)
-        except OSError:
+        except OSError as e:
+            # EBADF, ENOTSOCK, EINVAL are expected for invalid/closed sockets
+            # Other errors might indicate real issues
+            if e.errno in SOCKET_CLOSED_ERRNOS:
+                return False
             return True
 
         state: int = struct.unpack("B", info[0:1])[0]
