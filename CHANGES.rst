@@ -1,3 +1,9 @@
+2.15.901 (2025-12-22)
+=====================
+
+- Extended pre-check for socket liveness probe capabilities and resiliency across OSes.
+- Added explicit support for Python freethreaded.
+
 2.15.900 (2025-12-16)
 =====================
 

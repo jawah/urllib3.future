@@ -11,7 +11,12 @@ if typing.TYPE_CHECKING:
     from ..util.ssltransport import SSLTransport
 
 IS_NT = sys.platform in {"win32", "cygwin", "msys"}
-IS_DARWIN_OR_BSD = not IS_NT and (sys.platform == "darwin" or "bsd" in sys.platform)
+IS_DARWIN_OR_BSD = not IS_NT and (
+    sys.platform == "darwin"
+    or "bsd" in sys.platform
+    or "dragonfly" in sys.platform
+    or sys.platform == "ios"
+)
 IS_LINUX = not IS_DARWIN_OR_BSD and sys.platform == "linux"
 SOCKET_CLOSED_ERRNOS: frozenset[int] = frozenset(
     filter(
@@ -63,9 +68,7 @@ if IS_NT:
 
     try:
         WSAIoctl_Fn = ctypes.windll.ws2_32.WSAIoctl  # type: ignore[attr-defined]
-    except AttributeError:  # Defensive: very old Windows distribution
-        WSAIoctl_Fn = None
-    else:
+
         WSAIoctl_Fn.argtypes = [
             ctypes.c_void_p,  # [in]  SOCKET  s
             ctypes.wintypes.DWORD,  # [in]  DWORD   SIO_TCP_INFO
@@ -78,6 +81,15 @@ if IS_NT:
             ctypes.c_void_p,  # [in]  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
         ]
         WSAIoctl_Fn.restype = ctypes.c_int  # int
+    except AttributeError:  # Defensive: very old Windows distribution
+        WSAIoctl_Fn = None
+
+    try:
+        WSAGetLastError_Fn = ctypes.windll.ws2_32.WSAGetLastError  # type: ignore[attr-defined]
+        WSAGetLastError_Fn.argtypes = []
+        WSAGetLastError_Fn.restype = ctypes.c_int
+    except AttributeError:
+        WSAGetLastError_Fn = None
 
     SIO_TCP_INFO = ctypes.wintypes.DWORD(
         1 << 31  # IOC_IN
@@ -86,12 +98,19 @@ if IS_NT:
         | 39
     )
 
+    WSAENOTSOCK = 10038
+    WSAEINVAL = 10022
+    WSA_OPERATION_ABORTED = 995
+
 
 def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     """
     Determine by best effort if the socket is closed
     without ever attempting to read from it.
     This works by trying to get the TCP current status.
+
+    That function is extremely sensible, making change here
+    must be carefully thought before even suggesting a change.
     """
     if sock.fileno() == -1:
         return False
@@ -106,11 +125,15 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
         return False
 
     # Well... If we're on UDP (or anything else),
-    if sock.type is not socket.SOCK_STREAM:
-        return True
+    try:
+        if (sock.type & socket.SOCK_STREAM) != socket.SOCK_STREAM:
+            return True
+    except TypeError:  # Defensive: unit test mocking
+        if sock.type != socket.SOCK_STREAM:
+            return True
 
     if IS_DARWIN_OR_BSD:
-        if sys.platform == "darwin":
+        if sys.platform in {"darwin", "ios"}:
             TCP_CONNECTION_INFO = getattr(socket, "TCP_CONNECTION_INFO", 0x106)
         else:
             TCP_CONNECTION_INFO = getattr(socket, "TCP_INFO", 11)
@@ -118,10 +141,11 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_CONNECTION_INFO, 1024)
         except OSError as e:
-            # EBADF, ENOTSOCK, EINVAL are expected for invalid/closed sockets
-            # Other errors might indicate real issues
             if e.errno in SOCKET_CLOSED_ERRNOS:
                 return False
+            return True
+
+        if not info:  # Defensive: in theory impossible.
             return True
 
         state: int = struct.unpack("B", info[0:1])[0]
@@ -144,7 +168,12 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
 
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_INFO, 1024)
-        except OSError:
+        except OSError as e:
+            if e.errno in SOCKET_CLOSED_ERRNOS:
+                return False
+            return True
+
+        if not info:  # Defensive: in theory impossible.
             return True
 
         state = struct.unpack("B", info[0:1])[0]
@@ -201,5 +230,14 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
             # 10 = Time Wait
             # 11 = Max?
             return tcp_info.State == 4  # type: ignore[no-any-return]
+        elif WSAGetLastError_Fn is not None:
+            err = WSAGetLastError_Fn()
+
+            if err in (
+                WSAENOTSOCK,
+                WSAEINVAL,
+                WSA_OPERATION_ABORTED,
+            ):
+                return False
 
     return True
