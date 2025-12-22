@@ -125,8 +125,12 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
         return False
 
     # Well... If we're on UDP (or anything else),
-    if (sock.type & socket.SOCK_STREAM) != socket.SOCK_STREAM:
-        return True
+    try:
+        if (sock.type & socket.SOCK_STREAM) != socket.SOCK_STREAM:
+            return True
+    except TypeError:  # Defensive: unit test mocking
+        if sock.type != socket.SOCK_STREAM:
+            return True
 
     if IS_DARWIN_OR_BSD:
         if sys.platform in {"darwin", "ios"}:
