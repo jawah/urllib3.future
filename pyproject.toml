@@ -57,7 +57,7 @@ zstd = [
 ]
 secure = []
 socks = [
-  "python-socks>=2.0,<=2.6.1",
+  "python-socks>=2.0,<=2.8.0",
 ]
 qh3 = [
   "qh3>=1.5.4,<2.0.0",
