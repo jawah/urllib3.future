@@ -180,6 +180,11 @@ class Retry:
         Sequence of headers to remove from the request when a response
         indicating a redirect is returned before firing off the redirected
         request.
+
+    :param int retry_after_max: Number of seconds to allow as the maximum for
+        Retry-After headers. Defaults to :attr:`Retry.DEFAULT_RETRY_AFTER_MAX`.
+        Any Retry-After headers larger than this value will be limited to this
+        value.
     """
 
     #: Default methods to be used for ``allowed_methods``
@@ -197,6 +202,10 @@ class Retry:
 
     #: Default maximum backoff time.
     DEFAULT_BACKOFF_MAX = 120
+
+    # This is undocumented in the RFC. Setting to 6 hours matches other popular libraries.
+    #: Default maximum allowed value for Retry-After headers in seconds
+    DEFAULT_RETRY_AFTER_MAX: typing.Final[int] = 21600
 
     # Backward compatibility; assigned outside of the class.
     DEFAULT: typing.ClassVar[Retry]
@@ -221,6 +230,7 @@ class Retry:
             str
         ] = DEFAULT_REMOVE_HEADERS_ON_REDIRECT,
         backoff_jitter: float = 0.0,
+        retry_after_max: int = DEFAULT_RETRY_AFTER_MAX,
     ) -> None:
         self.total = total
         self.connect = connect
@@ -245,6 +255,7 @@ class Retry:
             h.lower() for h in remove_headers_on_redirect
         )
         self.backoff_jitter = backoff_jitter
+        self.retry_after_max = retry_after_max
 
     def new(self, **kw: typing.Any) -> Retry:
         params = dict(
@@ -264,6 +275,7 @@ class Retry:
             remove_headers_on_redirect=self.remove_headers_on_redirect,
             respect_retry_after_header=self.respect_retry_after_header,
             backoff_jitter=self.backoff_jitter,
+            retry_after_max=self.retry_after_max,
         )
 
         params.update(kw)
@@ -321,6 +333,10 @@ class Retry:
             seconds = retry_date - time.time()
 
         seconds = max(seconds, 0)
+
+        # Check the seconds do not exceed the specified maximum
+        if seconds > self.retry_after_max:
+            seconds = self.retry_after_max
 
         return seconds
 
