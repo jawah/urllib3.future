@@ -1375,6 +1375,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     response = conn.getresponse(
                         police_officer=self.pool,
                         early_response_callback=on_early_response,
+                        promise=rp,
                     )
                 except (BaseSSLError, OSError) as e:
                     self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
