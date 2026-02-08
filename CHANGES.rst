@@ -1,10 +1,17 @@
+2.15.903 (2026-02-08)
+=====================
+
+- Improved AsyncTrafficPolice for better multiplexing distribution.
+  We recently issued a fix in 2.15.902 regarding (#309) and accidentally induced a massive slowdown in highly concurrent scenarii.
+  after seeing such impact we decided to yank 2.15.902 in favor of spending more time investigating and improving. This release
+  include every change from the yanked release.
+
 2.15.902 (2026-02-03)
 =====================
 
 - Fixed multiplexing mixing issue under specific concurrency condition. (#309)
 - Backported "GHSA-38jv-5279-wg99" security patch for "decompression-bomb safeguards of the streaming API were bypassed when HTTP redirects were followed" from upstream.
 - Backported "Started treating Retry-After times greater than 6 hours as 6 hours by default" from upstream (https://github.com/urllib3/urllib3/pull/3743).
-
 
 2.15.901 (2025-12-22)
 =====================

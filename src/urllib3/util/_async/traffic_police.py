@@ -14,6 +14,7 @@ from ..traffic_police import (
     traffic_state_of,
     ItemPlaceholder,
 )
+from ...contrib.ssa._timeout import timeout as ctx_expire_in
 
 if typing.TYPE_CHECKING:
     from ..._async.connection import AsyncHTTPConnection
@@ -116,10 +117,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self.parent: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
 
         # The bellow Condition is for: "A conn_or_pool is in a ready state (ie not saturated)"
-        self._any_available: SyncEntrantCondition = SyncEntrantCondition()
+        self._want_write: SyncEntrantCondition = SyncEntrantCondition()
 
         # This condition is a signal whenever a conn_or_pool enter the container.
-        self._container_insert: SyncEntrantCondition = SyncEntrantCondition()
+        self._want_exploit: SyncEntrantCondition = SyncEntrantCondition()
 
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
@@ -159,6 +160,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
             for _ in self._registry.values()
         )
 
+    @property
+    def bag_not_saturated(self) -> bool:
+        if not self._registry:
+            return False
+
+        for conn in self._registry.values():
+            if traffic_state_of(conn) is not TrafficState.SATURATED:
+                return True
+
+        return False
+
     async def wait_for_unallocated_or_available_slot(self) -> None:
         """Wait for EITHER free slot in the pool OR one conn is not saturated!"""
         if self.maxsize is None:  # case Inf.
@@ -173,14 +185,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
         ):
             return
 
-        async with self._any_available:
-            await self._any_available.wait()
+        async with self._want_write:
+            await self._want_write.wait()
 
     async def wait_for_idle_or_available_slot(
         self, timeout: float | None = None
     ) -> None:
-        combined_wait: float = 0.0
-
         while True:
             if self.maxsize is None:  # case Inf.
                 return
@@ -192,17 +202,18 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if traffic_state_of(conn_or_pool) is TrafficState.IDLE:
                     return
 
-            before = asyncio.get_running_loop().time()
-
-            async with self._container_insert:
-                await self._container_insert.wait()
-
-            combined_wait += asyncio.get_running_loop().time() - before
-
-            if timeout is not None and combined_wait >= combined_wait:
-                raise TimeoutError(
-                    "Timed out while waiting for conn_or_pool to become available"
-                )
+            if timeout is not None:
+                try:
+                    async with ctx_expire_in(delay=timeout):
+                        async with self._want_exploit:
+                            await self._want_exploit.wait()
+                except TimeoutError:
+                    raise TimeoutError(
+                        "Timed out while waiting for conn_or_pool to become available"
+                    )
+            else:
+                async with self._want_exploit:
+                    await self._want_exploit.wait()
 
     def __len__(self) -> int:
         return len(self._registry)
@@ -275,12 +286,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         # edge case avoid infinite sleeping task
         if not self._registry:
-            if self._container_insert.anyone_waiting():
-                async with self._container_insert:
-                    self._container_insert.notify_all()
-            if self._any_available.anyone_waiting():
-                async with self._any_available:
-                    self._any_available.notify_all()
+            if self._want_exploit.anyone_waiting():
+                async with self._want_exploit:
+                    self._want_exploit.notify_all()
+            if self._want_write.anyone_waiting():
+                async with self._want_write:
+                    self._want_write.notify_all()
 
     async def _sacrifice_first_idle(self, block: bool = False) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
@@ -355,17 +366,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
                         if self.concurrency is True:
                             self._container[obj_id] = conn_or_pool
                             if (
-                                self._any_available.anyone_waiting()
+                                self._want_write.anyone_waiting()
                                 and traffic_state_of(conn_or_pool)
                                 is not TrafficState.SATURATED
                             ):
-                                async with self._any_available:
-                                    self._any_available.notify()
+                                async with self._want_write:
+                                    self._want_write.notify()
                                     should_schedule_another_task = True
 
-                            elif self._container_insert.anyone_waiting():
-                                async with self._container_insert:
-                                    self._container_insert.notify()
+                            elif self._want_exploit.anyone_waiting():
+                                async with self._want_exploit:
+                                    self._want_exploit.notify()
                                 should_schedule_another_task = True
 
                         try:
@@ -429,15 +440,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if self._cursor is None:
                     self._container[obj_id] = conn_or_pool
                     if (
-                        self._any_available.anyone_waiting()
+                        self._want_write.anyone_waiting()
                         and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED
                     ):
-                        async with self._any_available:
-                            self._any_available.notify()
+                        async with self._want_write:
+                            self._want_write.notify()
                             should_schedule_another_task = True
-                    elif self._container_insert.anyone_waiting():
-                        async with self._container_insert:
-                            self._container_insert.notify()
+                    elif self._want_exploit.anyone_waiting():
+                        async with self._want_exploit:
+                            self._want_exploit.notify()
                         should_schedule_another_task = True
             else:
                 self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
@@ -447,15 +458,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 ):
                     self._container[obj_id] = conn_or_pool
                     if (
-                        self._any_available.anyone_waiting()
+                        self._want_write.anyone_waiting()
                         and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED
                     ):
-                        async with self._any_available:
-                            self._any_available.notify()
+                        async with self._want_write:
+                            self._want_write.notify()
                             should_schedule_another_task = True
-                    elif self._container_insert.anyone_waiting():
-                        async with self._container_insert:
-                            self._container_insert.notify()
+                    elif self._want_exploit.anyone_waiting():
+                        async with self._want_exploit:
+                            self._want_exploit.notify()
                         should_schedule_another_task = True
 
             if traffic_indicators:
@@ -482,9 +493,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
         not_idle_only: bool = False,
     ) -> T | None:
         conn_or_pool = None
-
-        wait_clock: float = 0.0
-
         should_schedule_another_task: bool = False
 
         while True:
@@ -532,37 +540,58 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     if self.concurrency is True:
                         self._container[obj_id] = conn_or_pool
                         if (
-                            self._any_available.anyone_waiting()
+                            self._want_write.anyone_waiting()
                             and traffic_state_of(conn_or_pool)
                             is not TrafficState.SATURATED
                         ):
-                            async with self._any_available:
-                                self._any_available.notify()
+                            async with self._want_write:
+                                self._want_write.notify()
                                 should_schedule_another_task = True
-                        elif self._container_insert.anyone_waiting():
-                            async with self._container_insert:
-                                self._container_insert.notify()
+                        elif self._want_exploit.anyone_waiting():
+                            async with self._want_exploit:
+                                self._want_exploit.notify()
                             should_schedule_another_task = True
 
                     break
 
             if conn_or_pool is None:
                 if block is False:
-                    before = asyncio.get_running_loop().time()
+                    if not_idle_only:
+                        while (
+                            self.concurrency is False
+                            and self.bag_not_saturated
+                            and self._want_write.anyone_waiting()
+                        ):
+                            await asyncio.sleep(0)
 
-                    async with self._container_insert:
-                        await self._container_insert.wait()
+                        if timeout is not None:
+                            try:
+                                async with ctx_expire_in(delay=timeout):
+                                    async with self._want_exploit:
+                                        await self._want_exploit.wait()
+                            except TimeoutError as e:
+                                raise UnavailableTraffic(
+                                    f"No connection available within {timeout} second(s)"
+                                ) from e
+                        else:
+                            async with self._want_exploit:
+                                await self._want_exploit.wait()
+                        break
+                    else:
+                        if timeout is not None:
+                            try:
+                                async with ctx_expire_in(delay=timeout):
+                                    async with self._want_write:
+                                        await self._want_write.wait()
+                            except TimeoutError as e:
+                                raise UnavailableTraffic(
+                                    f"No connection available within {timeout} second(s)"
+                                ) from e
+                        else:
+                            async with self._want_write:
+                                await self._want_write.wait()
 
                     should_schedule_another_task = False
-
-                    if timeout is not None:
-                        wait_clock += asyncio.get_running_loop().time() - before
-
-                        if wait_clock >= timeout:
-                            raise UnavailableTraffic(
-                                f"No connection available within {timeout} second(s)"
-                            )
-
                     continue
 
                 raise UnavailableTraffic("No connection available")
@@ -688,8 +717,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
     ) -> T | None:
-        wait_clock: float = 0.0
-
         while True:
             if not isinstance(traffic_indicator, type):
                 key: PoolKey | int = (
@@ -723,17 +750,24 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if not isinstance(conn_or_pool, ItemPlaceholder):
                 break
 
-            before = asyncio.get_running_loop().time()
+            while True:
+                if (
+                    self.concurrency is False
+                    and self.bag_not_saturated
+                    and self._want_write.anyone_waiting()
+                ):
+                    await asyncio.sleep(0)
+                    continue
 
-            await asyncio.sleep(0.001)
+                if timeout is not None:
+                    async with ctx_expire_in(delay=timeout):
+                        async with self._want_exploit:
+                            await self._want_exploit.wait()
+                else:
+                    async with self._want_exploit:
+                        await self._want_exploit.wait()
 
-            if timeout is not None:
-                wait_clock += asyncio.get_running_loop().time() - before
-
-                if wait_clock >= timeout:
-                    raise TimeoutError(
-                        "Timed out while waiting for conn_or_pool to become available"
-                    )
+                break
 
         if conn_or_pool is None or obj_id is None:
             return None
@@ -753,8 +787,20 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 raise UnavailableTraffic("Unavailable connection")
 
             while True:
-                async with self._container_insert:
-                    await self._container_insert.wait()
+                if (
+                    self.concurrency is False
+                    and self.bag_not_saturated
+                    and self._want_write.anyone_waiting()
+                ):
+                    await asyncio.sleep(0)
+                    continue
+                if timeout is not None:
+                    async with ctx_expire_in(delay=timeout):
+                        async with self._want_exploit:
+                            await self._want_exploit.wait()
+                else:
+                    async with self._want_exploit:
+                        await self._want_exploit.wait()
                 if obj_id in self._container:
                     break
 
@@ -773,6 +819,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
         timeout: float | None = None,
         not_idle_only: bool = False,
     ) -> typing.AsyncGenerator[T, None]:
+        if self.concurrency is False:
+            while self.bag_not_saturated and self._want_write.anyone_waiting():
+                await asyncio.sleep(0)
+
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -831,15 +881,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if self.concurrency is False:
                     self._container[active_cursor.obj_id] = active_cursor.conn_or_pool
                     if (
-                        self._any_available.anyone_waiting()
+                        self._want_write.anyone_waiting()
                         and traffic_state_of(active_cursor.conn_or_pool)
                         is not TrafficState.SATURATED
                     ):
-                        with self._any_available:
-                            self._any_available.notify()
-                    elif self._container_insert.anyone_waiting():
-                        with self._container_insert:
-                            self._container_insert.notify()
+                        with self._want_write:
+                            self._want_write.notify()
+                    elif self._want_exploit.anyone_waiting():
+                        with self._want_exploit:
+                            self._want_exploit.notify()
 
                 self._set_cursor(None)
 
