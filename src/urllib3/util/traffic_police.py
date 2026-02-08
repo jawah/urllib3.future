@@ -389,10 +389,10 @@ class TrafficPolice(typing.Generic[T]):
 
                     return
 
-                signal = self._register_signal(None, TrafficState.IDLE)
+                if block:
+                    break
 
-            if block:
-                break
+                signal = self._register_signal(None, TrafficState.IDLE)
 
             signal.event.wait()
 
