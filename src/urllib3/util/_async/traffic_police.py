@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
-import contextvars
+import sys
+import time
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..traffic_police import (
     AtomicTraffic,
@@ -22,7 +24,6 @@ if typing.TYPE_CHECKING:
     from ..._async.response import AsyncHTTPResponse
     from ...backend import ResponsePromise
     from ...poolmanager import PoolKey
-    from types import TracebackType
 
     MappableTraffic: typing.TypeAlias = typing.Union[
         AsyncHTTPResponse, ResponsePromise, PoolKey
@@ -45,36 +46,317 @@ class ActiveCursor(typing.Generic[T]):
     depth: int = 1
 
 
-class SyncEntrantCondition(asyncio.Condition):
-    """This asyncio.Condition extension is solely needed to avoid a breaking change
-    in AsyncTrafficPolice.release as we cannot make it awaitable. The risk should
-    be minimal."""
+def _current_task_or_die() -> asyncio.Task[typing.Any]:
+    t = asyncio.current_task()
+    if t is None:
+        raise RuntimeError(
+            "Attempt to call function outside of (async) running event loop"
+        )
+    return t
 
-    def __enter__(self) -> None:
-        lock: asyncio.Lock = self._lock  # type: ignore[attr-defined]
-        current_task = asyncio.current_task()
 
-        if lock._locked:  # type: ignore[attr-defined]
-            raise RuntimeError("Lock is already held")
+@dataclass
+class AsyncPendingSignal(typing.Generic[T]):
+    """A task may want to block on a specific signal to avoid consuming CPU needlessly."""
 
-        lock._locked = True  # type: ignore[attr-defined]
-        lock._owner = current_task  # type: ignore[attr-defined]
+    owner_task: asyncio.Task[typing.Any] = field(default_factory=_current_task_or_die)
+    #: the signal itself, when the condition is met, it's set.
+    event: asyncio.Event = field(default_factory=asyncio.Event)
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> typing.Literal[False]:
-        lock: asyncio.Lock = self._lock  # type: ignore[attr-defined]
+    #: the target makes the signal only trigger for that particular conn_or_pool
+    target_conn_or_pool: T | None = None
+    target_obj_id: int | None = None
 
-        lock._locked = False  # type: ignore[attr-defined]
-        lock._owner = None  # type: ignore[attr-defined]
+    #: what conn_or_pool you get after the signal is received (if it's there, it's safe to use)
+    conn_or_pool: T | None = None
+
+    #: limited suite of state we want for the conn_or_pool or None
+    states: tuple[TrafficState, ...] = (
+        TrafficState.IDLE,
+        TrafficState.USED,
+        TrafficState.SATURATED,
+    )
+
+
+# Target delay in seconds (100 µs). This is the approximate time we want
+# the event-loop thread to stall so the kernel can accumulate
+# several incoming segments before the next recv() call.
+_COALESCE_DELAY: float = 0.0001
+
+if sys.platform == "win32":
+    # Windows lacks nanosleep, let's improvise!
+    # A perf_counter spin-wait is the only portable way to get consistent
+    # sub-millisecond blocking on Windows. 100 µs of busy-waiting is
+    # negligible in practice (< 0.5 % of a typical request lifecycle).
+    _perf_counter = time.perf_counter
+
+    def _kernel_recv_coalesce() -> None:
+        deadline = _perf_counter() + _COALESCE_DELAY
+        while _perf_counter() < deadline:
+            pass
+
+else:
+    # Every POSIX platform (Linux, macOS, FreeBSD, ...) exposes nanosleep
+    # through time.sleep() with µs-level accuracy.  This is both precise
+    # and CPU-friendly: the thread truly sleeps instead of spinning.
+    # we are effectively letting the kernel coalesce as much packet as possible.
+    def _kernel_recv_coalesce() -> None:
+        time.sleep(_COALESCE_DELAY)
+
+
+def _intent_to_write(*states: TrafficState) -> bool:
+    """Infer whether the caller wants to WRITE (True) or READ (False)
+    based on the traffic states being queried.
+
+    Querying exclusively for states with remaining request capacity
+    (IDLE, USED) implies a WRITE intent — looking for a connection to
+    send a new request on.
+    Querying for states with open streams that may be at capacity
+    (SATURATED) implies a READ intent — waiting to consume responses.
+    """
+    return all(state < TrafficState.SATURATED for state in states)
+
+
+class AsyncSignals(typing.Generic[T]):
+    """The signal mgr counterpart of our synchronous implementation but for monothreaded/goto label version."""
+
+    def __init__(
+        self, cursors: dict[asyncio.Task[typing.Any], ActiveCursor[T]]
+    ) -> None:
+        self._priority_signals: collections.deque[AsyncPendingSignal[T]] = (
+            collections.deque()
+        )
+        self._furthest_signals: collections.deque[AsyncPendingSignal[T]] = (
+            collections.deque()
+        )
+
+        #: set if there is no waiter for write + no specific target
+        self._generic_waiters: asyncio.Event = asyncio.Event()
+        self._generic_waiters.set()
+
+        self._saturated_signals: dict[int, asyncio.Event] = {}
+
+        #: ref to higher cursors held in AsyncTrafficPolice
+        self._cursors: dict[asyncio.Task[typing.Any], ActiveCursor[T]] = cursors
+
+        self._writing_tasks: set[asyncio.Task[typing.Any]] = set()
+
+        self._last_dispatch_end = 0.0
+        self._ema_gap = 0.0
+
+    def declare_writing(self) -> None:
+        self._writing_tasks.add(_current_task_or_die())
+
+    def terminate_writing(self) -> bool:
+        current_task = _current_task_or_die()
+        if current_task in self._writing_tasks:
+            self._writing_tasks.remove(current_task)
+            return self._refresh_generic_waiters()
+        return False
+
+    def _refresh_generic_waiters(self) -> bool:
+        if self._writing_tasks or self._priority_signals:
+            if self._generic_waiters.is_set():
+                self._generic_waiters.clear()
+                return True
+        else:
+            if not self._generic_waiters.is_set():
+                self._generic_waiters.set()
+                return True
 
         return False
 
-    def anyone_waiting(self) -> bool:
-        return bool(self._waiters)
+    def register(
+        self,
+        target_conn_or_pool: T | None,
+        *states: TrafficState,
+    ) -> AsyncPendingSignal[T]:
+        signal = AsyncPendingSignal(
+            states=states,
+            target_conn_or_pool=target_conn_or_pool,
+        )
+
+        if target_conn_or_pool is not None:
+            signal.target_obj_id = id(target_conn_or_pool)
+
+        if target_conn_or_pool is not None:
+            obj_id = id(target_conn_or_pool)
+
+            if obj_id not in self._saturated_signals:
+                self._saturated_signals[obj_id] = asyncio.Event()
+
+        if _intent_to_write(*states):
+            self._priority_signals.appendleft(signal)
+        else:
+            self._furthest_signals.append(signal)
+
+        return signal
+
+    def unregister(
+        self,
+        signal: AsyncPendingSignal[T],
+        unblock: bool = False,
+    ) -> None:
+        if signal in self._priority_signals:
+            self._priority_signals.remove(signal)
+        else:
+            self._furthest_signals.remove(signal)
+        if unblock:
+            signal.event.set()
+
+    def should_queue_read_operation(
+        self,
+        target_conn_or_pool: T,
+    ) -> bool:
+        if self._generic_waiters.is_set():
+            return False
+        elif traffic_state_of(target_conn_or_pool) is TrafficState.SATURATED:
+            return False
+
+        obj_id = id(target_conn_or_pool)
+
+        if obj_id not in self._saturated_signals:
+            self._saturated_signals[obj_id] = asyncio.Event()
+
+        if self._saturated_signals[obj_id].is_set():
+            return False
+        elif self._priority_signals:
+            return True
+
+        return False
+
+    def kill(self) -> bool:
+        current_task = _current_task_or_die()
+
+        if current_task not in self._cursors:
+            raise AtomicTraffic
+
+        cursor = self._cursors[current_task]
+
+        any_broadcast_push: bool = False
+
+        if cursor.obj_id in self._saturated_signals:
+            condition = self._saturated_signals[cursor.obj_id]
+            condition.set()
+            any_broadcast_push = True
+
+        awoken_signals = []
+
+        if self._priority_signals:
+            awoken_signal = self._priority_signals.popleft()
+            awoken_signal.event.set()
+            any_broadcast_push = True
+
+        for signal in self._furthest_signals:
+            if signal.target_obj_id == cursor.obj_id:
+                signal.event.set()
+                awoken_signals.append(signal)
+
+        for awoken_signal in awoken_signals:
+            if awoken_signal in self._priority_signals:
+                self._priority_signals.remove(awoken_signal)
+            else:
+                self._furthest_signals.remove(awoken_signal)
+
+        del self._cursors[current_task]
+
+        if awoken_signals:
+            return True
+
+        return any_broadcast_push
+
+    def next(self) -> bool:
+        current_task = _current_task_or_die()
+
+        if current_task not in self._cursors:
+            raise AtomicTraffic
+
+        cursor = self._cursors[current_task]
+        current_state = traffic_state_of(cursor.conn_or_pool)
+
+        now = time.perf_counter()
+
+        # Natural gap = time the event loop spent between dispatches
+        # (excludes our own sleep from last time)
+        if self._last_dispatch_end > 0:
+            natural_gap = now - self._last_dispatch_end
+            # Smooth with EMA to avoid reacting to transient spikes
+            self._ema_gap = self._ema_gap * 0.7 + natural_gap * 0.3
+
+        remaining = _COALESCE_DELAY - self._ema_gap
+
+        if remaining > 0:
+            _kernel_recv_coalesce()  # or spin-wait on Windows
+
+        # ... bookkeeping, signal dispatch ...
+        self._last_dispatch_end = time.perf_counter()
+
+        can_write_more: bool = current_state is not TrafficState.SATURATED
+        can_read_anything: bool = current_state is not TrafficState.IDLE
+        can_only_write: bool = current_state is TrafficState.IDLE
+
+        any_broadcast_push: bool = False
+
+        if cursor.obj_id in self._saturated_signals:
+            event = self._saturated_signals[cursor.obj_id]
+
+            if current_state is TrafficState.SATURATED:
+                if not event.is_set():
+                    event.set()
+                    any_broadcast_push = True
+            else:
+                if event.is_set():
+                    event.clear()
+
+        anything_pending_write: bool = bool(self._priority_signals)
+
+        if anything_pending_write and can_write_more:
+            early_unpack_signal = self._priority_signals.pop()
+
+            early_unpack_signal.conn_or_pool = cursor.conn_or_pool
+
+            # transfer the cursor
+            del self._cursors[current_task]
+            self._cursors[early_unpack_signal.owner_task] = cursor
+            cursor.depth = 1
+
+            # mark task as currently in writing
+            if current_task in self._writing_tasks:
+                self._writing_tasks.remove(current_task)
+
+            self._writing_tasks.add(early_unpack_signal.owner_task)
+
+            early_unpack_signal.event.set()
+            self._refresh_generic_waiters()
+            return True
+
+        if (can_only_write and not anything_pending_write) or not can_read_anything:
+            return any_broadcast_push
+
+        late_signal_elected: AsyncPendingSignal[T] | None = None
+
+        for signal in self._furthest_signals:
+            if current_state not in signal.states:
+                continue
+
+            if signal.target_obj_id == cursor.obj_id:
+                late_signal_elected = signal
+                break
+
+        if late_signal_elected is not None:
+            late_signal_elected.conn_or_pool = cursor.conn_or_pool
+            del self._cursors[current_task]
+            self._cursors[late_signal_elected.owner_task] = cursor
+            cursor.depth = 1
+
+            late_signal_elected.event.set()
+
+            self._furthest_signals.remove(late_signal_elected)
+
+            self._refresh_generic_waiters()
+            return True
+
+        return any_broadcast_push
 
 
 class AsyncTrafficPolice(typing.Generic[T]):
@@ -94,13 +376,22 @@ class AsyncTrafficPolice(typing.Generic[T]):
     This program is (very) complex and need, for patches, at least both unit tests and integration tests passing.
     """
 
-    def __init__(self, maxsize: int | None = None, concurrency: bool = False):
+    def __init__(
+        self,
+        maxsize: int | None = None,
+        concurrency: bool = False,
+        strict_maxsize: bool = True,
+    ):
         """
         :param maxsize: Maximum number of items that can be contained.
-        :param concurrency: Whether to allow a single item to be used across multiple threads.
+        :param concurrency: Whether to allow a single item to be used across multiple tasks.
+        :param strict_maxsize: If True the scheduler does not increase maxsize for a temporary increase.
         """
         self.maxsize = maxsize
         self.concurrency = concurrency
+        self.strict_maxsize = strict_maxsize
+
+        self._original_maxsize = maxsize
 
         self._registry: dict[int, T] = {}
         self._container: dict[int, T] = {}
@@ -110,27 +401,26 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         self._shutdown: bool = False
 
-        self.__ctx_cursor: contextvars.ContextVar[ActiveCursor[T] | None] = (
-            contextvars.ContextVar("cursor", default=None)
-        )
+        self._cursors: dict[asyncio.Task[typing.Any], ActiveCursor[T]] = {}
 
         self.parent: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
 
-        # The bellow Condition is for: "A conn_or_pool is in a ready state (ie not saturated)"
-        self._want_write: SyncEntrantCondition = SyncEntrantCondition()
-
-        # This condition is a signal whenever a conn_or_pool enter the container.
-        self._want_exploit: SyncEntrantCondition = SyncEntrantCondition()
+        self._signals = AsyncSignals(self._cursors)
 
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
-        try:
-            return self.__ctx_cursor.get()
-        except LookupError:
-            return None
+        current_task = _current_task_or_die()
 
-    def _set_cursor(self, value: ActiveCursor[T] | None) -> None:
-        self.__ctx_cursor.set(value)
+        if current_task in self._cursors:
+            return self._cursors[current_task]
+
+        return None
+
+    def _unset_cursor(self) -> None:
+        current_task = _current_task_or_die()
+
+        if current_task in self._cursors:
+            del self._cursors[current_task]
 
     @property
     def busy(self) -> bool:
@@ -171,50 +461,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         return False
 
-    async def wait_for_unallocated_or_available_slot(self) -> None:
-        """Wait for EITHER free slot in the pool OR one conn is not saturated!"""
-        if self.maxsize is None:  # case Inf.
-            return
-
-        if len(self._registry) < self.maxsize:
-            return
-
-        if any(
-            traffic_state_of(c) is not TrafficState.SATURATED
-            for c in self._container.values()
-        ):
-            return
-
-        async with self._want_write:
-            await self._want_write.wait()
-
-    async def wait_for_idle_or_available_slot(
-        self, timeout: float | None = None
-    ) -> None:
-        while True:
-            if self.maxsize is None:  # case Inf.
-                return
-
-            if len(self._registry) < self.maxsize:
-                return
-
-            for obj_id, conn_or_pool in self._container.items():
-                if traffic_state_of(conn_or_pool) is TrafficState.IDLE:
-                    return
-
-            if timeout is not None:
-                try:
-                    async with ctx_expire_in(delay=timeout):
-                        async with self._want_exploit:
-                            await self._want_exploit.wait()
-                except TimeoutError:
-                    raise TimeoutError(
-                        "Timed out while waiting for conn_or_pool to become available"
-                    )
-            else:
-                async with self._want_exploit:
-                    await self._want_exploit.wait()
-
     def __len__(self) -> int:
         return len(self._registry)
 
@@ -236,32 +482,60 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
     async def _find_by(self, traffic_type: type, block: bool = True) -> T | None:
         """Find the first available conn or pool that is linked to at least one traffic type."""
-        while True:
-            any_match = False
+        any_of: list[T] = []
 
-            for k, v in self._map_types.items():
-                if v is traffic_type:
-                    conn_or_pool = self._map[k]
-                    # this method may be subject to quick states mutation
-                    # due to the (internal) map independent lock
-                    if conn_or_pool.is_idle is True:
+        for k, v in self._map_types.items():
+            if v is traffic_type:
+                conn_or_pool = self._map[k]
+                obj_id = id(conn_or_pool)
+
+                if obj_id in self._container:
+                    return conn_or_pool
+
+                any_of.append(conn_or_pool)
+
+        if not block:
+            return None
+
+        if any_of:
+            signals = [
+                self._signals.register(
+                    conn_or_pool, TrafficState.USED, TrafficState.SATURATED
+                )
+                for conn_or_pool in any_of
+            ]
+
+            coros_to_signal: dict[asyncio.Task[typing.Any], AsyncPendingSignal[T]] = {
+                asyncio.ensure_future(s.event.wait()): s for s in signals
+            }
+            futs = list(coros_to_signal.keys())
+
+            try:
+                done, pending = await asyncio.wait(
+                    futs, return_when=asyncio.FIRST_COMPLETED
+                )
+            except asyncio.CancelledError:
+                for task, signal in coros_to_signal.items():
+                    self._signals.unregister(signal)
+                    task.cancel()
+
+                await asyncio.gather(*futs, return_exceptions=True)
+            else:
+                for task in pending:
+                    task.cancel()
+
+                first_coro = done.pop()
+                target_signal = coros_to_signal[first_coro]
+
+                for signal in signals:
+                    if target_signal == signal:
                         continue
 
-                    any_match = True
+                    self._signals.unregister(signal)
 
-                    obj_id = id(conn_or_pool)
+                await asyncio.gather(*pending, return_exceptions=True)
 
-                    if obj_id in self._container:
-                        return conn_or_pool
-
-            if block is False:
-                break
-
-            if any_match:
-                await asyncio.sleep(0.001)
-                continue
-
-            break
+                return target_signal.target_conn_or_pool
 
         return None
 
@@ -282,18 +556,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
         except Exception:
             pass
 
-        self._set_cursor(None)
+        if not self.concurrency:
+            self._signals.kill()
+            await asyncio.sleep(0)
+        else:
+            del self._container[active_cursor.obj_id]
+            self._unset_cursor()
 
-        # edge case avoid infinite sleeping task
-        if not self._registry:
-            if self._want_exploit.anyone_waiting():
-                async with self._want_exploit:
-                    self._want_exploit.notify_all()
-            if self._want_write.anyone_waiting():
-                async with self._want_write:
-                    self._want_write.notify_all()
-
-    async def _sacrifice_first_idle(self, block: bool = False) -> None:
+    async def _sacrifice_first_idle(self, block: bool = True) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
         This method try its best to find the most appropriate idle item and removes it.
         """
@@ -302,40 +572,48 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if not self._registry:
             return
 
-        while True:
-            for obj_id, conn_or_pool in self._registry.items():
-                if (
-                    obj_id in self._container
-                    and traffic_state_of(conn_or_pool) is TrafficState.IDLE
-                ):
-                    eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
-                    break
-
-            if eligible_obj_id is not None and eligible_conn_or_pool is not None:
-                self._map_clear(eligible_conn_or_pool)
-
-                del self._registry[eligible_obj_id]
-                del self._container[eligible_obj_id]
-
-                try:
-                    await eligible_conn_or_pool.close()
-                except Exception:
-                    pass
-
-                return
-
-            if block:
+        for obj_id, conn_or_pool in self._registry.items():
+            if (
+                obj_id in self._container
+                and traffic_state_of(conn_or_pool) is TrafficState.IDLE
+            ):
+                eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
                 break
 
-            await asyncio.sleep(0)
+        if eligible_obj_id is not None and eligible_conn_or_pool is not None:
+            self._map_clear(eligible_conn_or_pool)
 
-        raise OverwhelmedTraffic(
-            "Cannot select a disposable connection to ease the charge. "
-            "This usually means that your pool sizing is insufficient, "
-            "please increase your pool maxsize appropriately. "
-            f"Currently set at maxsize={self.maxsize}. Usually you "
-            "want as much as the number of active tasks/connections."
+            del self._registry[eligible_obj_id]
+            del self._container[eligible_obj_id]
+
+            try:
+                await eligible_conn_or_pool.close()
+            except Exception:
+                pass
+
+            return
+
+        if not block:
+            raise OverwhelmedTraffic(
+                "Cannot select a disposable connection to ease the charge. "
+                "This usually means that your pool sizing is insufficient, "
+                "please increase your pool maxsize appropriately. "
+                f"Currently set at maxsize={self.maxsize}. Usually you "
+                "want as much as the number of active tasks/connections."
+            )
+
+        signal = self._signals.register(
+            None,
+            TrafficState.IDLE,
         )
+
+        try:
+            await signal.event.wait()
+        except asyncio.CancelledError:
+            self._signals.unregister(signal)
+            raise
+
+        await self._sacrifice_first_idle(block=block)
 
     async def iter_idle(self) -> typing.AsyncGenerator[T, None]:
         """Iterate over idle conn contained in the container bag."""
@@ -345,53 +623,37 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 "Call release prior to calling this method."
             )
 
-        should_schedule_another_task: bool = False
+        current_task = _current_task_or_die()
 
-        try:
-            if self._container:
-                idle_targets: list[tuple[int, T]] = []
+        if self._container:
+            idle_targets: list[tuple[int, T]] = []
 
-                for cur_obj_id, cur_conn_or_pool in self._container.items():
-                    if traffic_state_of(cur_conn_or_pool) is not TrafficState.IDLE:
-                        continue
+            for cur_obj_id, cur_conn_or_pool in self._container.items():
+                if traffic_state_of(cur_conn_or_pool) is not TrafficState.IDLE:
+                    continue
 
-                    idle_targets.append((cur_obj_id, cur_conn_or_pool))
+                idle_targets.append((cur_obj_id, cur_conn_or_pool))
 
-                for obj_id, conn_or_pool in idle_targets:
+            for obj_id, conn_or_pool in idle_targets:
+                if (
+                    not self.concurrency
+                ):  # i.e. no exclusive access to conn_or_pool, no lock.
                     del self._container[obj_id]
 
-                    if obj_id is not None and conn_or_pool is not None:
-                        self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
+                if obj_id is not None and conn_or_pool is not None:
+                    self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
 
-                        if self.concurrency is True:
-                            self._container[obj_id] = conn_or_pool
-                            if (
-                                self._want_write.anyone_waiting()
-                                and traffic_state_of(conn_or_pool)
-                                is not TrafficState.SATURATED
-                            ):
-                                async with self._want_write:
-                                    self._want_write.notify()
-                                    should_schedule_another_task = True
-
-                            elif self._want_exploit.anyone_waiting():
-                                async with self._want_exploit:
-                                    self._want_exploit.notify()
-                                should_schedule_another_task = True
-
-                        try:
-                            yield conn_or_pool
-                        finally:
-                            self.release()
-        finally:
-            if should_schedule_another_task:
-                await asyncio.sleep(0)
+                    try:
+                        yield conn_or_pool
+                    finally:
+                        if self.release():
+                            await asyncio.sleep(0)
 
     async def put(
         self,
         conn_or_pool: T,
         *traffic_indicators: MappableTraffic,
-        block: bool = False,
+        block: bool = True,
         immediately_unavailable: bool = False,
     ) -> None:
         # clear was called, each conn/pool that gets back must be destroyed appropriately.
@@ -410,6 +672,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
             await self._sacrifice_first_idle(block=block)
 
         should_schedule_another_task: bool = False
+        current_task = _current_task_or_die()
+        active_cursor = self._cursor
 
         try:
             obj_id = id(conn_or_pool)
@@ -421,8 +685,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     # we remain conservative here on purpose. BC constraints with upstream.
                     return
 
-                active_cursor = self._cursor
-
                 if active_cursor is not None:
                     if active_cursor.obj_id != obj_id:
                         raise AtomicTraffic(
@@ -432,42 +694,33 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     active_cursor.depth -= 1
 
                     if active_cursor.depth == 0:
-                        self._set_cursor(None)
+                        if not self.concurrency:
+                            if self._signals.terminate_writing():
+                                should_schedule_another_task = True
+
+                            if self._signals.next():
+                                should_schedule_another_task = True
+                            else:
+                                self._unset_cursor()
+                                self._container[obj_id] = conn_or_pool
+                        else:
+                            self._unset_cursor()
             else:
                 self._registry[obj_id] = conn_or_pool
 
-            if not immediately_unavailable:
-                if self._cursor is None:
-                    self._container[obj_id] = conn_or_pool
-                    if (
-                        self._want_write.anyone_waiting()
-                        and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED
-                    ):
-                        async with self._want_write:
-                            self._want_write.notify()
-                            should_schedule_another_task = True
-                    elif self._want_exploit.anyone_waiting():
-                        async with self._want_exploit:
-                            self._want_exploit.notify()
-                        should_schedule_another_task = True
-            else:
-                self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
+            if immediately_unavailable:
+                # it's "registered" but not available to others. thus setting the cursor on it.
+                self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
 
-                if self.concurrency is True and not isinstance(
-                    conn_or_pool, ItemPlaceholder
-                ):
+                is_placeholder = isinstance(conn_or_pool, ItemPlaceholder)
+
+                if not is_placeholder and not self.concurrency:
+                    self._signals.declare_writing()
+
+                # even with immediately_unavailable, if we're on a non-exclusive bag, then it's shared.
+                if self.concurrency is True and not is_placeholder:
                     self._container[obj_id] = conn_or_pool
-                    if (
-                        self._want_write.anyone_waiting()
-                        and traffic_state_of(conn_or_pool) is not TrafficState.SATURATED
-                    ):
-                        async with self._want_write:
-                            self._want_write.notify()
-                            should_schedule_another_task = True
-                    elif self._want_exploit.anyone_waiting():
-                        async with self._want_exploit:
-                            self._want_exploit.notify()
-                        should_schedule_another_task = True
+                    should_schedule_another_task = True
 
             if traffic_indicators:
                 for indicator in traffic_indicators:
@@ -489,115 +742,118 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self,
         block: bool = True,
         timeout: float | None = None,
-        non_saturated_only: bool = False,
-        not_idle_only: bool = False,
+        non_saturated_only: bool = False,  # ie. wants WRITE
+        not_idle_only: bool = False,  # ie. wants READ
     ) -> T | None:
         conn_or_pool = None
-        should_schedule_another_task: bool = False
 
-        while True:
-            if self._cursor is not None:
-                raise AtomicTraffic(
-                    "One connection/pool active per task at a given time. "
-                    "Call release prior to calling this method."
+        if self._cursor is not None:
+            raise AtomicTraffic(
+                "One connection/pool active per task at a given time. "
+                "Call release prior to calling this method."
+            )
+
+        # This part is ugly but set for backward compatibility
+        # urllib3 used to fill the bag with 'None'. This simulates that
+        # old and bad behavior.
+        if (
+            not self._container or self.bag_only_saturated
+        ) and self.maxsize is not None:
+            if self.maxsize > len(self._registry):
+                await self.put(
+                    ItemPlaceholder(),  # type: ignore[arg-type]
+                    immediately_unavailable=True,
+                    block=block,
                 )
+                return None
 
-            # This part is ugly but set for backward compatibility
-            # urllib3 used to fill the bag with 'None'. This simulates that
-            # old and bad behavior.
-            if (
-                not self._container or self.bag_only_saturated
-            ) and self.maxsize is not None:
-                if self.maxsize > len(self._registry):
-                    return None
+        current_task = _current_task_or_die()
 
-            if self._container:
-                if non_saturated_only:
+        if self._container:
+            if non_saturated_only:
+                obj_id, conn_or_pool = None, None
+                for cur_obj_id, cur_conn_or_pool in self._container.items():
+                    if traffic_state_of(cur_conn_or_pool) is TrafficState.SATURATED:
+                        continue
+                    obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
+                    break
+                if obj_id is not None:
+                    del self._container[obj_id]
+            else:
+                if not not_idle_only:
+                    obj_id, conn_or_pool = self._container.popitem()
+                else:
                     obj_id, conn_or_pool = None, None
                     for cur_obj_id, cur_conn_or_pool in self._container.items():
-                        if traffic_state_of(cur_conn_or_pool) is TrafficState.SATURATED:
+                        if traffic_state_of(cur_conn_or_pool) is TrafficState.IDLE:
                             continue
                         obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
                         break
                     if obj_id is not None:
                         del self._container[obj_id]
+
+            if obj_id is not None and conn_or_pool is not None:
+                self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
+
+                if self.concurrency:
+                    self._container[obj_id] = conn_or_pool
                 else:
-                    if not not_idle_only:
-                        obj_id, conn_or_pool = self._container.popitem()
+                    if non_saturated_only and not self.concurrency:
+                        self._signals.declare_writing()
+
+                return conn_or_pool
+
+        if conn_or_pool is None:
+            if block:
+                if not_idle_only:
+                    states: tuple[TrafficState, ...] = (
+                        TrafficState.USED,
+                        TrafficState.SATURATED,
+                    )
+                elif non_saturated_only:
+                    states = (
+                        TrafficState.USED,
+                        TrafficState.IDLE,
+                    )
+                else:
+                    states = (
+                        TrafficState.IDLE,
+                        TrafficState.USED,
+                        TrafficState.SATURATED,
+                    )
+
+                signal = self._signals.register(
+                    None,
+                    *states,
+                )
+
+                try:
+                    if timeout is not None:
+                        try:
+                            async with ctx_expire_in(delay=timeout):
+                                await signal.event.wait()
+                        except TimeoutError as e:
+                            raise UnavailableTraffic(
+                                f"No connection available within {timeout} second(s)"
+                            ) from e
                     else:
-                        obj_id, conn_or_pool = None, None
-                        for cur_obj_id, cur_conn_or_pool in self._container.items():
-                            if traffic_state_of(cur_conn_or_pool) is TrafficState.IDLE:
-                                continue
-                            obj_id, conn_or_pool = cur_obj_id, cur_conn_or_pool
-                            break
-                        if obj_id is not None:
-                            del self._container[obj_id]
+                        await signal.event.wait()
+                except asyncio.CancelledError:
+                    self._signals.unregister(signal)
+                    raise
 
-                if obj_id is not None and conn_or_pool is not None:
-                    self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
+                if (
+                    signal.conn_or_pool is None
+                ):  # case where a slot is free. (previously killed)
+                    await self.put(
+                        ItemPlaceholder(),  # type: ignore[arg-type]
+                        immediately_unavailable=True,
+                        block=block,
+                    )
+                    return None
+                return signal.conn_or_pool
 
-                    if self.concurrency is True:
-                        self._container[obj_id] = conn_or_pool
-                        if (
-                            self._want_write.anyone_waiting()
-                            and traffic_state_of(conn_or_pool)
-                            is not TrafficState.SATURATED
-                        ):
-                            async with self._want_write:
-                                self._want_write.notify()
-                                should_schedule_another_task = True
-                        elif self._want_exploit.anyone_waiting():
-                            async with self._want_exploit:
-                                self._want_exploit.notify()
-                            should_schedule_another_task = True
-
-                    break
-
-            if conn_or_pool is None:
-                if block is False:
-                    if not_idle_only:
-                        while (
-                            self.concurrency is False
-                            and self.bag_not_saturated
-                            and self._want_write.anyone_waiting()
-                        ):
-                            await asyncio.sleep(0)
-
-                        if timeout is not None:
-                            try:
-                                async with ctx_expire_in(delay=timeout):
-                                    async with self._want_exploit:
-                                        await self._want_exploit.wait()
-                            except TimeoutError as e:
-                                raise UnavailableTraffic(
-                                    f"No connection available within {timeout} second(s)"
-                                ) from e
-                        else:
-                            async with self._want_exploit:
-                                await self._want_exploit.wait()
-                        break
-                    else:
-                        if timeout is not None:
-                            try:
-                                async with ctx_expire_in(delay=timeout):
-                                    async with self._want_write:
-                                        await self._want_write.wait()
-                            except TimeoutError as e:
-                                raise UnavailableTraffic(
-                                    f"No connection available within {timeout} second(s)"
-                                ) from e
-                        else:
-                            async with self._want_write:
-                                await self._want_write.wait()
-
-                    should_schedule_another_task = False
-                    continue
-
-                raise UnavailableTraffic("No connection available")
-
-        if should_schedule_another_task:
-            await asyncio.sleep(0)
+            raise UnavailableTraffic("No connection available")
 
         return conn_or_pool
 
@@ -652,7 +908,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
     async def locate_or_hold(
         self,
         traffic_indicator: MappableTraffic | None = None,
-        block: bool = False,
+        block: bool = True,
+        placeholder_set: bool = False,
     ) -> typing.AsyncGenerator[typing.Callable[[T], typing.Awaitable[None]] | T]:
         """Reserve a spot into the TrafficPolice instance while you construct your conn_or_pool.
 
@@ -675,14 +932,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if traffic_indicator is not None:
             traffic_indicators.append(traffic_indicator)
 
-        await self.wait_for_idle_or_available_slot()
-
-        await self.put(
-            ItemPlaceholder(),  # type: ignore[arg-type]
-            *traffic_indicators,
-            immediately_unavailable=True,
-            block=block,
-        )
+        if not placeholder_set:
+            await self.put(
+                ItemPlaceholder(),  # type: ignore[arg-type]
+                *traffic_indicators,
+                immediately_unavailable=True,
+                block=block,
+            )
 
         swap_made: bool = False
 
@@ -693,11 +949,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             active_cursor = self._cursor
 
-            if active_cursor is None:
-                raise AtomicTraffic()
-
-            del self._registry[active_cursor.obj_id]
-            self._set_cursor(None)
+            if (
+                active_cursor is not None
+            ):  # only allowed in tests, should never occur in real conditions.
+                del self._registry[active_cursor.obj_id]
+                self._unset_cursor()
 
             await self.put(
                 swappable_conn_or_pool,
@@ -750,24 +1006,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
             if not isinstance(conn_or_pool, ItemPlaceholder):
                 break
 
-            while True:
-                if (
-                    self.concurrency is False
-                    and self.bag_not_saturated
-                    and self._want_write.anyone_waiting()
-                ):
-                    await asyncio.sleep(0)
-                    continue
-
-                if timeout is not None:
-                    async with ctx_expire_in(delay=timeout):
-                        async with self._want_exploit:
-                            await self._want_exploit.wait()
-                else:
-                    async with self._want_exploit:
-                        await self._want_exploit.wait()
-
-                break
+            await asyncio.sleep(0)
 
         if conn_or_pool is None or obj_id is None:
             return None
@@ -782,32 +1021,28 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 "Seeking to locate a connection when having another one used, did you forget a call to release?"
             )
 
-        if obj_id not in self._container:
-            if block is False:
+        if obj_id not in self._container or self._signals.should_queue_read_operation(
+            conn_or_pool
+        ):
+            if not block:
                 raise UnavailableTraffic("Unavailable connection")
 
-            while True:
-                if (
-                    self.concurrency is False
-                    and self.bag_not_saturated
-                    and self._want_write.anyone_waiting()
-                ):
-                    await asyncio.sleep(0)
-                    continue
-                if timeout is not None:
-                    async with ctx_expire_in(delay=timeout):
-                        async with self._want_exploit:
-                            await self._want_exploit.wait()
-                else:
-                    async with self._want_exploit:
-                        await self._want_exploit.wait()
-                if obj_id in self._container:
-                    break
+            signal = self._signals.register(
+                conn_or_pool,
+                TrafficState.USED,
+                TrafficState.SATURATED,
+            )
 
-        if self.concurrency is False:
-            del self._container[obj_id]
+            try:
+                await signal.event.wait()
+            except asyncio.CancelledError:
+                self._signals.unregister(signal)
+                raise
+        else:
+            self._cursors[_current_task_or_die()] = ActiveCursor(obj_id, conn_or_pool)
 
-        self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
+            if not self.concurrency:
+                del self._container[obj_id]
 
         return conn_or_pool
 
@@ -819,10 +1054,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
         timeout: float | None = None,
         not_idle_only: bool = False,
     ) -> typing.AsyncGenerator[T, None]:
-        if self.concurrency is False:
-            while self.bag_not_saturated and self._want_write.anyone_waiting():
-                await asyncio.sleep(0)
-
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -839,9 +1070,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
                                 )
                             active_cursor.depth += 1
                         else:
-                            self._set_cursor(ActiveCursor(obj_id, conn_or_pool))
+                            self._cursors[_current_task_or_die()] = ActiveCursor(
+                                obj_id, conn_or_pool
+                            )
 
-                            if self.concurrency is False:
+                            if not self.concurrency:
                                 del self._container[obj_id]
                 else:
                     conn_or_pool = await self.locate(
@@ -869,29 +1102,27 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 raise UnavailableTraffic("No connection are available")
             yield conn_or_pool
         finally:
-            self.release()
+            if self.release():
+                await asyncio.sleep(0)
 
-    def release(self) -> None:
+    def release(self) -> bool:
         active_cursor = self._cursor
-
+        cursor_transferred: bool = False
         if active_cursor is not None:
             active_cursor.depth -= 1
 
             if active_cursor.depth == 0:
-                if self.concurrency is False:
-                    self._container[active_cursor.obj_id] = active_cursor.conn_or_pool
-                    if (
-                        self._want_write.anyone_waiting()
-                        and traffic_state_of(active_cursor.conn_or_pool)
-                        is not TrafficState.SATURATED
-                    ):
-                        with self._want_write:
-                            self._want_write.notify()
-                    elif self._want_exploit.anyone_waiting():
-                        with self._want_exploit:
-                            self._want_exploit.notify()
+                if not self.concurrency:
+                    cursor_transferred = self._signals.next()
+                    if not cursor_transferred:
+                        self._container[active_cursor.obj_id] = (
+                            active_cursor.conn_or_pool
+                        )
+                        self._unset_cursor()
+                else:
+                    self._unset_cursor()
 
-                self._set_cursor(None)
+        return cursor_transferred
 
     async def clear(self) -> None:
         """Shutdown traffic pool."""
@@ -922,7 +1153,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         if active_cursor is not None:
             if active_cursor.obj_id in planned_removal:
-                self._set_cursor(None)
+                self._unset_cursor()
 
     def qsize(self) -> int:
         return len(self._container)

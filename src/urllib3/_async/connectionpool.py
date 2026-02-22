@@ -42,7 +42,6 @@ from ..contrib.resolver._async import (
     AsyncResolverDescription,
 )
 from ..contrib.ssa._timeout import timeout
-from ..contrib.webextensions._async import load_extension
 from ..exceptions import (
     BaseSSLError,
     ClosedPoolError,
@@ -344,10 +343,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             )
             self.QueueCls = AsyncTrafficPolice
 
-        self.pool: AsyncTrafficPolice[AsyncHTTPConnection] | None = self.QueueCls(
-            maxsize
-        )
         self.block = block
+        self.pool: AsyncTrafficPolice[AsyncHTTPConnection] | None = self.QueueCls(
+            maxsize,
+            concurrency=False,
+            strict_maxsize=not self.block,
+        )
 
         self.proxy = _proxy
         self.proxy_headers = _proxy_headers or {}
@@ -478,7 +479,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         conn = None
 
-        async with self.pool.locate_or_hold() as swapper:
+        async with self.pool.locate_or_hold(
+            block=True, placeholder_set=True
+        ) as swapper:
             # this path is applicable if resolver yield at least two records.
             # if A/AAAA records only (non-dual stack) -> spawn 4 (default) tasks with each record
             # if A/AAAA records mixed (dual stack)    -> spawn 4 (default) tasks following this pattern (IPv6, IPv4, IPv6, IPv4)
@@ -695,7 +698,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         try:
             conn = await self.pool.get(
-                block=self.block, timeout=timeout, non_saturated_only=True
+                block=True, timeout=timeout, non_saturated_only=True
             )
         except AttributeError:  # self.pool is None
             raise ClosedPoolError(self, "Pool is closed.") from None  # Defensive:
@@ -741,7 +744,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         if self.pool is not None:
             try:
-                await self.pool.put(conn, block=False)
+                await self.pool.put(conn, block=True)
                 return  # Everything is dandy, done.
             except AttributeError:
                 # self.pool is None.
@@ -1094,6 +1097,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
+                    from ..contrib.webextensions._async import load_extension
+
                     extension = load_extension(None)()
 
                 await response.start_extension(extension)
@@ -1413,6 +1418,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             and (method == "CONNECT" or extension is not None)
         ):
             if extension is None:
+                from ..contrib.webextensions._async import load_extension
+
                 extension = load_extension(None)()
             await response.start_extension(extension)
 
@@ -1749,7 +1756,6 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         try:
             # Request a connection from the queue.
             timeout_obj = self._get_timeout(timeout)
-            await self.pool.wait_for_unallocated_or_available_slot()
             conn = await self._get_conn(timeout=pool_timeout, heb_timeout=timeout_obj)
 
             conn.timeout = timeout_obj.connect_timeout  # type: ignore[assignment]
@@ -1818,7 +1824,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # Everything went great!
             clean_exit = True
 
-        except EmptyPoolError:
+        except EmptyPoolError as e:
+            print(e)
             # Didn't get a connection from the pool, no need to clean up
             clean_exit = True
             release_this_conn = False
@@ -2042,7 +2049,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         port: int | None = None,
         timeout: _TYPE_TIMEOUT | None = _DEFAULT_TIMEOUT,
         maxsize: int = 1,
-        block: bool = False,
+        block: bool = True,
         headers: typing.Mapping[str, str] | None = None,
         retries: Retry | bool | int | None = None,
         _proxy: Url | None = None,
@@ -2150,7 +2157,9 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
 
         conn = None
 
-        async with self.pool.locate_or_hold(block=self.block) as swapper:
+        async with self.pool.locate_or_hold(
+            block=True, placeholder_set=True
+        ) as swapper:
             if self.happy_eyeballs:
                 # Taking this path forward will establish a connection (aka. connect) prior to what usually
                 # take place. This is the only place where it is the most convenient.
