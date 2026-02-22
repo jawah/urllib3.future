@@ -42,7 +42,6 @@ from .contrib.resolver import (
     ProtocolResolver,
     ResolverDescription,
 )
-from .contrib.webextensions import load_extension
 from .exceptions import (
     BaseSSLError,
     ClosedPoolError,
@@ -349,8 +348,14 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             )
             self.QueueCls = TrafficPolice  # Defensive: auto fallback on known safe structure for HTTP/2+
 
-        self.pool: TrafficPolice[HTTPConnection] | None = self.QueueCls(maxsize)
         self.block = block
+
+        try:
+            self.pool: TrafficPolice[HTTPConnection] | None = self.QueueCls(
+                maxsize, concurrency=False, strict_maxsize=not self.block
+            )
+        except TypeError:
+            self.pool = self.QueueCls(maxsize)
 
         self.proxy = _proxy
         self.proxy_headers = _proxy_headers or {}
@@ -478,9 +483,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
 
-        with self.pool.locate_or_hold(
-            block=self.block, placeholder_set=True
-        ) as swapper:
+        with self.pool.locate_or_hold(block=True, placeholder_set=True) as swapper:
             self.num_connections += 1
             log.debug(
                 "Starting new HTTP connection (%d): %s:%s",
@@ -684,9 +687,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             raise ClosedPoolError(self, "Pool is closed.")
 
         try:
-            conn = self.pool.get(
-                block=self.block, timeout=timeout, non_saturated_only=True
-            )
+            conn = self.pool.get(block=True, timeout=timeout, non_saturated_only=True)
         except AttributeError:  # self.pool is None
             raise ClosedPoolError(self, "Pool is closed.") from None  # Defensive:
 
@@ -734,7 +735,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         if self.pool is not None:
             try:
-                self.pool.put(conn, block=False)
+                self.pool.put(conn, block=True)
                 return  # Everything is dandy, done.
             except AttributeError:
                 # self.pool is None.
@@ -1085,6 +1086,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
+                    # we defer the import until there to avoid loading wsproto and such early.
+                    from .contrib.webextensions import load_extension
+
                     extension = load_extension(None)()
                 response.start_extension(extension)
 
@@ -1392,6 +1396,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             and (method == "CONNECT" or extension is not None)
         ):
             if extension is None:
+                from .contrib.webextensions import load_extension
+
                 extension = load_extension(None)()
             response.start_extension(extension)
 
@@ -2090,9 +2096,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         # because when we call get() and it returns 'None'
         # it automatically insert a Placeholder to avoid
         # concurrent / racing 'believe a spot is free'.
-        with self.pool.locate_or_hold(
-            block=self.block, placeholder_set=True
-        ) as swapper:
+        with self.pool.locate_or_hold(block=True, placeholder_set=True) as swapper:
             conn = None
 
             if self.happy_eyeballs:

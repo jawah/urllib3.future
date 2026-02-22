@@ -26,7 +26,6 @@ from .contrib.resolver import (
     ProtocolResolver,
     ResolverDescription,
 )
-from .contrib.webextensions import load_extension
 from .exceptions import (
     LocationValueError,
     MaxRetryError,
@@ -267,7 +266,9 @@ class PoolManager(RequestMethods):
         )
 
         self.pools: TrafficPolice[HTTPConnectionPool] = TrafficPolice(
-            num_pools, concurrency=True
+            num_pools,
+            concurrency=True,
+            strict_maxsize=not self.block,
         )
 
         # Locally set the pool classes and keys so other PoolManagers can
@@ -451,6 +452,9 @@ class PoolManager(RequestMethods):
 
         if pool_key_constructor is None:
             target_scheme, target_implementation = parse_extension(scheme)
+            # we defer the import until there to avoid loading wsproto and such early.
+            from .contrib.webextensions import load_extension
+
             try:
                 extension = load_extension(target_scheme, target_implementation)
             except ImportError:
@@ -513,7 +517,7 @@ class PoolManager(RequestMethods):
         if self.pools.busy:
             self.pools.release()
 
-        with self.pools.locate_or_hold(pool_key, block=self.block) as swapper_or_pool:
+        with self.pools.locate_or_hold(pool_key, block=True) as swapper_or_pool:
             # If the scheme, host, or port doesn't match existing open
             # connections, open a new ConnectionPool.
             if not hasattr(swapper_or_pool, "is_idle"):
@@ -803,6 +807,8 @@ class PoolManager(RequestMethods):
                 and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
+                    from .contrib.webextensions import load_extension
+
                     extension = load_extension(None)()
                 response.start_extension(extension)
 
@@ -878,6 +884,8 @@ class PoolManager(RequestMethods):
         )
 
         if u.scheme is not None and u.scheme.lower() not in ("http", "https"):
+            from .contrib.webextensions import load_extension
+
             extension = load_extension(*parse_extension(u.scheme))
             kw["extension"] = extension()
             kw.update(kw["extension"].urlopen_kwargs)
