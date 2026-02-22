@@ -7,6 +7,7 @@
 - Fixed eager import of web extensions from contrib when it's never used (part of https://github.com/jawah/niquests/issues/333).
 - Fixed a thread safety issue when using many event loops within the same interpreter each using a thread when TLS is used. (#313)
 - Fixed rare FD collision error in the connect/allocation phase within the async context causing a RuntimeError instead of ConnectionError.
+- Fixed coroutine 'AsyncFile.tell' was never awaited (part of https://github.com/jawah/niquests/issues/334).
 
 2.15.903 (2026-02-08)
 =====================
