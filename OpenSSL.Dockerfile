@@ -1,6 +1,7 @@
 FROM python:3.7.2-alpine3.7
 
-RUN apk add build-base libffi-dev linux-headers
+RUN apk add build-base libffi-dev linux-headers \
+    && wget --no-check-certificate -O /etc/ssl/cert.pem https://curl.se/ca/cacert.pem
 
 WORKDIR /app
 

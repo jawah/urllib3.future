@@ -30,12 +30,14 @@ class DummyLock:
 
 
 class _NoLock_CacheableSSLContext(_CacheableSSLContext):
+    """Deprecated: we no longer avoid the lock in the async part because we want to allow many loop within many thread..."""
+
     def __init__(self, maxsize: int | None = 32):
         super().__init__(maxsize=maxsize)
         self._lock = DummyLock()  # type: ignore[assignment]
 
 
-_SSLContextCache = _NoLock_CacheableSSLContext()
+_SSLContextCache = _CacheableSSLContext()
 
 
 async def ssl_wrap_socket(

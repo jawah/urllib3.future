@@ -18,7 +18,6 @@ from ..contrib.resolver._async import (
     AsyncManyResolver,
     AsyncResolverDescription,
 )
-from ..contrib.webextensions._async import load_extension
 from ..exceptions import (
     LocationValueError,
     MaxRetryError,
@@ -130,7 +129,9 @@ class AsyncPoolManager(AsyncRequestMethods):
         )
 
         self.pools: AsyncTrafficPolice[AsyncHTTPConnectionPool] = AsyncTrafficPolice(
-            num_pools, concurrency=True
+            num_pools,
+            concurrency=True,
+            strict_maxsize=not self.block,
         )
 
         # Locally set the pool classes and keys so other PoolManagers can
@@ -315,6 +316,9 @@ class AsyncPoolManager(AsyncRequestMethods):
 
         if pool_key_constructor is None:
             target_scheme, target_implementation = parse_extension(scheme)
+
+            from ..contrib.webextensions._async import load_extension
+
             try:
                 extension = load_extension(target_scheme, target_implementation)
             except ImportError:
@@ -373,7 +377,8 @@ class AsyncPoolManager(AsyncRequestMethods):
             self.pools.release()
 
         async with self.pools.locate_or_hold(
-            pool_key, block=self.block
+            pool_key,
+            block=True,
         ) as swapper_or_pool:
             if not hasattr(swapper_or_pool, "is_idle"):
                 # Make a fresh ConnectionPool of the desired type
@@ -462,7 +467,9 @@ class AsyncPoolManager(AsyncRequestMethods):
 
         try:
             async with self.pools.borrow(
-                promise or ResponsePromise, block=False, not_idle_only=True
+                promise or ResponsePromise,
+                block=False,
+                not_idle_only=True,
             ) as pool:
                 response = await pool.get_response(promise=promise)
         except UnavailableTraffic:
@@ -657,6 +664,8 @@ class AsyncPoolManager(AsyncRequestMethods):
                 and (method == "CONNECT" or extension is not None)
             ):
                 if extension is None:
+                    from ..contrib.webextensions._async import load_extension
+
                     extension = load_extension(None)()
                 await response.start_extension(extension)
 
@@ -732,6 +741,8 @@ class AsyncPoolManager(AsyncRequestMethods):
         )
 
         if u.scheme is not None and u.scheme.lower() not in ("http", "https"):
+            from ..contrib.webextensions._async import load_extension
+
             extension = load_extension(*parse_extension(u.scheme))
             kw["extension"] = extension()
             kw.update(kw["extension"].urlopen_kwargs)

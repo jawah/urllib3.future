@@ -117,14 +117,23 @@ class TrafficPolice(typing.Generic[T]):
     This program is (very) complex and need, for patches, at least both unit tests and integration tests passing.
     """
 
-    def __init__(self, maxsize: int | None = None, concurrency: bool = False):
+    def __init__(
+        self,
+        maxsize: int | None = None,
+        concurrency: bool = False,
+        strict_maxsize: bool = True,
+    ):
         """
         :param maxsize: Maximum number of items that can be contained.
         :param concurrency: Whether to allow a single item to be used across multiple threads.
             Delegating thread safety to another level.
+        :param strict_maxsize: If True the scheduler does not increase maxsize for a temporary increase.
         """
         self.maxsize = maxsize
         self.concurrency = concurrency
+        self.strict_maxsize = strict_maxsize
+
+        self._original_maxsize = maxsize
 
         #: the registry contain the conn_or_pool administrated
         self._registry: dict[int, T] = {}
@@ -336,7 +345,7 @@ class TrafficPolice(typing.Generic[T]):
         for pending_signal in signals_to_wake:
             pending_signal.event.set()
 
-    def _sacrifice_first_idle(self, block: bool = False) -> None:
+    def _sacrifice_first_idle(self, block: bool = True) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
         This method try its best to find the most appropriate idle item and removes it.
         """
@@ -389,7 +398,7 @@ class TrafficPolice(typing.Generic[T]):
 
                     return
 
-                if block:
+                if not block:
                     break
 
                 signal = self._register_signal(None, TrafficState.IDLE)
@@ -408,7 +417,7 @@ class TrafficPolice(typing.Generic[T]):
         self,
         conn_or_pool: T,
         *traffic_indicators: MappableTraffic,
-        block: bool = False,
+        block: bool = True,
         immediately_unavailable: bool = False,
     ) -> None:
         """Register and/or store the conn_or_pool into the TrafficPolice container."""
@@ -595,7 +604,7 @@ class TrafficPolice(typing.Generic[T]):
 
                     return conn_or_pool
 
-            if not block:
+            if block:
                 signal = self._register_signal(
                     None,
                     TrafficState.IDLE,
@@ -690,7 +699,7 @@ class TrafficPolice(typing.Generic[T]):
     def locate_or_hold(
         self,
         traffic_indicator: MappableTraffic | None = None,
-        block: bool = False,
+        block: bool = True,
         placeholder_set: bool = False,
     ) -> typing.Generator[typing.Callable[[T], None] | T]:
         """Reserve a spot into the TrafficPolice instance while you construct your conn_or_pool.
