@@ -6,7 +6,7 @@ from base64 import b64encode
 from enum import Enum
 
 from ..exceptions import UnrewindableBodyError
-from .util import to_bytes
+from .util import to_bytes, iscoroutinefunction
 from .response import BytesQueueBuffer
 
 if typing.TYPE_CHECKING:
@@ -144,6 +144,10 @@ def make_headers(
     return headers
 
 
+def is_async_file(body: typing.Any) -> bool:
+    return iscoroutinefunction(getattr(body, "tell", lambda: None))
+
+
 def set_file_position(
     body: typing.Any, pos: _TYPE_BODY_POSITION | None
 ) -> _TYPE_BODY_POSITION | None:
@@ -156,6 +160,25 @@ def set_file_position(
     elif getattr(body, "tell", None) is not None:
         try:
             pos = body.tell()
+        except OSError:
+            # This differentiates from None, allowing us to catch
+            # a failed `tell()` later when trying to rewind the body.
+            pos = _FAILEDTELL
+
+    return pos
+
+
+async def aset_file_position(
+    body: typing.Any, pos: _TYPE_BODY_POSITION | None
+) -> _TYPE_BODY_POSITION | None:
+    """
+    Asynchronous variant for set_file_position when using anyio.AsyncFile for example.
+    """
+    if pos is not None:
+        await arewind_body(body, pos)
+    elif getattr(body, "tell", None) is not None:
+        try:
+            pos = await body.tell()
         except OSError:
             # This differentiates from None, allowing us to catch
             # a failed `tell()` later when trying to rewind the body.
@@ -179,6 +202,29 @@ def rewind_body(body: typing.IO[typing.AnyStr], body_pos: _TYPE_BODY_POSITION) -
     if body_seek is not None and isinstance(body_pos, int):
         try:
             body_seek(body_pos)
+        except OSError as e:
+            raise UnrewindableBodyError(
+                "An error occurred when rewinding request body for redirect/retry."
+            ) from e
+    elif body_pos is _FAILEDTELL:
+        raise UnrewindableBodyError(
+            "Unable to record file position for rewinding "
+            "request body during a redirect/retry."
+        )
+    else:
+        raise ValueError(
+            f"body_pos must be of type integer, instead it was {type(body_pos)}."
+        )
+
+
+async def arewind_body(body: typing.Any, body_pos: _TYPE_BODY_POSITION) -> None:
+    """
+    Async counterpart of rewind_body.
+    """
+    body_seek = getattr(body, "seek", None)
+    if body_seek is not None and isinstance(body_pos, int):
+        try:
+            await body_seek(body_pos)
         except OSError as e:
             raise UnrewindableBodyError(
                 "An error occurred when rewinding request body for redirect/retry."

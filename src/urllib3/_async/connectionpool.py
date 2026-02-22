@@ -67,7 +67,12 @@ from ..util._async.traffic_police import (  # type: ignore[attr-defined]
 )
 from ..util.connection import is_connection_dropped
 from ..util.proxy import connection_requires_http_tunnel
-from ..util.request import NOT_FORWARDABLE_HEADERS, set_file_position
+from ..util.request import (
+    NOT_FORWARDABLE_HEADERS,
+    set_file_position,
+    aset_file_position,
+    is_async_file,
+)
 from ..util.retry import Retry
 from ..util.ssl_match_hostname import CertificateError
 from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
@@ -1751,7 +1756,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         # Rewind body position, if needed. Record current position
         # for future rewinds in the event of a redirect/retry.
-        body_pos = set_file_position(body, body_pos)
+        if not is_async_file(body):
+            body_pos = set_file_position(body, body_pos)
+        else:
+            body_pos = await aset_file_position(body, body_pos)
 
         try:
             # Request a connection from the queue.
