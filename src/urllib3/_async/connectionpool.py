@@ -1832,8 +1832,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # Everything went great!
             clean_exit = True
 
-        except EmptyPoolError as e:
-            print(e)
+        except EmptyPoolError:
             # Didn't get a connection from the pool, no need to clean up
             clean_exit = True
             release_this_conn = False
