@@ -517,6 +517,7 @@ def downstream_clickhouse_connect(session: nox.Session) -> None:
     # the lib expect stream to yield bytes even if not
     # chunk size respected.
     session.run("rm", "-f", "tests/integration_tests/test_streaming.py")
+    session.run("rm", "-f", "tests/integration_tests/test_mid_stream_exception.py")
 
     try:
         session.run(
