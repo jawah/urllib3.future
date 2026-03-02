@@ -128,6 +128,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._remote_address = remote_address
         self._events: StreamMatrix = StreamMatrix()
         self._packets: deque[bytes] = deque()
+        self._packets_in_distribution: bool = False
         self._http: H3Connection | None = None
         self._terminated: bool = False
         self._data_in_flight: bool = False
@@ -273,19 +274,28 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 self._max_frame_size = self._quic._remote_max_stream_data_bidi_remote
 
     def bytes_to_send(self) -> bytes:
-        now = monotonic()
+        if not self._packets:
+            if self._packets_in_distribution:
+                self._packets_in_distribution = False
+                return b""
 
-        if self._http is None:
-            self._quic.connect(self._remote_address, now=now)
-            self._http = H3Connection(self._quic)
+            now = monotonic()
 
-        # the QUIC state machine returns datagrams (addr, packet)
-        # the client never have to worry about the destination
-        # unless server yield a preferred address?
-        self._packets.extend(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
+            if self._http is None:
+                self._quic.connect(self._remote_address, now=now)
+                self._http = H3Connection(self._quic)
+
+            # the QUIC state machine returns datagrams (addr, packet)
+            # the client never have to worry about the destination
+            # unless server yield a preferred address?
+            self._packets.extend(
+                map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
+            )
 
         if not self._packets:
             return b""
+
+        self._packets_in_distribution = True
 
         # it is absolutely crucial to return one at a time
         # because UDP don't support sending more than
