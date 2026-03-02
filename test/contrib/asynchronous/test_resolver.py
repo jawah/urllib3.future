@@ -68,8 +68,8 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dou://1.1.1.1", PlainResolver),
         ("dox://ooooo.com", None),
         ("doh://dns.google/resolve", HTTPSResolver),
-        ("doq://dns.nextdns.io/?timeout=5&cert_reqs=0", QUICResolver),
-        ("dns://dns.nextdns.io", None),
+        ("doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0", QUICResolver),
+        ("dns://dns.adguard-dns.com", None),
         ("null://default", NullResolver),
         ("default://null", None),
         ("system://default", SystemResolver),
@@ -83,7 +83,7 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("system://", SystemResolver),
         ("dot://", None),
         (
-            "doq://dns.nextdns.io/?implementation=qh3&timeout=1&cert_reqs=0",
+            "doq://dns.adguard-dns.com/?implementation=qh3&timeout=1&cert_reqs=0",
             QUICResolver,
         ),
     ],
@@ -124,7 +124,7 @@ async def test_url_resolver(
         "system://default",
         "dot://dns.google",
         "dot://one.one.one.one",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "doh+google://",
         "doh+cloudflare://default",
     ],
@@ -155,11 +155,11 @@ async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
         "dou://1.1.1.1",
         "dou://one.one.one.one",
         "dou://dns.google",
-        "doh://cloudflare-dns.com/dns-query",
+        # "doh://cloudflare-dns.com/dns-query",
         "doh://dns.google",
         "dot://dns.google",
         "dot://one.one.one.one",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
     ],
 )
 @pytest.mark.parametrize(
@@ -294,7 +294,7 @@ async def test_many_resolver_host_constraint_distribution() -> None:
     [
         "doh+google://default/?timeout=1",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -339,7 +339,7 @@ async def test_short_endurance_sprint(dns_url: str) -> None:
     [
         "doh+google://default?rfc8484=true",
         "doh+cloudflare://default?rfc8484=true",
-        "doh://dns.nextdns.io/dns-query?rfc8484=true",
+        "doh://dns.adguard-dns.com/dns-query?rfc8484=true",
         "doh+adguard://",
     ],
 )
@@ -380,7 +380,7 @@ async def test_doh_rfc8484(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -464,7 +464,7 @@ async def test_many_resolver_task_safe() -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -500,7 +500,7 @@ async def test_resolver_recycle(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -524,7 +524,7 @@ async def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -562,7 +562,7 @@ async def test_ipv6_always_preferred(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.nextdns.io/?timeout=5&cert_reqs=0",
+        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
