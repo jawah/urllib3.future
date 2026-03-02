@@ -1157,15 +1157,21 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     f"Invalid content-length set. Given '{values[0]}' when only digits are allowed."
                 )
         elif self.__legacy_host_entry is None and encoded_header == b"host":
-            self.__legacy_host_entry = (
-                values[0].encode("idna") if isinstance(values[0], str) else values[0]
-            )
+            if isinstance(values[0], str):
+                self.__legacy_host_entry = values[0].encode("idna")
+            elif isinstance(values[0], bytes):
+                self.__legacy_host_entry = values[0]
+            else:
+                self.__legacy_host_entry = str(values[0]).encode("iso-8859-1")
             return
 
         for value in values:
-            encoded_value = (
-                value.encode("iso-8859-1") if isinstance(value, str) else value
-            )
+            if isinstance(value, str):
+                encoded_value = value.encode("iso-8859-1")
+            elif isinstance(value, bytes):
+                encoded_value = value
+            else:  # best effort branch
+                encoded_value = str(value).encode("iso-8859-1")
 
             if encoded_header.startswith(b":"):
                 if encoded_header == b":protocol":
