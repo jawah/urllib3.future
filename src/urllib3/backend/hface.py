@@ -48,6 +48,12 @@ from ..contrib.hface.events import (
     HeadersReceived,
     StreamResetReceived,
 )
+from ..contrib.ssa._gro import (
+    _sock_has_gro,
+    _sock_has_gso,
+    sync_recv_gro,
+    sync_sendmsg_gso,
+)
 from ..exceptions import (
     EarlyResponse,
     IncompleteRead,
@@ -146,6 +152,10 @@ class HfaceBackend(BaseBackend):
 
         # automatic upgrade shield against errors!
         self._max_tolerable_delay_for_upgrade: float | None = None
+
+        # GRO/GSO flags — set properly in _post_conn() for DGRAM sockets
+        self._dgram_gro_enabled: bool = False
+        self._dgram_gso_enabled: bool = False
 
     @property
     def is_saturated(self) -> bool:
@@ -517,6 +527,13 @@ class HfaceBackend(BaseBackend):
         self.conn_info = ConnectionInfo()
         self.conn_info.http_version = self._svn
 
+        if self.sock.type == SOCK_DGRAM:
+            self._dgram_gro_enabled = _sock_has_gro(self.sock)
+            self._dgram_gso_enabled = _sock_has_gso(self.sock)
+        else:
+            self._dgram_gro_enabled = False
+            self._dgram_gso_enabled = False
+
         if hasattr(self, "_connect_timings") and self._connect_timings:
             self.conn_info.resolution_latency = self._connect_timings[0]
             self.conn_info.established_latency = self._connect_timings[1]
@@ -823,7 +840,10 @@ class HfaceBackend(BaseBackend):
         self.sock.settimeout(0.001 if not expect_frame else 0.1)
 
         try:
-            peek_data = self.sock.recv(self.blocksize)
+            if self._dgram_gro_enabled:
+                peek_data = sync_recv_gro(self.sock, self.blocksize)
+            else:
+                peek_data = self.sock.recv(self.blocksize)
         except (OSError, TimeoutError, socket.timeout):
             return False
         except (ConnectionAbortedError, ConnectionResetError):
@@ -837,7 +857,11 @@ class HfaceBackend(BaseBackend):
             return False
 
         try:
-            self._protocol.bytes_received(peek_data)
+            if isinstance(peek_data, list):
+                for gro_segment in peek_data:
+                    self._protocol.bytes_received(gro_segment)
+            else:
+                self._protocol.bytes_received(peek_data)
         except self._protocol.exceptions():
             return False
 
@@ -876,7 +900,7 @@ class HfaceBackend(BaseBackend):
                 maximal_data_in_read = None
 
         data_out: bytes
-        data_in: bytes
+        data_in: bytes | list[bytes]
 
         data_in_len: int = 0
 
@@ -896,16 +920,31 @@ class HfaceBackend(BaseBackend):
             reach_socket: bool = False
             if not self._protocol.has_pending_event(stream_id=stream_id):
                 if receive_first is False:
-                    while True:
-                        data_out = self._protocol.bytes_to_send()
+                    if self._dgram_gso_enabled:
+                        tbs = []
+                        while True:
+                            data_out = self._protocol.bytes_to_send()
+                            if not data_out:
+                                break
+                            tbs.append(data_out)
+                        if len(tbs) > 1:
+                            sync_sendmsg_gso(self.sock, tbs)
+                        elif tbs:
+                            self.sock.sendall(tbs[0])
+                    else:
+                        while True:
+                            data_out = self._protocol.bytes_to_send()
 
-                        if not data_out:
-                            break
+                            if not data_out:
+                                break
 
-                        self.sock.sendall(data_out)
+                            self.sock.sendall(data_out)
 
                 try:
-                    data_in = self.sock.recv(self.blocksize)
+                    if self._dgram_gro_enabled:
+                        data_in = sync_recv_gro(self.sock, self.blocksize)
+                    else:
+                        data_in = self.sock.recv(self.blocksize)
                 except (ConnectionAbortedError, ConnectionResetError) as e:
                     if isinstance(e, ConnectionResetError) and (
                         event_type is HandshakeCompleted
@@ -950,30 +989,59 @@ class HfaceBackend(BaseBackend):
                     else:
                         self._protocol.connection_lost()
                 else:
-                    if data_in_len_from is None:
-                        data_in_len += len(data_in)
+                    if isinstance(data_in, list):
+                        for udp_gro_segment in data_in:
+                            if data_in_len_from is None:
+                                data_in_len += len(udp_gro_segment)
 
-                    try:
-                        self._protocol.bytes_received(data_in)
-                    except self._protocol.exceptions() as e:
-                        # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
-                        # we convert the exception to our "IncompleteRead" instead.
-                        if hasattr(e, "expected_length") and hasattr(
-                            e, "actual_length"
-                        ):
-                            raise IncompleteRead(
-                                partial=e.actual_length, expected=e.expected_length
-                            ) from e  # Defensive:
-                        raise ProtocolError(e) from e  # Defensive:
+                            try:
+                                self._protocol.bytes_received(udp_gro_segment)
+                            except self._protocol.exceptions() as e:
+                                if hasattr(e, "expected_length") and hasattr(
+                                    e, "actual_length"
+                                ):
+                                    raise IncompleteRead(
+                                        partial=e.actual_length,
+                                        expected=e.expected_length,
+                                    ) from e  # Defensive:
+                                raise ProtocolError(e) from e  # Defensive:
+                    else:
+                        if data_in_len_from is None:
+                            data_in_len += len(data_in)
+
+                        try:
+                            self._protocol.bytes_received(data_in)
+                        except self._protocol.exceptions() as e:
+                            # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
+                            # we convert the exception to our "IncompleteRead" instead.
+                            if hasattr(e, "expected_length") and hasattr(
+                                e, "actual_length"
+                            ):
+                                raise IncompleteRead(
+                                    partial=e.actual_length, expected=e.expected_length
+                                ) from e  # Defensive:
+                            raise ProtocolError(e) from e  # Defensive:
 
                 if receive_first is True:
-                    while True:
-                        data_out = self._protocol.bytes_to_send()
+                    if self._dgram_gso_enabled:
+                        tbs = []
+                        while True:
+                            data_out = self._protocol.bytes_to_send()
+                            if not data_out:
+                                break
+                            tbs.append(data_out)
+                        if len(tbs) > 1:
+                            sync_sendmsg_gso(self.sock, tbs)
+                        elif tbs:
+                            self.sock.sendall(tbs[0])
+                    else:
+                        while True:
+                            data_out = self._protocol.bytes_to_send()
 
-                        if not data_out:
-                            break
+                            if not data_out:
+                                break
 
-                        self.sock.sendall(data_out)
+                            self.sock.sendall(data_out)
 
             for event in self._protocol.events(stream_id=stream_id):  # type: Event
                 stream_related_event: bool = hasattr(event, "stream_id")
@@ -1336,11 +1404,23 @@ class HfaceBackend(BaseBackend):
             raise ProtocolError(e) from e  # Defensive:
 
         try:
-            while True:
-                buf = self._protocol.bytes_to_send()
-                if not buf:
-                    break
-                self.sock.sendall(buf)
+            if self._dgram_gso_enabled:
+                tbs = []
+                while True:
+                    buf = self._protocol.bytes_to_send()
+                    if not buf:
+                        break
+                    tbs.append(buf)
+                if len(tbs) > 1:
+                    sync_sendmsg_gso(self.sock, tbs)
+                elif tbs:
+                    self.sock.sendall(tbs[0])
+            else:
+                while True:
+                    buf = self._protocol.bytes_to_send()
+                    if not buf:
+                        break
+                    self.sock.sendall(buf)
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
@@ -1374,7 +1454,16 @@ class HfaceBackend(BaseBackend):
             self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
             is True
         ):
-            self._protocol.bytes_received(self.sock.recv(self.blocksize))
+            if self._dgram_gro_enabled:
+                data_in = sync_recv_gro(self.sock, self.blocksize)
+            else:
+                data_in = self.sock.recv(self.blocksize)
+
+            if isinstance(data_in, list):
+                for gro_segment in data_in:
+                    self._protocol.bytes_received(gro_segment)
+            else:
+                self._protocol.bytes_received(data_in)
 
             while True:
                 data_out = self._protocol.bytes_to_send()
@@ -1693,7 +1782,16 @@ class HfaceBackend(BaseBackend):
                 )
                 is True
             ):
-                self._protocol.bytes_received(self.sock.recv(self.blocksize))
+                if self._dgram_gro_enabled:
+                    data_in = sync_recv_gro(self.sock, self.blocksize)
+                else:
+                    data_in = self.sock.recv(self.blocksize)
+
+                if not isinstance(data_in, list):
+                    self._protocol.bytes_received(data_in)
+                else:
+                    for gro_segment in data_in:
+                        self._protocol.bytes_received(gro_segment)
 
                 # this is a bad sign. we should stop sending and instead retrieve the response.
                 # we exclude 'EarlyHeadersReceived' event because it is simply expected. e.g. 100-continue!
@@ -1735,16 +1833,28 @@ class HfaceBackend(BaseBackend):
 
             # some protocols may impose regulated frame size
             # so expect multiple frame per send()
-            while True:
-                data_out = self._protocol.bytes_to_send()
+            try:
+                if self._dgram_gso_enabled:
+                    tbs = []
+                    while True:
+                        data_out = self._protocol.bytes_to_send()
+                        if not data_out:
+                            break
+                        tbs.append(data_out)
+                    if len(tbs) > 1:
+                        sync_sendmsg_gso(self.sock, tbs)
+                    elif tbs:
+                        self.sock.sendall(tbs[0])
+                else:
+                    while True:
+                        data_out = self._protocol.bytes_to_send()
 
-                if not data_out:
-                    break
+                        if not data_out:
+                            break
 
-                try:
-                    self.sock.sendall(data_out)
-                except BrokenPipeError as e:
-                    remote_pipe_shutdown = e
+                        self.sock.sendall(data_out)
+            except BrokenPipeError as e:
+                remote_pipe_shutdown = e
 
             if eot or remote_pipe_shutdown:
                 if self._start_last_request and self.conn_info:
@@ -1842,3 +1952,5 @@ class HfaceBackend(BaseBackend):
         self._cached_http_vsn = None
         self._connected_at = None
         self._last_used_at = time.monotonic()
+        self._dgram_gro_enabled = False
+        self._dgram_gso_enabled = False

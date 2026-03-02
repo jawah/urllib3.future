@@ -4,6 +4,7 @@ import socket
 import typing
 from collections import deque
 
+from ...ssa._gro import _sock_has_gro, sync_recv_gro
 from ..protocols import (
     COMMON_RCODE_LABEL,
     BaseResolver,
@@ -73,6 +74,8 @@ class PlainResolver(BaseResolver):
 
         #: Only useful for inheritance, e.g. DNS over TLS support dns-message but require a prefix.
         self._rfc1035_prefix_mandated: bool = False
+
+        self._gro_enabled: bool = _sock_has_gro(self._socket)
 
         self._unconsumed: deque[DomainNameServerReturn] = deque()
         self._pending: deque[DomainNameServerQuery] = deque()
@@ -216,17 +219,33 @@ class PlainResolver(BaseResolver):
                         continue
 
                 try:
-                    payload = self._socket.recv(1500)
+                    if self._gro_enabled:
+                        data_in_or_segments = sync_recv_gro(self._socket, 65535)
+                    else:
+                        data_in_or_segments = self._socket.recv(1500)
 
-                    if self._rfc1035_prefix_mandated is True:
+                    if isinstance(data_in_or_segments, list):
+                        payloads = data_in_or_segments
+                    elif data_in_or_segments:
+                        payloads = [data_in_or_segments]
+                    else:
+                        payloads = []
+
+                    if self._rfc1035_prefix_mandated is True and payloads:
+                        payload = b"".join(payloads)
                         while rfc1035_should_read(payload):
-                            payload += self._socket.recv(1500)
+                            extra = self._socket.recv(1500)
+                            if isinstance(extra, list):
+                                payload += b"".join(extra)
+                            else:
+                                payload += extra
+                        payloads = [payload]
                 except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
                     raise socket.gaierror(
                         "Got unexpectedly disconnected while waiting for name resolution"
                     ) from e
 
-                if not payload:
+                if not payloads:
                     self._terminated = True
                     raise socket.gaierror(
                         "Got unexpectedly disconnected while waiting for name resolution"
@@ -234,28 +253,29 @@ class PlainResolver(BaseResolver):
 
                 pending_raw_identifiers = [_.raw_id for _ in self._pending]
 
-                #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
-                if self._rfc1035_prefix_mandated is True:
-                    fragments = rfc1035_unpack(payload)
-                else:
-                    fragments = packet_fragment(payload, *pending_raw_identifiers)
-
-                for fragment in fragments:
-                    dns_resp = DomainNameServerReturn(fragment)
-
-                    if any(dns_resp.id == _.id for _ in queries):
-                        responses.append(dns_resp)
-
-                        query_tbr: DomainNameServerQuery | None = None
-
-                        for query_tbr in self._pending:
-                            if query_tbr.id == dns_resp.id:
-                                break
-
-                        if query_tbr:
-                            self._pending.remove(query_tbr)
+                for payload in payloads:
+                    #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
+                    if self._rfc1035_prefix_mandated is True:
+                        fragments = rfc1035_unpack(payload)
                     else:
-                        self._unconsumed.append(dns_resp)
+                        fragments = packet_fragment(payload, *pending_raw_identifiers)
+
+                    for fragment in fragments:
+                        dns_resp = DomainNameServerReturn(fragment)
+
+                        if any(dns_resp.id == _.id for _ in queries):
+                            responses.append(dns_resp)
+
+                            query_tbr: DomainNameServerQuery | None = None
+
+                            for query_tbr in self._pending:
+                                if query_tbr.id == dns_resp.id:
+                                    break
+
+                            if query_tbr:
+                                self._pending.remove(query_tbr)
+                        else:
+                            self._unconsumed.append(dns_resp)
 
         results = []
 
