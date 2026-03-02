@@ -128,7 +128,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._remote_address = remote_address
         self._events: StreamMatrix = StreamMatrix()
         self._packets: deque[bytes] = deque()
-        self._packets_in_distribution: bool = False
         self._http: H3Connection | None = None
         self._terminated: bool = False
         self._data_in_flight: bool = False
@@ -275,10 +274,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def bytes_to_send(self) -> bytes:
         if not self._packets:
-            if self._packets_in_distribution:
-                self._packets_in_distribution = False
-                return b""
-
             now = monotonic()
 
             if self._http is None:
@@ -294,8 +289,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if not self._packets:
             return b""
-
-        self._packets_in_distribution = True
 
         # it is absolutely crucial to return one at a time
         # because UDP don't support sending more than
