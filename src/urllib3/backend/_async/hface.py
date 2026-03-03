@@ -780,7 +780,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             return False
 
         try:
-            self._protocol.bytes_received(peek_data)
+            if isinstance(peek_data, list):
+                for gro_segment in peek_data:
+                    self._protocol.bytes_received(gro_segment)
+            else:
+                self._protocol.bytes_received(peek_data)
         except self._protocol.exceptions():
             return False
 
@@ -819,7 +823,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 maximal_data_in_read = None
 
         data_out: bytes
-        data_in: bytes
+        data_in: bytes | list[bytes]
 
         data_in_len: int = 0
 
@@ -839,13 +843,21 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             reach_socket: bool = False
             if not self._protocol.has_pending_event(stream_id=stream_id):
                 if receive_first is False:
+                    tbs = []
+
                     while True:
                         data_out = self._protocol.bytes_to_send()
 
                         if not data_out:
                             break
 
-                        await self.sock.sendall(data_out)
+                        tbs.append(data_out)
+
+                    if self._svn is HttpVersion.h3 and len(tbs) > 1:
+                        await self.sock.sendall(tbs)
+                    else:
+                        for chunk in tbs:
+                            await self.sock.sendall(chunk)
 
                 try:
                     data_in = await self.sock.recv(self.blocksize)
@@ -880,30 +892,62 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     else:
                         self._protocol.connection_lost()
                 else:
-                    if data_in_len_from is None:
-                        data_in_len += len(data_in)
+                    if isinstance(data_in, list):
+                        for udp_gro_segment in data_in:
+                            if data_in_len_from is None:
+                                data_in_len += len(udp_gro_segment)
 
-                    try:
-                        self._protocol.bytes_received(data_in)
-                    except self._protocol.exceptions() as e:
-                        # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
-                        # we convert the exception to our "IncompleteRead" instead.
-                        if hasattr(e, "expected_length") and hasattr(
-                            e, "actual_length"
-                        ):
-                            raise IncompleteRead(
-                                partial=e.actual_length, expected=e.expected_length
-                            ) from e  # Defensive:
-                        raise ProtocolError(e) from e  # Defensive:
+                            try:
+                                self._protocol.bytes_received(udp_gro_segment)
+                            except self._protocol.exceptions() as e:
+                                # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
+                                # we convert the exception to our "IncompleteRead" instead.
+                                if hasattr(e, "expected_length") and hasattr(
+                                    e, "actual_length"
+                                ):
+                                    raise IncompleteRead(
+                                        partial=e.actual_length,
+                                        expected=e.expected_length,
+                                    ) from e  # Defensive:
+                                raise ProtocolError(e) from e  # Defensive:
+                    else:
+                        incoming_buffer_size = len(data_in)
+                        self._recv_size_ema = (
+                            self._recv_size_ema * 0.7 + incoming_buffer_size * 0.3
+                        )
+
+                        if data_in_len_from is None:
+                            data_in_len += incoming_buffer_size
+
+                        try:
+                            self._protocol.bytes_received(data_in)
+                        except self._protocol.exceptions() as e:
+                            # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
+                            # we convert the exception to our "IncompleteRead" instead.
+                            if hasattr(e, "expected_length") and hasattr(
+                                e, "actual_length"
+                            ):
+                                raise IncompleteRead(
+                                    partial=e.actual_length, expected=e.expected_length
+                                ) from e  # Defensive:
+                            raise ProtocolError(e) from e  # Defensive:
 
                 if receive_first is True:
+                    tbs = []
+
                     while True:
                         data_out = self._protocol.bytes_to_send()
 
                         if not data_out:
                             break
 
-                        await self.sock.sendall(data_out)
+                        tbs.append(data_out)
+
+                    if self._svn is HttpVersion.h3 and len(tbs) > 1:
+                        await self.sock.sendall(tbs)
+                    else:
+                        for chunk in tbs:
+                            await self.sock.sendall(chunk)
 
             for event in self._protocol.events(stream_id=stream_id):  # type: Event
                 stream_related_event: bool = hasattr(event, "stream_id")
@@ -1157,15 +1201,21 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     f"Invalid content-length set. Given '{values[0]}' when only digits are allowed."
                 )
         elif self.__legacy_host_entry is None and encoded_header == b"host":
-            self.__legacy_host_entry = (
-                values[0].encode("idna") if isinstance(values[0], str) else values[0]
-            )
+            if isinstance(values[0], str):
+                self.__legacy_host_entry = values[0].encode("idna")
+            elif isinstance(values[0], bytes):
+                self.__legacy_host_entry = values[0]
+            else:
+                self.__legacy_host_entry = str(values[0]).encode("iso-8859-1")
             return
 
         for value in values:
-            encoded_value = (
-                value.encode("iso-8859-1") if isinstance(value, str) else value
-            )
+            if isinstance(value, str):
+                encoded_value = value.encode("iso-8859-1")
+            elif isinstance(value, bytes):
+                encoded_value = value
+            else:  # best effort branch
+                encoded_value = str(value).encode("iso-8859-1")
 
             if encoded_header.startswith(b":"):
                 if encoded_header == b":protocol":
@@ -1256,11 +1306,19 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             raise ProtocolError(e) from e  # Defensive:
 
         try:
+            tbs = []
+
             while True:
                 buf = self._protocol.bytes_to_send()
                 if not buf:
                     break
-                await self.sock.sendall(buf)
+                tbs.append(buf)
+
+            if self._svn is HttpVersion.h3 and len(tbs) > 1:
+                await self.sock.sendall(tbs)
+            else:
+                for chunk in tbs:
+                    await self.sock.sendall(chunk)
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
@@ -1294,7 +1352,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
             is True
         ):
-            self._protocol.bytes_received(await self.sock.recv(self.blocksize))
+            data_in = await self.sock.recv(self.blocksize)
+
+            if isinstance(data_in, list):
+                for gro_segment in data_in:
+                    self._protocol.bytes_received(gro_segment)
+            else:
+                self._protocol.bytes_received(data_in)
 
             while True:
                 data_out = self._protocol.bytes_to_send()
@@ -1612,7 +1676,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 )
                 is True
             ):
-                self._protocol.bytes_received(await self.sock.recv(self.blocksize))
+                data_in = await self.sock.recv(self.blocksize)
+
+                if not isinstance(data_in, list):
+                    self._protocol.bytes_received(data_in)
+                else:
+                    for gro_segment in data_in:
+                        self._protocol.bytes_received(gro_segment)
 
                 # this is a bad sign. we should stop sending and instead retrieve the response.
                 if self._protocol.has_pending_event(
@@ -1758,3 +1828,4 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._cached_http_vsn = None
         self._connected_at = None
         self._last_used_at = time.monotonic()
+        self._recv_size_ema = 0.0

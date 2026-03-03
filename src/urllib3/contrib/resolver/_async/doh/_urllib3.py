@@ -391,6 +391,9 @@ class HTTPSResolver(AsyncBaseResolver):
                             except ValueError:
                                 raw_record = b""
 
+                            if not raw_record:
+                                continue
+
                             https_record = parse_https_rdata(raw_record)
 
                             if "h3" not in https_record["alpn"]:

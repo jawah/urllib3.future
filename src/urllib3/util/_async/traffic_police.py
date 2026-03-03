@@ -274,22 +274,36 @@ class AsyncSignals(typing.Generic[T]):
         cursor = self._cursors[current_task]
         current_state = traffic_state_of(cursor.conn_or_pool)
 
-        now = time.perf_counter()
+        # this code will certainly surprise most people
+        # in our investigations, the signal management
+        # was often "too fast" to let the Kernel stack
+        # into the buffer coalesced TCP packets, leading
+        # the event loop to wasting a couple of iterations
+        # (e.g. epoll_wait) when a single one was sufficient
+        # and asyncio/OSes don't have a "wake me when
+        # we have more than x bytes".
+        # so we were creative (or foolish) enough to
+        # stall the event loop in highly concurrent scenarii
+        # where we expect plenty of bytes into the socket.
+        # bellow is heuristic, caution. it's not a silver
+        # bullet.
+        if not getattr(cursor.conn_or_pool, "_fast_recv_mode", True):
+            now = time.perf_counter()
 
-        # Natural gap = time the event loop spent between dispatches
-        # (excludes our own sleep from last time)
-        if self._last_dispatch_end > 0:
-            natural_gap = now - self._last_dispatch_end
-            # Smooth with EMA to avoid reacting to transient spikes
-            self._ema_gap = self._ema_gap * 0.7 + natural_gap * 0.3
+            # Natural gap = time the event loop spent between dispatches
+            # (excludes our own sleep from last time)
+            if self._last_dispatch_end > 0:
+                natural_gap = now - self._last_dispatch_end
+                # Smooth with EMA to avoid reacting to transient spikes
+                self._ema_gap = self._ema_gap * 0.7 + natural_gap * 0.3
 
-        remaining = _COALESCE_DELAY - self._ema_gap
+                remaining = _COALESCE_DELAY - self._ema_gap
 
-        if remaining > 0:
-            _kernel_recv_coalesce()  # or spin-wait on Windows
+                if remaining > 0:
+                    _kernel_recv_coalesce()  # or spin-wait on Windows
 
-        # ... bookkeeping, signal dispatch ...
-        self._last_dispatch_end = time.perf_counter()
+            # ... bookkeeping, signal dispatch ...
+            self._last_dispatch_end = time.perf_counter()
 
         can_write_more: bool = current_state is not TrafficState.SATURATED
         can_read_anything: bool = current_state is not TrafficState.IDLE

@@ -535,8 +535,16 @@ class BaseBackend:
         self._connected_at: float | None = None
         self._last_used_at: float = time.monotonic()
 
+        self._recv_size_ema: float = 0.0
+
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises
+
+    @property
+    def _fast_recv_mode(self) -> bool:
+        if len(self._promises) <= 1 or self._svn is HttpVersion.h3:
+            return True
+        return self._recv_size_ema >= 1450
 
     @property
     def last_used_at(self) -> float:

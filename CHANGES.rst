@@ -1,3 +1,12 @@
+2.17.900 (2026-03-03)
+=====================
+
+- Added GRO/GSO support for Linux users in order to leverage UDP coalescing when available.
+  This should increase QUIC/UDP performances in high throughput networking environment (very-fast NIC).
+  Expect no more than 10 to 20% improvement usually.
+- Changed timings in our ``AsyncPoliceTraffic`` scheduler implementation in order to not penalize fast servers.
+- Fixed passing non-str/non-bytes as an header value. It was previously allowed by accident from urllib3. (#318)
+
 2.16.900 (2026-02-22)
 =====================
 

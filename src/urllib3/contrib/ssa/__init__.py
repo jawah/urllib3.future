@@ -7,6 +7,7 @@ import typing
 import warnings
 
 from ._timeout import timeout
+from ._gro import open_dgram_connection, DatagramReader, DatagramWriter
 
 StandardTimeoutError = socket.timeout
 
@@ -79,9 +80,8 @@ class AsyncSocket:
         # set nonblocking / or cause the loop to block with dgram socket...
         self._sock.settimeout(0)
 
-        # only initialized in STREAM ctx
-        self._writer: asyncio.StreamWriter | None = None
-        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | DatagramWriter | None = None
+        self._reader: asyncio.StreamReader | DatagramReader | None = None
 
         self._writer_semaphore: asyncio.Semaphore = asyncio.Semaphore()
         self._reader_semaphore: asyncio.Semaphore = asyncio.Semaphore()
@@ -292,8 +292,12 @@ class AsyncSocket:
 
         if self.type == socket.SOCK_STREAM or self.type == -1:
             self._reader, self._writer = await asyncio.open_connection(sock=self._sock)
-            # will become an asyncio.TransportSocket
-            self._sock = self._writer.get_extra_info("socket", self._sock)
+        elif self.type == socket.SOCK_DGRAM:
+            self._reader, self._writer = await open_dgram_connection(sock=self._sock)
+
+        # can become an asyncio.TransportSocket
+        assert self._writer is not None
+        self._sock = self._writer.get_extra_info("socket", self._sock)
 
         self._addr = addr
         self._established.set()
@@ -320,6 +324,7 @@ class AsyncSocket:
 
         if self.type == socket.SOCK_STREAM:
             assert self._writer is not None
+            assert isinstance(self._writer, asyncio.StreamWriter)
 
             # bellow is hard to maintain. Starting with 3.11+, it is useless.
             protocol = self._writer._protocol  # type: ignore[attr-defined]
@@ -350,73 +355,61 @@ class AsyncSocket:
 
         return self  # type: ignore[return-value]
 
-    async def recv(self, size: int = -1) -> bytes:
+    async def recv(self, size: int = -1) -> bytes | list[bytes]:
+        """Receive data from the socket.
+
+        Returns ``bytes`` for a single datagram (or stream chunk), or
+        ``list[bytes]`` when GRO / batch-receive delivered multiple
+        coalesced datagrams in one syscall.  The caller can then feed
+        all segments to the QUIC state-machine in a tight loop before
+        probing, avoiding per-datagram overhead."""
         if size == -1:
             size = 65536
+        assert self._reader is not None
         await self._established.wait()
         await self._reader_semaphore.acquire()
-        if self._reader is not None:
-            try:
-                if self._external_timeout is not None:
-                    try:
-                        async with timeout(self._external_timeout):
-                            return await self._reader.read(n=size)
-                    except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
-                        self._reader_semaphore.release()
-                        raise StandardTimeoutError from e
-                    except OSError as e:  # Defensive: treat any OSError as ConnReset!
-                        raise ConnectionResetError() from e
-                return await self._reader.read(n=size)
-            finally:
-                self._reader_semaphore.release()
 
         try:
             if self._external_timeout is not None:
                 try:
                     async with timeout(self._external_timeout):
-                        return await asyncio.get_running_loop().sock_recv(
-                            self._sock, size
-                        )
+                        return await self._reader.read(n=size)
                 except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
                     self._reader_semaphore.release()
                     raise StandardTimeoutError from e
-
-            return await asyncio.get_running_loop().sock_recv(self._sock, size)
-        except OSError as e:
-            # Windows raises OSError target does not listen on given addr:port
-            # when using UDP sock. We want to translate the OSError into ConnResetError
-            # so that we can properly trigger the downgrade procedure anyway. (QUIC -> TCP)
-            raise ConnectionResetError() from e
+                except OSError as e:  # Defensive: treat any OSError as ConnReset!
+                    raise ConnectionResetError() from e
+            return await self._reader.read(n=size)
         finally:
             self._reader_semaphore.release()
 
-    async def read_exact(self, size: int = -1) -> bytes:
-        """Just an alias for sendall(), it is needed due to our custom AsyncSocks override."""
+    async def read_exact(self, size: int = -1) -> bytes | list[bytes]:
+        """Just an alias for recv(), it is needed due to our custom AsyncSocks override."""
         return await self.recv(size=size)
 
-    async def read(self) -> bytes:
-        """Just an alias for sendall(), it is needed due to our custom AsyncSocks override."""
+    async def read(self) -> bytes | list[bytes]:
+        """Just an alias for recv(), it is needed due to our custom AsyncSocks override."""
         return await self.recv()
 
-    async def sendall(self, data: bytes | bytearray | memoryview) -> None:
+    async def sendall(self, data: bytes | bytearray | memoryview | list[bytes]) -> None:
+        assert self._writer is not None
         await self._established.wait()
         await self._writer_semaphore.acquire()
         try:
-            if self._writer is not None:
-                self._writer.write(data)
-                await self._writer.drain()
-            else:
-                await asyncio.get_running_loop().sock_sendall(self._sock, data=data)
+            self._writer.write(data)  # type: ignore[arg-type]
+            await self._writer.drain()
         except Exception:
             raise
         finally:
             self._writer_semaphore.release()
 
-    async def write_all(self, data: bytes | bytearray | memoryview) -> None:
+    async def write_all(
+        self, data: bytes | bytearray | memoryview | list[bytes]
+    ) -> None:
         """Just an alias for sendall(), it is needed due to our custom AsyncSocks override."""
         await self.sendall(data)
 
-    async def send(self, data: bytes | bytearray | memoryview) -> None:
+    async def send(self, data: bytes | bytearray | memoryview | list[bytes]) -> None:
         await self.sendall(data)
 
     def settimeout(self, __value: float | None = None) -> None:

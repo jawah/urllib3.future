@@ -463,14 +463,22 @@ class QUICResolver(PlainResolver):
 
             while True:
                 if not self._quic._events:
-                    data = await self._socket.recv(1500)
+                    data_in = await self._socket.recv(1500)
 
-                    if not data:
+                    if not data_in:
                         break
 
                     now = monotonic()
 
-                    self._quic.receive_datagram(data, (self._server, self._port), now)
+                    if not isinstance(data_in, list):
+                        self._quic.receive_datagram(
+                            data_in, (self._server, self._port), now
+                        )
+                    else:
+                        for gro_segment in data_in:
+                            self._quic.receive_datagram(
+                                gro_segment, (self._server, self._port), now
+                            )
 
                     while True:
                         datagrams = self._quic.datagrams_to_send(now)

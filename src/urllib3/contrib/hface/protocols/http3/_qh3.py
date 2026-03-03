@@ -273,16 +273,19 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 self._max_frame_size = self._quic._remote_max_stream_data_bidi_remote
 
     def bytes_to_send(self) -> bytes:
-        now = monotonic()
+        if not self._packets:
+            now = monotonic()
 
-        if self._http is None:
-            self._quic.connect(self._remote_address, now=now)
-            self._http = H3Connection(self._quic)
+            if self._http is None:
+                self._quic.connect(self._remote_address, now=now)
+                self._http = H3Connection(self._quic)
 
-        # the QUIC state machine returns datagrams (addr, packet)
-        # the client never have to worry about the destination
-        # unless server yield a preferred address?
-        self._packets.extend(map(lambda e: e[0], self._quic.datagrams_to_send(now=now)))
+            # the QUIC state machine returns datagrams (addr, packet)
+            # the client never have to worry about the destination
+            # unless server yield a preferred address?
+            self._packets.extend(
+                map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
+            )
 
         if not self._packets:
             return b""

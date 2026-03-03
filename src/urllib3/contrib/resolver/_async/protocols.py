@@ -4,10 +4,12 @@ import asyncio
 import ipaddress
 import socket
 import struct
+import sys
 import typing
 from abc import ABCMeta, abstractmethod
 from datetime import datetime, timedelta, timezone
 
+from ...._constant import UDP_LINUX_GRO
 from ...._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
 from ....exceptions import LocationParseError
 from ....util.connection import _set_socket_options, allowed_gai_family
@@ -160,6 +162,13 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                             socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
                         )
                     except (OSError, AttributeError):
+                        pass
+
+                # attempt to leverage GRO when under Linux
+                if socktype == socket.SOCK_DGRAM and sys.platform == "linux":
+                    try:
+                        sock.setsockopt(socket.SOL_UDP, UDP_LINUX_GRO, 1)
+                    except OSError:  # Defensive: oh, well(...) anyway!
                         pass
 
                 # If provided, set socket level options before connecting.

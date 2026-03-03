@@ -236,11 +236,24 @@ class PlainResolver(AsyncBaseResolver):
                     continue
 
             try:
-                payload = await self._socket.recv(1500)
+                data_in_or_segments = await self._socket.recv(1500)
 
-                if self._rfc1035_prefix_mandated is True:
+                if isinstance(data_in_or_segments, list):
+                    payloads = data_in_or_segments
+                elif data_in_or_segments:
+                    payloads = [data_in_or_segments]
+                else:
+                    payloads = []
+
+                if self._rfc1035_prefix_mandated is True and payloads:
+                    payload = b"".join(payloads)
                     while rfc1035_should_read(payload):
-                        payload += await self._socket.recv(1500)
+                        extra = await self._socket.recv(1500)
+                        if isinstance(extra, list):
+                            payload += b"".join(extra)
+                        else:
+                            payload += extra
+                    payloads = [payload]
             except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
                 raise socket.gaierror(
                     "Got unexpectedly disconnected while waiting for name resolution"
@@ -248,7 +261,7 @@ class PlainResolver(AsyncBaseResolver):
 
             self._read_semaphore.release()
 
-            if not payload:
+            if not payloads:
                 self._terminated = True
                 raise socket.gaierror(
                     "Got unexpectedly disconnected while waiting for name resolution"
@@ -256,28 +269,29 @@ class PlainResolver(AsyncBaseResolver):
 
             pending_raw_identifiers = [_.raw_id for _ in self._pending]
 
-            #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
-            if self._rfc1035_prefix_mandated is True:
-                fragments = rfc1035_unpack(payload)
-            else:
-                fragments = packet_fragment(payload, *pending_raw_identifiers)
-
-            for fragment in fragments:
-                dns_resp = DomainNameServerReturn(fragment)
-
-                if any(dns_resp.id == _.id for _ in queries):
-                    responses.append(dns_resp)
-
-                    query_tbr: DomainNameServerQuery | None = None
-
-                    for query_tbr in self._pending:
-                        if query_tbr.id == dns_resp.id:
-                            break
-
-                    if query_tbr:
-                        self._pending.remove(query_tbr)
+            for payload in payloads:
+                #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
+                if self._rfc1035_prefix_mandated is True:
+                    fragments = rfc1035_unpack(payload)
                 else:
-                    self._unconsumed.append(dns_resp)
+                    fragments = packet_fragment(payload, *pending_raw_identifiers)
+
+                for fragment in fragments:
+                    dns_resp = DomainNameServerReturn(fragment)
+
+                    if any(dns_resp.id == _.id for _ in queries):
+                        responses.append(dns_resp)
+
+                        query_tbr: DomainNameServerQuery | None = None
+
+                        for query_tbr in self._pending:
+                            if query_tbr.id == dns_resp.id:
+                                break
+
+                        if query_tbr:
+                            self._pending.remove(query_tbr)
+                    else:
+                        self._unconsumed.append(dns_resp)
 
         results = []
 
