@@ -206,11 +206,9 @@ class _OptimizedDatagramTransport(asyncio.DatagramTransport):
             if not self._closed_fut.done():
                 self._closed_fut.set_result(None)
 
-    # --- send path ---
-
     def sendto(self, data: bytes, addr: tuple[str, int] | None = None) -> None:  # type: ignore[override]
         if self._closing:
-            raise RuntimeError("Transport is closing")
+            raise OSError("Transport is closing")
 
         target = addr or self._address
         if not self._write_ready:
@@ -235,7 +233,7 @@ class _OptimizedDatagramTransport(asyncio.DatagramTransport):
         Falls back to individual ``sendto`` calls when GSO is not
         supported or the socket write buffer is full."""
         if self._closing:
-            raise RuntimeError("Transport is closing")
+            raise OSError("Transport is closing")
 
         if not self._write_ready:
             target = self._address
@@ -323,8 +321,6 @@ class _OptimizedDatagramTransport(asyncio.DatagramTransport):
 
         if self._closing:
             self._call_connection_lost(None)
-
-    # --- recv path ---
 
     def pause_reading(self) -> None:
         if not self._paused:
@@ -540,6 +536,8 @@ class DatagramWriter:
         return self._transport
 
     def write(self, data: bytes | bytearray | memoryview | list[bytes]) -> None:
+        if self._transport.is_closing():
+            raise OSError("transport is closing")
         if isinstance(data, list):
             if hasattr(self._transport, "sendto_many"):
                 self._transport.sendto_many(data)
