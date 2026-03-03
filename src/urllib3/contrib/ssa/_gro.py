@@ -527,6 +527,7 @@ class DatagramWriter:
         transport: asyncio.DatagramTransport,
     ) -> None:
         self._transport = transport
+        self._address: tuple[str, int] | None = transport.get_extra_info("peername")
         self._closed_event = asyncio.Event()
         self._paused = False
         self._drain_waiter: asyncio.Future[None] | None = None
@@ -537,16 +538,16 @@ class DatagramWriter:
 
     def write(self, data: bytes | bytearray | memoryview | list[bytes]) -> None:
         if self._transport.is_closing():
-            raise OSError("transport is closing")
+            return
         if isinstance(data, list):
             if hasattr(self._transport, "sendto_many"):
                 self._transport.sendto_many(data)
             else:
                 # Plain asyncio transport — send individually
                 for dgram in data:
-                    self._transport.sendto(dgram)
+                    self._transport.sendto(dgram, self._address)
         else:
-            self._transport.sendto(bytes(data))
+            self._transport.sendto(bytes(data), self._address)
 
     async def drain(self) -> None:
         if not self._paused:
