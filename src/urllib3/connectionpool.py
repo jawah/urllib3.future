@@ -1894,7 +1894,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             assert isinstance(response, ResponsePromise)
             return response  # actually a response promise!
 
-        assert isinstance(response, HTTPResponse)
+        if not isinstance(response, HTTPResponse):
+            warnings.warn(f"Expected {type(response)} to be a subclass of HTTPResponse")
 
         if redirect and response.get_redirect_location():
             # Handle redirect?

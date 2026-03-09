@@ -914,7 +914,9 @@ class PoolManager(RequestMethods):
             # the established connection is not capable of doing multiplexed request
             kw["multiplexed"] = False
 
-        assert isinstance(response, HTTPResponse)
+        if not isinstance(response, HTTPResponse):
+            warnings.warn(f"Expected {type(response)} to be a subclass of HTTPResponse")
+
         redirect_location = redirect and response.get_redirect_location()
         if not redirect_location:
             return response
