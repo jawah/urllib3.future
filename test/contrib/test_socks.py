@@ -126,7 +126,7 @@ def _set_up_fake_getaddrinfo(monkeypatch: pytest.MonkeyPatch) -> None:
     ]:
         gai_list = real_getaddrinfo(host, port, family, type, proto, flags)
         gai_list = [gai for gai in gai_list if gai[0] == socket.AF_INET]
-        return gai_list[:1]
+        return gai_list[:1]  # type: ignore[return-value]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 

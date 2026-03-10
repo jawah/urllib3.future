@@ -357,7 +357,6 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
             for key, val in other.items():
                 self.add(key, val)
         elif isinstance(other, typing.Iterable):
-            other = typing.cast(typing.Iterable[typing.Tuple[str, str]], other)
             for key, value in other:
                 self.add(key, value)
         elif hasattr(other, "keys") and hasattr(other, "__getitem__"):

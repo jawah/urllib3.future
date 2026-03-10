@@ -47,7 +47,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
             except SocketTimeout as e:
                 clean_exit = True
                 pool = (
-                    self._response._pool  # type: ignore[has-type]
+                    self._response._pool
                     if self._response and hasattr(self._response, "_pool")
                     else None
                 )
@@ -60,7 +60,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
                     raise SSLError(e) from e
                 clean_exit = True  # ws algorithms based on timeouts can expect this without being harmful!
                 pool = (
-                    self._response._pool  # type: ignore[has-type]
+                    self._response._pool
                     if self._response and hasattr(self._response, "_pool")
                     else None
                 )
@@ -100,7 +100,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
 
             except SocketTimeout as e:
                 pool = (
-                    self._response._pool  # type: ignore[has-type]
+                    self._response._pool
                     if self._response and hasattr(self._response, "_pool")
                     else None
                 )

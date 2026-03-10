@@ -290,7 +290,7 @@ class AsyncSocket:
                     "Likely FD Kernel/Loop Racing Allocation Error. You should retry."
                 )
 
-        if self.type == socket.SOCK_STREAM or self.type == -1:
+        if self.type == socket.SOCK_STREAM or self.type == -1:  # type: ignore[comparison-overlap]
             self._reader, self._writer = await asyncio.open_connection(sock=self._sock)
         elif self.type == socket.SOCK_DGRAM:
             self._reader, self._writer = await open_dgram_connection(sock=self._sock)

@@ -329,7 +329,7 @@ class HTTP1Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
     ) -> bool | None:
-        return NotImplemented
+        return NotImplemented  # type: ignore[no-any-return]
 
 
 class HTTP2Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):

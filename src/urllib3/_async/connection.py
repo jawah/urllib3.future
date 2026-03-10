@@ -813,7 +813,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
                 self.assert_hostname,
                 self.cert_reqs,
             )
-            is NotImplemented
+            is False
         ):
             server_hostname: str = self.host
             tls_in_tls = False

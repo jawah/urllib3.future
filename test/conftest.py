@@ -77,7 +77,7 @@ def run_server_in_thread(
 
         port = asyncio.run_coroutine_threadsafe(
             run_app(),
-            io_loop.asyncio_loop,  # type: ignore[attr-defined]
+            io_loop.asyncio_loop,
         ).result()
         yield ServerConfig(
             scheme,
@@ -121,7 +121,7 @@ def run_server_and_proxy_in_thread(
 
         proxy_config, server_config = asyncio.run_coroutine_threadsafe(
             run_app(),
-            io_loop.asyncio_loop,  # type: ignore[attr-defined]
+            io_loop.asyncio_loop,
         ).result()
         yield (proxy_config, server_config)
 
