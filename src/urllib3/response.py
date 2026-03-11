@@ -34,7 +34,7 @@ try:
 
 except (AttributeError, ImportError, ValueError):  # Defensive:
     try:
-        from compression import zstd  # type: ignore[no-redef,import-not-found]
+        from compression import zstd  # type: ignore[no-redef]
     except ImportError:
         zstd = None  # type: ignore[assignment]
 
@@ -463,7 +463,8 @@ class HTTPResponse(io.IOBase):
     def retries(self, retries: Retry | None) -> None:
         # Override the request_url if retries has a redirect location.
         if retries is not None and retries.history:
-            self.url = retries.history[-1].redirect_location
+            if isinstance(retries.history[-1].redirect_location, str):
+                self.url = retries.history[-1].redirect_location
         self._retries = retries
 
     def _init_decoder(self) -> None:

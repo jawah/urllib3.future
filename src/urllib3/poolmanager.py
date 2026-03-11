@@ -914,7 +914,13 @@ class PoolManager(RequestMethods):
             # the established connection is not capable of doing multiplexed request
             kw["multiplexed"] = False
 
-        assert isinstance(response, HTTPResponse)
+        # we are relaxing that constraint to behave properly
+        # with 3rd party mocking tool such as vcrpy.
+        # see https://github.com/jawah/urllib3.future/issues/320
+        # for more details.
+        # assert isinstance(response, HTTPResponse)
+        response = typing.cast(HTTPResponse, response)
+
         redirect_location = redirect and response.get_redirect_location()
         if not redirect_location:
             return response

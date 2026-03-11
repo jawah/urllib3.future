@@ -1894,7 +1894,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             assert isinstance(response, ResponsePromise)
             return response  # actually a response promise!
 
-        assert isinstance(response, HTTPResponse)
+        # we are relaxing that constraint to behave properly
+        # with 3rd party mocking tool such as vcrpy.
+        # see https://github.com/jawah/urllib3.future/issues/320
+        # for more details.
+        # assert isinstance(response, HTTPResponse)
+        response = typing.cast(HTTPResponse, response)
 
         if redirect and response.get_redirect_location():
             # Handle redirect?

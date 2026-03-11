@@ -220,7 +220,7 @@ if sys.flags.debug:
 #
 class PySSLContextStruct(ctypes.Structure):
     _fields_ = (
-        _head_extra_fields
+        _head_extra_fields  # type: ignore[assignment]
         + [
             ("ob_refcnt", ctypes.c_ssize_t),  # Py_ssize_t ob_refcnt;
             ("ob_type", ctypes.c_void_p),  # PyTypeObject *ob_type;
