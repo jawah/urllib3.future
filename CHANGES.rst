@@ -1,3 +1,9 @@
+2.17.901 (2026-03-11)
+=====================
+
+- Relax strict assertion on response object. Ease the support of vcrpy mocking utility. (#320)
+  This alone does not solve the compatibility issue with vcrpy. See https://github.com/jawah/urllib3.future/issues/320
+
 2.17.900 (2026-03-03)
 =====================
 
