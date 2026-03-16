@@ -1078,14 +1078,13 @@ class HfaceBackend(BaseBackend):
 
                         return events
 
-                    # we can receive a zero-length payload, that usually means the remote closed the socket.
+                    # we can receive a zero-length payload, that usually means the remote closed the socket (EOF).
                     # while we could retry this, we should not as some servers can have tricky edge cases
                     # where a request could actually be executed without you knowing so.
                     # see https://github.com/jawah/urllib3.future/issues/280 for the rationale behind this change.
                     if (
                         reach_socket is True
                         and data_in == b""
-                        and self._response is not None
                         and (
                             (
                                 isinstance(event_type, tuple)
