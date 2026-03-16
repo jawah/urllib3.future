@@ -38,11 +38,13 @@ class _OpenSSL:
         if platform.system() == "Windows":
             # possible search locations
             candidates = {
-                os.path.dirname(ssl._ssl.__file__),
                 os.path.dirname(sys.executable),
                 os.path.join(sys.prefix, "DLLs"),
                 sys.prefix,
             }
+
+            if hasattr(ssl._ssl, "__file__"):
+                candidates.add(os.path.dirname(ssl._ssl.__file__))
 
             _ssl_options_signed_long_bug = sys.version_info < (3, 11)
 
@@ -79,7 +81,15 @@ class _OpenSSL:
             # that's the most common path
             # ssl built in module already loaded both crypto and ssl
             # symbols.
-            self._ssl = ctypes.CDLL(ssl._ssl.__file__)
+            if hasattr(ssl._ssl, "__file__"):
+                self._ssl = ctypes.CDLL(ssl._ssl.__file__)
+            else:
+                # _ssl is statically linked into the interpreter
+                # (e.g. python-build-standalone via uv). OpenSSL symbols
+                # are in the main process image; ctypes.CDLL(None) exposes them.
+                # see https://github.com/jawah/urllib3.future/issues/325 for more
+                # details.
+                self._ssl = ctypes.CDLL(None)
             self._crypto = self._ssl
 
         # we want to ensure a minimal set of symbols

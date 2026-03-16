@@ -38,3 +38,15 @@ jobs:
 
       - name: "Run against Python 3.7 built with OpenSSL 1.0.2q"
         run: ./ci/run_legacy_openssl.sh
+
+  edge-static-linked-openssl:
+    name: Ensure Static Linked OpenSSL
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+
+      - name: "Run against Python 3.12 built with Statically Linked OpenSSL"
+        run: ./ci/run_static_openssl.sh

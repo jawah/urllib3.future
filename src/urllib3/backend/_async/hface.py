@@ -991,7 +991,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if (
                         reach_socket is True
                         and data_in == b""
-                        and self._response is not None
                         and (
                             (
                                 isinstance(event_type, tuple)

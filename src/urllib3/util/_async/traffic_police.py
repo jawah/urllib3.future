@@ -657,6 +657,22 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if obj_id is not None and conn_or_pool is not None:
                     self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
 
+                    if (
+                        hasattr(conn_or_pool, "is_connected")
+                        and not conn_or_pool.is_connected
+                    ):
+                        try:
+                            await conn_or_pool.close()
+                        except Exception:  # Defensive:
+                            pass
+
+                        self.release()
+
+                        del self._container[obj_id]
+                        del self._registry[obj_id]
+
+                        continue
+
                     try:
                         yield conn_or_pool
                     finally:

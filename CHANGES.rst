@@ -1,3 +1,9 @@
+2.17.902 (2026-03-16)
+=====================
+
+- Automatically dispose of expired connection within the discrete idle watcher running in background. (#324)
+- Support in-memory certificate loading when Python is built with static linked OpenSSL. (#325)
+
 2.17.901 (2026-03-11)
 =====================
 
