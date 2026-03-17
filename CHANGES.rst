@@ -1,3 +1,9 @@
+2.17.903 (2026-03-17)
+=====================
+
+- Fixed segfault when leveraging in memory certificate against MacOS build of Python using statically linked ssl implementation.
+- Added support for in memory certificate through FIFO as a last resort in MacOS when facing bellow issue.
+
 2.17.902 (2026-03-16)
 =====================
 
