@@ -8,6 +8,7 @@ if typing.TYPE_CHECKING:
 
 from ._ctypes import load_cert_chain as _ctypes_load_cert_chain
 from ._shm import load_cert_chain as _shm_load_cert_chain
+from ._fifo import load_cert_chain as _fifo_load_cert_chain
 
 SUPPORTED_METHODS: list[
     typing.Callable[
@@ -22,6 +23,7 @@ SUPPORTED_METHODS: list[
 ] = [
     _ctypes_load_cert_chain,
     _shm_load_cert_chain,
+    _fifo_load_cert_chain,  # MacOS last resort(...)
 ]
 
 
