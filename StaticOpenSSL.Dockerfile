@@ -46,4 +46,3 @@ CMD ["python", "-m", "pytest", "-v", "--cov=urllib3", "--cov-report=", \
     "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password_ctypes_only", \
     "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password_shm_only", \
     "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password_fifo_only"]
-
