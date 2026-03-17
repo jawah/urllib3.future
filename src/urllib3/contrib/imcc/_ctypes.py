@@ -210,8 +210,6 @@ class _OpenSSL:
 
 
 _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
-_IS_LINUX = sys.platform == "linux"
-_FT_HEAD_ADDITIONAL_OFFSET = 1 if _IS_LINUX else 2
 
 _head_extra_fields = []
 
@@ -221,6 +219,36 @@ if sys.flags.debug:
     # two pointers (_ob_next, _ob_prev).
     _head_extra_fields = [("_ob_next", ctypes.c_void_p), ("_ob_prev", ctypes.c_void_p)]
 
+# PyObject_HEAD layout differs between GIL and free-threaded builds.
+#
+# GIL build (16 bytes):
+#   Py_ssize_t ob_refcnt;      // 8 bytes
+#   PyTypeObject *ob_type;     // 8 bytes
+#
+# Free-threaded build (32 bytes):
+#   uintptr_t ob_tid;          // 8 bytes
+#   uint16_t  ob_flags;        // 2 bytes  (called _padding in 3.13)
+#   PyMutex   ob_mutex;        // 1 byte   (uint8_t)
+#   uint8_t   ob_gc_bits;      // 1 byte
+#   uint32_t  ob_ref_local;    // 4 bytes
+#   Py_ssize_t ob_ref_shared;  // 8 bytes
+#   PyTypeObject *ob_type;     // 8 bytes
+if _IS_GIL_DISABLED:
+    _pyobject_head_fields = [
+        ("ob_tid", ctypes.c_size_t),
+        ("ob_flags", ctypes.c_uint16),
+        ("ob_mutex", ctypes.c_uint8),
+        ("ob_gc_bits", ctypes.c_uint8),
+        ("ob_ref_local", ctypes.c_uint32),
+        ("ob_ref_shared", ctypes.c_ssize_t),
+        ("ob_type", ctypes.c_void_p),
+    ]
+else:
+    _pyobject_head_fields = [
+        ("ob_refcnt", ctypes.c_ssize_t),
+        ("ob_type", ctypes.c_void_p),
+    ]
+
 
 # Define the PySSLContext C structure using ctypes.
 # This definition assumes that 'SSL_CTX *ctx' is the first member
@@ -229,7 +257,7 @@ if sys.flags.debug:
 #
 # CPython's Modules/_ssl.c (simplified):
 # typedef struct {
-#     PyObject_HEAD  // Expands to _PyObject_HEAD_EXTRA (if debug) + ob_refcnt + ob_type
+#     PyObject_HEAD
 #     SSL_CTX *ctx;
 #     // ... other members ...
 # } PySSLContextObject;
@@ -237,15 +265,7 @@ if sys.flags.debug:
 class PySSLContextStruct(ctypes.Structure):
     _fields_ = (
         _head_extra_fields  # type: ignore[assignment]
-        + [
-            ("ob_refcnt", ctypes.c_ssize_t),  # Py_ssize_t ob_refcnt;
-            ("ob_type", ctypes.c_void_p),  # PyTypeObject *ob_type;
-        ]
-        + (
-            [(f"_ob_ft{i}", ctypes.c_void_p) for i in range(_FT_HEAD_ADDITIONAL_OFFSET)]
-            if _IS_GIL_DISABLED
-            else []
-        )
+        + _pyobject_head_fields
         + [
             ("ssl_ctx", ctypes.c_void_p),  # SSL_CTX *ctx; (this is the pointer we want)
             # If there were other C members between ob_type and ssl_ctx,

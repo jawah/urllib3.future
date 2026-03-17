@@ -280,7 +280,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
 
         with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)) as fp_key_data:
             with open(os.path.join(self.certs_dir, CLIENT_CERT)) as fp_cert_data:
-                if not hasattr(ssl._ssl, "__file__"):
+                if not hasattr(ssl._ssl, "__file__"):  # type: ignore[attr-defined]
                     # Static _ssl: ctypes cannot work, expect warning
                     with HTTPSConnectionPool(
                         self.host,
