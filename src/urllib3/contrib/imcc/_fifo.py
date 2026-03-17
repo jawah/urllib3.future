@@ -10,6 +10,7 @@ from io import UnsupportedOperation
 if typing.TYPE_CHECKING:
     import ssl
 
+
 def load_cert_chain(
     ctx: ssl.SSLContext,
     certdata: str | bytes,
@@ -74,10 +75,10 @@ def load_cert_chain(
 
         ctx.load_cert_chain(cert_fifo, keyfile=key_fifo, password=password)
 
-        cert_thread.join(timeout=1.)
+        cert_thread.join(timeout=1.0)
 
         if key_thread is not None:
-            key_thread.join(timeout=1.)
+            key_thread.join(timeout=1.0)
 
         if writer_exc is not None:
             raise UnsupportedOperation(
