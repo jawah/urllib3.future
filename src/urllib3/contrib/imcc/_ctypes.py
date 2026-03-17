@@ -90,6 +90,38 @@ class _OpenSSL:
                 # see https://github.com/jawah/urllib3.future/issues/325 for more
                 # details.
                 self._ssl = ctypes.CDLL(None)
+
+                # On some platforms (e.g. macOS), ctypes.CDLL(None) may resolve
+                # SSL symbols from a different library than what _ssl was built
+                # against (e.g. system LibreSSL vs statically-linked OpenSSL).
+                # Calling functions from the wrong library on SSL_CTX* structs
+                # created by the real _ssl module will segfault due to ABI mismatch.
+                # We must verify the ctypes-resolved library matches before proceeding.
+                _ctypes_version: str | None = None
+
+                if hasattr(self._ssl, "OpenSSL_version"):
+                    self._ssl.OpenSSL_version.argtypes = [ctypes.c_int]
+                    self._ssl.OpenSSL_version.restype = ctypes.c_char_p
+                    _ctypes_version = self._ssl.OpenSSL_version(0).decode()
+                elif hasattr(self._ssl, "SSLeay_version"):
+                    self._ssl.SSLeay_version.argtypes = [ctypes.c_int]
+                    self._ssl.SSLeay_version.restype = ctypes.c_char_p
+                    _ctypes_version = self._ssl.SSLeay_version(0).decode()
+
+                if _ctypes_version is None:
+                    raise UnsupportedOperation(
+                        "Unable to verify the SSL library resolved via ctypes.CDLL(None). "
+                        "Neither OpenSSL_version nor SSLeay_version symbols are available."
+                    )
+
+                if _ctypes_version != ssl.OPENSSL_VERSION:
+                    raise UnsupportedOperation(
+                        f"SSL library mismatch: Python's _ssl is built against "
+                        f"'{ssl.OPENSSL_VERSION}' but ctypes.CDLL(None) resolved "
+                        f"'{_ctypes_version}'. The statically-linked SSL symbols "
+                        f"are not exported in the process symbol table."
+                    )
+
             self._crypto = self._ssl
 
         # we want to ensure a minimal set of symbols
