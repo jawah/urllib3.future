@@ -236,12 +236,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert subject["organizationalUnitName"].startswith("Testing cert")
 
     @pytest.mark.xfail(
-        sys.implementation.name == "pypy"
-        and (
-            platform.python_version().startswith("3.11")
-            or platform.python_version().startswith("3.10")
-        ),
-        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
         strict=False,
     )
     def test_in_memory_client_key_password(self) -> None:
@@ -262,12 +258,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                     assert subject["organizationalUnitName"].startswith("Testing cert")
 
     @pytest.mark.xfail(
-        sys.implementation.name == "pypy"
-        and (
-            platform.python_version().startswith("3.11")
-            or platform.python_version().startswith("3.10")
-        ),
-        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
         strict=False,
     )
     def test_in_memory_client_key_password_ctypes_only(
@@ -314,12 +306,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                         )
 
     @pytest.mark.xfail(
-        sys.implementation.name == "pypy"
-        and (
-            platform.python_version().startswith("3.11")
-            or platform.python_version().startswith("3.10")
-        ),
-        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
         strict=False,
     )
     def test_in_memory_client_key_password_shm_only(
@@ -368,12 +356,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                         )
 
     @pytest.mark.xfail(
-        sys.implementation.name == "pypy"
-        and (
-            platform.python_version().startswith("3.11")
-            or platform.python_version().startswith("3.10")
-        ),
-        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
         strict=False,
     )
     def test_in_memory_client_key_password_fifo_only(
