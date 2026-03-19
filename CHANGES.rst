@@ -1,3 +1,10 @@
+2.17.903 (2026-03-19)
+=====================
+
+- Fixed segfault when leveraging in memory certificate against build of Python using statically linked ssl lib.
+- Added support for in memory certificate through FIFO as a last resort in MacOS when facing bellow issue.
+- Fixed IMCC support on Linux when using a Freethreaded build of CPython.
+
 2.17.902 (2026-03-16)
 =====================
 

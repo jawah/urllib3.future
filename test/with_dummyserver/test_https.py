@@ -44,6 +44,12 @@ from urllib3.exceptions import (
 from urllib3.util.ssl_match_hostname import CertificateError
 from urllib3.util.timeout import Timeout
 
+
+from urllib3.util.ssl_ import _SSLContextCache
+from urllib3.contrib.imcc._ctypes import load_cert_chain as _ctypes_load_cert_chain
+from urllib3.contrib.imcc._shm import load_cert_chain as _shm_load_cert_chain
+from urllib3.contrib.imcc._fifo import load_cert_chain as _fifo_load_cert_chain
+
 from .. import has_alpn
 
 TLSv1_CERTS = DEFAULT_CERTS.copy()
@@ -230,12 +236,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert subject["organizationalUnitName"].startswith("Testing cert")
 
     @pytest.mark.xfail(
-        sys.implementation.name == "pypy"
-        and (
-            platform.python_version().startswith("3.11")
-            or platform.python_version().startswith("3.10")
-        ),
-        reason="PyPy libffi does not implement _shm_open (probable bug)",
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
         strict=False,
     )
     def test_in_memory_client_key_password(self) -> None:
@@ -254,6 +256,152 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                     r = https_pool.request("GET", "/certificate")
                     subject = r.json()
                     assert subject["organizationalUnitName"].startswith("Testing cert")
+
+    @pytest.mark.xfail(
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
+        strict=False,
+    )
+    def test_in_memory_client_key_password_ctypes_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _SSLContextCache.clear()
+        monkeypatch.setattr(
+            "urllib3.contrib.imcc.SUPPORTED_METHODS", [_ctypes_load_cert_chain]
+        )
+
+        with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)) as fp_key_data:
+            with open(os.path.join(self.certs_dir, CLIENT_CERT)) as fp_cert_data:
+                if not hasattr(ssl._ssl, "__file__"):  # type: ignore[attr-defined]
+                    # Static _ssl: ctypes cannot work, expect warning
+                    with HTTPSConnectionPool(
+                        self.host,
+                        self.port,
+                        ca_certs=DEFAULT_CA,
+                        key_data=fp_key_data.read(),
+                        cert_data=fp_cert_data.read(),
+                        key_password="letmein",
+                        ssl_minimum_version=self.tls_version(),
+                        retries=False,
+                    ) as https_pool:
+                        with pytest.warns(
+                            UserWarning, match="unsupported on your platform"
+                        ):
+                            https_pool.request("GET", "/certificate")
+                else:
+                    with HTTPSConnectionPool(
+                        self.host,
+                        self.port,
+                        ca_certs=DEFAULT_CA,
+                        key_data=fp_key_data.read(),
+                        cert_data=fp_cert_data.read(),
+                        key_password="letmein",
+                        ssl_minimum_version=self.tls_version(),
+                        retries=False,
+                    ) as https_pool:
+                        r = https_pool.request("GET", "/certificate")
+                        subject = r.json()
+                        assert subject["organizationalUnitName"].startswith(
+                            "Testing cert"
+                        )
+
+    @pytest.mark.xfail(
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
+        strict=False,
+    )
+    def test_in_memory_client_key_password_shm_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _SSLContextCache.clear()
+        monkeypatch.setattr(
+            "urllib3.contrib.imcc.SUPPORTED_METHODS", [_shm_load_cert_chain]
+        )
+
+        with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)) as fp_key_data:
+            with open(os.path.join(self.certs_dir, CLIENT_CERT)) as fp_cert_data:
+                if sys.platform not in ("linux",) and not sys.platform.startswith(
+                    ("freebsd", "openbsd")
+                ):
+                    # _shm only supports Linux, FreeBSD, OpenBSD
+                    with HTTPSConnectionPool(
+                        self.host,
+                        self.port,
+                        ca_certs=DEFAULT_CA,
+                        key_data=fp_key_data.read(),
+                        cert_data=fp_cert_data.read(),
+                        key_password="letmein",
+                        ssl_minimum_version=self.tls_version(),
+                        retries=False,
+                    ) as https_pool:
+                        with pytest.warns(
+                            UserWarning, match="unsupported on your platform"
+                        ):
+                            https_pool.request("GET", "/certificate")
+                else:
+                    with HTTPSConnectionPool(
+                        self.host,
+                        self.port,
+                        ca_certs=DEFAULT_CA,
+                        key_data=fp_key_data.read(),
+                        cert_data=fp_cert_data.read(),
+                        key_password="letmein",
+                        ssl_minimum_version=self.tls_version(),
+                        retries=False,
+                    ) as https_pool:
+                        r = https_pool.request("GET", "/certificate")
+                        subject = r.json()
+                        assert subject["organizationalUnitName"].startswith(
+                            "Testing cert"
+                        )
+
+    @pytest.mark.xfail(
+        sys.implementation.name == "pypy",
+        reason="PyPy IMCC not guaranteed",
+        strict=False,
+    )
+    def test_in_memory_client_key_password_fifo_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _SSLContextCache.clear()
+        monkeypatch.setattr(
+            "urllib3.contrib.imcc.SUPPORTED_METHODS", [_fifo_load_cert_chain]
+        )
+
+        with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE)) as fp_key_data:
+            with open(os.path.join(self.certs_dir, CLIENT_CERT)) as fp_cert_data:
+                if not hasattr(os, "mkfifo"):
+                    # No FIFO support (Windows)
+                    with HTTPSConnectionPool(
+                        self.host,
+                        self.port,
+                        ca_certs=DEFAULT_CA,
+                        key_data=fp_key_data.read(),
+                        cert_data=fp_cert_data.read(),
+                        key_password="letmein",
+                        ssl_minimum_version=self.tls_version(),
+                        retries=False,
+                    ) as https_pool:
+                        with pytest.warns(
+                            UserWarning, match="unsupported on your platform"
+                        ):
+                            https_pool.request("GET", "/certificate")
+                else:
+                    with HTTPSConnectionPool(
+                        self.host,
+                        self.port,
+                        ca_certs=DEFAULT_CA,
+                        key_data=fp_key_data.read(),
+                        cert_data=fp_cert_data.read(),
+                        key_password="letmein",
+                        ssl_minimum_version=self.tls_version(),
+                        retries=False,
+                    ) as https_pool:
+                        r = https_pool.request("GET", "/certificate")
+                        subject = r.json()
+                        assert subject["organizationalUnitName"].startswith(
+                            "Testing cert"
+                        )
 
     def test_client_encrypted_key_requires_password(self) -> None:
         with HTTPSConnectionPool(

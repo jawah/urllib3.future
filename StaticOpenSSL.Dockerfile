@@ -40,6 +40,9 @@ ENV TRAEFIK_HTTPBIN_ENABLE=false
 ENV CI=true
 ENV TERM=xterm-256color
 
-CMD ["python", "-m", "pytest", "-v", \
+CMD ["python", "-m", "pytest", "-v", "--cov=urllib3", "--cov-report=", \
     "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_intermediate", \
-    "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password"]
+    "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password", \
+    "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password_ctypes_only", \
+    "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password_shm_only", \
+    "test/with_dummyserver/test_https.py::TestHTTPS_TLSv1_3::test_in_memory_client_key_password_fifo_only"]
