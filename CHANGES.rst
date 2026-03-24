@@ -1,3 +1,11 @@
+2.18.900 (2026-03-24)
+=====================
+
+- Added initial support for ECH when negotiating HTTP/3 over QUIC. qh3 introduced support for ECH
+  since version 1.7.0 and requires passing ``ech_config_list`` which we now do automatically when
+  using a custom resolver. E.g. ``PoolManager(resolver="doh+cloudflare://").urlopen("GET", "https://encryptedsni.com")``
+  will be automatically using ECH, therefore masking your intent to visit ``https://encryptedsni.com``.
+
 2.17.903 (2026-03-19)
 =====================
 

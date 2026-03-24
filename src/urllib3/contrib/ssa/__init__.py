@@ -91,6 +91,8 @@ class AsyncSocket:
         self._external_timeout: float | int | None = None
         self._tls_in_tls = False
 
+        self._ech_config: bytes | None = None
+
     def fileno(self) -> int:
         return self._fileno if self._fileno is not None else self._sock.fileno()
 

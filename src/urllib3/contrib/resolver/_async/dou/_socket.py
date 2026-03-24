@@ -109,7 +109,7 @@ class PlainResolver(AsyncBaseResolver):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
@@ -186,6 +186,7 @@ class PlainResolver(AsyncBaseResolver):
             await self._socket.wait_for_readiness()
 
         remote_preemptive_quic_rr = False
+        ech_config_list: bytes | None = None
 
         if quic_upgrade_via_dns_rr and type == socket.SOCK_DGRAM:
             quic_upgrade_via_dns_rr = False
@@ -293,7 +294,15 @@ class PlainResolver(AsyncBaseResolver):
                     else:
                         self._unconsumed.append(dns_resp)
 
-        results = []
+        results: list[
+            tuple[
+                socket.AddressFamily,
+                socket.SocketKind,
+                int,
+                str | bytes,
+                tuple[str, int] | tuple[str, int, int, int],
+            ]
+        ] = []
 
         for response in responses:
             if not response.is_ok:
@@ -310,6 +319,8 @@ class PlainResolver(AsyncBaseResolver):
                     assert isinstance(record[-1], dict)
                     if "h3" in record[-1]["alpn"]:
                         remote_preemptive_quic_rr = True
+                    if record[-1]["echconfig"]:
+                        ech_config_list = record[-1]["echconfig"]
                     continue
 
                 assert not isinstance(record[-1], dict)
@@ -343,7 +354,15 @@ class PlainResolver(AsyncBaseResolver):
                     )
                 )
 
-        quic_results = []
+        quic_results: list[
+            tuple[
+                socket.AddressFamily,
+                socket.SocketKind,
+                int,
+                str | bytes,
+                tuple[str, int] | tuple[str, int, int, int],
+            ]
+        ] = []
 
         if remote_preemptive_quic_rr:
             any_specified = False
@@ -359,6 +378,12 @@ class PlainResolver(AsyncBaseResolver):
 
             if any_specified:
                 quic_results = []
+
+        if ech_config_list is not None:
+            results = [(r[0], r[1], r[2], ech_config_list, r[4]) for r in results]
+            quic_results = [
+                (r[0], r[1], r[2], ech_config_list, r[4]) for r in quic_results
+            ]
 
         return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
 
