@@ -24,6 +24,12 @@ if typing.TYPE_CHECKING:
     from .utils import HttpsRecord
 
 
+class _with_attr_sock(socket.socket):
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        self._ech_config: bytes | None = None
+        super().__init__(*args, **kwargs)
+
+
 class ProtocolResolver(str, Enum):
     """
     At urllib3.future we aim to propose a wide range of DNS-protocols.
@@ -154,7 +160,7 @@ class BaseResolver(metaclass=ABCMeta):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
@@ -231,7 +237,7 @@ class BaseResolver(metaclass=ABCMeta):
             af, socktype, proto, canonname, sa = res
             sock = None
             try:
-                sock = socket.socket(af, socktype, proto)
+                sock = _with_attr_sock(af, socktype, proto)
 
                 # we need to add this or reusing the same origin port will likely fail within
                 # short period of time. kernel put port on wait shut.
@@ -294,6 +300,9 @@ class BaseResolver(metaclass=ABCMeta):
                             datetime.now(tz=timezone.utc),
                         )
                     )
+
+                if isinstance(canonname, bytes) and canonname:
+                    setattr(sock, "_ech_config", canonname)
 
                 return sock
             except (OSError, OverflowError) as _:
@@ -397,7 +406,7 @@ class ManyResolver(BaseResolver):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:

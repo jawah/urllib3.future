@@ -44,7 +44,7 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
@@ -201,6 +201,9 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                         )
                     )
 
+                if isinstance(canonname, bytes) and canonname:
+                    sock._ech_config = canonname
+
                 return sock
             except (OSError, OverflowError) as _:
                 err = _
@@ -303,7 +306,7 @@ class AsyncManyResolver(AsyncBaseResolver):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:

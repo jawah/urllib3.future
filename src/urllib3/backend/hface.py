@@ -410,6 +410,7 @@ class HfaceBackend(BaseBackend):
             if isinstance(assert_hostname, str)
             else None,
             idle_timeout=self._keepalive_delay or 300.0,
+            ech_config_list=self._ech_config,
         )
 
         self.is_verified = not self.__custom_tls_settings.insecure
@@ -1953,3 +1954,4 @@ class HfaceBackend(BaseBackend):
         self._last_used_at = time.monotonic()
         self._dgram_gro_enabled = False
         self._dgram_gso_enabled = False
+        self._ech_config = None

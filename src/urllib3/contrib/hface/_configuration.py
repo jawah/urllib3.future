@@ -57,3 +57,5 @@ class QuicTLSConfig:
     ciphers: list[Mapping[str, Any]] | None = None
 
     idle_timeout: float = 300.0
+
+    ech_config_list: bytes | None = None

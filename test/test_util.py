@@ -859,7 +859,7 @@ class TestUtil:
         ],
     )
     @patch("socket.getaddrinfo")
-    @patch("socket.socket")
+    @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
     def test_create_connection_with_valid_idna_labels(
         self, socket: MagicMock, getaddrinfo: MagicMock, host: str
     ) -> None:
@@ -894,7 +894,7 @@ class TestUtil:
             )
 
     @patch("socket.getaddrinfo")
-    @patch("socket.socket")
+    @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
     def test_create_connection_with_scoped_ipv6(
         self, socket: MagicMock, getaddrinfo: MagicMock
     ) -> None:

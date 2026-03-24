@@ -254,6 +254,9 @@ class HTTPConnection(HfaceBackend):
             self.socket_kind = socket.SOCK_DGRAM
             self._svn = HttpVersion.h3
 
+        if hasattr(sock, "_ech_config"):
+            self._ech_config = sock._ech_config
+
         return sock
 
     def set_tunnel(

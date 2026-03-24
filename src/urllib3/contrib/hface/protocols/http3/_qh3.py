@@ -98,6 +98,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             max_stream_data=2**24,
         )
 
+        # infer support for encrypted hello!
+        # qh3 introduced its support since v1.7.0
+        if hasattr(self._configuration, "ech_config_list"):
+            self._configuration.ech_config_list = tls_config.ech_config_list
+
         if tls_config.ciphers:
             available_ciphers = {c.name: c for c in CipherSuite}
             chosen_ciphers: list[CipherSuite] = []

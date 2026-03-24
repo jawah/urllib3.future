@@ -31,10 +31,10 @@
 - Support for Python/PyPy 3.7+, no compromise.
 - Automatic Connection Upgrade / Downgrade.
 - Early (Informational) Responses / Hints.
+- Post-Quantum Security & ECH with QUIC.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
 - WebSocket over HTTP/2+ (RFC8441).
 - Proxy support for HTTP and SOCKS.
-- Post-Quantum Security with QUIC.
 - Detailed connection inspection.
 - HTTP/2 with prior knowledge.
 - Support for free-threaded.

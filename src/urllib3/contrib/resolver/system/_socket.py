@@ -50,7 +50,7 @@ class SystemResolver(BaseResolver):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:

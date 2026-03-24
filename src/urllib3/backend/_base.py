@@ -536,6 +536,7 @@ class BaseBackend:
         self._last_used_at: float = time.monotonic()
 
         self._recv_size_ema: float = 0.0
+        self._ech_config: bytes | None = None
 
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises

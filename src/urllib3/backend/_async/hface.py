@@ -378,6 +378,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             if isinstance(assert_hostname, str)
             else None,
             idle_timeout=self._keepalive_delay or 300.0,
+            ech_config_list=self._ech_config,
         )
 
         self.is_verified = not self.__custom_tls_settings.insecure
@@ -1828,3 +1829,4 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._connected_at = None
         self._last_used_at = time.monotonic()
         self._recv_size_ema = 0.0
+        self._ech_config = None

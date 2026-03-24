@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 import typing
-from base64 import b64encode
+from base64 import b64decode, b64encode
 
 from ...._collections import HTTPHeaderDict
 from ....backend import ConnectionInfo, HttpVersion, ResponsePromise
@@ -15,6 +15,7 @@ from ..protocols import (
     DomainNameServerReturn,
     ProtocolResolver,
     SupportedQueryType,
+    COMMON_RCODE_LABEL,
 )
 from ..utils import is_ipv4, is_ipv6, validate_length_of, parse_https_rdata
 
@@ -156,7 +157,7 @@ class HTTPSResolver(BaseResolver):
             socket.AddressFamily,
             socket.SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
@@ -214,6 +215,7 @@ class HTTPSResolver(BaseResolver):
 
         promises: list[HTTPResponse | ResponsePromise] = []
         remote_preemptive_quic_rr = False
+        ech_config_list: bytes | None = None
 
         if quic_upgrade_via_dns_rr and type == socket.SOCK_DGRAM:
             quic_upgrade_via_dns_rr = False
@@ -323,7 +325,7 @@ class HTTPSResolver(BaseResolver):
                 socket.AddressFamily,
                 socket.SocketKind,
                 int,
-                str,
+                str | bytes,
                 tuple[str, int] | tuple[str, int, int, int],
             ]
         ] = []
@@ -382,21 +384,34 @@ class HTTPSResolver(BaseResolver):
 
                             https_record = parse_https_rdata(raw_record)
 
+                            if https_record["echconfig"]:
+                                ech_config_list = https_record["echconfig"]
+
                             if "h3" not in https_record["alpn"]:
                                 continue
 
                             remote_preemptive_quic_rr = True
                         else:
                             rr_decode: dict[str, str] = dict(
-                                tuple(_.lower().split("=", 1))  # type: ignore[misc]
-                                for _ in rr.split(" ")
-                                if "=" in _
+                                (k.lower(), v)
+                                for k, v in (
+                                    _.split("=", 1) for _ in rr.split(" ") if "=" in _
+                                )
                             )
 
-                            if "alpn" not in rr_decode or "h3" not in rr_decode["alpn"]:
+                            if (
+                                "alpn" not in rr_decode
+                                or "h3" not in rr_decode["alpn"].lower()
+                            ):
                                 continue
 
                             remote_preemptive_quic_rr = True
+
+                            if "ech" in rr_decode:
+                                try:
+                                    ech_config_list = b64decode(rr_decode["ech"])
+                                except Exception:
+                                    pass
 
                             if "ipv4hint" in rr_decode and family in [
                                 socket.AF_UNSPEC,
@@ -467,11 +482,22 @@ class HTTPSResolver(BaseResolver):
             else:
                 dns_resp = DomainNameServerReturn(response.data)
 
+                if not dns_resp.is_ok:
+                    if dns_resp.rcode == 2:
+                        raise socket.gaierror(
+                            f"DNSSEC validation failure. Check http://dnsviz.net/d/{host}/dnssec/ and http://dnssec-debugger.verisignlabs.com/{host} for errors"
+                        )
+                    raise socket.gaierror(
+                        f"DNS returned an error: {COMMON_RCODE_LABEL[dns_resp.rcode] if dns_resp.rcode in COMMON_RCODE_LABEL else f'code {dns_resp.rcode}'}"
+                    )
+
                 for record in dns_resp.records:
                     if record[0] == SupportedQueryType.HTTPS:
                         assert isinstance(record[-1], dict)
                         if "h3" in record[-1]["alpn"]:
                             remote_preemptive_quic_rr = True
+                        if record[-1]["echconfig"]:
+                            ech_config_list = record[-1]["echconfig"]
                         continue
 
                     assert not isinstance(record[-1], dict)
@@ -510,7 +536,7 @@ class HTTPSResolver(BaseResolver):
                 socket.AddressFamily,
                 socket.SocketKind,
                 int,
-                str,
+                str | bytes,
                 tuple[str, int] | tuple[str, int, int, int],
             ]
         ] = []
@@ -529,6 +555,12 @@ class HTTPSResolver(BaseResolver):
 
             if any_specified:
                 quic_results = []
+
+        if ech_config_list is not None:
+            results = [(r[0], r[1], r[2], ech_config_list, r[4]) for r in results]
+            quic_results = [
+                (r[0], r[1], r[2], ech_config_list, r[4]) for r in quic_results
+            ]
 
         return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
 

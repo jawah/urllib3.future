@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import binascii
 import socket
 import struct
@@ -14,7 +13,7 @@ if typing.TYPE_CHECKING:
         alpn: list[str]
         ipv4hint: list[str]
         ipv6hint: list[str]
-        echconfig: list[str]
+        echconfig: bytes
 
 
 def inet4_ntoa(address: bytes) -> str:
@@ -238,28 +237,6 @@ def read_name(data: bytes, offset: int) -> tuple[str, int]:
     return ".".join(labels), offset
 
 
-def parse_echconfigs(buf: bytes) -> list[str]:
-    """
-    buf is the raw bytes of the ECHConfig vector:
-      - 2-byte total length, then for each:
-        - 2-byte cfg length + that many bytes of cfg
-    We return a list of Base64 strings (one per config).
-    """
-    if len(buf) < 2:
-        return []
-    off = 2
-    total = struct.unpack_from("!H", buf, 0)[0]
-    end = 2 + total
-    out = []
-    while off + 2 <= end:
-        cfg_len = struct.unpack_from("!H", buf, off)[0]
-        off += 2
-        cfg = buf[off : off + cfg_len]
-        off += cfg_len
-        out.append(base64.b64encode(cfg).decode())
-    return out
-
-
 def parse_https_rdata(rdata: bytes) -> HttpsRecord:
     """
     Parse the RDATA of an SVCB/HTTPS record.
@@ -296,7 +273,7 @@ def parse_https_rdata(rdata: bytes) -> HttpsRecord:
     ipv6 = [
         inet6_ntoa(params[6][i : i + 16]) for i in range(0, len(params.get(6, b"")), 16)
     ]
-    echconfs = parse_echconfigs(params.get(5, b""))
+    echconfs = params.get(5, b"")
 
     return {
         "priority": priority,

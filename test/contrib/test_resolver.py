@@ -404,7 +404,7 @@ def test_thread_safe_resolver(dns_url: str) -> None:
             AddressFamily,
             SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
@@ -452,7 +452,7 @@ def test_many_resolver_thread_safe() -> None:
             AddressFamily,
             SocketKind,
             int,
-            str,
+            str | bytes,
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
