@@ -135,7 +135,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._packets: deque[bytes] = deque()
         self._http: H3Connection | None = None
         self._terminated: bool = False
-        self._data_in_flight: bool = False
         self._open_stream_count: int = 0
         self._total_stream_count: int = 0
         self._goaway_to_honor: bool = False
@@ -143,6 +142,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             100  # safe-default, broadly used. (and set by qh3)
         )
         self._max_frame_size: int | None = None
+        self._next_timer: float | None = None
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
@@ -214,8 +214,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> None:
         assert self._http is not None
         self._http.send_data(stream_id, data, end_stream)
-        if end_stream is False:
-            self._data_in_flight = True
 
     def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
         self._quic.reset_stream(stream_id, error_code)
@@ -242,9 +240,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def bytes_received(self, data: bytes) -> None:
         self._quic.receive_datagram(data, self._remote_address, now=monotonic())
         self._fetch_events()
-
-        if self._data_in_flight:
-            self._data_in_flight = False
 
         # we want to perpetually mark the connection as "saturated"
         if self._goaway_to_honor:
@@ -278,19 +273,24 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 self._max_frame_size = self._quic._remote_max_stream_data_bidi_remote
 
     def bytes_to_send(self) -> bytes:
-        if not self._packets:
-            now = monotonic()
+        now = monotonic()
 
-            if self._http is None:
-                self._quic.connect(self._remote_address, now=now)
-                self._http = H3Connection(self._quic)
+        if self._http is None:
+            self._quic.connect(self._remote_address, now=now)
+            self._http = H3Connection(self._quic)
 
+        timer_expired = self._next_timer is not None and now >= self._next_timer
+
+        if not self._packets or timer_expired:
+            if timer_expired:
+                self._quic.handle_timer(now)
             # the QUIC state machine returns datagrams (addr, packet)
             # the client never have to worry about the destination
             # unless server yield a preferred address?
             self._packets.extend(
                 map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
             )
+            self._next_timer = self._quic.get_timer()
 
         if not self._packets:
             return b""
@@ -362,7 +362,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
     ) -> bool | None:
-        return self._data_in_flight
+        return False
 
     @typing.overload
     def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None: ...

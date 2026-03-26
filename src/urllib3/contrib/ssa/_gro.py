@@ -96,6 +96,10 @@ def sync_recv_gro(
         if cmsg_level == socket.SOL_UDP and cmsg_type == UDP_LINUX_GRO:
             (segment_size,) = _UINT16.unpack(cmsg_data[:2])
             break
+    else:
+        # No GRO cmsg found — the kernel delivered a single datagram,
+        # not a coalesced batch.  Return it as-is regardless of size.
+        return data
 
     if len(data) <= segment_size:
         return data
@@ -362,6 +366,11 @@ class _OptimizedDatagramTransport(asyncio.DatagramTransport):
                 if cmsg_level == socket.SOL_UDP and cmsg_type == UDP_LINUX_GRO:
                     (segment_size,) = _UINT16.unpack(cmsg_data[:2])
                     break
+            else:
+                # No GRO cmsg found — the kernel delivered a single
+                # datagram, not a coalesced batch.  Deliver as-is.
+                self._protocol.datagram_received(data, addr)
+                continue
 
             if len(data) <= segment_size:
                 self._protocol.datagram_received(data, addr)
