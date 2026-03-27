@@ -64,6 +64,7 @@ async def ssl_wrap_socket(
     check_hostname: bool | None = None,
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
+    ech_config_list: bytes | None = None,
 ) -> SSLAsyncSocket:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -190,5 +191,10 @@ async def ssl_wrap_socket(
                 _SSLContextCache.save(context)
         else:
             context = cached_ctx
+
+    if ech_config_list and hasattr(context, "set_ech_configs"):
+        # we need to mutate the ctx, so it's going to be a copy
+        # ech config list is specific to a single connection.
+        context = context.set_ech_configs(ech_config_list)
 
     return await sock.wrap_socket(context, server_hostname=server_hostname)

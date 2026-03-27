@@ -671,6 +671,7 @@ def ssl_wrap_socket(
     check_hostname: bool | None = None,
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
+    ech_config_list: bytes | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -799,8 +800,12 @@ def ssl_wrap_socket(
         else:
             context = cached_ctx
 
-    ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
-    return ssl_sock
+    if ech_config_list and hasattr(context, "set_ech_configs"):
+        # we need to mutate the ctx, so it's going to be a copy
+        # ech config list is specific to a single connection.
+        context = context.set_ech_configs(ech_config_list)
+
+    return _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
 
 
 def is_ipaddress(hostname: str | bytes) -> bool:

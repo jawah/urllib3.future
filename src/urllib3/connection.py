@@ -857,6 +857,7 @@ class HTTPSConnection(HTTPConnection):
                 cert_data=self.cert_data,
                 key_data=self.key_data,
                 ciphers=self.ciphers,
+                ech_config_list=self._ech_config,
             )
 
             # we want the http3 upgrade to behave
@@ -961,6 +962,7 @@ def _ssl_wrap_socket_and_match_hostname(
     cert_data: str | bytes | None = None,
     key_data: str | bytes | None = None,
     ciphers: str | None = None,
+    ech_config_list: bytes | None = None,
 ) -> _WrappedAndVerifiedSocket:
     """Logic for constructing an SSLContext from all TLS parameters, passing
     that down into ssl_wrap_socket, and then doing certificate verification
@@ -1018,6 +1020,7 @@ def _ssl_wrap_socket_and_match_hostname(
         ssl_version=resolve_ssl_version(ssl_version, mitigate_tls_version=True),
         ssl_minimum_version=ssl_minimum_version,
         ssl_maximum_version=ssl_maximum_version,
+        ech_config_list=ech_config_list,
     )
 
     context = ssl_sock.context
