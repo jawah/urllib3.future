@@ -33,7 +33,10 @@ from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
 
 try:  # Compiled with SSL?
-    import ssl
+    try:
+        import rtls as ssl  # type: ignore[import-untyped,no-redef]
+    except ImportError:
+        import ssl
 
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
@@ -1092,6 +1095,7 @@ def _wrap_proxy_error(err: Exception, proxy_scheme: str | None) -> ProxyError:
         "wrong version number" in error_normalized
         or "unknown protocol" in error_normalized
         or "record layer failure" in error_normalized
+        or "received corrupt message of type" in error_normalized
     )
     http_proxy_warning = (
         ". Your proxy appears to only use HTTP and not HTTPS, "

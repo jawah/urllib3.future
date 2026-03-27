@@ -211,6 +211,10 @@ def _is_has_never_check_common_name_reliable(
 ) -> bool:
     # As of May 2023, all released versions of LibreSSL fail to reject certificates with
     # only common names, see https://github.com/urllib3/urllib3/pull/3024
+    # Rustls has correct hostname verification and doesn't suffer from the
+    # LibreSSL/old-OpenSSL common name checking bugs that this function guards against.
+    if openssl_version.startswith("Rustls "):
+        return True
     is_openssl = openssl_version.startswith("OpenSSL ")
     # Before fixing OpenSSL issue #14579, the SSL_new() API was not copying hostflags
     # like X509_CHECK_FLAG_NEVER_CHECK_SUBJECT, which tripped up CPython.
@@ -236,26 +240,25 @@ if typing.TYPE_CHECKING:
 _SSL_VERSION_TO_TLS_VERSION: dict[int, int] = {}
 
 try:  # Do we have ssl at all?
-    import ssl
-    from ssl import (  # type: ignore[assignment]
-        CERT_REQUIRED,
-        HAS_NEVER_CHECK_COMMON_NAME,
-        OP_NO_COMPRESSION,
-        OP_NO_TICKET,
-        OPENSSL_VERSION,
-        OPENSSL_VERSION_NUMBER,
-        PROTOCOL_TLS,
-        PROTOCOL_TLS_CLIENT,
-        OP_NO_SSLv2,
-        OP_NO_SSLv3,
-        SSLContext,
-        TLSVersion,
-    )
-
     try:
-        from ssl import OP_NO_RENEGOTIATION
+        import rtls as ssl  # type: ignore[import-untyped,no-redef]
     except ImportError:
-        OP_NO_RENEGOTIATION = None  # type: ignore[misc,assignment]
+        import ssl
+
+    CERT_REQUIRED = ssl.CERT_REQUIRED
+    HAS_NEVER_CHECK_COMMON_NAME = ssl.HAS_NEVER_CHECK_COMMON_NAME  # type: ignore[assignment]
+    OP_NO_COMPRESSION = ssl.OP_NO_COMPRESSION  # type: ignore[assignment]
+    OP_NO_TICKET = ssl.OP_NO_TICKET  # type: ignore[assignment]
+    OPENSSL_VERSION = ssl.OPENSSL_VERSION
+    OPENSSL_VERSION_NUMBER = ssl.OPENSSL_VERSION_NUMBER
+    PROTOCOL_TLS = ssl.PROTOCOL_TLS
+    PROTOCOL_TLS_CLIENT = ssl.PROTOCOL_TLS_CLIENT  # type: ignore[assignment]
+    OP_NO_SSLv2 = ssl.OP_NO_SSLv2  # type: ignore[assignment]
+    OP_NO_SSLv3 = ssl.OP_NO_SSLv3  # type: ignore[assignment]
+    SSLContext = ssl.SSLContext
+    TLSVersion = ssl.TLSVersion
+
+    OP_NO_RENEGOTIATION = getattr(ssl, "OP_NO_RENEGOTIATION", None)  # type: ignore[misc,assignment]
 
     PROTOCOL_SSLv23 = PROTOCOL_TLS
 
@@ -517,7 +520,11 @@ def create_urllib3_context(
             # avoid relying on cpython default cipher list
             # and instead retrieve OpenSSL own default. This should make
             # urllib3.future less flagged by basic firewall anti-bot rules.
-            context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
+            if "Rustls" not in ssl.OPENSSL_VERSION:
+                # the cipher list only contain entries for TLS 1.2
+                # because CPython stdlib enforce TLS 1.3 ciphers automatically
+                # when it's enabled.
+                context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
 
     # Setting the default here, as we may have no ssl module on import
     cert_reqs = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
@@ -764,14 +771,18 @@ def ssl_wrap_socket(
                 else:
                     context.load_cert_chain(certfile, keyfile, key_password)
             elif certdata and keydata:
-                try:
-                    _ctx_load_cert_chain(context, certdata, keydata, key_password)
-                except io.UnsupportedOperation as e:
-                    warnings.warn(
-                        f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
-                        Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
-                        UserWarning,
-                    )
+                if "Rustls" in ssl.OPENSSL_VERSION:
+                    context.load_cert_chain(certdata, keydata, key_password)
+                else:
+                    try:
+                        _ctx_load_cert_chain(context, certdata, keydata, key_password)
+                    except io.UnsupportedOperation as e:
+                        warnings.warn(
+                            "Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform. "
+                            f"Reason: {e}. It will be picked out if you upgrade to a QUIC connection or if you install "
+                            "rtls alternative ssl backend.",
+                            UserWarning,
+                        )
 
             try:
                 context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)

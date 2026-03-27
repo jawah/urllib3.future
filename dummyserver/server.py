@@ -20,6 +20,7 @@ import typing
 import warnings
 from collections.abc import Coroutine, Generator
 from datetime import datetime
+from enum import Enum
 
 import tornado.httpserver
 import tornado.ioloop
@@ -183,9 +184,9 @@ def ssl_options_to_context(  # type: ignore[no-untyped-def]
         and is_broken_old_ssl is False
     ):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        if hasattr(ssl, "TLSVersion") and isinstance(ssl_version, ssl.TLSVersion):
-            ctx.minimum_version = ssl_version
-            ctx.maximum_version = ssl_version
+        if hasattr(ssl, "TLSVersion") and isinstance(ssl_version, Enum):
+            ctx.minimum_version = ssl.TLSVersion(ssl_version)
+            ctx.maximum_version = ssl.TLSVersion(ssl_version)
     else:
         ctx = ssl.SSLContext(ssl_version)  # type: ignore[arg-type]
 

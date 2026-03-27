@@ -381,7 +381,7 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
             assert isinstance(e.value.reason, SSLError)
             assert "doesn't match" in str(
                 e.value.reason
-            ) or "certificate verify failed" in str(e.value.reason)
+            ) or "certificate verify failed" in str(e.value.reason) or "invalid peer certificate: certificate not valid for name" in str(e.value.reason)
 
     @pytest.mark.asyncio
     async def test_verified_with_bad_ca_certs(self) -> None:
@@ -405,6 +405,8 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 "certificate verify failed" in str(e.value.reason)
                 # PyPy is more specific
                 or "self signed certificate in certificate chain" in str(e.value.reason)
+                # Rustls specific
+                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
     @pytest.mark.asyncio
@@ -446,6 +448,8 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 # PyPy sometimes uses all-caps here
                 or "certificate verify failed" in str(e.value.reason).lower()
                 or "invalid certificate chain" in str(e.value.reason)
+                # Rustls specific
+                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
             ), (
                 "Expected 'No root certificates specified',  "
                 "'certificate verify failed', or "
@@ -1004,9 +1008,10 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
             assert keylog_file.is_file(), "keylogfile '%s' should exist" % str(
                 keylog_file
             )
-            assert keylog_file.read_text().startswith("# TLS secrets log file"), (
-                "keylogfile '%s' should start with '# TLS secrets log file'"
-                % str(keylog_file)
+            content = keylog_file.read_text()
+            assert content.startswith("# TLS secrets log file") or "CLIENT_TRAFFIC_SECRET_0" in content or "CLIENT_RANDOM" in content, (
+                    "keylogfile '%s' should start with '# TLS secrets log file'"
+                    % str(keylog_file)
             )
 
     @pytest.mark.parametrize("sslkeylogfile", [None, ""])
@@ -1142,7 +1147,7 @@ class TestAsyncHTTPS_Hostname:
             ca_cert_data=broken_intermediate_server.intermediate,
             retries=False,
         ) as https_pool:
-            with pytest.raises(SSLError, match="issuer"):
+            with pytest.raises(SSLError, match="issuer|UnknownIssuer"):
                 await https_pool.request("GET", "/")
 
         async with AsyncHTTPSConnectionPool(
@@ -1152,7 +1157,7 @@ class TestAsyncHTTPS_Hostname:
             ca_cert_data=broken_intermediate_server.intermediate,
             retries=False,
         ) as https_pool:
-            with pytest.raises(SSLError, match="issuer"):
+            with pytest.raises(SSLError, match="issuer|UnknownIssuer"):
                 await https_pool.request("GET", "/")
 
         assert broken_intermediate_server.intermediate is not None
@@ -1192,7 +1197,7 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
 """,
             retries=False,
         ) as https_pool:
-            with pytest.raises(SSLError, match="issuer"):
+            with pytest.raises(SSLError, match="issuer|UnknownIssuer"):
                 await https_pool.request("GET", "/")
 
     async def test_common_name_without_san_fails(
@@ -1210,7 +1215,7 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
                 await https_pool.request("GET", "/")
             assert "mismatch, certificate is not valid" in str(
                 e.value
-            ) or "no appropriate subjectAltName" in str(e.value)
+            ) or "no appropriate subjectAltName" in str(e.value) or "certificate is not valid for any names (according to its subjectAltName extension" in str(e.value)
 
     async def test_common_name_without_san_with_different_common_name(
         self, no_san_server_with_different_commmon_name: ServerConfig

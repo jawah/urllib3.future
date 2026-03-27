@@ -29,7 +29,10 @@ from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
 from ..util.util import to_str
 
 try:  # Compiled with SSL?
-    import ssl
+    try:
+        import rtls as ssl  # type: ignore[import-untyped,no-redef]
+    except ImportError:
+        import ssl
 
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]

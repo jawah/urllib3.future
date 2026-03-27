@@ -1414,7 +1414,7 @@ class TestSSL(SocketDummyServerTestCase):
         with HTTPSConnectionPool(self.host, self.port, ca_certs=DEFAULT_CA) as pool:
             with pytest.raises(
                 SSLError,
-                match=r"(wrong version number|record overflow|record layer failure)",
+                match=r"(wrong version number|record overflow|record layer failure|received corrupt message)",
             ):
                 pool.request("GET", "/", retries=False)
 
@@ -1614,7 +1614,15 @@ class TestSSL(SocketDummyServerTestCase):
                 "load_default_certs must not be called in this test run"
             )
 
-        monkeypatch.setattr(ssl.SSLContext, "load_default_certs", forbidden)
+        try:
+            import rtls as alt_ssl
+        except ImportError:
+            alt_ssl = None
+
+        if alt_ssl is None:
+            monkeypatch.setattr(ssl.SSLContext, "load_default_certs", forbidden)
+        else:
+            monkeypatch.setattr(alt_ssl.SSLContext, "load_default_certs", forbidden)
 
         def socket_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
@@ -1643,7 +1651,10 @@ class TestSSL(SocketDummyServerTestCase):
             ssl_sock.close()
             sock.close()
 
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        if alt_ssl is not None:
+            context = alt_ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        else:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.load_verify_locations(cafile=DEFAULT_CA)
 
         with pytest.raises(AssertionError):
@@ -1698,7 +1709,7 @@ class TestSSL(SocketDummyServerTestCase):
             except ConnectionResetError:
                 return
             except ssl.SSLError as e:
-                assert "alert unknown ca" in str(e)
+                assert "alert unknown ca" in str(e) or "UnknownIssuer" in str(e)
                 if is_closed_socket(sock):
                     server_closed.set()
 

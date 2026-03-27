@@ -38,6 +38,7 @@ class TestSvnCapability(TraefikTestCase):
             self.https_port,
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
+            retries=False
         ) as p:
             resp = await p.request("GET", "/get")
 

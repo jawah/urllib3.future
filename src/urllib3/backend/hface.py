@@ -10,7 +10,10 @@ from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
 try:  # Compiled with SSL?
-    import ssl
+    try:
+        import rtls as ssl  # type: ignore[import-untyped,no-redef]
+    except ImportError:
+        import ssl
 
     from ..util.ssltransport import SSLTransport
 except (ImportError, AttributeError):
@@ -19,9 +22,12 @@ except (ImportError, AttributeError):
 
 
 try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    from _ssl import Certificate
-except (ImportError, AttributeError):
-    Certificate = None  # type: ignore[misc,assignment]
+    from rtls import Certificate  # type: ignore[import-untyped]
+except ImportError:
+    try:
+        from _ssl import Certificate
+    except (ImportError, AttributeError):
+        Certificate = None  # type: ignore[misc,assignment]
 
 from .._collections import HTTPHeaderDict
 from .._constant import (
@@ -570,11 +576,14 @@ class HfaceBackend(BaseBackend):
                         len(chain) > 1
                         and Certificate is not None
                         and isinstance(chain[1], Certificate)
-                        and hasattr(ssl, "PEM_cert_to_DER_cert")
                     ):
-                        self.conn_info.issuer_certificate_der = (
-                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
-                        )
+                        issuer_public_bytes = chain[1].public_bytes()
+                        if isinstance(issuer_public_bytes, bytes):
+                            self.conn_info.issuer_certificate_der = issuer_public_bytes
+                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
+                            self.conn_info.issuer_certificate_der = (
+                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
+                            )
                         self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             elif hasattr(self.sock, "getpeercert"):
@@ -604,11 +613,14 @@ class HfaceBackend(BaseBackend):
                         len(chain) > 1
                         and Certificate is not None
                         and isinstance(chain[1], Certificate)
-                        and hasattr(ssl, "PEM_cert_to_DER_cert")
                     ):
-                        self.conn_info.issuer_certificate_der = (
-                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
-                        )
+                        issuer_public_bytes = chain[1].public_bytes()
+                        if isinstance(issuer_public_bytes, bytes):
+                            self.conn_info.issuer_certificate_der = issuer_public_bytes
+                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
+                            self.conn_info.issuer_certificate_der = (
+                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
+                            )
                         self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             if cipher_tuple:

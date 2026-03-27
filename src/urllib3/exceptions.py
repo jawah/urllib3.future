@@ -17,9 +17,16 @@ if typing.TYPE_CHECKING:
 
 # Base Exceptions
 try:  # Compiled with SSL?
-    import ssl
+    try:
+        import rtls as ssl  # type: ignore[import-untyped,no-redef]
+    except ImportError:
+        import ssl
 
-    BaseSSLError = ssl.SSLError
+    # Use the stdlib ssl.SSLError as base so we catch both stdlib and rtls SSL errors.
+    # rtls.SSLError is a subclass of ssl.SSLError, so isinstance checks work both ways.
+    import ssl as _stdlib_ssl  # type: ignore[no-redef]
+
+    BaseSSLError = _stdlib_ssl.SSLError
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
 

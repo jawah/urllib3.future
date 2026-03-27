@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import ssl
+
+try:
+    import rtls as ssl  # type: ignore[import-untyped,no-redef]
+except ImportError:
+    import ssl
+
 import typing
 from collections import deque
-from ssl import SSLError
+
+SSLError = ssl.SSLError
 from time import time as monotonic
 
 from qh3.quic.configuration import QuicConfiguration

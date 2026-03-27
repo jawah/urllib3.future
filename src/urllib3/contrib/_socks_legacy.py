@@ -69,7 +69,10 @@ from ..poolmanager import PoolManager
 from ..util.url import parse_url
 
 try:
-    import ssl
+    try:
+        import rtls as ssl  # type: ignore[import-untyped,no-redef]
+    except ImportError:
+        import ssl
 except ImportError:
     ssl = None  # type: ignore[assignment]
 
