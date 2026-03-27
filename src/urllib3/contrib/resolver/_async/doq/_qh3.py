@@ -11,7 +11,6 @@ except ImportError:
 import typing
 from collections import deque
 
-SSLError = ssl.SSLError
 from time import time as monotonic
 
 from qh3.quic.configuration import QuicConfiguration
@@ -43,6 +42,8 @@ from ...utils import (
 )
 from ..dou import PlainResolver
 from ..system import SystemResolver
+
+SSLError = ssl.SSLError
 
 if IS_FIPS:
     raise ImportError(

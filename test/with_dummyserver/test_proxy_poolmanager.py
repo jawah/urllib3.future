@@ -222,7 +222,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
             https_fail_pool = http._new_pool("https", "127.0.0.1", self.https_port)
 
             with pytest.raises(
-                MaxRetryError, match="doesn't match|IP address mismatch|certificate not valid for name"
+                MaxRetryError,
+                match="doesn't match|IP address mismatch|certificate not valid for name",
             ) as e:
                 https_fail_pool.request("GET", "/", retries=0)
             assert isinstance(e.value.reason, SSLError)
@@ -784,9 +785,12 @@ class TestHTTPSProxyVerification:
 
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
-            assert "hostname 'localhost' doesn't match" in str(
-                ssl_error
-            ) or "Hostname mismatch" in str(ssl_error) or "invalid peer certificate: certificate not valid for name" in str(ssl_error)
+            assert (
+                "hostname 'localhost' doesn't match" in str(ssl_error)
+                or "Hostname mismatch" in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
+            )
 
             with pytest.raises(MaxRetryError) as e:
                 https.request("GET", "https://%s/" % test_url)
@@ -794,9 +798,12 @@ class TestHTTPSProxyVerification:
 
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
-            assert "hostname 'localhost' doesn't match" in str(
-                ssl_error
-            ) or "Hostname mismatch" in str(ssl_error) or "invalid peer certificate: certificate not valid for name" in str(ssl_error)
+            assert (
+                "hostname 'localhost' doesn't match" in str(ssl_error)
+                or "Hostname mismatch" in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
+            )
 
     def test_https_proxy_ipv4_san(
         self, ipv4_san_proxy_with_server: tuple[ServerConfig, ServerConfig]
@@ -836,11 +843,13 @@ class TestHTTPSProxyVerification:
 
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
-            assert "no appropriate subjectAltName fields were found" in str(
-                ssl_error
-            ) or "Hostname mismatch, certificate is not valid for 'localhost'" in str(
-                ssl_error
-            ) or "invalid peer certificate: certificate not valid for name" in str(ssl_error)
+            assert (
+                "no appropriate subjectAltName fields were found" in str(ssl_error)
+                or "Hostname mismatch, certificate is not valid for 'localhost'"
+                in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
+            )
 
     def test_https_proxy_no_san_hostname_checks_common_name(
         self, no_san_proxy_with_server: tuple[ServerConfig, ServerConfig]
