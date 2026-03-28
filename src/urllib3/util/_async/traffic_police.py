@@ -647,37 +647,34 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     continue
 
                 idle_targets.append((cur_obj_id, cur_conn_or_pool))
-
-            for obj_id, conn_or_pool in idle_targets:
                 if (
                     not self.concurrency
                 ):  # i.e. no exclusive access to conn_or_pool, no lock.
-                    del self._container[obj_id]
+                    del self._container[cur_obj_id]
 
-                if obj_id is not None and conn_or_pool is not None:
-                    self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
+            for obj_id, conn_or_pool in idle_targets:
+                self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
 
-                    if (
-                        hasattr(conn_or_pool, "is_connected")
-                        and not conn_or_pool.is_connected
-                    ):
-                        try:
-                            await conn_or_pool.close()
-                        except Exception:  # Defensive:
-                            pass
-
-                        self.release()
-
-                        del self._container[obj_id]
-                        del self._registry[obj_id]
-
-                        continue
-
+                if (
+                    hasattr(conn_or_pool, "is_connected")
+                    and not conn_or_pool.is_connected
+                ):
                     try:
-                        yield conn_or_pool
-                    finally:
-                        if self.release():
-                            await asyncio.sleep(0)
+                        await conn_or_pool.close()
+                    except Exception:  # Defensive:
+                        pass
+
+                    self.release()
+
+                    del self._container[obj_id]
+                    del self._registry[obj_id]
+
+                    continue
+
+                try:
+                    yield conn_or_pool
+                finally:
+                    self.release()
 
     async def put(
         self,
