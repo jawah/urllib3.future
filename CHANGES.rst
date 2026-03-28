@@ -14,6 +14,7 @@
 - Changed default ``DEFAULT_KEEPALIVE_DELAY`` to 10min instead of 60min. We received many observations were users
   saw that servers tend to silently quit the socket without properly closing it.
 - Fixed a racing condition in our async discrete idle handler that could cause a conn to be closed while used.
+- Fixed a racing condition in our http1 state machine where a conn could be reused before consuming all buffered data. (#323)
 
 2.18.901 (2026-03-26)
 =====================
