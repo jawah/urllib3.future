@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import io
 import os
+import typing
 import warnings
 from pathlib import Path
 
-try:
-    import rtls as ssl
-except ImportError:
+if typing.TYPE_CHECKING:
+    import ssl
+else:
     try:
-        import ssl
+        import rtls as ssl
     except ImportError:
-        ssl = None
+        try:
+            import ssl
+        except ImportError:
+            ssl = None  # type: ignore[assignment]
 
 from ...contrib.imcc import load_cert_chain as _ctx_load_cert_chain
 from ...contrib.ssa import AsyncSocket, SSLAsyncSocket

@@ -10,10 +10,13 @@ from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
 try:  # Compiled with SSL?
-    try:
-        import rtls as ssl  # type: ignore[import-untyped,no-redef]
-    except ImportError:
+    if typing.TYPE_CHECKING:
         import ssl
+    else:
+        try:
+            import rtls as ssl
+        except ImportError:
+            import ssl
 
     from ..util.ssltransport import SSLTransport
 except (ImportError, AttributeError):
@@ -22,7 +25,10 @@ except (ImportError, AttributeError):
 
 
 try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    from rtls import Certificate  # type: ignore[import-untyped]
+    if typing.TYPE_CHECKING:
+        from _ssl import Certificate
+    else:
+        from rtls import Certificate
 except ImportError:
     try:
         from _ssl import Certificate
@@ -381,7 +387,7 @@ class HfaceBackend(BaseBackend):
                 allow_insecure = True
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
-                ctx_root_certificates = ssl_context.get_ca_certs(True)
+                ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(

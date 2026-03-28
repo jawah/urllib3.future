@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import socket
+import typing
 
-try:
-    import rtls as ssl  # type: ignore[import-untyped,no-redef]
-except ImportError:
+if typing.TYPE_CHECKING:
     import ssl
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        import ssl
 
 import ssl as _stdlib_ssl  # Always import stdlib ssl for exception compatibility
-
-import typing
 
 from .._constant import DEFAULT_BLOCKSIZE
 from ..exceptions import ProxySchemeUnsupported
@@ -69,11 +71,14 @@ class SSLTransport:
         # ``ssl`` but the caller passes a stdlib SSLContext (or vice-versa),
         # wrap_bio() will reject a foreign MemoryBIO with a TypeError.
         # Try the default ``ssl`` first, then fall back to ``_stdlib_ssl``.
-        for _MemoryBIO in dict.fromkeys([ssl.MemoryBIO, _stdlib_ssl.MemoryBIO]):
-            self.incoming = _MemoryBIO()
-            self.outgoing = _MemoryBIO()
+        _bio_factories: list[type[ssl.MemoryBIO]] = list(
+            dict.fromkeys([ssl.MemoryBIO, _stdlib_ssl.MemoryBIO])
+        )
+        for _MemoryBIO in _bio_factories:
+            self.incoming: ssl.MemoryBIO = _MemoryBIO()
+            self.outgoing: ssl.MemoryBIO = _MemoryBIO()
             try:
-                self.sslobj = ssl_context.wrap_bio(
+                self.sslobj: ssl.SSLObject = ssl_context.wrap_bio(
                     self.incoming, self.outgoing, server_hostname=server_hostname
                 )
                 break

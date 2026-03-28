@@ -608,7 +608,7 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
         try:
             import rtls as alt_ssl
         except ImportError:
-            alt_ssl = None
+            alt_ssl = None  # type: ignore[assignment]
 
         proxy_url = self.https_proxy_url if proxy_scheme == "https" else self.proxy_url
         if alt_ssl is None:

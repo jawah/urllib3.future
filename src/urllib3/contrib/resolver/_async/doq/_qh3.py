@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import socket
-
-try:
-    import rtls as ssl  # type: ignore[import-untyped,no-redef]
-except ImportError:
-    import ssl
-
 import typing
+
+if typing.TYPE_CHECKING:
+    import ssl
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        import ssl
 from collections import deque
 
 from time import time as monotonic
@@ -74,6 +76,7 @@ class QUICResolver(PlainResolver):
                 ctx.load_default_certs()
 
                 for der in ctx.get_ca_certs(binary_form=True):
+                    assert isinstance(der, bytes)
                     kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
 
                 if kwargs["ca_cert_data"]:
@@ -86,7 +89,7 @@ class QUICResolver(PlainResolver):
         if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
             if (
                 "cert_reqs" not in kwargs
-                or resolve_cert_reqs(kwargs["cert_reqs"]) is ssl.CERT_REQUIRED
+                or resolve_cert_reqs(kwargs["cert_reqs"]) == ssl.CERT_REQUIRED
             ):
                 raise ssl.SSLError(
                     "DoQ requires at least one CA loaded in order to verify the remote peer certificate. "

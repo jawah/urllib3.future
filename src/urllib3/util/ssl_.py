@@ -229,36 +229,44 @@ def _is_has_never_check_common_name_reliable(
 
 
 if typing.TYPE_CHECKING:
+    import ssl
+
     from ssl import VerifyMode
 
     from typing_extensions import Literal
 
     from .ssltransport import SSLTransport as SSLTransportType
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        try:
+            import ssl
+        except ImportError:
+            ssl = None
 
 
 # Mapping from 'ssl.PROTOCOL_TLSX' to 'TLSVersion.X'
 _SSL_VERSION_TO_TLS_VERSION: dict[int, int] = {}
 
 try:  # Do we have ssl at all?
-    try:
-        import rtls as ssl  # type: ignore[import-untyped,no-redef]
-    except ImportError:
-        import ssl
+    if ssl is None:
+        raise ImportError("ssl")
 
     CERT_REQUIRED = ssl.CERT_REQUIRED
-    HAS_NEVER_CHECK_COMMON_NAME = ssl.HAS_NEVER_CHECK_COMMON_NAME  # type: ignore[assignment]
-    OP_NO_COMPRESSION = ssl.OP_NO_COMPRESSION  # type: ignore[assignment]
-    OP_NO_TICKET = ssl.OP_NO_TICKET  # type: ignore[assignment]
+    HAS_NEVER_CHECK_COMMON_NAME = ssl.HAS_NEVER_CHECK_COMMON_NAME
+    OP_NO_COMPRESSION = ssl.OP_NO_COMPRESSION
+    OP_NO_TICKET = ssl.OP_NO_TICKET
     OPENSSL_VERSION = ssl.OPENSSL_VERSION
     OPENSSL_VERSION_NUMBER = ssl.OPENSSL_VERSION_NUMBER
     PROTOCOL_TLS = ssl.PROTOCOL_TLS
-    PROTOCOL_TLS_CLIENT = ssl.PROTOCOL_TLS_CLIENT  # type: ignore[assignment]
-    OP_NO_SSLv2 = ssl.OP_NO_SSLv2  # type: ignore[assignment]
-    OP_NO_SSLv3 = ssl.OP_NO_SSLv3  # type: ignore[assignment]
+    PROTOCOL_TLS_CLIENT = ssl.PROTOCOL_TLS_CLIENT
+    OP_NO_SSLv2 = ssl.OP_NO_SSLv2
+    OP_NO_SSLv3 = ssl.OP_NO_SSLv3
     SSLContext = ssl.SSLContext
     TLSVersion = ssl.TLSVersion
 
-    OP_NO_RENEGOTIATION = getattr(ssl, "OP_NO_RENEGOTIATION", None)  # type: ignore[misc,assignment]
+    OP_NO_RENEGOTIATION = getattr(ssl, "OP_NO_RENEGOTIATION", None)
 
     PROTOCOL_SSLv23 = PROTOCOL_TLS
 
@@ -300,13 +308,13 @@ try:  # Do we have ssl at all?
             IS_FIPS = 32 not in HASHFUNC_MAP
 
 except ImportError:
-    OP_NO_COMPRESSION = 0x20000  # type: ignore[misc,assignment]
-    OP_NO_TICKET = 0x4000  # type: ignore[misc,assignment]
-    OP_NO_SSLv2 = 0x1000000  # type: ignore[misc,assignment]
-    OP_NO_SSLv3 = 0x2000000  # type: ignore[misc,assignment]
-    PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[misc,assignment]
-    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS  # type: ignore[misc]
-    OP_NO_RENEGOTIATION = None  # type: ignore[misc,assignment]
+    OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]
+    OP_NO_TICKET = 0x4000  # type: ignore[assignment]
+    OP_NO_SSLv2 = 0x1000000  # type: ignore[assignment]
+    OP_NO_SSLv3 = 0x2000000  # type: ignore[assignment]
+    PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
+    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS
+    OP_NO_RENEGOTIATION = None
     SUPPORT_MIN_MAX_TLS_VERSION = False
     IS_FIPS = False
 
@@ -487,6 +495,7 @@ def create_urllib3_context(
                 ssl_maximum_version = ssl_version
             else:
                 # Use 'ssl_minimum_version' and 'ssl_maximum_version' instead.
+                assert ssl_version is not None  # guarded by `not in (None, ...)`
                 ssl_minimum_version = _SSL_VERSION_TO_TLS_VERSION.get(
                     ssl_version, TLSVersion.MINIMUM_SUPPORTED
                 )
@@ -501,13 +510,13 @@ def create_urllib3_context(
 
     if SUPPORT_MIN_MAX_TLS_VERSION:
         if ssl_minimum_version is not None:
-            context.minimum_version = ssl_minimum_version
+            context.minimum_version = ssl_minimum_version  # type: ignore[assignment]
         else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
             context.minimum_version = TLSVersion.TLSv1_2
             default_tlsv1_2 = True
 
         if ssl_maximum_version is not None:
-            context.maximum_version = ssl_maximum_version
+            context.maximum_version = ssl_maximum_version  # type: ignore[assignment]
 
     # Unless we're given ciphers defer to either system ciphers in
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
@@ -578,11 +587,11 @@ def create_urllib3_context(
     # We always set 'check_hostname=False' for pyOpenSSL so we rely on our own
     # 'ssl.match_hostname()' implementation.
     if cert_reqs == ssl.CERT_REQUIRED:
-        context.verify_mode = cert_reqs
+        context.verify_mode = cert_reqs  # type: ignore[assignment]
         context.check_hostname = True
     else:
         context.check_hostname = False
-        context.verify_mode = cert_reqs
+        context.verify_mode = cert_reqs  # type: ignore[assignment]
 
     try:
         context.hostname_checks_common_name = False
@@ -593,7 +602,7 @@ def create_urllib3_context(
     # 'SSLKEYLOGFILE', if the feature is available (Python 3.8+). Skip empty values.
     if hasattr(context, "keylog_filename"):
         if "SSLKEYLOGFILE" in os.environ:
-            sslkeylogfile = os.path.expandvars(os.environ.get("SSLKEYLOGFILE"))
+            sslkeylogfile = os.path.expandvars(os.environ["SSLKEYLOGFILE"])
         else:
             sslkeylogfile = None
 
@@ -624,6 +633,7 @@ def ssl_wrap_socket(
     check_hostname: bool | None = ...,
     ssl_minimum_version: int | None = ...,
     ssl_maximum_version: int | None = ...,
+    ech_config_list: bytes | None = ...,
 ) -> ssl.SSLSocket: ...
 
 
@@ -648,6 +658,7 @@ def ssl_wrap_socket(
     check_hostname: bool | None = ...,
     ssl_minimum_version: int | None = ...,
     ssl_maximum_version: int | None = ...,
+    ech_config_list: bytes | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType: ...
 
 

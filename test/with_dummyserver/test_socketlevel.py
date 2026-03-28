@@ -1617,7 +1617,7 @@ class TestSSL(SocketDummyServerTestCase):
         try:
             import rtls as alt_ssl
         except ImportError:
-            alt_ssl = None
+            alt_ssl = None  # type: ignore[assignment]
 
         if alt_ssl is None:
             monkeypatch.setattr(ssl.SSLContext, "load_default_certs", forbidden)
@@ -1670,7 +1670,7 @@ class TestSSL(SocketDummyServerTestCase):
 
             self._start_server(socket_handler)
 
-            with HTTPSConnectionPool(  # type: ignore
+            with HTTPSConnectionPool(  # type: ignore[arg-type]
                 self.host, self.port, retries=False, **kwargs
             ) as pool:
                 r = pool.request("GET", "/", timeout=LONG_TIMEOUT)

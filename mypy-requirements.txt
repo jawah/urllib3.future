@@ -16,3 +16,4 @@ aiofile>=3.9.0,<4
 zstandard>=0.18.0
 wsproto
 types-PySocks
+rtls
