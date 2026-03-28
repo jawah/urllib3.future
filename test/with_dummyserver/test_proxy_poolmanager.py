@@ -199,6 +199,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
                 "certificate verify failed" in str(e.value.reason)
                 # PyPy is more specific
                 or "self signed certificate in certificate chain" in str(e.value.reason)
+                # Rustls specific
+                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
             http = proxy_from_url(
@@ -220,7 +222,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
             https_fail_pool = http._new_pool("https", "127.0.0.1", self.https_port)
 
             with pytest.raises(
-                MaxRetryError, match="doesn't match|IP address mismatch"
+                MaxRetryError,
+                match="doesn't match|IP address mismatch|certificate not valid for name",
             ) as e:
                 https_fail_pool.request("GET", "/", retries=0)
             assert isinstance(e.value.reason, SSLError)
@@ -602,10 +605,21 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
         if proxy_scheme == "https" and use_forwarding_for_https:
             pytest.skip("Test is expected to fail due to urllib3/urllib3#2577")
 
+        try:
+            import rtls as alt_ssl
+        except ImportError:
+            alt_ssl = None  # type: ignore[assignment]
+
         proxy_url = self.https_proxy_url if proxy_scheme == "https" else self.proxy_url
-        proxy_ctx = ssl.create_default_context()
+        if alt_ssl is None:
+            proxy_ctx = ssl.create_default_context()
+        else:
+            proxy_ctx = alt_ssl.create_default_context()
         proxy_ctx.load_verify_locations(DEFAULT_CA)
-        ctx = ssl.create_default_context()
+        if alt_ssl is None:
+            ctx = ssl.create_default_context()
+        else:
+            ctx = alt_ssl.create_default_context()
 
         with proxy_from_url(
             proxy_url,
@@ -771,9 +785,12 @@ class TestHTTPSProxyVerification:
 
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
-            assert "hostname 'localhost' doesn't match" in str(
-                ssl_error
-            ) or "Hostname mismatch" in str(ssl_error)
+            assert (
+                "hostname 'localhost' doesn't match" in str(ssl_error)
+                or "Hostname mismatch" in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
+            )
 
             with pytest.raises(MaxRetryError) as e:
                 https.request("GET", "https://%s/" % test_url)
@@ -781,9 +798,12 @@ class TestHTTPSProxyVerification:
 
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
-            assert "hostname 'localhost' doesn't match" in str(
-                ssl_error
-            ) or "Hostname mismatch" in str(ssl_error)
+            assert (
+                "hostname 'localhost' doesn't match" in str(ssl_error)
+                or "Hostname mismatch" in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
+            )
 
     def test_https_proxy_ipv4_san(
         self, ipv4_san_proxy_with_server: tuple[ServerConfig, ServerConfig]
@@ -823,10 +843,12 @@ class TestHTTPSProxyVerification:
 
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
-            assert "no appropriate subjectAltName fields were found" in str(
-                ssl_error
-            ) or "Hostname mismatch, certificate is not valid for 'localhost'" in str(
-                ssl_error
+            assert (
+                "no appropriate subjectAltName fields were found" in str(ssl_error)
+                or "Hostname mismatch, certificate is not valid for 'localhost'"
+                in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
             )
 
     def test_https_proxy_no_san_hostname_checks_common_name(

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import socket
-import ssl
 import typing
+
+if typing.TYPE_CHECKING:
+    import ssl
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        import ssl
+
+import ssl as _stdlib_ssl  # Always import stdlib ssl for exception compatibility
 
 from .._constant import DEFAULT_BLOCKSIZE
 from ..exceptions import ProxySchemeUnsupported
@@ -55,15 +64,31 @@ class SSLTransport:
         """
         Create an SSLTransport around socket using the provided ssl_context.
         """
-        self.incoming = ssl.MemoryBIO()
-        self.outgoing = ssl.MemoryBIO()
-
         self.suppress_ragged_eofs = suppress_ragged_eofs
         self.socket = socket
 
-        self.sslobj = ssl_context.wrap_bio(
-            self.incoming, self.outgoing, server_hostname=server_hostname
+        # Determine the correct MemoryBIO to use.  When rtls is the default
+        # ``ssl`` but the caller passes a stdlib SSLContext (or vice-versa),
+        # wrap_bio() will reject a foreign MemoryBIO with a TypeError.
+        # Try the default ``ssl`` first, then fall back to ``_stdlib_ssl``.
+        _bio_factories: list[type[ssl.MemoryBIO]] = list(
+            dict.fromkeys([ssl.MemoryBIO, _stdlib_ssl.MemoryBIO])
         )
+        for _MemoryBIO in _bio_factories:
+            self.incoming: ssl.MemoryBIO = _MemoryBIO()
+            self.outgoing: ssl.MemoryBIO = _MemoryBIO()
+            try:
+                self.sslobj: ssl.SSLObject = ssl_context.wrap_bio(
+                    self.incoming, self.outgoing, server_hostname=server_hostname
+                )
+                break
+            except TypeError:
+                continue
+        else:
+            raise TypeError(
+                "SSLTransport could not find a compatible MemoryBIO for "
+                f"the provided ssl_context ({type(ssl_context)})"
+            )
 
         # Perform initial handshake.
         self._ssl_io_loop(self.sslobj.do_handshake)
@@ -180,8 +205,8 @@ class SSLTransport:
     def _wrap_ssl_read(self, len: int, buffer: bytearray | None = None) -> int | bytes:
         try:
             return self._ssl_io_loop(self.sslobj.read, len, buffer)
-        except ssl.SSLError as e:
-            if e.errno == ssl.SSL_ERROR_EOF and self.suppress_ragged_eofs:
+        except _stdlib_ssl.SSLError as e:
+            if e.errno == _stdlib_ssl.SSL_ERROR_EOF and self.suppress_ragged_eofs:
                 return 0  # eof, return 0.
             else:
                 raise
@@ -222,8 +247,11 @@ class SSLTransport:
                     ret = func(arg1)
                 else:
                     ret = func(arg1, arg2)
-            except ssl.SSLError as e:
-                if e.errno not in (ssl.SSL_ERROR_WANT_READ, ssl.SSL_ERROR_WANT_WRITE):
+            except _stdlib_ssl.SSLError as e:
+                if e.errno not in (
+                    _stdlib_ssl.SSL_ERROR_WANT_READ,
+                    _stdlib_ssl.SSL_ERROR_WANT_WRITE,
+                ):
                     # WANT_READ, and WANT_WRITE are expected, others are not.
                     raise e
                 errno = e.errno
@@ -233,7 +261,7 @@ class SSLTransport:
 
             if errno is None:
                 should_loop = False
-            elif errno == ssl.SSL_ERROR_WANT_READ:
+            elif errno == _stdlib_ssl.SSL_ERROR_WANT_READ:
                 buf = self.socket.recv(DEFAULT_BLOCKSIZE)
                 if buf:
                     self.incoming.write(buf)

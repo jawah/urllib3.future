@@ -1,3 +1,21 @@
+2.19.900 (2026-03-28)
+=====================
+
+- Added support for Rustls alternative ssl backend via ``pip install urllib3-future[rtls]``.
+  Once the extra is installed it will be automatically picked up for usage. Using a memory-safe
+  TLS backend is highly recommended for critical infrastructure project. It is completely
+  transparent to our software, you won't need to tune or configure it manually. Once installed
+  it runs automatically.
+- Added automatic ECH support for HTTPS over TCP when using a custom resolver.
+  We previously enabled ECH support for HTTPS over QUIC, now we pushed this feature as a
+  general feature but it requires installing the ``rtls`` extra as the stdlib ssl is completely
+  unable to deliver such feature. The ``ConnectionInfo`` have a new member, namely ``tls_ech_accepted``
+  for observability purpose on that feature.
+- Changed default ``DEFAULT_KEEPALIVE_DELAY`` to 10min instead of 60min. We received many observations were users
+  saw that servers tend to silently quit the socket without properly closing it.
+- Fixed a racing condition in our async discrete idle handler that could cause a conn to be closed while used.
+- Fixed a racing condition in our http1 state machine where a conn could be reused before consuming all buffered data. (#323)
+
 2.18.901 (2026-03-26)
 =====================
 

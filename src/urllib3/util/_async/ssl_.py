@@ -8,6 +8,14 @@ from pathlib import Path
 
 if typing.TYPE_CHECKING:
     import ssl
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        try:
+            import ssl
+        except ImportError:
+            ssl = None  # type: ignore[assignment]
 
 from ...contrib.imcc import load_cert_chain as _ctx_load_cert_chain
 from ...contrib.ssa import AsyncSocket, SSLAsyncSocket
@@ -60,6 +68,7 @@ async def ssl_wrap_socket(
     check_hostname: bool | None = None,
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
+    ech_config_list: bytes | None = None,
 ) -> SSLAsyncSocket:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -159,14 +168,18 @@ async def ssl_wrap_socket(
                 else:
                     context.load_cert_chain(certfile, keyfile, key_password)
             elif certdata and keydata:
-                try:
-                    _ctx_load_cert_chain(context, certdata, keydata, key_password)
-                except io.UnsupportedOperation as e:
-                    warnings.warn(
-                        f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
-                        Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
-                        UserWarning,
-                    )
+                if ssl is not None and "Rustls" in ssl.OPENSSL_VERSION:
+                    context.load_cert_chain(certdata, keydata, key_password)
+                else:
+                    try:
+                        _ctx_load_cert_chain(context, certdata, keydata, key_password)
+                    except io.UnsupportedOperation as e:
+                        warnings.warn(
+                            "Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform. "
+                            f"Reason: {e}. It will be picked out if you upgrade to a QUIC connection or if you install "
+                            "rtls alternative ssl backend.",
+                            UserWarning,
+                        )
 
             try:
                 context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
@@ -182,5 +195,10 @@ async def ssl_wrap_socket(
                 _SSLContextCache.save(context)
         else:
             context = cached_ctx
+
+    if ech_config_list and hasattr(context, "set_ech_configs"):
+        # we need to mutate the ctx, so it's going to be a copy
+        # ech config list is specific to a single connection.
+        context = context.set_ech_configs(ech_config_list)
 
     return await sock.wrap_socket(context, server_hostname=server_hostname)

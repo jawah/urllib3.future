@@ -512,9 +512,12 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             with pytest.raises(MaxRetryError) as e:
                 https_pool.request("GET", "/", retries=0)
             assert isinstance(e.value.reason, SSLError)
-            assert "doesn't match" in str(
-                e.value.reason
-            ) or "certificate verify failed" in str(e.value.reason)
+            assert (
+                "doesn't match" in str(e.value.reason)
+                or "certificate verify failed" in str(e.value.reason)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(e.value.reason)
+            )
 
     def test_verified_with_bad_ca_certs(self) -> None:
         # PyPy 3.10+ workaround raised warning about untrustworthy TLS protocols.
@@ -537,6 +540,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 "certificate verify failed" in str(e.value.reason)
                 # PyPy is more specific
                 or "self signed certificate in certificate chain" in str(e.value.reason)
+                # Rustls specific
+                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
     def test_wrap_socket_failure_resource_leak(self) -> None:
@@ -576,6 +581,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 # PyPy sometimes uses all-caps here
                 or "certificate verify failed" in str(e.value.reason).lower()
                 or "invalid certificate chain" in str(e.value.reason)
+                # Rustls specific
+                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
             ), (
                 "Expected 'No root certificates specified',  "
                 "'certificate verify failed', or "
@@ -1140,8 +1147,13 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             assert keylog_file.is_file(), "keylogfile '%s' should exist" % str(
                 keylog_file
             )
-            assert keylog_file.read_text().startswith("# TLS secrets log file"), (
-                "keylogfile '%s' should start with '# TLS secrets log file'"
+            content = keylog_file.read_text()
+            assert (
+                content.startswith("# TLS secrets log file")
+                or "CLIENT_TRAFFIC_SECRET_0" in content
+                or "CLIENT_RANDOM" in content
+            ), (
+                "keylogfile '%s' should start with '# TLS secrets log file' or contain CLIENT_TRAFFIC_SECRET_0"
                 % str(keylog_file)
             )
 
@@ -1293,7 +1305,7 @@ class TestHTTPS_Hostname:
             ca_cert_data=broken_intermediate_server.intermediate,
             retries=False,
         ) as https_pool:
-            with pytest.raises(SSLError, match="issuer"):
+            with pytest.raises(SSLError, match="issuer|UnknownIssuer"):
                 https_pool.request("GET", "/")
 
         with HTTPSConnectionPool(
@@ -1303,7 +1315,7 @@ class TestHTTPS_Hostname:
             ca_cert_data=broken_intermediate_server.intermediate,
             retries=False,
         ) as https_pool:
-            with pytest.raises(SSLError, match="issuer"):
+            with pytest.raises(SSLError, match="issuer|UnknownIssuer"):
                 https_pool.request("GET", "/")
 
         assert broken_intermediate_server.intermediate is not None
@@ -1343,7 +1355,7 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
 """,
             retries=False,
         ) as https_pool:
-            with pytest.raises(SSLError, match="issuer"):
+            with pytest.raises(SSLError, match="issuer|UnknownIssuer"):
                 https_pool.request("GET", "/")
 
     def test_common_name_without_san_fails(self, no_san_server: ServerConfig) -> None:
@@ -1357,9 +1369,12 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
                 MaxRetryError,
             ) as e:
                 https_pool.request("GET", "/")
-            assert "mismatch, certificate is not valid" in str(
-                e.value
-            ) or "no appropriate subjectAltName" in str(e.value)
+            assert (
+                "mismatch, certificate is not valid" in str(e.value)
+                or "no appropriate subjectAltName" in str(e.value)
+                or "certificate is not valid for any names (according to its subjectAltName extension"
+                in str(e.value)
+            )
 
     def test_common_name_without_san_with_different_common_name(
         self, no_san_server_with_different_commmon_name: ServerConfig

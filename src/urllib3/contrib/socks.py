@@ -107,7 +107,13 @@ if not BYPASS_SOCKS_LEGACY:
     from ..util.url import parse_url
 
     try:
-        import ssl
+        if typing.TYPE_CHECKING:
+            import ssl
+        else:
+            try:
+                import rtls as ssl
+            except ImportError:
+                import ssl
     except ImportError:
         ssl = None  # type: ignore[assignment]
 
@@ -179,12 +185,13 @@ if not BYPASS_SOCKS_LEGACY:
                 #   B) the maintainer pursue the removal -> do we vendor our copy of python-socks? is there an alternative?
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", DeprecationWarning)
-                    return p.connect(
+                    sock: socket = p.connect(
                         self.host,
                         self.port,
                         self.timeout,
                         _socket=_socket,
                     )
+                    return sock
             except (SocketTimeout, ProxyTimeoutError) as e:
                 raise ConnectTimeoutError(
                     self,

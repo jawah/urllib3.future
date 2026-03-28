@@ -10,7 +10,13 @@ from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
 try:  # Compiled with SSL?
-    import ssl
+    if typing.TYPE_CHECKING:
+        import ssl
+    else:
+        try:
+            import rtls as ssl
+        except ImportError:
+            import ssl
 
     from ..util.ssltransport import SSLTransport
 except (ImportError, AttributeError):
@@ -19,9 +25,15 @@ except (ImportError, AttributeError):
 
 
 try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    from _ssl import Certificate
-except (ImportError, AttributeError):
-    Certificate = None  # type: ignore[misc,assignment]
+    if typing.TYPE_CHECKING:
+        from _ssl import Certificate
+    else:
+        from rtls import Certificate
+except ImportError:
+    try:
+        from _ssl import Certificate
+    except (ImportError, AttributeError):
+        Certificate = None  # type: ignore[misc,assignment]
 
 from .._collections import HTTPHeaderDict
 from .._constant import (
@@ -375,7 +387,7 @@ class HfaceBackend(BaseBackend):
                 allow_insecure = True
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
-                ctx_root_certificates = ssl_context.get_ca_certs(True)
+                ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(
@@ -540,10 +552,17 @@ class HfaceBackend(BaseBackend):
             self.conn_info.established_latency = self._connect_timings[1]
 
         #: Populating the ConnectionInfo using Python native capabilities
-        if self._svn != HttpVersion.h3:
+        if self._svn is not HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
 
             if hasattr(self.sock, "sslobj"):
+                if hasattr(self.sock.sslobj, "ech_status"):
+                    self.conn_info.tls_ech_accepted = (
+                        self.sock.sslobj.ech_status == "accepted"
+                    )
+                else:
+                    self.conn_info.tls_ech_accepted = False
+
                 self.conn_info.certificate_der = self.sock.sslobj.getpeercert(
                     binary_form=True
                 )
@@ -570,11 +589,14 @@ class HfaceBackend(BaseBackend):
                         len(chain) > 1
                         and Certificate is not None
                         and isinstance(chain[1], Certificate)
-                        and hasattr(ssl, "PEM_cert_to_DER_cert")
                     ):
-                        self.conn_info.issuer_certificate_der = (
-                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
-                        )
+                        issuer_public_bytes = chain[1].public_bytes()
+                        if isinstance(issuer_public_bytes, bytes):
+                            self.conn_info.issuer_certificate_der = issuer_public_bytes
+                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
+                            self.conn_info.issuer_certificate_der = (
+                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
+                            )
                         self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             elif hasattr(self.sock, "getpeercert"):
@@ -604,11 +626,14 @@ class HfaceBackend(BaseBackend):
                         len(chain) > 1
                         and Certificate is not None
                         and isinstance(chain[1], Certificate)
-                        and hasattr(ssl, "PEM_cert_to_DER_cert")
                     ):
-                        self.conn_info.issuer_certificate_der = (
-                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
-                        )
+                        issuer_public_bytes = chain[1].public_bytes()
+                        if isinstance(issuer_public_bytes, bytes):
+                            self.conn_info.issuer_certificate_der = issuer_public_bytes
+                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
+                            self.conn_info.issuer_certificate_der = (
+                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
+                            )
                         self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             if cipher_tuple:
@@ -716,6 +741,7 @@ class HfaceBackend(BaseBackend):
             )
             self.conn_info.destination_address = self.sock.getpeername()[:2]
             self.conn_info.cipher = self._protocol.cipher()
+            self.conn_info.tls_ech_accepted = self._protocol.ech_accepted()
             self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
             self.conn_info.issuer_certificate_dict = self._protocol.getissuercert(
                 binary_form=False

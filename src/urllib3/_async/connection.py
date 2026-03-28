@@ -29,7 +29,13 @@ from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
 from ..util.util import to_str
 
 try:  # Compiled with SSL?
-    import ssl
+    if typing.TYPE_CHECKING:
+        import ssl
+    else:
+        try:
+            import rtls as ssl
+        except ImportError:
+            import ssl
 
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
@@ -876,6 +882,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
                 cert_data=self.cert_data,
                 key_data=self.key_data,
                 ciphers=self.ciphers,
+                ech_config_list=self._ech_config,
             )
 
             # we want the http3 upgrade to behave
@@ -985,6 +992,7 @@ async def _ssl_wrap_socket_and_match_hostname(
     cert_data: str | bytes | None = None,
     key_data: str | bytes | None = None,
     ciphers: str | None = None,
+    ech_config_list: bytes | None = None,
 ) -> _WrappedAndVerifiedSocket:
     """Logic for constructing an SSLContext from all TLS parameters, passing
     that down into ssl_wrap_socket, and then doing certificate verification
@@ -1042,6 +1050,7 @@ async def _ssl_wrap_socket_and_match_hostname(
         ssl_minimum_version=ssl_minimum_version,
         ssl_maximum_version=ssl_maximum_version,
         check_hostname=check_hostname,
+        ech_config_list=ech_config_list,
     )
 
     context = ssl_sock.context
