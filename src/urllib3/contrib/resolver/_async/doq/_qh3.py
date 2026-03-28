@@ -277,8 +277,7 @@ class QUICResolver(PlainResolver):
         if family in [socket.AF_UNSPEC, socket.AF_INET6]:
             tbq.append(SupportedQueryType.AAAA)
 
-        if quic_upgrade_via_dns_rr:
-            tbq.append(SupportedQueryType.HTTPS)
+        tbq.append(SupportedQueryType.HTTPS)
 
         queries = DomainNameServerQuery.bulk(host, *tbq)
         open_streams = []
@@ -396,10 +395,10 @@ class QUICResolver(PlainResolver):
             for record in response.records:
                 if record[0] == SupportedQueryType.HTTPS:
                     assert isinstance(record[-1], dict)
-                    if "h3" in record[-1]["alpn"]:
-                        remote_preemptive_quic_rr = True
                     if record[-1]["echconfig"]:
                         ech_config_list = record[-1]["echconfig"]
+                    if "h3" in record[-1]["alpn"] and quic_upgrade_via_dns_rr:
+                        remote_preemptive_quic_rr = True
                     continue
 
                 assert not isinstance(record[-1], dict)

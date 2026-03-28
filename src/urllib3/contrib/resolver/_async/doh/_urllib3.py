@@ -286,36 +286,35 @@ class HTTPSResolver(AsyncBaseResolver):
                     )
                 )
 
-        if quic_upgrade_via_dns_rr:
-            if not self._rfc8484:
-                promises.append(
-                    await self._pool.request_encode_url(
-                        "GET",
-                        self._path,
-                        {"name": host, "type": "65"},
-                        headers={"Accept": "application/dns-json"},
-                        on_post_connection=self._connection_callback,
-                        multiplexed=True,
-                    )
+        if not self._rfc8484:
+            promises.append(
+                await self._pool.request_encode_url(
+                    "GET",
+                    self._path,
+                    {"name": host, "type": "65"},
+                    headers={"Accept": "application/dns-json"},
+                    on_post_connection=self._connection_callback,
+                    multiplexed=True,
                 )
-            else:
-                dns_query = DomainNameServerQuery(
-                    host, SupportedQueryType.HTTPS, override_id=0
-                )
-                dns_payload = bytes(dns_query)
+            )
+        else:
+            dns_query = DomainNameServerQuery(
+                host, SupportedQueryType.HTTPS, override_id=0
+            )
+            dns_payload = bytes(dns_query)
 
-                promises.append(
-                    await self._pool.request_encode_url(
-                        "GET",
-                        self._path,
-                        {
-                            "dns": b64encode(dns_payload).decode().replace("=", ""),
-                        },
-                        headers={"Accept": "application/dns-message"},
-                        on_post_connection=self._connection_callback,
-                        multiplexed=True,
-                    )
+            promises.append(
+                await self._pool.request_encode_url(
+                    "GET",
+                    self._path,
+                    {
+                        "dns": b64encode(dns_payload).decode().replace("=", ""),
+                    },
+                    headers={"Accept": "application/dns-message"},
+                    on_post_connection=self._connection_callback,
+                    multiplexed=True,
                 )
+            )
 
         tasks = []
         responses = []
@@ -401,7 +400,10 @@ class HTTPSResolver(AsyncBaseResolver):
                             if https_record["echconfig"]:
                                 ech_config_list = https_record["echconfig"]
 
-                            if "h3" not in https_record["alpn"]:
+                            if (
+                                "h3" not in https_record["alpn"]
+                                or not quic_upgrade_via_dns_rr
+                            ):
                                 continue
 
                             remote_preemptive_quic_rr = True
@@ -413,19 +415,20 @@ class HTTPSResolver(AsyncBaseResolver):
                                 )
                             )
 
-                            if (
-                                "alpn" not in rr_decode
-                                or "h3" not in rr_decode["alpn"].lower()
-                            ):
-                                continue
-
-                            remote_preemptive_quic_rr = True
-
                             if "ech" in rr_decode:
                                 try:
                                     ech_config_list = b64decode(rr_decode["ech"])
                                 except Exception:
                                     pass
+
+                            if (
+                                "alpn" not in rr_decode
+                                or "h3" not in rr_decode["alpn"].lower()
+                                or not quic_upgrade_via_dns_rr
+                            ):
+                                continue
+
+                            remote_preemptive_quic_rr = True
 
                             if "ipv4hint" in rr_decode and family in [
                                 socket.AF_UNSPEC,
