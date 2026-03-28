@@ -134,6 +134,10 @@ class OverQUICProtocol(OverUDPProtocol):
     def cipher(self) -> str | None:
         raise NotImplementedError
 
+    @abstractmethod
+    def ech_accepted(self) -> bool:
+        raise NotImplementedError
+
 
 class HTTPProtocol(metaclass=ABCMeta):
     """

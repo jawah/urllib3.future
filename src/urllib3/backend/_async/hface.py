@@ -502,10 +502,17 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self.conn_info.resolution_latency = self._connect_timings[0]
             self.conn_info.established_latency = self._connect_timings[1]
 
-        if self._svn != HttpVersion.h3:
+        if self._svn is not HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
 
             if hasattr(self.sock, "sslobj"):
+                if hasattr(self.sock.sslobj, "ech_status"):
+                    self.conn_info.tls_ech_accepted = (
+                        self.sock.sslobj.ech_status == "accepted"
+                    )
+                else:
+                    self.conn_info.tls_ech_accepted = False
+
                 self.conn_info.certificate_der = self.sock.sslobj.getpeercert(
                     binary_form=True
                 )
@@ -653,6 +660,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self.conn_info.destination_address = self.sock.getpeername()[:2]
             self.conn_info.cipher = self._protocol.cipher()
             self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
+            self.conn_info.tls_ech_accepted = self._protocol.ech_accepted()
             self.conn_info.issuer_certificate_dict = self._protocol.getissuercert(
                 binary_form=False
             )

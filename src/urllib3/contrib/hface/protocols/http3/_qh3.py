@@ -583,6 +583,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         return f"TLS_{cipher_suite.name}"
 
+    def ech_accepted(self) -> bool:
+        if not hasattr(self._quic, "ech_accepted"):
+            return False
+        return self._quic.ech_accepted
+
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):
             self._events.appendleft(ev)
