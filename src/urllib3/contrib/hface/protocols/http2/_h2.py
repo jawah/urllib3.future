@@ -154,7 +154,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return jh2.exceptions.ProtocolError, jh2.exceptions.H2Error
 
     def is_available(self) -> bool:
-        if self._terminated:
+        if self._terminated or self._goaway_to_honor:
             return False
         return self._max_stream_count > self._open_stream_count
 
@@ -163,7 +163,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return self._max_stream_count
 
     def is_idle(self) -> bool:
-        if self._events:
+        if self._events.stream_count:
             return False
         return self._terminated is False and self._open_stream_count == 0
 

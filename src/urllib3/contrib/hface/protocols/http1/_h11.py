@@ -155,7 +155,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         # we first saw that behavior at https://github.com/jawah/urllib3.future/issues/323
         # bellow will prevent sending any requests until the stream matrix
         # have been entirely consumed.
-        if self._events:
+        if self._events.stream_count:
             return False
         return self._connection.our_state == self._connection.their_state == h11.IDLE
 
