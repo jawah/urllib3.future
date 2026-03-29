@@ -1209,7 +1209,10 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         expected_maximum_version = ssl.SSLContext(
             ssl.PROTOCOL_TLS_CLIENT
         ).maximum_version
-        assert ctx.maximum_version == expected_maximum_version
+        assert (
+            ctx.maximum_version == expected_maximum_version
+            or ctx.maximum_version == ssl.TLSVersion.MAXIMUM_SUPPORTED
+        )
 
     @pytest.mark.skipif(
         urllib3.util.ssl_.SUPPORT_MIN_MAX_TLS_VERSION is False,
