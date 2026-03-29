@@ -75,7 +75,7 @@ from ..exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from ..util import parse_alt_svc, resolve_cert_reqs
+from ..util import parse_alt_svc, resolve_cert_reqs, parse_url
 from ._base import (
     BaseBackend,
     ConnectionInfo,
@@ -1263,6 +1263,15 @@ class HfaceBackend(BaseBackend):
             host, port = self._tunnel_host, self._tunnel_port
         else:
             host, port = self.host, self.port
+
+            if url.startswith("http"):
+                # stdlib http.client always set "Host" to
+                # url parsed netloc by default.
+                # bug originally found at https://github.com/jawah/niquests/issues/355
+                parsed_url = parse_url(url)
+
+                if parsed_url.host != host:
+                    host, port = parsed_url.host, parsed_url.port or self.default_port  # type: ignore[attr-defined,assignment]
 
         self.__headers = [
             (b":method", method.encode("ascii")),
