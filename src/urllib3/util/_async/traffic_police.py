@@ -650,34 +650,30 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             for obj_id, conn_or_pool in idle_targets:
                 if (
+                    obj_id not in self._container
+                    or traffic_state_of(conn_or_pool) is not TrafficState.IDLE
+                ):
+                    continue
+
+                if (
                     not self.concurrency
                 ):  # i.e. no exclusive access to conn_or_pool, no lock.
                     del self._container[obj_id]
 
-                if obj_id is not None and conn_or_pool is not None:
-                    self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
+                self._cursors[current_task] = ActiveCursor(obj_id, conn_or_pool)
 
-                    if (
-                        hasattr(conn_or_pool, "is_connected")
-                        and not conn_or_pool.is_connected
-                    ):
-                        try:
-                            await conn_or_pool.close()
-                        except Exception:  # Defensive:
-                            pass
+                if (
+                    hasattr(conn_or_pool, "is_connected")
+                    and not conn_or_pool.is_connected
+                ):
+                    await self.kill_cursor()
 
-                        self.release()
+                    continue
 
-                        del self._container[obj_id]
-                        del self._registry[obj_id]
-
-                        continue
-
-                    try:
-                        yield conn_or_pool
-                    finally:
-                        if self.release():
-                            await asyncio.sleep(0)
+                try:
+                    yield conn_or_pool
+                finally:
+                    self.release()
 
     async def put(
         self,

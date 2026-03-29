@@ -211,6 +211,10 @@ def _is_has_never_check_common_name_reliable(
 ) -> bool:
     # As of May 2023, all released versions of LibreSSL fail to reject certificates with
     # only common names, see https://github.com/urllib3/urllib3/pull/3024
+    # Rustls has correct hostname verification and doesn't suffer from the
+    # LibreSSL/old-OpenSSL common name checking bugs that this function guards against.
+    if openssl_version.startswith("Rustls "):
+        return True
     is_openssl = openssl_version.startswith("OpenSSL ")
     # Before fixing OpenSSL issue #14579, the SSL_new() API was not copying hostflags
     # like X509_CHECK_FLAG_NEVER_CHECK_SUBJECT, which tripped up CPython.
@@ -225,37 +229,44 @@ def _is_has_never_check_common_name_reliable(
 
 
 if typing.TYPE_CHECKING:
+    import ssl
+
     from ssl import VerifyMode
 
     from typing_extensions import Literal
 
     from .ssltransport import SSLTransport as SSLTransportType
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        try:
+            import ssl
+        except ImportError:
+            ssl = None
 
 
 # Mapping from 'ssl.PROTOCOL_TLSX' to 'TLSVersion.X'
 _SSL_VERSION_TO_TLS_VERSION: dict[int, int] = {}
 
 try:  # Do we have ssl at all?
-    import ssl
-    from ssl import (  # type: ignore[assignment]
-        CERT_REQUIRED,
-        HAS_NEVER_CHECK_COMMON_NAME,
-        OP_NO_COMPRESSION,
-        OP_NO_TICKET,
-        OPENSSL_VERSION,
-        OPENSSL_VERSION_NUMBER,
-        PROTOCOL_TLS,
-        PROTOCOL_TLS_CLIENT,
-        OP_NO_SSLv2,
-        OP_NO_SSLv3,
-        SSLContext,
-        TLSVersion,
-    )
+    if ssl is None:
+        raise ImportError("ssl")
 
-    try:
-        from ssl import OP_NO_RENEGOTIATION
-    except ImportError:
-        OP_NO_RENEGOTIATION = None  # type: ignore[misc,assignment]
+    CERT_REQUIRED = ssl.CERT_REQUIRED
+    HAS_NEVER_CHECK_COMMON_NAME = ssl.HAS_NEVER_CHECK_COMMON_NAME
+    OP_NO_COMPRESSION = ssl.OP_NO_COMPRESSION
+    OP_NO_TICKET = ssl.OP_NO_TICKET
+    OPENSSL_VERSION = ssl.OPENSSL_VERSION
+    OPENSSL_VERSION_NUMBER = ssl.OPENSSL_VERSION_NUMBER
+    PROTOCOL_TLS = ssl.PROTOCOL_TLS
+    PROTOCOL_TLS_CLIENT = ssl.PROTOCOL_TLS_CLIENT
+    OP_NO_SSLv2 = ssl.OP_NO_SSLv2
+    OP_NO_SSLv3 = ssl.OP_NO_SSLv3
+    SSLContext = ssl.SSLContext
+    TLSVersion = ssl.TLSVersion
+
+    OP_NO_RENEGOTIATION = getattr(ssl, "OP_NO_RENEGOTIATION", None)
 
     PROTOCOL_SSLv23 = PROTOCOL_TLS
 
@@ -297,13 +308,13 @@ try:  # Do we have ssl at all?
             IS_FIPS = 32 not in HASHFUNC_MAP
 
 except ImportError:
-    OP_NO_COMPRESSION = 0x20000  # type: ignore[misc,assignment]
-    OP_NO_TICKET = 0x4000  # type: ignore[misc,assignment]
-    OP_NO_SSLv2 = 0x1000000  # type: ignore[misc,assignment]
-    OP_NO_SSLv3 = 0x2000000  # type: ignore[misc,assignment]
-    PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[misc,assignment]
-    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS  # type: ignore[misc]
-    OP_NO_RENEGOTIATION = None  # type: ignore[misc,assignment]
+    OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]
+    OP_NO_TICKET = 0x4000  # type: ignore[assignment]
+    OP_NO_SSLv2 = 0x1000000  # type: ignore[assignment]
+    OP_NO_SSLv3 = 0x2000000  # type: ignore[assignment]
+    PROTOCOL_SSLv23 = PROTOCOL_TLS = 2  # type: ignore[assignment]
+    PROTOCOL_TLS_CLIENT = PROTOCOL_TLS
+    OP_NO_RENEGOTIATION = None
     SUPPORT_MIN_MAX_TLS_VERSION = False
     IS_FIPS = False
 
@@ -484,6 +495,7 @@ def create_urllib3_context(
                 ssl_maximum_version = ssl_version
             else:
                 # Use 'ssl_minimum_version' and 'ssl_maximum_version' instead.
+                assert ssl_version is not None  # guarded by `not in (None, ...)`
                 ssl_minimum_version = _SSL_VERSION_TO_TLS_VERSION.get(
                     ssl_version, TLSVersion.MINIMUM_SUPPORTED
                 )
@@ -498,13 +510,13 @@ def create_urllib3_context(
 
     if SUPPORT_MIN_MAX_TLS_VERSION:
         if ssl_minimum_version is not None:
-            context.minimum_version = ssl_minimum_version
+            context.minimum_version = ssl_minimum_version  # type: ignore[assignment]
         else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
             context.minimum_version = TLSVersion.TLSv1_2
             default_tlsv1_2 = True
 
         if ssl_maximum_version is not None:
-            context.maximum_version = ssl_maximum_version
+            context.maximum_version = ssl_maximum_version  # type: ignore[assignment]
 
     # Unless we're given ciphers defer to either system ciphers in
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
@@ -517,7 +529,11 @@ def create_urllib3_context(
             # avoid relying on cpython default cipher list
             # and instead retrieve OpenSSL own default. This should make
             # urllib3.future less flagged by basic firewall anti-bot rules.
-            context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
+            if "Rustls" not in ssl.OPENSSL_VERSION:
+                # the cipher list only contain entries for TLS 1.2
+                # because CPython stdlib enforce TLS 1.3 ciphers automatically
+                # when it's enabled.
+                context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
 
     # Setting the default here, as we may have no ssl module on import
     cert_reqs = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
@@ -571,11 +587,11 @@ def create_urllib3_context(
     # We always set 'check_hostname=False' for pyOpenSSL so we rely on our own
     # 'ssl.match_hostname()' implementation.
     if cert_reqs == ssl.CERT_REQUIRED:
-        context.verify_mode = cert_reqs
+        context.verify_mode = cert_reqs  # type: ignore[assignment]
         context.check_hostname = True
     else:
         context.check_hostname = False
-        context.verify_mode = cert_reqs
+        context.verify_mode = cert_reqs  # type: ignore[assignment]
 
     try:
         context.hostname_checks_common_name = False
@@ -586,7 +602,7 @@ def create_urllib3_context(
     # 'SSLKEYLOGFILE', if the feature is available (Python 3.8+). Skip empty values.
     if hasattr(context, "keylog_filename"):
         if "SSLKEYLOGFILE" in os.environ:
-            sslkeylogfile = os.path.expandvars(os.environ.get("SSLKEYLOGFILE"))
+            sslkeylogfile = os.path.expandvars(os.environ["SSLKEYLOGFILE"])
         else:
             sslkeylogfile = None
 
@@ -617,6 +633,7 @@ def ssl_wrap_socket(
     check_hostname: bool | None = ...,
     ssl_minimum_version: int | None = ...,
     ssl_maximum_version: int | None = ...,
+    ech_config_list: bytes | None = ...,
 ) -> ssl.SSLSocket: ...
 
 
@@ -641,6 +658,7 @@ def ssl_wrap_socket(
     check_hostname: bool | None = ...,
     ssl_minimum_version: int | None = ...,
     ssl_maximum_version: int | None = ...,
+    ech_config_list: bytes | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType: ...
 
 
@@ -664,6 +682,7 @@ def ssl_wrap_socket(
     check_hostname: bool | None = None,
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
+    ech_config_list: bytes | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -764,14 +783,18 @@ def ssl_wrap_socket(
                 else:
                     context.load_cert_chain(certfile, keyfile, key_password)
             elif certdata and keydata:
-                try:
-                    _ctx_load_cert_chain(context, certdata, keydata, key_password)
-                except io.UnsupportedOperation as e:
-                    warnings.warn(
-                        f"""Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform.
-                        Reason: {e}. It will be picked out if you upgrade to a QUIC connection.""",
-                        UserWarning,
-                    )
+                if "Rustls" in ssl.OPENSSL_VERSION:
+                    context.load_cert_chain(certdata, keydata, key_password)
+                else:
+                    try:
+                        _ctx_load_cert_chain(context, certdata, keydata, key_password)
+                    except io.UnsupportedOperation as e:
+                        warnings.warn(
+                            "Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform. "
+                            f"Reason: {e}. It will be picked out if you upgrade to a QUIC connection or if you install "
+                            "rtls alternative ssl backend.",
+                            UserWarning,
+                        )
 
             try:
                 context.set_alpn_protocols(alpn_protocols or ALPN_PROTOCOLS)
@@ -788,8 +811,12 @@ def ssl_wrap_socket(
         else:
             context = cached_ctx
 
-    ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
-    return ssl_sock
+    if ech_config_list and hasattr(context, "set_ech_configs"):
+        # we need to mutate the ctx, so it's going to be a copy
+        # ech config list is specific to a single connection.
+        context = context.set_ech_configs(ech_config_list)
+
+    return _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
 
 
 def is_ipaddress(hostname: str | bytes) -> bool:

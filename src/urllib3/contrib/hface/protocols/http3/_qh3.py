@@ -155,10 +155,13 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def is_available(self) -> bool:
         return (
             self._terminated is False
+            and self._goaway_to_honor is False
             and self._max_stream_count > self._quic.open_outbound_streams
         )
 
     def is_idle(self) -> bool:
+        if self._events.stream_count:
+            return False
         return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
@@ -582,6 +585,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             raise ValueError("TLS handshake has not been done yet")
 
         return f"TLS_{cipher_suite.name}"
+
+    def ech_accepted(self) -> bool:
+        if not hasattr(self._quic, "ech_accepted"):
+            return False
+        return self._quic.ech_accepted
 
     def reshelve(self, *events: Event) -> None:
         for ev in reversed(events):

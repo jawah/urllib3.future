@@ -209,7 +209,11 @@ def tests_impl(
         # Print the Python version and bytesize.
         session.run("python", "--version")
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
-        session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
+
+        if "rtls" not in extras:
+            session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
+        else:
+            session.run("python", "-c", "import rtls; print(rtls.OPENSSL_VERSION)")
 
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step
@@ -262,6 +266,24 @@ def tests_impl(
 )
 def test(session: nox.Session) -> None:
     tests_impl(session)
+
+
+@nox.session(
+    python=[
+        "3.7",
+        "3.8",
+        "3.9",
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.13t",
+        "3.14",
+        "3.14t",
+    ]
+)
+def test_rtls(session: nox.Session) -> None:
+    tests_impl(session, extras="socks,brotli,zstd,ws,rtls")
 
 
 @nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"])

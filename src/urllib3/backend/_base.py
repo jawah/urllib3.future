@@ -61,7 +61,8 @@ class ConnectionInfo:
         self.tls_handshake_latency: timedelta | None = None
         #: Time taken to resolve a domain name into a reachable IP address.
         self.resolution_latency: timedelta | None = None
-
+        #: ECH Accepted
+        self.tls_ech_accepted: bool | None = None
         #: Time taken to encode and send the whole request through the socket.
         self.request_sent_latency: timedelta | None = None
 
@@ -77,6 +78,7 @@ class ConnectionInfo:
                 "cipher": self.cipher,
                 "tls_version": self.tls_version,
                 "tls_handshake_latency": self.tls_handshake_latency,
+                "tls_ech_accepted": self.tls_ech_accepted,
                 "http_version": self.http_version,
                 "resolution_latency": self.resolution_latency,
                 "request_sent_latency": self.request_sent_latency,

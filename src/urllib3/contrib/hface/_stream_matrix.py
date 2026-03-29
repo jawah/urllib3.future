@@ -13,11 +13,13 @@ class StreamMatrix:
         "_matrix",
         "_count",
         "_event_cursor_id",
+        "_stream_count",
     )
 
     def __init__(self) -> None:
         self._matrix: dict[int | None, deque[Event]] = {}
         self._count: int = 0
+        self._stream_count: int = 0
         self._event_cursor_id: int = 0
 
     def __len__(self) -> int:
@@ -30,6 +32,10 @@ class StreamMatrix:
     def streams(self) -> list[int]:
         return sorted(i for i in self._matrix.keys() if i is not None)
 
+    @property
+    def stream_count(self) -> int:
+        return self._stream_count
+
     def append(self, event: Event) -> None:
         matrix_idx = getattr(event, "stream_id", None)
 
@@ -38,6 +44,8 @@ class StreamMatrix:
 
         if matrix_idx not in self._matrix:
             self._matrix[matrix_idx] = deque()
+            if matrix_idx is not None:
+                self._stream_count += 1
 
         self._matrix[matrix_idx].append(event)
 
@@ -62,6 +70,8 @@ class StreamMatrix:
         for k, v in triaged_events.items():
             if k not in self._matrix:
                 self._matrix[k] = deque()
+                if k is not None:
+                    self._stream_count += 1
 
             self._matrix[k].extend(v)
 
@@ -72,6 +82,8 @@ class StreamMatrix:
 
         if matrix_idx not in self._matrix:
             self._matrix[matrix_idx] = deque()
+            if matrix_idx is not None:
+                self._stream_count += 1
 
         self._matrix[matrix_idx].appendleft(event)
 
@@ -114,6 +126,8 @@ class StreamMatrix:
 
             if stream_id is not None and not self._matrix[stream_id]:
                 del self._matrix[stream_id]
+                if stream_id is not None:
+                    self._stream_count -= 1
 
         return ev
 
@@ -124,6 +138,8 @@ class StreamMatrix:
     ) -> int:
         if stream_id is None:
             return self._count
+        if stream_id == -1:
+            return 0 if None not in self._matrix else len(self._matrix[None])
         if stream_id not in self._matrix:
             return 0
 

@@ -8,15 +8,27 @@ from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
 try:  # Compiled with SSL?
-    import ssl
+    if typing.TYPE_CHECKING:
+        import ssl
+    else:
+        try:
+            import rtls as ssl
+        except ImportError:
+            import ssl
 except (ImportError, AttributeError):
     ssl = None  # type: ignore[assignment]
 
 
 try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    from _ssl import Certificate
-except (ImportError, AttributeError):
-    Certificate = None  # type: ignore[misc,assignment]
+    if typing.TYPE_CHECKING:
+        from _ssl import Certificate
+    else:
+        from rtls import Certificate
+except ImportError:
+    try:
+        from _ssl import Certificate
+    except (ImportError, AttributeError):
+        Certificate = None  # type: ignore[misc,assignment]
 
 from ..._collections import HTTPHeaderDict
 from ..._constant import (
@@ -53,7 +65,7 @@ from ...exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from ...util import parse_alt_svc, resolve_cert_reqs
+from ...util import parse_alt_svc, resolve_cert_reqs, parse_url
 from .._base import (
     ConnectionInfo,
     HttpVersion,
@@ -350,7 +362,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 allow_insecure = True
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
-                ctx_root_certificates = ssl_context.get_ca_certs(True)
+                ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(
@@ -496,10 +508,17 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self.conn_info.resolution_latency = self._connect_timings[0]
             self.conn_info.established_latency = self._connect_timings[1]
 
-        if self._svn != HttpVersion.h3:
+        if self._svn is not HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
 
             if hasattr(self.sock, "sslobj"):
+                if hasattr(self.sock.sslobj, "ech_status"):
+                    self.conn_info.tls_ech_accepted = (
+                        self.sock.sslobj.ech_status == "accepted"
+                    )
+                else:
+                    self.conn_info.tls_ech_accepted = False
+
                 self.conn_info.certificate_der = self.sock.sslobj.getpeercert(
                     binary_form=True
                 )
@@ -528,11 +547,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         len(chain) > 1
                         and Certificate is not None
                         and isinstance(chain[1], Certificate)
-                        and hasattr(ssl, "PEM_cert_to_DER_cert")
                     ):
-                        self.conn_info.issuer_certificate_der = (
-                            ssl.PEM_cert_to_DER_cert(chain[1].public_bytes())
-                        )
+                        issuer_public_bytes = chain[1].public_bytes()
+                        if isinstance(issuer_public_bytes, bytes):
+                            self.conn_info.issuer_certificate_der = issuer_public_bytes
+                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
+                            self.conn_info.issuer_certificate_der = (
+                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
+                            )
                         self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
 
             if cipher_tuple:
@@ -644,6 +666,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self.conn_info.destination_address = self.sock.getpeername()[:2]
             self.conn_info.cipher = self._protocol.cipher()
             self.conn_info.tls_version = ssl.TLSVersion.TLSv1_3
+            self.conn_info.tls_ech_accepted = self._protocol.ech_accepted()
             self.conn_info.issuer_certificate_dict = self._protocol.getissuercert(
                 binary_form=False
             )
@@ -1138,6 +1161,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             host, port = self._tunnel_host, self._tunnel_port
         else:
             host, port = self.host, self.port
+
+            if url.startswith("http"):
+                # stdlib http.client always set "Host" to
+                # url parsed netloc by default.
+                # bug originally found at https://github.com/jawah/niquests/issues/355
+                parsed_url = parse_url(url)
+
+                if parsed_url.host != host:
+                    host, port = parsed_url.host, parsed_url.port or self.default_port  # type: ignore[attr-defined,assignment]
 
         self.__headers = [
             (b":method", method.encode("ascii")),

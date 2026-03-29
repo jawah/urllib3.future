@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import ssl
 import typing
+
+if typing.TYPE_CHECKING:
+    import ssl
+else:
+    try:
+        import rtls as ssl
+    except ImportError:
+        import ssl
 from collections import deque
-from ssl import SSLError
+
 from time import time as monotonic
 
 from qh3.quic.configuration import QuicConfiguration
@@ -38,6 +45,8 @@ from ...utils import (
 from ..dou import PlainResolver
 from ..system import SystemResolver
 
+SSLError = ssl.SSLError
+
 if IS_FIPS:
     raise ImportError(
         "DNS-over-QUIC disabled when Python is built with FIPS-compliant ssl module"
@@ -67,6 +76,7 @@ class QUICResolver(PlainResolver):
                 ctx.load_default_certs()
 
                 for der in ctx.get_ca_certs(binary_form=True):
+                    assert isinstance(der, bytes)
                     kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
 
                 if kwargs["ca_cert_data"]:
@@ -79,7 +89,7 @@ class QUICResolver(PlainResolver):
         if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
             if (
                 "cert_reqs" not in kwargs
-                or resolve_cert_reqs(kwargs["cert_reqs"]) is ssl.CERT_REQUIRED
+                or resolve_cert_reqs(kwargs["cert_reqs"]) == ssl.CERT_REQUIRED
             ):
                 raise ssl.SSLError(
                     "DoQ requires at least one CA loaded in order to verify the remote peer certificate. "
@@ -270,8 +280,7 @@ class QUICResolver(PlainResolver):
         if family in [socket.AF_UNSPEC, socket.AF_INET6]:
             tbq.append(SupportedQueryType.AAAA)
 
-        if quic_upgrade_via_dns_rr:
-            tbq.append(SupportedQueryType.HTTPS)
+        tbq.append(SupportedQueryType.HTTPS)
 
         queries = DomainNameServerQuery.bulk(host, *tbq)
         open_streams = []
@@ -389,10 +398,10 @@ class QUICResolver(PlainResolver):
             for record in response.records:
                 if record[0] == SupportedQueryType.HTTPS:
                     assert isinstance(record[-1], dict)
-                    if "h3" in record[-1]["alpn"]:
-                        remote_preemptive_quic_rr = True
                     if record[-1]["echconfig"]:
                         ech_config_list = record[-1]["echconfig"]
+                    if "h3" in record[-1]["alpn"] and quic_upgrade_via_dns_rr:
+                        remote_preemptive_quic_rr = True
                     continue
 
                 assert not isinstance(record[-1], dict)

@@ -65,6 +65,9 @@ qh3 = [
 ws = [
   "wsproto>=1.2,<2",
 ]
+rtls = [
+    "rtls; platform_python_implementation == 'CPython'"
+]
 
 [project.urls]
 "Changelog" = "https://github.com/jawah/urllib3.future/blob/main/CHANGES.rst"
