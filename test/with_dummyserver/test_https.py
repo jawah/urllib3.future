@@ -1204,15 +1204,25 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         reason="Python built against restricted ssl library with one protocol supported",
     )
     def test_default_ssl_context_ssl_min_max_versions(self) -> None:
+        try:
+            import rtls as alt_ssl
+        except ImportError:
+            alt_ssl = None  # type: ignore[assignment]
+
         ctx = urllib3.util.ssl_.create_urllib3_context()
-        assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
-        expected_maximum_version = ssl.SSLContext(
-            ssl.PROTOCOL_TLS_CLIENT
-        ).maximum_version
-        assert (
-            ctx.maximum_version == expected_maximum_version
-            or ctx.maximum_version == ssl.TLSVersion.MAXIMUM_SUPPORTED
-        )
+
+        if alt_ssl is None:
+            assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
+            expected_maximum_version = ssl.SSLContext(
+                ssl.PROTOCOL_TLS_CLIENT
+            ).maximum_version
+            assert ctx.maximum_version == expected_maximum_version
+        else:
+            assert ctx.minimum_version == alt_ssl.TLSVersion.TLSv1_2  # type: ignore[comparison-overlap]
+            expected_maximum_version = alt_ssl.SSLContext(
+                alt_ssl.PROTOCOL_TLS_CLIENT
+            ).maximum_version
+            assert ctx.maximum_version == expected_maximum_version  # type: ignore[comparison-overlap]
 
     @pytest.mark.skipif(
         urllib3.util.ssl_.SUPPORT_MIN_MAX_TLS_VERSION is False,
