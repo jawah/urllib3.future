@@ -159,6 +159,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         )
 
     def is_idle(self) -> bool:
+        if self._events:
+            return False
         return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
