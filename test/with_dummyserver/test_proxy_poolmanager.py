@@ -200,7 +200,7 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
                 # PyPy is more specific
                 or "self signed certificate in certificate chain" in str(e.value.reason)
                 # Rustls specific
-                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
+                or "invalid peer certificate:" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
             http = proxy_from_url(

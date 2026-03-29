@@ -209,7 +209,11 @@ def tests_impl(
         # Print the Python version and bytesize.
         session.run("python", "--version")
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
-        session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
+
+        if "rtls" not in extras:
+            session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
+        else:
+            session.run("python", "-c", "import rtls; print(rtls.OPENSSL_VERSION)")
 
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step

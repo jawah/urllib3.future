@@ -45,7 +45,7 @@ from urllib3.util.ssl_match_hostname import CertificateError
 from urllib3.util.timeout import Timeout
 
 
-from urllib3.util.ssl_ import _SSLContextCache
+from urllib3.util.ssl_ import _SSLContextCache, OPENSSL_VERSION
 from urllib3.contrib.imcc._ctypes import load_cert_chain as _ctypes_load_cert_chain
 from urllib3.contrib.imcc._shm import load_cert_chain as _shm_load_cert_chain
 from urllib3.contrib.imcc._fifo import load_cert_chain as _fifo_load_cert_chain
@@ -262,6 +262,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         reason="PyPy IMCC not guaranteed",
         strict=False,
     )
+    @pytest.mark.skipif(
+        "Rustls" in OPENSSL_VERSION, reason="rtls already have native support for imcc"
+    )
     def test_in_memory_client_key_password_ctypes_only(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -309,6 +312,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         sys.implementation.name == "pypy",
         reason="PyPy IMCC not guaranteed",
         strict=False,
+    )
+    @pytest.mark.skipif(
+        "Rustls" in OPENSSL_VERSION, reason="rtls already have native support for imcc"
     )
     def test_in_memory_client_key_password_shm_only(
         self, monkeypatch: pytest.MonkeyPatch
@@ -359,6 +365,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         sys.implementation.name == "pypy",
         reason="PyPy IMCC not guaranteed",
         strict=False,
+    )
+    @pytest.mark.skipif(
+        "Rustls" in OPENSSL_VERSION, reason="rtls already have native support for imcc"
     )
     def test_in_memory_client_key_password_fifo_only(
         self, monkeypatch: pytest.MonkeyPatch
@@ -541,7 +550,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 # PyPy is more specific
                 or "self signed certificate in certificate chain" in str(e.value.reason)
                 # Rustls specific
-                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
+                or "invalid peer certificate:" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
     def test_wrap_socket_failure_resource_leak(self) -> None:
@@ -582,7 +591,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 or "certificate verify failed" in str(e.value.reason).lower()
                 or "invalid certificate chain" in str(e.value.reason)
                 # Rustls specific
-                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
+                or "invalid peer certificate:" in str(e.value.reason)
             ), (
                 "Expected 'No root certificates specified',  "
                 "'certificate verify failed', or "

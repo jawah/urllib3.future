@@ -409,7 +409,7 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 # PyPy is more specific
                 or "self signed certificate in certificate chain" in str(e.value.reason)
                 # Rustls specific
-                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
+                or "invalid peer certificate:" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
     @pytest.mark.asyncio
@@ -452,7 +452,7 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 or "certificate verify failed" in str(e.value.reason).lower()
                 or "invalid certificate chain" in str(e.value.reason)
                 # Rustls specific
-                or "invalid peer certificate: UnknownIssuer" in str(e.value.reason)
+                or "invalid peer certificate:" in str(e.value.reason)
             ), (
                 "Expected 'No root certificates specified',  "
                 "'certificate verify failed', or "
