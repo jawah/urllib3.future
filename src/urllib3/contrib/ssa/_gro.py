@@ -42,8 +42,7 @@ def _sock_has_gro(sock: socket.socket) -> bool:
 def _sock_has_gso(sock: socket.socket) -> bool:
     """Check if the kernel supports GSO on *sock*."""
     try:
-        sock.getsockopt(socket.SOL_UDP, UDP_LINUX_SEGMENT)
-        return True
+        return bool(sock.getsockopt(socket.SOL_UDP, UDP_LINUX_SEGMENT))
     except OSError:
         return False
 
