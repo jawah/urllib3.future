@@ -294,17 +294,22 @@ class TestWebExtensions(TraefikTestCase):
             await resp.extension.close()
 
     @pytest.mark.parametrize(
-        "target_protocol, target_http",
+        "target_protocol, target_http, custom_headers",
         [
-            ("sse", 11),
-            ("sse", 20),
-            ("sse", 30),
-            ("psse", 11),
-            ("psse", 20),
+            ("sse", 11, None),
+            ("sse", 20, None),
+            ("sse", 30, None),
+            ("psse", 11, None),
+            ("psse", 20, None),
+            ("sse", 20, {"Accept": "application/json, text/event-stream"}),
+            ("psse", 20, {"Accept": "application/json, text/event-stream"}),
         ],
     )
     async def test_server_side_event(
-        self, target_protocol: str, target_http: int
+        self,
+        target_protocol: str,
+        target_http: int,
+        custom_headers: dict[str, str] | None,
     ) -> None:
         target_url = self.https_url if target_protocol == "sse" else self.http_url
         target_url = (
@@ -333,7 +338,11 @@ class TestWebExtensions(TraefikTestCase):
             ca_certs=self.ca_authority,
             disabled_svn=disabled_svn,
         ) as pm:
-            resp = await pm.urlopen("GET", target_url + "/sse?delay=1s&count=5")
+            resp = await pm.urlopen(
+                "GET",
+                target_url + "/sse?delay=1s&count=5",
+                headers=custom_headers or {},
+            )
 
             # The response ends with a "200 OK"!
             assert resp.status == 200

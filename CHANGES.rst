@@ -3,6 +3,7 @@
 
 - Fixed docker-py compatibility.
 - Fixed needless strong reference to AsyncConnectionPool instance within our background idle watcher.
+- Fixed extension headers (e.g. SSE's ``Accept: text/event-stream``) overwriting user-provided headers with the same key. User-supplied headers now take precedence over extension defaults. (#333)
 
 2.19.901 (2026-04-02)
 =====================
