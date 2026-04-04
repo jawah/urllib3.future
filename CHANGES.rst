@@ -2,6 +2,7 @@
 =====================
 
 - Fixed docker-py compatibility.
+- Fixed needless strong reference to AsyncConnectionPool instance within our background idle watcher.
 
 2.19.901 (2026-04-02)
 =====================
