@@ -2112,7 +2112,7 @@ class TestHeaders(SocketDummyServerTestCase):
             body = io.BytesIO(b"bytes-io-body")
             body.seek(0, 0)
         else:
-            raise ValueError("Unknonw body type")
+            raise ValueError("Unknown body type")
 
         buffer: bytes = b""
 

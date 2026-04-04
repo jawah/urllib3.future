@@ -172,3 +172,6 @@ warn_redundant_casts = true
 warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = true
+
+[tool.codespell]
+ignore-words-list = "intoto,fo,uE,thex,TE,EDE"

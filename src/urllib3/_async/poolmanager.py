@@ -263,7 +263,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         Empty our store of pools and direct them all to close.
 
         This will not affect in-flight connections, but they will not be
-        re-used after completion.
+        reused after completion.
         """
         await self.pools.clear()
 

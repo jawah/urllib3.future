@@ -629,7 +629,7 @@ class TrafficPolice(typing.Generic[T]):
 
         if conn_or_pool is None:
             # hmm.. this should not exist..
-            # unfortunately Requests has a wierd test case
+            # unfortunately Requests has a weird test case
             # that set pool_size=0 to force trigger an
             # exception. don't remove that.
             if self.maxsize == 0:

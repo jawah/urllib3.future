@@ -6,7 +6,8 @@ on:
       - main
   pull_request:
 
-permissions: "read-all"
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref_name }}
@@ -24,6 +25,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        with:
+          persist-credentials: false
 
       - name: "Setup Python"
         uses: "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405"
@@ -153,6 +156,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        with:
+          persist-credentials: false
 
       - name: "Traefik: Setup Docker - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
@@ -209,6 +214,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        with:
+          persist-credentials: false
 
       - name: "Setup Python"
         uses: "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405"

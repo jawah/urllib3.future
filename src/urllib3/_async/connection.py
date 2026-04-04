@@ -338,7 +338,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             await super().close()
         finally:
             # Reset all stateful properties so connection
-            # can be re-used without leaking prior configs.
+            # can be reused without leaking prior configs.
             self.sock = None
             self.is_verified = False
             self.proxy_is_verified = None
@@ -397,7 +397,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         | None = None,
     ) -> ResponsePromise:
         # Update the inner socket's timeout value to send the request.
-        # This only triggers if the connection is re-used.
+        # This only triggers if the connection is reused.
         if self.sock is not None:
             self.sock.settimeout(self.timeout)
 

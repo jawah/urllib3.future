@@ -1,3 +1,9 @@
+2.19.902 (2026-04-04)
+=====================
+
+- Fixed docker-py compatibility.
+- Fixed needless strong reference to AsyncConnectionPool instance within our background idle watcher.
+
 2.19.901 (2026-04-02)
 =====================
 
@@ -39,7 +45,7 @@
 =====================
 
 - Fixed segfault when leveraging in memory certificate against build of Python using statically linked ssl lib.
-- Added support for in memory certificate through FIFO as a last resort in MacOS when facing bellow issue.
+- Added support for in memory certificate through FIFO as a last resort in MacOS when facing below issue.
 - Fixed IMCC support on Linux when using a Freethreaded build of CPython.
 
 2.17.902 (2026-03-16)
@@ -520,7 +526,7 @@
   This improves the fix shipped in v2.10.906 and avoid having to recycle your multiplexed connection in idle moments.
   A new keyword argument is supported in your PoolManager configuration, namely ``background_watch_delay``.
   This parameter takes a int or float as the delay between checks. Set it to None to void this background task.
-  Anything lower than ``0.01`` will be interpreted as None, therefor disabling the discrete watch.
+  Anything lower than ``0.01`` will be interpreted as None, therefore disabling the discrete watch.
 - Added managed keepalive for HTTP/2 and HTTP/3 over QUIC. A new keyword argument, named ``keepalive_delay`` that
   takes a value expressed in seconds for how long urllib3-future should automatically keep the connection alive.
   This is done in direct extension to our "discrete task" mentioned just before. We will send ``PING`` frame
@@ -834,7 +840,7 @@
   ``AsyncPoolManager``, ``AsyncHTTPConnectionPool``, ``AsyncHTTPSConnectionPool``, ``AsyncProxyManager``,
   ``AsyncResolverDescription``.
 
-  Finally, bellow functions are also available:
+  Finally, below functions are also available:
 
   ``async_proxy_from_url``, and ``async_connection_from_url``.
 
@@ -2214,7 +2220,7 @@ Fixed
 
 * Pools can be used as context managers. (Issue #545)
 
-* Don't re-use connections which experienced an SSLError. (Issue #529)
+* Don't reuse connections which experienced an SSLError. (Issue #529)
 
 * Don't fail when gzip decoding an empty stream. (Issue #535)
 

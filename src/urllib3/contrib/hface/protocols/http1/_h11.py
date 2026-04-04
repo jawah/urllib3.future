@@ -153,7 +153,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         # and the h11 state machine would be marked as idle, when the
         # stream matrix still have ready data to unpack.
         # we first saw that behavior at https://github.com/jawah/urllib3.future/issues/323
-        # bellow will prevent sending any requests until the stream matrix
+        # below will prevent sending any requests until the stream matrix
         # have been entirely consumed.
         if self._events.stream_count:
             return False
