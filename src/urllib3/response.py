@@ -775,7 +775,9 @@ class HTTPResponse(io.IOBase):
             # which does not auto-close when reading data
             # with amt=None.
             is_foreign_fp_unclosed = (
-                amt is None and getattr(self._fp, "closed", False) is False and not fp_upgraded
+                amt is None
+                and getattr(self._fp, "closed", False) is False
+                and not fp_upgraded
             )
 
             if (amt is not None and amt != 0 and not data) or is_foreign_fp_unclosed:
