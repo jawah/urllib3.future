@@ -58,7 +58,7 @@ class TestWebExtensions(TraefikTestCase):
             # The HTTP extension should be automatically loaded!
             assert resp.extension is not None
 
-            # This response should not have a body, therefor don't try to read from
+            # This response should not have a body, therefore don't try to read from
             # socket in there!
             assert resp.data == b""
             assert resp.read() == b""
@@ -89,7 +89,7 @@ class TestWebExtensions(TraefikTestCase):
     )
     def test_basic_websocket_manual(self, target_protocol: str) -> None:
         """
-        Users shall be capable of negotiating WebSocket manually. Therefor
+        Users shall be capable of negotiating WebSocket manually. Therefore
         urllib3-future wouldn't know it's about WebSocket and would return an
         agnostic HTTP extension (direct stream access I/O). Leaving the
         protocol part to the user capable hands!
@@ -127,7 +127,7 @@ class TestWebExtensions(TraefikTestCase):
             # The HTTP extension should be automatically loaded!
             assert resp.extension is not None
 
-            # This response should not have a body, therefor don't try to read from
+            # This response should not have a body, therefore don't try to read from
             # socket in there!
             assert resp.data == b""
             assert resp.read() == b""
@@ -210,7 +210,7 @@ class TestWebExtensions(TraefikTestCase):
             # The HTTP extension should be automatically loaded!
             assert resp.extension is not None
 
-            # This response should not have a body, therefor don't try to read from
+            # This response should not have a body, therefore don't try to read from
             # socket in there!
             assert resp.data == b""
             assert resp.read() == b""
@@ -270,7 +270,7 @@ class TestWebExtensions(TraefikTestCase):
             # The HTTP extension should be automatically loaded!
             assert resp.extension is not None
 
-            # This response should not have a body, therefor don't try to read from
+            # This response should not have a body, therefore don't try to read from
             # socket in there!
             assert resp.data == b""
             assert resp.read() == b""
@@ -530,7 +530,7 @@ class TestWebExtensions(TraefikTestCase):
             # The HTTP extension should be automatically loaded!
             assert resp.extension is not None
 
-            # This response should not have a body, therefor don't try to read from
+            # This response should not have a body, therefore don't try to read from
             # socket in there!
             assert resp.data == b""
             assert resp.read() == b""

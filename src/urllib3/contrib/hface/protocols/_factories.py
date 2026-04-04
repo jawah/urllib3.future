@@ -72,8 +72,10 @@ class HTTPProtocolFactory(metaclass=ABCMeta):
             tuple[str, type[HTTPOverQUICProtocol | HTTPOverTCPProtocol]]
         ] = inspect.getmembers(
             http_module,
-            lambda e: isinstance(e, type)
-            and issubclass(e, (HTTPOverQUICProtocol, HTTPOverTCPProtocol)),
+            lambda e: (
+                isinstance(e, type)
+                and issubclass(e, (HTTPOverQUICProtocol, HTTPOverTCPProtocol))
+            ),
         )
 
         if not implementations:

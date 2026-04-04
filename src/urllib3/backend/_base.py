@@ -113,8 +113,8 @@ class DirectStreamAccess:
             self._read = None
 
         if write is not None:
-            self._write: typing.Callable[[bytes, bool], None] | None = (
-                lambda buf, eot: write(buf, self._stream_id, eot)
+            self._write: typing.Callable[[bytes, bool], None] | None = lambda buf, eot: (
+                write(buf, self._stream_id, eot)
             )
         else:
             self._write = None
