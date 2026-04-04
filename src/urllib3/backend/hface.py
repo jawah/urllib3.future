@@ -1311,7 +1311,7 @@ class HfaceBackend(BaseBackend):
 
         # only h11 support chunked transfer encoding, we internally translate
         # it to the right method for h2 and h3.
-        support_te_chunked: bool = self._svn == HttpVersion.h11
+        support_te_chunked: bool = self._svn is HttpVersion.h11 or self._svn is None
 
         # We MUST never use that header in h2 and h3 over quic.
         # Passing 'Connection' header is actually a protocol violation above h11.

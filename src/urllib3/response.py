@@ -766,15 +766,16 @@ class HTTPResponse(io.IOBase):
             return None  # type: ignore[return-value]
 
         fp_closed = getattr(self._fp, "closed", False)
+        fp_upgraded = getattr(self._fp, "_dsa", None) is not None
 
         with self._error_catcher():
-            data = self._fp_read(amt) if not fp_closed else b""
+            data = self._fp_read(amt) if not fp_closed and not fp_upgraded else b""
 
             # Mocking library often use io.BytesIO
             # which does not auto-close when reading data
             # with amt=None.
             is_foreign_fp_unclosed = (
-                amt is None and getattr(self._fp, "closed", False) is False
+                amt is None and getattr(self._fp, "closed", False) is False and not fp_upgraded
             )
 
             if (amt is not None and amt != 0 and not data) or is_foreign_fp_unclosed:

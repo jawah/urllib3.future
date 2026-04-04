@@ -4,7 +4,6 @@ import enum
 import socket
 import time
 import typing
-import warnings
 from base64 import b64encode
 from datetime import datetime, timedelta
 from secrets import token_bytes
@@ -228,7 +227,7 @@ class LowLevelResponse:
 
         self.__internal_read_st = body
 
-        has_body = self.__internal_read_st is not None
+        has_body = self.__internal_read_st is not None or dsa is not None
 
         self.closed = has_body is False
         self._eot = self.closed
@@ -275,21 +274,6 @@ class LowLevelResponse:
 
     @property
     def fp(self) -> socket.SocketIO | DirectStreamAccess | None:
-        warnings.warn(
-            (
-                "This is a rather awkward situation. A program (probably) tried to access the socket object "
-                "directly, thus bypassing our state-machine protocol (amongst other things). "
-                "This is currently unsupported and dangerous. Errors will occurs if you negotiated HTTP/2 or later versions. "
-                "We tried to be rather strict on the backward compatibility between urllib3 and urllib3-future, "
-                "but this is rather complicated to support (e.g. direct socket access). "
-                "You are probably better off using our higher level read() function. "
-                "Please open an issue at https://github.com/jawah/urllib3.future/issues to gain support or "
-                "insights on it."
-            ),
-            DeprecationWarning,
-            2,
-        )
-
         if self._sock is None:
             if self.status == 101 or (
                 self._method == "CONNECT" and 200 <= self.status < 300
@@ -358,8 +342,9 @@ class LowLevelResponse:
 
         if self._eot and buf_capacity == 0:
             self._stream_abort = None
-            self.closed = True
-            self._sock = None
+            if not self._dsa:
+                self.closed = True
+                self._sock = None
 
         if self.chunked:
             self.chunk_left = buf_capacity if buf_capacity else None
