@@ -204,7 +204,9 @@ async def idle_conn_watch_task(
                                     await conn.peek_and_react(expect_frame=True)
             except AttributeError:
                 return
-    except (ReferenceError, asyncio.CancelledError):
+    except asyncio.CancelledError:
+        raise
+    except ReferenceError:
         return
 
 
@@ -2136,7 +2138,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         ):
             self._background_monitoring = asyncio.create_task(
                 idle_conn_watch_task(
-                    self,
+                    proxy(self),
                     self._background_watch_delay,
                     self._keepalive_delay,
                     self._keepalive_idle_window,
