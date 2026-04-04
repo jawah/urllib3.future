@@ -613,7 +613,15 @@ def downstream_docker(session: nox.Session) -> None:
         "pytest",
         "-v",
         f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
-        *(session.posargs or ("tests/unit",)),
+        *(
+            session.posargs
+            or (
+                "tests/unit",
+                "tests/integration",
+                "--ignore=tests/integration/credentials/store_test.py",
+                "--deselect=tests/integration/api_container_test.py::AttachContainerTest::test_run_container_reading_socket_ws",
+            )
+        ),
     )
 
 

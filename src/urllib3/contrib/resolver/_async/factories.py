@@ -36,10 +36,13 @@ class AsyncResolverFactory(metaclass=ABCMeta):
 
         implementations: list[tuple[str, type[AsyncBaseResolver]]] = inspect.getmembers(
             resolver_module,
-            lambda e: isinstance(e, type)
-            and issubclass(e, AsyncBaseResolver)
-            and (
-                (specifier is None and e.specifier is None) or specifier == e.specifier
+            lambda e: (
+                isinstance(e, type)
+                and issubclass(e, AsyncBaseResolver)
+                and (
+                    (specifier is None and e.specifier is None)
+                    or specifier == e.specifier
+                )
             ),
         )
 
@@ -75,13 +78,16 @@ class AsyncResolverFactory(metaclass=ABCMeta):
 
         implementations: list[tuple[str, type[AsyncBaseResolver]]] = inspect.getmembers(
             resolver_module,
-            lambda e: isinstance(e, type)
-            and issubclass(e, AsyncBaseResolver)
-            and (
-                (specifier is None and e.specifier is None) or specifier == e.specifier
-            )
-            and hasattr(e, "protocol")
-            and e.protocol == protocol,
+            lambda e: (
+                isinstance(e, type)
+                and issubclass(e, AsyncBaseResolver)
+                and (
+                    (specifier is None and e.specifier is None)
+                    or specifier == e.specifier
+                )
+                and hasattr(e, "protocol")
+                and e.protocol == protocol
+            ),
         )
 
         if not implementations:

@@ -285,7 +285,7 @@ class AsyncSignals(typing.Generic[T]):
         # so we were creative (or foolish) enough to
         # stall the event loop in highly concurrent scenarii
         # where we expect plenty of bytes into the socket.
-        # bellow is heuristic, caution. it's not a silver
+        # below is heuristic, caution. it's not a silver
         # bullet.
         if not getattr(cursor.conn_or_pool, "_fast_recv_mode", True):
             now = time.perf_counter()

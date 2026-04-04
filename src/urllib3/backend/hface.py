@@ -707,7 +707,7 @@ class HfaceBackend(BaseBackend):
                     if alt_key in self._preemptive_quic_cache:
                         del self._preemptive_quic_cache[alt_key]
 
-                # this avoid the close() to attempt re-use the (dead) sock
+                # this avoid the close() to attempt reuse the (dead) sock
                 self._protocol = None
 
                 # we don't want to force downgrade if the user specifically said
@@ -1311,7 +1311,7 @@ class HfaceBackend(BaseBackend):
 
         # only h11 support chunked transfer encoding, we internally translate
         # it to the right method for h2 and h3.
-        support_te_chunked: bool = self._svn == HttpVersion.h11
+        support_te_chunked: bool = self._svn is HttpVersion.h11 or self._svn is None
 
         # We MUST never use that header in h2 and h3 over quic.
         # Passing 'Connection' header is actually a protocol violation above h11.
@@ -1435,7 +1435,7 @@ class HfaceBackend(BaseBackend):
                 end_stream=should_end_stream,
             )
         except self._protocol.exceptions() as e:  # Defensive:
-            # overly protective, designed to avoid exception leak bellow urllib3.
+            # overly protective, designed to avoid exception leak below urllib3.
             raise ProtocolError(e) from e  # Defensive:
 
         try:

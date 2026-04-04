@@ -4,7 +4,8 @@ on:
   pull_request:
     types: [labeled, unlabeled, opened, reopened, synchronize]
 
-permissions: "read-all"
+permissions:
+  contents: read
 
 jobs:
   check-changelog-entry:
@@ -18,11 +19,14 @@ jobs:
           # `towncrier check` runs `git diff --name-only origin/main...`, which
           # needs a non-shallow clone.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: "Check changelog"
         if: "!contains(github.event.pull_request.labels.*.name, 'Skip Changelog')"
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if ! pipx run towncrier check --compare-with origin/${{ github.base_ref }}; then
+          if ! pipx run towncrier check --compare-with "origin/$BASE_REF"; then
           echo "Please see https://github.com/urllib3/urllib3/blob/main/changelog/README.rst for guidance."
             false
           fi

@@ -6,7 +6,8 @@ on:
       - main
   pull_request:
 
-permissions: "read-all"
+permissions:
+  contents: read
 
 concurrency:
   group: ci-dead-things-${{ github.ref_name }}
@@ -23,6 +24,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        with:
+          persist-credentials: false
 
       - name: "Run against Python 3.7 built with LibreSSL 2.7.4"
         run: ./ci/run_legacy_libressl.sh
@@ -35,6 +38,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        with:
+          persist-credentials: false
 
       - name: "Run against Python 3.7 built with OpenSSL 1.0.2q"
         run: ./ci/run_legacy_openssl.sh
@@ -47,6 +52,8 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        with:
+          persist-credentials: false
 
       - name: "Run against Python 3.12 built with Statically Linked OpenSSL"
         run: ./ci/run_static_openssl.sh

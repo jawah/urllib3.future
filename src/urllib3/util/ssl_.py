@@ -63,7 +63,7 @@ def _caller_id() -> _KnownCaller:
 def _compute_key_ctx_build(
     *args: str | bytes | int | Path | list[str] | bool | dict[str, typing.Any] | None,
 ) -> int:
-    """We want a dedicated hashing technics to cache ssl ctx, so that they are reusable across the runtime."""
+    """We want a dedicated hashing techniques to cache ssl ctx, so that they are reusable across the runtime."""
     key: str = ""
 
     for arg in args:
@@ -869,7 +869,7 @@ def is_capable_for_quic(
     Quickly uncover if passed parameters for HTTPSConnection does not exclude QUIC.
     Some parameters may defacto exclude HTTP/3 over QUIC.
     -> TLS 1.3 required
-    -> One of the three supported ciphers (listed bellow)
+    -> One of the three supported ciphers (listed below)
     """
     quic_disable: bool = False
 

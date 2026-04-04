@@ -264,7 +264,7 @@ class TestConnectionPool:
             with patch.object(conn1, "close") as conn1_close:
                 with patch.object(conn2, "close") as conn2_close:
                     pool._put_conn(conn1)
-                    # Bellow is disabled since the introduction of TrafficPolice scheduler.
+                    # Below is disabled since the introduction of TrafficPolice scheduler.
                     # Idle conn are automatically evicted.
                     # with pytest.raises(FullPoolError):
                     #     pool._put_conn(conn2)
@@ -384,7 +384,7 @@ class TestConnectionPool:
         with pytest.raises(ClosedPoolError):
             pool._get_conn()
 
-        # Bellow is disabled since the introduction of TrafficPolice scheduler.
+        # Below is disabled since the introduction of TrafficPolice scheduler.
         # with pytest.raises(Empty):
         #     assert old_pool_queue is not None
         #     old_pool_queue.get(block=False)
@@ -441,7 +441,7 @@ class TestConnectionPool:
         with pytest.raises(ClosedPoolError):
             pool._get_conn()
 
-        # Bellow is disabled since the introduction of TrafficPolice scheduler.
+        # Below is disabled since the introduction of TrafficPolice scheduler.
         # with pytest.raises(Empty):
         #     assert old_pool_queue is not None
         #     old_pool_queue.get(block=False)

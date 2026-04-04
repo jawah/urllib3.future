@@ -40,10 +40,13 @@ class ResolverFactory(metaclass=ABCMeta):
 
         implementations: list[tuple[str, type[BaseResolver]]] = inspect.getmembers(
             resolver_module,
-            lambda e: isinstance(e, type)
-            and issubclass(e, BaseResolver)
-            and (
-                (specifier is None and e.specifier is None) or specifier == e.specifier
+            lambda e: (
+                isinstance(e, type)
+                and issubclass(e, BaseResolver)
+                and (
+                    (specifier is None and e.specifier is None)
+                    or specifier == e.specifier
+                )
             ),
         )
 

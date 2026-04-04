@@ -73,7 +73,7 @@ class AsyncSocket:
         self._connect_called: bool = False
         self._established: asyncio.Event = asyncio.Event()
 
-        # we do that everytime to forward properly options / advanced settings
+        # we do that every time to forward properly options / advanced settings
         self._sock: socket.socket = socket.socket(
             family=self.family, type=self.type, proto=self.proto, fileno=fileno
         )
@@ -328,7 +328,7 @@ class AsyncSocket:
             assert self._writer is not None
             assert isinstance(self._writer, asyncio.StreamWriter)
 
-            # bellow is hard to maintain. Starting with 3.11+, it is useless.
+            # below is hard to maintain. Starting with 3.11+, it is useless.
             protocol = self._writer._protocol  # type: ignore[attr-defined]
             await self._writer.drain()
 

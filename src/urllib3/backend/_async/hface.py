@@ -632,7 +632,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if alt_key in self._preemptive_quic_cache:
                         del self._preemptive_quic_cache[alt_key]
 
-                # this avoid the close() to attempt re-use the (dead) sock
+                # this avoid the close() to attempt reuse the (dead) sock
                 self._protocol = None
 
                 # we don't want to force downgrade if the user specifically said
@@ -1334,7 +1334,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 end_stream=should_end_stream,
             )
         except self._protocol.exceptions() as e:  # Defensive:
-            # overly protective, designed to avoid exception leak bellow urllib3.
+            # overly protective, designed to avoid exception leak below urllib3.
             raise ProtocolError(e) from e  # Defensive:
 
         try:
