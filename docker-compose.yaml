@@ -86,7 +86,7 @@ services:
       - ./traefik:/usr/local/etc/haproxy
 
   httpbin:
-    image: mccutchen/go-httpbin:v2.17.0
+    image: mccutchen/go-httpbin:2.21
     restart: unless-stopped
     labels:
       - traefik.enable=true
