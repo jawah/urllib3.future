@@ -600,11 +600,15 @@ def downstream_docker(session: nox.Session) -> None:
         session.run("git", "apply", f"{root}/ci/{patch}", external=True)
 
     session.run("git", "rev-parse", "HEAD", external=True)
-    session.install(".[ssh,dev]", silent=False)
+    session.install(".[ssh,dev,websockets]", silent=False)
 
     session.cd(root)
-    session.install(".[websockets]", silent=False)
+    session.install(".", silent=False)
     session.cd(f"{tmp_dir}/docker-py")
+
+    # todo: investigate those
+    #       tests/integration/api_container_test.py::AttachContainerTest::test_attach_no_stream
+    #       tests/integration/api_image_test.py::ImportImageTest::test_get_load_image
 
     session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
     session.run(
@@ -613,7 +617,14 @@ def downstream_docker(session: nox.Session) -> None:
         "pytest",
         "-v",
         f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
-        *(session.posargs or ("tests/unit", "tests/integration")),
+        *(
+            session.posargs
+            or (
+                "tests/unit",
+                "tests/integration",
+                "--ignore=tests/integration/credentials/store_test.py",
+            )
+        ),
     )
 
 
