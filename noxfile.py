@@ -603,7 +603,7 @@ def downstream_docker(session: nox.Session) -> None:
     session.install(".[ssh,dev]", silent=False)
 
     session.cd(root)
-    session.install(".", silent=False)
+    session.install(".[websockets]", silent=False)
     session.cd(f"{tmp_dir}/docker-py")
 
     session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
@@ -613,7 +613,7 @@ def downstream_docker(session: nox.Session) -> None:
         "pytest",
         "-v",
         f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
-        *(session.posargs or ("tests/unit",)),
+        *(session.posargs or ("tests/unit", "tests/integration")),
     )
 
 
