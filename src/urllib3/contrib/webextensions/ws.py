@@ -140,12 +140,23 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
             raise OSError("The HTTP extension is closed or uninitialized")
 
         with self._police_officer.borrow(self._response):
+            text_buf: list[str] = []
+            bytes_buf: list[bytes] = []
+
             # we may have pending event to unpack!
             for event in self._protocol.events():
                 if isinstance(event, TextMessage):
-                    return event.data
+                    if event.message_finished and not text_buf:
+                        return event.data
+                    text_buf.append(event.data)
+                    if event.message_finished:
+                        return "".join(text_buf)
                 elif isinstance(event, BytesMessage):
-                    return event.data
+                    if event.message_finished and not bytes_buf:
+                        return event.data
+                    bytes_buf.append(event.data)
+                    if event.message_finished:
+                        return b"".join(bytes_buf)
                 elif isinstance(event, CloseConnection):
                     self._remote_shutdown = True
                     self.close()
@@ -172,9 +183,17 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
 
                 for event in self._protocol.events():
                     if isinstance(event, TextMessage):
-                        return event.data
+                        if event.message_finished and not text_buf:
+                            return event.data
+                        text_buf.append(event.data)
+                        if event.message_finished:
+                            return "".join(text_buf)
                     elif isinstance(event, BytesMessage):
-                        return event.data
+                        if event.message_finished and not bytes_buf:
+                            return event.data
+                        bytes_buf.append(event.data)
+                        if event.message_finished:
+                            return b"".join(bytes_buf)
                     elif isinstance(event, CloseConnection):
                         self._remote_shutdown = True
                         self.close()
