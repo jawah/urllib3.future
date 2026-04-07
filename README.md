@@ -6,9 +6,6 @@
   <a href="https://pypi.org/project/urllib3-future"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/urllib3-future.svg?maxAge=86400" /></a>
   <a href="https://pypi.org/project/urllib3-future"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3-future.svg?maxAge=86400" /></a>
   <br><small>urllib3.future is as BoringSSL is to OpenSSL but to urllib3 (but with available support!)</small>
-  <br><small>✨🍰 Enjoy HTTP like its 2025 🍰✨</small>
-  <br><small>💰 Promotional offer, get everything and more for <del>40k</del> <b>0</b>$!</small>
-  <br><small>Wondering why and how this fork exist? Why urllib3 is stuck? <a href="https://medium.com/@ahmed.tahri/revived-the-promise-made-six-years-ago-for-requests-3-37b440e6a064">Take a peek at this article!</a></small>
 </p>
 
 ⚡ urllib3.future is a powerful, *user-friendly* HTTP client for Python.<br>
@@ -100,48 +97,57 @@ URLLIB3_NO_OVERRIDE=1 python -m pip install urllib3.future --no-binary urllib3.f
 import urllib3_future
 ```
 
+## Background
+
+In 2018, a Requests 3 was announced with plans for async and HTTP/2 support, backed by a ~$30k fundraiser.
+The work never materialized. Requests entered a feature freeze, and urllib3 -- its foundation --
+showed no signs of pursuing HTTP/2 support on its own.
+
+A [contribution bringing HTTP/2 support to urllib3](https://github.com/urllib3/urllib3/pull/3030)
+was proposed but abandoned after months without review. Shortly after [they discovered urllib3-future](https://github.com/jawah/urllib3.future/issues/46), urllib3 launched [its fundraiser](https://sethmlarson.dev/urllib3-is-fundraising-for-http2-support) seeking ~$40-50k USD
+for HTTP/2 support alone. The work around this complex milestone, since, is very stale.
+
+urllib3-future starts on a simple premise: HTTP/2 has been a finalized standard for well over a decade, and we should
+be able to leverage it without asking the massive community to shift toward yet another http client. It's exhausting
+for developers to shift around fundamental libraries.
+
 ## Notes / Frequently Asked Questions
 
 - **It's a fork**
 
-⚠️ Installing urllib3.future shadows the actual urllib3 package.
+urllib3.future is a backward-compatible fork that extends urllib3 with HTTP/2 and HTTP/3 support.
+When installed, it takes precedence over urllib3 to provide a consistent environment.
 The semver will always be like _MAJOR.MINOR.9PP_ like 2.0.941, the patch node is always greater or equal to 900.
 
 Support for bugs or improvements is served in this repository. We regularly sync this fork
 with the main branch of urllib3/urllib3 against bugfixes and security patches if applicable.
 
-This package is a real drop-in replacement, 100% compatible with its predecessor. Found anything not compatible? We'll fix it.
+This package is a drop-in replacement, fully compatible with its predecessor. Found anything not compatible? We'll fix it.
 
-- **Why replacing urllib3 when it is maintained?**
+- **Why fork urllib3 instead of contributing upstream?**
 
-Progress does not necessarily mean to be a revisionist, first we need to embrace
-what was graciously made by our predecessors. So much knowledge has been poured into this that
-we must just extend it.
+We built on the considerable work poured into urllib3 rather than starting from scratch.
+We attempted to participate in urllib3 development but found ourselves in disagreement on the path forward.
+This happens regularly in open source, even on the largest projects (e.g. OpenSSL vs BoringSSL, MySQL vs MariaDB).
 
-We attempted to participate in urllib3 development only to find that we were in disagreement on how
-to proceed. It happens all the time, even on the biggest projects out there (e.g. OpenSSL vs BoringSSL or NSS or LibreSSL...)
+- **Why does urllib3-future take precedence over urllib3?**
 
-- **OK, but I got there because I saw that urllib3 was replaced in my environment!**
+Python packaging has no native concept of one package replacing another.
+When both are present (e.g. via transitive dependencies), package managers may install them concurrently,
+leaving the `urllib3` namespace in an inconsistent state.
+urllib3-future resolves this by ensuring its own code is what sits behind `import urllib3`.
 
-Since Forks are allowed (fortunately for us); It how package manager do things.
+Backward compatibility is treated as a top priority. We continuously test this fork against the most
+widely used packages that depend on urllib3, including those that rely on urllib3 internals.
 
-We know how sensible this matter is, this is why we are obligated to ensure the highest
-level of compatibility and a fast support in case anything happen. We are probably going to be
-less forgiven in case of bugs than the original urllib3. For understandable reasons, we know.
+Most users are not fully aware of their transitive dependencies -- urllib3 is typically pulled in
+automatically regardless of your preferences. urllib3-future ensures that when it is present, the
+environment is deterministic.
 
-The matter is taken with utmost seriousness and everyone can inspect this package at will.
+- **Why an in-place fork rather than a separate package?**
 
-We regularly test this fork against the most used packages (that depend on urllib3, especially those who plunged deep into urllib3 internals).
-
-Finally, rare is someone "fully aware" of their transitive dependencies. And "urllib3" is forced
-into your environments regardless of your preferences.
-
-- **Wasn't there any other solution than having an in-place fork?**
-
-We assessed many solutions but none were completely satisfying.
-We agree that this solution isn't perfect and actually put a lot of pressure on us (urllib3-future).
-
-Here are some of the reasons (not exhaustive) we choose to work this way:
+We evaluated several approaches. An in-place fork carries real constraints, but the alternatives
+were not viable given the ecosystem's structure:
 
 > **A)** Some major companies may not be able to modify production code but can change/swap dependencies.
 >
@@ -156,7 +162,34 @@ Here are some of the reasons (not exhaustive) we choose to work this way:
 > **D)** Some of our partners noticed that HTTP/1 is being disabled by some web services in favor of HTTP/2+.
 > This fork can unblock them at almost zero cost.
 
-- **OK... then what do I gain from this?**
+- **Why not use an opt-in extra or a public inject function instead?**
+
+These alternatives were considered and fail for the same fundamental reason:
+
+> **"Make it an opt-in extra"** (e.g. `pip install urllib3-future[override]`): Once any single package
+> in your dependency tree activates the extra, every other package in the environment is affected.
+> The person who chose the extra is rarely the person who is surprised by the result. It creates
+> the same outcome as the current approach, but with a false sense of user consent.
+>
+> **"Expose a public `inject_into_urllib3()` function"**: If any library calls this function at import
+> time, the effect propagates to every other library in the process. This is equivalent to a
+> `sys.modules` hack that silently redirects imports -- the same end result, but hidden inside
+> application code instead of being visible in the packaging layer. It also introduces
+> unpredictable behavior depending on import order.
+>
+> Both approaches converge to the same outcome as the current mechanism, but add indirection
+> that makes the behavior harder to audit and reason about. The `.pth` approach is at least
+> explicit: it lives in a single inspectable file in site-packages, operates before any user
+> code runs, and is deterministic regardless of import order.
+>
+> There is also a practical paradox: the user who objects to the override most likely wants
+> `import urllib3` to work exactly as before -- no extra steps, no adapter code. But the
+> opt-out path (keeping both packages side by side) is precisely the one that breaks that
+> expectation, since downstream packages that import urllib3 directly will not see
+> urllib3-future's improvements. The default behavior is the one that gives the seamless,
+> zero-friction experience most users actually want.
+
+- **What do I gain from this?**
 
 1. It is faster than its counterpart, we measured gain up to 2X faster in a multithreaded environment using a http2 endpoint.
 2. It works well with gevent / does not conflict. We do not use the standard queue class from stdlib as it does not fit http2+ constraints.
@@ -172,10 +205,10 @@ Here are some of the reasons (not exhaustive) we choose to work this way:
 
 Yes! We have some funds coming in regularly to ensure its sustainability.
 
-- **How can I restore urllib3 to the "legacy" version?**
+- **How do I keep urllib3 and urllib3-future side by side?**
 
-You still have a choice on your best discretion.
-Let's say you want to install Niquests and keep BOTH urllib3 and urllib3-future, do:
+You can install both packages independently. For example, to install Niquests
+while keeping the original urllib3 untouched:
 
 <details>
   <summary>👆 <b>pip</b></summary>
@@ -243,32 +276,44 @@ uv add niquests  # sync / pip / ...
 ```
 </details>
 
-This applies to every package you wish to install and brings indirectly urllib3-future.
-This enforces strict separation between urllib3 and urllib3-future.
-You will lose the perfect in-place backward compatibility without further deep compatibility hacks.
+This applies to any package that transitively depends on urllib3-future.
+It enforces strict separation between urllib3 and urllib3-future.
+Note that without the in-place upgrade, some downstream packages that import urllib3 directly
+will not benefit from urllib3-future's improvements.
 
-- **Can you guarantee us that everything will go smooth?**
+- **How is compatibility ensured?**
 
-Guarantee is a strong word with a lot of (legal) implication. We cannot offer a "guarantee".
-Yet, we answer and solve issues in a timely manner as you may have seen in our tracker.
+Every change goes through multiple layers of verification before it can land:
 
-We take a lot of precaution with this fork, and we welcome any contribution at the sole condition
-that you don't break the compatibility between the projects. Namely, urllib3 and urllib3-future.
+**1. Upstream test suite.** We maintain the full urllib3 test suite and enforce it in CI.
+Every test that passes against upstream urllib3 must also pass against urllib3-future.
+This is the baseline that guarantees API and behavioral parity.
 
-Every software is subject to bugs no matter what we do.
+**2. Downstream integration tests.** On every push to `main` and every pull request, we
+automatically clone and run the test suites of major projects that depend on urllib3:
 
-This being said, rest assured, we kept all the tests from urllib3 to ensure that what was
-guaranteed by upstream is also carefully watched down there. See the CI/pipeline for yourself.
+| Project                | Why it matters                                                                                 |
+|------------------------|------------------------------------------------------------------------------------------------|
+| **Requests**           | The most widely used HTTP client in Python; exercises urllib3's public API surface extensively |
+| **Niquests**           | Drop-in replacement for Requests, exercises urllib3-future's extended capabilities             |
+| **botocore**           | The foundation of AWS SDK for Python; deeply coupled to urllib3 internals                      |
+| **boto3**              | AWS SDK high-level API; built on top of botocore                                               |
+| **Sphinx**             | Documentation generator used across the ecosystem; uses urllib3 for link checking              |
+| **docker-py**          | Official Docker SDK for Python; exercises connection pooling and streaming                     |
+| **clickhouse-connect** | ClickHouse database client; exercises chunked transfer and streaming edge cases                |
 
-In addition to that, we enforced key integration tests to watch how urllib3-future acts with some critical projects.
+These are not toy tests -- they are the actual upstream test suites of each project, run
+against the latest `main` of both urllib3-future and the downstream project. If any of
+them breaks, the CI pipeline fails and the change does not merge.
 
-Top-priorities issues are those impacting users with the "shadowing" part. Meaning, if a user is suffering
-an error or something that ends up causing an undesirable outcome from a third-party library that leverage urllib3.
+**3. Priority policy.** Compatibility issues affecting downstream packages are treated
+as top-priority bugs. A regression that breaks a library using urllib3 through its
+public API is treated with the same urgency as a security issue.
 
-- **Can I contribute to this?**
+- **Can I contribute?**
 
-Yes! But keep in mind that it is going to be hard to contribute as we have huge constraints.
-Some of them: Python 3.7+, OpenSSL <1.1.1,>1, LibreSSL, Downstream Perfect Compat, API Compatibility with urllib3, and so on.
+Yes! Contributing to this project is a rewarding challenge due to the breadth of constraints:
+Python 3.7+, OpenSSL <1.1.1,>1, LibreSSL, downstream compatibility, API parity with urllib3, and more.
 
 If you like a good challenge, then this project will definitely suit you.
 
@@ -302,14 +347,11 @@ Finally make sure to fix any lint errors:
 nox -s lint
 ```
 
-- **OS Package Managers, beware!**
+- **For OS package maintainers**
 
-Fellow OS package maintainers: you cannot _simply_ build and ship this package to your package registry.
-As it override `urllib3` and due to its current criticality, you'll have to set:
-
-`URLLIB3_NO_OVERRIDE=1 python -m build`. Set `URLLIB3_NO_OVERRIDE` variable with any value.
-
-It will prevent the override.
+When packaging for a distribution registry, set `URLLIB3_NO_OVERRIDE=1` during the build
+(e.g. `URLLIB3_NO_OVERRIDE=1 python -m build`). This prevents the in-place upgrade behavior,
+which is appropriate for environments where the OS package manager controls package namespaces.
 
 ## Compatibility with downstream
 
