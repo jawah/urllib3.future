@@ -139,10 +139,10 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        with self._police_officer.borrow(self._response):
-            text_buf: list[str] = []
-            bytes_buf: list[bytes] = []
+        text_buf: list[str] = []
+        bytes_buf: list[bytes] = []
 
+        with self._police_officer.borrow(self._response):
             # we may have pending event to unpack!
             for event in self._protocol.events():
                 if isinstance(event, TextMessage):
