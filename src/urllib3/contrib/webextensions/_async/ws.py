@@ -139,12 +139,23 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
+        text_buf: list[str] = []
+        bytes_buf: list[bytes] = []
+
         async with self._police_officer.borrow(self._response):
             for event in self._protocol.events():
                 if isinstance(event, TextMessage):
-                    return event.data
+                    if event.message_finished and not text_buf:
+                        return event.data
+                    text_buf.append(event.data)
+                    if event.message_finished:
+                        return "".join(text_buf)
                 elif isinstance(event, BytesMessage):
-                    return event.data
+                    if event.message_finished and not bytes_buf:
+                        return event.data
+                    bytes_buf.append(event.data)
+                    if event.message_finished:
+                        return b"".join(bytes_buf)
                 elif isinstance(event, CloseConnection):
                     self._remote_shutdown = True
                     await self.close()
@@ -170,9 +181,17 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
 
                 for event in self._protocol.events():
                     if isinstance(event, TextMessage):
-                        return event.data
+                        if event.message_finished and not text_buf:
+                            return event.data
+                        text_buf.append(event.data)
+                        if event.message_finished:
+                            return "".join(text_buf)
                     elif isinstance(event, BytesMessage):
-                        return event.data
+                        if event.message_finished and not bytes_buf:
+                            return event.data
+                        bytes_buf.append(event.data)
+                        if event.message_finished:
+                            return b"".join(bytes_buf)
                     elif isinstance(event, CloseConnection):
                         self._remote_shutdown = True
                         await self.close()
