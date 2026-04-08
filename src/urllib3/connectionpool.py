@@ -1281,9 +1281,20 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             and conn.conn_info is not None
             and conn.conn_info.http_version is not None
         ):
-            extension_headers = extension.headers(conn.conn_info.http_version)
+            extension_headers = HTTPHeaderDict(
+                extension.headers(conn.conn_info.http_version)
+            )
 
             if extension_headers:
+                # allow overriding "Accept"
+                # see https://github.com/jawah/urllib3.future/pull/333
+                if (
+                    headers is not None
+                    and "Accept" in headers
+                    and "Accept" in extension_headers
+                ):
+                    extension_headers["Accept"] = headers["Accept"]
+
                 if headers is None:
                     headers = extension_headers
                 elif hasattr(headers, "copy"):
