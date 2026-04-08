@@ -1,3 +1,10 @@
+2.19.903 (2026-04-08)
+=====================
+
+- Reverted user-supplied headers now take precedence over extension defaults. (#333)
+- Fixed WebSocket ``next_payload()`` to correctly reassemble fragmented messages by buffering intermediate frames until ``message_finished`` is received.
+- Allowed overriding ``Accept`` header as a compromise to the revert of #333.
+
 2.19.902 (2026-04-04)
 =====================
 

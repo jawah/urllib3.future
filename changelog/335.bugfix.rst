@@ -1,1 +1,0 @@
-Fixed WebSocket ``next_payload()`` to correctly reassemble fragmented messages by buffering intermediate frames until ``message_finished`` is received.
