@@ -1286,11 +1286,17 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             if extension_headers:
                 if headers is None:
                     headers = extension_headers
+                elif hasattr(headers, "copy"):
+                    headers = headers.copy()
+                    headers.update(extension_headers)  # type: ignore[union-attr]
                 else:
-                    # User-provided headers take precedence over
-                    # extension defaults (case-insensitive merge).
-                    merged_headers = HTTPHeaderDict(extension_headers)
-                    merged_headers.update(headers)
+                    merged_headers = HTTPHeaderDict()
+
+                    for k, v in headers.items():
+                        merged_headers.add(k, v)
+                    for k, v in extension_headers.items():
+                        merged_headers.add(k, v)
+
                     headers = merged_headers
         else:
             extension = None
