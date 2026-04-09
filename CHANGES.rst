@@ -1,3 +1,8 @@
+2.19.904 (2026-04-09)
+=====================
+
+- Fixed race condition where asyncio transport is closed and freed (via asyncio internals) before our own procedure. (https://github.com/jawah/niquests/issues/368)
+
 2.19.903 (2026-04-08)
 =====================
 
