@@ -131,8 +131,16 @@ class AsyncSocket:
             pass
 
     def close(self) -> None:
+        """The closing procedure is a real challenge. There's a ton of edge cases. Act carefully around this method."""
         if self._writer is not None:
-            self._writer.close()
+            try:
+                self._writer.close()
+            except AttributeError:  # Defensive: rare racing condition where transport is freed but writer isn't fully freed yet.
+                self._connect_called = False
+                self._established.clear()
+                self._writer = None
+                self._reader = None
+                return  # see https://github.com/jawah/niquests/issues/368 to learn more
 
         edge_case_close_bug_exist = _CPYTHON_SELECTOR_CLOSE_BUG_EXIST
 
