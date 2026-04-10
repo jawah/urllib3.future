@@ -17,7 +17,6 @@ from ..system import SystemResolver
 from ..utils import (
     is_ipv4,
     is_ipv6,
-    packet_fragment,
     rfc1035_pack,
     rfc1035_should_read,
     rfc1035_unpack,
@@ -251,14 +250,14 @@ class PlainResolver(BaseResolver):
                         "Got unexpectedly disconnected while waiting for name resolution"
                     )
 
-                pending_raw_identifiers = [_.raw_id for _ in self._pending]
-
                 for payload in payloads:
-                    #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
+                    #: DoT (rfc1035) may carry multiple DNS messages in a single
+                    #: length-prefixed stream segment. UDP always delivers one
+                    #: datagram = one DNS message (GRO already splits for us).
                     if self._rfc1035_prefix_mandated is True:
                         fragments = rfc1035_unpack(payload)
                     else:
-                        fragments = packet_fragment(payload, *pending_raw_identifiers)
+                        fragments = (payload,)
 
                     for fragment in fragments:
                         dns_resp = DomainNameServerReturn(fragment)

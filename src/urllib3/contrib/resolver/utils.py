@@ -92,54 +92,6 @@ def inet6_ntoa(address: bytes) -> str:
     return thex
 
 
-def packet_fragment(payload: bytes, *identifiers: bytes) -> tuple[bytes, ...]:
-    """Split a coalesced UDP payload into individual DNS messages.
-
-    Each identifier is a 2-byte transaction ID from a pending query.
-    We find message boundaries by locating these IDs at positions where they
-    form the start of a valid DNS header (QDCOUNT == 1).
-    """
-    if len(payload) < 12:
-        raise ValueError(
-            "no identifiable dns message emerged from given payload. "
-            "this should not happen at all. networking issue?"
-        )
-
-    id_set = set(identifiers)
-    # Collect start positions of valid DNS messages
-    boundaries: list[int] = []
-
-    pos = 0
-    while pos <= len(payload) - 12:
-        # Check if the 2-byte ID at this position matches any pending query
-        candidate_id = payload[pos : pos + 2]
-        if candidate_id in id_set:
-            # Validate: QDCOUNT (bytes 4-5) should be 1 for any response to our queries
-            qdcount = struct.unpack("!H", payload[pos + 4 : pos + 6])[0]
-            if qdcount == 1:
-                boundaries.append(pos)
-                # Skip past the header to avoid false matches within this message's body
-                pos += 12
-                continue
-        pos += 1
-
-    if not boundaries:
-        raise ValueError(
-            "no identifiable dns message emerged from given payload. "
-            "this should not happen at all. networking issue?"
-        )
-
-    if len(boundaries) == 1:
-        return (payload,)
-
-    results: list[bytes] = []
-    for i in range(len(boundaries) - 1):
-        results.append(payload[boundaries[i] : boundaries[i + 1]])
-    results.append(payload[boundaries[-1] :])
-
-    return tuple(results)
-
-
 def is_ipv4(addr: str) -> bool:
     try:
         socket.inet_aton(addr)
@@ -275,7 +227,6 @@ def parse_https_rdata(rdata: bytes) -> HttpsRecord:
 __all__ = (
     "inet4_ntoa",
     "inet6_ntoa",
-    "packet_fragment",
     "is_ipv4",
     "is_ipv6",
     "validate_length_of",
