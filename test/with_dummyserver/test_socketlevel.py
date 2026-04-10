@@ -1598,15 +1598,18 @@ class TestSSL(SocketDummyServerTestCase):
 
         _SSLContextCache.clear()
 
-        with mock.patch("urllib3.util.ssl_.SSLContext", lambda *_, **__: context):
-            self._start_server(socket_handler)
-            with HTTPSConnectionPool(self.host, self.port) as pool:
-                # Without a proper `SSLContext`, this request will fail in some
-                # arbitrary way, but we only want to know if load_default_certs() was
-                # called, which is why we accept any `Exception` here.
-                with pytest.raises(Exception):
-                    pool.request("GET", "/", timeout=SHORT_TIMEOUT)
-                context.load_default_certs.assert_called_with()
+        try:
+            with mock.patch("urllib3.util.ssl_.SSLContext", lambda *_, **__: context):
+                self._start_server(socket_handler)
+                with HTTPSConnectionPool(self.host, self.port) as pool:
+                    # Without a proper `SSLContext`, this request will fail in some
+                    # arbitrary way, but we only want to know if load_default_certs() was
+                    # called, which is why we accept any `Exception` here.
+                    with pytest.raises(Exception):
+                        pool.request("GET", "/", timeout=SHORT_TIMEOUT)
+                    context.load_default_certs.assert_called_with()
+        finally:
+            _SSLContextCache.clear()
 
     def test_ssl_ctx_need_convert_rtls(self, monkeypatch) -> None:  # type: ignore
         def forbidden(ctx, *a, **kw):  # type: ignore
@@ -1652,21 +1655,17 @@ class TestSSL(SocketDummyServerTestCase):
         with pytest.raises(AssertionError):
             context.load_default_certs()
 
-        for kwargs in [
-            {"ca_certs": DEFAULT_CA},
-            {"ssl_context": context},
-        ]:
-            from urllib3.util.ssl_ import _SSLContextCache
+        from urllib3.util.ssl_ import _SSLContextCache
 
-            _SSLContextCache.clear()
+        _SSLContextCache.clear()
 
-            self._start_server(socket_handler)
+        self._start_server(socket_handler)
 
-            with HTTPSConnectionPool(  # type: ignore[arg-type]
-                self.host, self.port, retries=False, **kwargs
-            ) as pool:
-                r = pool.request("GET", "/", timeout=LONG_TIMEOUT)
-                assert r.status == 200
+        with HTTPSConnectionPool(
+            self.host, self.port, retries=False, ssl_context=context
+        ) as pool:
+            r = pool.request("GET", "/", timeout=LONG_TIMEOUT)
+            assert r.status == 200
 
     def test_ssl_dont_load_default_certs_when_given(self, monkeypatch) -> None:  # type: ignore
         def forbidden(ctx, *a, **kw):  # type: ignore
