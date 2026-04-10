@@ -268,11 +268,12 @@ class PlainResolver(BaseResolver):
 
                             query_tbr: DomainNameServerQuery | None = None
 
-                            for query_tbr in self._pending:
-                                if query_tbr.id == dns_resp.id:
+                            for pending_q in self._pending:
+                                if pending_q.id == dns_resp.id:
+                                    query_tbr = pending_q
                                     break
 
-                            if query_tbr:
+                            if query_tbr is not None:
                                 self._pending.remove(query_tbr)
                         else:
                             self._unconsumed.append(dns_resp)

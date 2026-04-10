@@ -93,62 +93,49 @@ def inet6_ntoa(address: bytes) -> str:
 
 
 def packet_fragment(payload: bytes, *identifiers: bytes) -> tuple[bytes, ...]:
-    results = []
+    """Split a coalesced UDP payload into individual DNS messages.
 
-    offset = 0
-
-    start_packet_idx = []
-    lead_identifier = None
-
-    for identifier in identifiers:
-        idx = payload[:12].find(identifier)
-
-        if idx == -1:
-            continue
-
-        if idx != 0:
-            offset = idx
-
-        start_packet_idx.append(idx - offset)
-
-        lead_identifier = identifier
-        break
-
-    for identifier in identifiers:
-        if identifier == lead_identifier:
-            continue
-
-        if offset == 0:
-            idx = payload.find(b"\x02" + identifier)
-        else:
-            idx = payload.find(identifier)
-
-        if idx == -1:
-            continue
-
-        start_packet_idx.append(idx - offset)
-
-    if not start_packet_idx:
+    Each identifier is a 2-byte transaction ID from a pending query.
+    We find message boundaries by locating these IDs at positions where they
+    form the start of a valid DNS header (QDCOUNT == 1).
+    """
+    if len(payload) < 12:
         raise ValueError(
             "no identifiable dns message emerged from given payload. "
             "this should not happen at all. networking issue?"
         )
 
-    if len(start_packet_idx) == 1:
+    id_set = set(identifiers)
+    # Collect start positions of valid DNS messages
+    boundaries: list[int] = []
+
+    pos = 0
+    while pos <= len(payload) - 12:
+        # Check if the 2-byte ID at this position matches any pending query
+        candidate_id = payload[pos : pos + 2]
+        if candidate_id in id_set:
+            # Validate: QDCOUNT (bytes 4-5) should be 1 for any response to our queries
+            qdcount = struct.unpack("!H", payload[pos + 4 : pos + 6])[0]
+            if qdcount == 1:
+                boundaries.append(pos)
+                # Skip past the header to avoid false matches within this message's body
+                pos += 12
+                continue
+        pos += 1
+
+    if not boundaries:
+        raise ValueError(
+            "no identifiable dns message emerged from given payload. "
+            "this should not happen at all. networking issue?"
+        )
+
+    if len(boundaries) == 1:
         return (payload,)
 
-    start_packet_idx = sorted(start_packet_idx)
-
-    previous_idx = None
-
-    for idx in start_packet_idx:
-        if previous_idx is None:
-            previous_idx = idx
-            continue
-        results.append(payload[previous_idx:idx])
-        previous_idx = idx
-
-    results.append(payload[previous_idx:])
+    results: list[bytes] = []
+    for i in range(len(boundaries) - 1):
+        results.append(payload[boundaries[i] : boundaries[i + 1]])
+    results.append(payload[boundaries[-1] :])
 
     return tuple(results)
 
@@ -296,4 +283,5 @@ __all__ = (
     "rfc1035_unpack",
     "rfc1035_should_read",
     "parse_https_rdata",
+    "read_name",
 )
