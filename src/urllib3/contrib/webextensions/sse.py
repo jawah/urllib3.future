@@ -123,23 +123,32 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
         if self._response is None or self._stream is None:
             raise OSError("The HTTP extension is closed or uninitialized")
         with self._lock:
-            try:
-                raw_payload: str = next(self._stream).decode("utf-8")
-            except StopIteration:
-                self._stream = None
-                return None
+            # Read chunks until the buffer contains at least one complete
+            # event (terminated by a blank line: \n\n or \r\n\r\n).
+            while "\n\n" not in self._buffer and "\r\n\r\n" not in self._buffer:
+                try:
+                    self._buffer += next(self._stream).decode("utf-8")
+                except StopIteration:
+                    self._stream = None
+                    return None
 
-            if self._buffer:
-                raw_payload = self._buffer + raw_payload
-                self._buffer = ""
+            # Locate the first event boundary.
+            lf = self._buffer.find("\n\n")
+            crlf = self._buffer.find("\r\n\r\n")
+
+            if crlf != -1 and (lf == -1 or crlf < lf):
+                boundary, sep_len = crlf, 4
+            else:
+                boundary, sep_len = lf, 2
+
+            event_text = self._buffer[:boundary]
+            self._buffer = self._buffer[boundary + sep_len :]
 
             kwargs: dict[str, typing.Any] = {}
-            eot = False
 
-            for line in raw_payload.splitlines():
+            for line in event_text.splitlines():
                 if not line:
-                    eot = True
-                    break
+                    continue
                 key, _, value = line.partition(":")
                 if key not in {"event", "data", "retry", "id"}:
                     continue
@@ -155,8 +164,7 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
                         continue
                 kwargs[key] = value
 
-            if eot is False:
-                self._buffer = raw_payload
+            if not kwargs:
                 return self.next_payload(raw=raw)  # type: ignore[call-overload,no-any-return]
 
             if "id" not in kwargs and self._last_event_id is not None:
@@ -168,7 +176,7 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
                 self._last_event_id = event.id
 
             if raw is True:
-                return raw_payload
+                return event_text + "\n\n"
 
             return event
 
