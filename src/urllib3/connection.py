@@ -58,7 +58,7 @@ from .exceptions import (
 )
 from .util import SKIP_HEADER, SKIPPABLE_HEADERS
 from .util.request import body_to_chunks
-from .util.ssl_ import assert_fingerprint as _assert_fingerprint
+from .util.ssl_ import assert_fingerprint as _assert_fingerprint, convert_ssl_ctx_rtls
 from .util.ssl_ import (
     is_capable_for_quic,
     is_ipaddress,
@@ -730,6 +730,9 @@ class HTTPSConnection(HTTPConnection):
         key_data: str | bytes | None = None,
         ciphers: str | None = None,
     ) -> None:
+        if ssl_context is not None:
+            ssl_context = convert_ssl_ctx_rtls(ssl_context)
+
         if not is_capable_for_quic(ssl_context, ssl_maximum_version):
             if disabled_svn is None:
                 disabled_svn = set()

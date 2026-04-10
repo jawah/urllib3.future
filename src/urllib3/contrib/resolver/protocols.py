@@ -18,7 +18,7 @@ from ...exceptions import LocationParseError
 from ...util.connection import _set_socket_options, allowed_gai_family
 from ...util.ssl_match_hostname import CertificateError, match_hostname
 from ...util.timeout import _DEFAULT_TIMEOUT
-from .utils import inet4_ntoa, inet6_ntoa, parse_https_rdata
+from .utils import inet4_ntoa, inet6_ntoa, parse_https_rdata, read_name
 
 if typing.TYPE_CHECKING:
     from .utils import HttpsRecord
@@ -583,51 +583,51 @@ class DomainNameServerReturn:
             self._qd_count = up[2]
             self._an_count = up[3]
 
-            self._rcode = int(f"0x{hex(payload[3])[-1]}", 16)
+            self._rcode = payload[3] & 0x0F
 
-            self._hostname: str = ""
-
-            idx = 12
-
-            while True:
-                c = payload[idx]
-
-                if c == 0:
-                    idx += 1
-                    break
-
-                self._hostname += payload[idx + 1 : idx + 1 + c].decode("ascii") + "."
-
-                idx += c + 1
+            # Parse QNAME using read_name which handles compression pointers (0xC0xx)
+            self._hostname, idx = read_name(payload, 12)
 
             self._records: list[tuple[SupportedQueryType, int, str | HttpsRecord]] = []
 
             if self._an_count:
+                # Skip QTYPE (2 bytes) and QCLASS (2 bytes) after QNAME
                 idx += 4
 
                 while idx < len(payload):
-                    up = struct.unpack("!HHHI", payload[idx : idx + 10])
-                    entry_size = struct.unpack("!H", payload[idx + 10 : idx + 12])[0]
+                    # Parse the answer NAME field (may be a compression pointer or full label)
+                    _, idx = read_name(payload, idx)
 
-                    data = payload[idx + 12 : idx + 12 + entry_size]
+                    # Read TYPE (2), CLASS (2), TTL (4), RDLENGTH (2) = 10 bytes
+                    rr_type, rr_class, rr_ttl = struct.unpack(
+                        "!HHI", payload[idx : idx + 8]
+                    )
+                    entry_size = struct.unpack("!H", payload[idx + 8 : idx + 10])[0]
 
-                    if len(data) == 4:
-                        decoded_data: str | HttpsRecord = inet4_ntoa(data)
-                    elif len(data) == 16:
+                    data = payload[idx + 10 : idx + 10 + entry_size]
+
+                    idx += 10 + entry_size
+
+                    # Dispatch based on the TYPE field, not data length
+                    try:
+                        query_type = SupportedQueryType(rr_type)
+                    except ValueError:
+                        # Unknown/unsupported record type (e.g. CNAME, SOA) -- skip
+                        continue
+
+                    decoded_data: str | HttpsRecord
+                    if query_type == SupportedQueryType.A:
+                        decoded_data = inet4_ntoa(data)
+                    elif query_type == SupportedQueryType.AAAA:
                         decoded_data = inet6_ntoa(data)
-                    elif data:
+                    elif query_type == SupportedQueryType.HTTPS:
+                        if not data:
+                            continue
                         decoded_data = parse_https_rdata(data)
                     else:
                         continue
 
-                    try:
-                        self._records.append(
-                            (SupportedQueryType(up[1]), up[-1], decoded_data)
-                        )
-                    except ValueError:
-                        pass
-
-                    idx += 12 + entry_size
+                    self._records.append((query_type, rr_ttl, decoded_data))
         except (struct.error, IndexError, ValueError, UnicodeDecodeError) as e:
             raise DomainNameServerParseException(
                 "A protocol error occurred while parsing the DNS response payload: "

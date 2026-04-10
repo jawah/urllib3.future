@@ -889,3 +889,78 @@ def is_capable_for_quic(
         quic_disable = True
 
     return not quic_disable
+
+
+def convert_ssl_ctx_rtls(ctx: ssl.SSLContext) -> ssl.SSLContext:
+    """Attempt to convert stdlib SSLContext to rtls SSLContext. Best effort only."""
+    if "Rustls" not in ssl.OPENSSL_VERSION:
+        return ctx
+
+    if hasattr(ctx, "set_ech_configs"):  # already rtls context, exit early.
+        return ctx
+
+    import ssl as stdlib_ssl
+
+    ssl_ctx_have_certs: bool = (
+        "x509_ca" in ctx.cert_store_stats() and ctx.cert_store_stats()["x509_ca"] > 0
+    )
+
+    ca_cert_data: str | None = None
+
+    if ssl_ctx_have_certs:
+        ctx_root_certificates: list[bytes] = ctx.get_ca_certs(True)
+
+        if ctx_root_certificates:
+            ca_cert_data = "\n".join(
+                stdlib_ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
+            )
+
+    rtls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    rtls_ctx.verify_mode = ssl.VerifyMode(int(ctx.verify_mode))
+
+    if ca_cert_data:
+        rtls_ctx.load_verify_locations(cadata=ca_cert_data)
+    else:
+        rtls_ctx.load_default_certs()
+
+    opt_match_no_tls: bool = False
+
+    try:
+        if stdlib_ssl.OP_NO_TLSv1_3 in ctx.options:
+            rtls_ctx.options |= ssl.OP_NO_TLSv1_3
+            opt_match_no_tls = True
+        if stdlib_ssl.OP_NO_TLSv1_2 in ctx.options:
+            rtls_ctx.options |= ssl.OP_NO_TLSv1_2
+            opt_match_no_tls = True
+    except TypeError:
+        # TODO: Investigate this weird edge case.
+        #       Debug info:
+        #         print(stdlib_ssl.OP_NO_TLSv1_3.__class__ == ssl.Options)  # False
+        #         print(stdlib_ssl.OP_NO_TLSv1_3.__class__ == stdlib_ssl.Options)  # True
+        #         print(ctx.options.__class__ == ssl.Options)  # False
+        #         print(ctx.options.__class__ == stdlib_ssl.Options)  # False
+        #         print(ctx.options.__class__)  # <flag 'Options'>
+        #         print(ctx.options.__module__) # ssl
+        #         print(isinstance(ctx.options, stdlib_ssl.Options))  # False
+        #         print(isinstance(ctx.options, ssl.Options))  # False
+        #         print(isinstance(ctx.options, enum.IntEnum))  # False
+        #         print(isinstance(ctx.options, enum.Enum))  # True
+        #         print(isinstance(ctx.options, int))  # True
+
+        options = ssl.Options(ctx.options)
+
+        if ssl.OP_NO_TLSv1_3 in options:
+            rtls_ctx.options |= ssl.OP_NO_TLSv1_3
+            opt_match_no_tls = True
+        if ssl.OP_NO_TLSv1_2 in options:
+            rtls_ctx.options |= ssl.OP_NO_TLSv1_2
+            opt_match_no_tls = True
+
+    if not opt_match_no_tls:
+        rtls_ctx.minimum_version = ssl.TLSVersion(int(ctx.minimum_version))
+        rtls_ctx.maximum_version = ssl.TLSVersion(int(ctx.maximum_version))
+
+    if hasattr(ctx, "check_hostname") and ctx.check_hostname is False:
+        rtls_ctx.check_hostname = False
+
+    return rtls_ctx

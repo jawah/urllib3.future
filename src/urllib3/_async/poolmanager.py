@@ -330,6 +330,11 @@ class AsyncPoolManager(AsyncRequestMethods):
 
                 request_context["scheme"] = scheme
 
+                if "port" not in request_context or not request_context["port"]:
+                    request_context["port"] = port_by_scheme.get(
+                        request_context["scheme"].lower()
+                    )
+
                 supported_svn = extension.supported_svn()
 
                 disabled_svn = (
@@ -932,7 +937,7 @@ class AsyncProxyManager(AsyncPoolManager):
         scheme: str | None = "http",
         pool_kwargs: dict[str, typing.Any] | None = None,
     ) -> AsyncHTTPConnectionPool:
-        if scheme == "https":
+        if scheme in {"https", "wss", "sse"}:
             return await super().connection_from_host(
                 host, port, scheme, pool_kwargs=pool_kwargs
             )

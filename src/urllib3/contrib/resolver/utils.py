@@ -92,67 +92,6 @@ def inet6_ntoa(address: bytes) -> str:
     return thex
 
 
-def packet_fragment(payload: bytes, *identifiers: bytes) -> tuple[bytes, ...]:
-    results = []
-
-    offset = 0
-
-    start_packet_idx = []
-    lead_identifier = None
-
-    for identifier in identifiers:
-        idx = payload[:12].find(identifier)
-
-        if idx == -1:
-            continue
-
-        if idx != 0:
-            offset = idx
-
-        start_packet_idx.append(idx - offset)
-
-        lead_identifier = identifier
-        break
-
-    for identifier in identifiers:
-        if identifier == lead_identifier:
-            continue
-
-        if offset == 0:
-            idx = payload.find(b"\x02" + identifier)
-        else:
-            idx = payload.find(identifier)
-
-        if idx == -1:
-            continue
-
-        start_packet_idx.append(idx - offset)
-
-    if not start_packet_idx:
-        raise ValueError(
-            "no identifiable dns message emerged from given payload. "
-            "this should not happen at all. networking issue?"
-        )
-
-    if len(start_packet_idx) == 1:
-        return (payload,)
-
-    start_packet_idx = sorted(start_packet_idx)
-
-    previous_idx = None
-
-    for idx in start_packet_idx:
-        if previous_idx is None:
-            previous_idx = idx
-            continue
-        results.append(payload[previous_idx:idx])
-        previous_idx = idx
-
-    results.append(payload[previous_idx:])
-
-    return tuple(results)
-
-
 def is_ipv4(addr: str) -> bool:
     try:
         socket.inet_aton(addr)
@@ -288,7 +227,6 @@ def parse_https_rdata(rdata: bytes) -> HttpsRecord:
 __all__ = (
     "inet4_ntoa",
     "inet6_ntoa",
-    "packet_fragment",
     "is_ipv4",
     "is_ipv6",
     "validate_length_of",
@@ -296,4 +234,5 @@ __all__ = (
     "rfc1035_unpack",
     "rfc1035_should_read",
     "parse_https_rdata",
+    "read_name",
 )
