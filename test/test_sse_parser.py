@@ -43,13 +43,13 @@ def _make_ext(chunks: list[bytes]) -> ServerSideEventExtensionFromHTTP:
             id="three-events-in-one-chunk",
         ),
         pytest.param(
-            [b"data: hel", b"lo\n\n"],
-            ["hello"],
+            [b"data: foob", b"arbaz\n\n"],
+            ["foobarbaz"],
             id="event-split-across-chunks",
         ),
         pytest.param(
-            [b"data: first\n\ndata: sec", b"ond\n\n"],
-            ["first", "second"],
+            [b"data: first\n\ndata: foob", b"arbaz\n\n"],
+            ["first", "foobarbaz"],
             id="mixed-bundled-and-split",
         ),
         pytest.param(
