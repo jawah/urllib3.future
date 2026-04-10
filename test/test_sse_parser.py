@@ -62,7 +62,10 @@ def _make_ext(chunks: list[bytes]) -> ServerSideEventExtensionFromHTTP:
 def test_sse_parser(chunks: list[bytes], expected_data: list[str]) -> None:
     ext = _make_ext(chunks)
     events = []
-    while (ev := ext.next_payload()) is not None:
+    while True:
+        ev = ext.next_payload()
+        if ev is None:
+            break
         assert isinstance(ev, ServerSentEvent)
         events.append(ev.data)
     assert events == expected_data
