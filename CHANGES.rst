@@ -1,3 +1,10 @@
+2.19.905 (2026-04-10)
+=====================
+
+- Added support to convert stdlib ssl.SSLContext to rtls.SSLContext with best effort strategy when ctx passed directly. (#342)
+- Fixed rare DNS frame parsing issues.
+- Fixed web extensions misleading ProxyManager to not being able to decide whether to create tunnel or not.
+
 2.19.904 (2026-04-09)
 =====================
 
