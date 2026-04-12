@@ -19,7 +19,7 @@ from urllib3.contrib.webextensions.sse import (
 def _make_ext(chunks: list[bytes]) -> ServerSideEventExtensionFromHTTP:
     """Build an SSE extension backed by a fake stream of byte chunks."""
     ext = ServerSideEventExtensionFromHTTP()
-    ext._stream = iter(chunks)
+    ext._stream = iter(chunks)  # type: ignore[assignment]
     ext._response = MagicMock()
     return ext
 
