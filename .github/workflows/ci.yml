@@ -189,6 +189,34 @@ jobs:
       - name: "Install dependencies"
         run: python -m pip install --upgrade pip setuptools nox
 
+      - name: "Ensure Docker is ready (Windows)"
+        # Workaround for https://github.com/actions/runner-images/issues/13729
+        if: ${{ contains(matrix.os, 'windows') && matrix.traefik-server }}
+        shell: pwsh
+        run: |
+          $svc = Get-Service docker -ErrorAction SilentlyContinue
+          if (-not $svc) {
+            Write-Error "Docker service not found"
+            exit 1
+          }
+          if ($svc.Status -ne 'Running') {
+            Write-Host "Docker service status: $($svc.Status). Starting..."
+            Start-Service docker -ErrorAction Stop
+          }
+          $timeout = 120
+          while ($timeout -gt 0) {
+            & docker info >$null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Docker is ready"
+              exit 0
+            }
+            Write-Host "Waiting for Docker daemon... (${timeout}s remaining)"
+            Start-Sleep -Seconds 3
+            $timeout -= 3
+          }
+          Write-Error "Docker daemon did not become ready within 120s"
+          exit 1
+
       - name: "Run tests"
         # see https://github.com/actions/runner-images/issues/10924
         # for context on why macOS runner need sudo(...)
