@@ -2,6 +2,7 @@
 =====================
 
 - Fixed missing proper exception for unknown hosts with customer resolvers.
+- Fixed SSE parser dropping trailing events when a single chunk contained multiple SSE messages.
 
 2.19.905 (2026-04-10)
 =====================
