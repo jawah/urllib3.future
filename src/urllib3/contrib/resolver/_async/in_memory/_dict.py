@@ -181,6 +181,6 @@ class InMemoryResolver(AsyncBaseResolver):
             )
 
         if not results:
-            raise socket.gaierror(f"no records found for hostname {host} in-memory")
+            raise socket.gaierror(f"Name or service not known: '{host}'")
 
         return results
