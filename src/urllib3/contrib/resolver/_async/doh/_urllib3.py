@@ -580,6 +580,9 @@ class HTTPSResolver(AsyncBaseResolver):
                 (r[0], r[1], r[2], ech_config_list, r[4]) for r in quic_results
             ]
 
+        if not results and not quic_results:
+            raise socket.gaierror(f"Name or service not known: '{host}'")
+
         return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
 
 
