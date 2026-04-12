@@ -1,3 +1,8 @@
+2.19.906 (2026-04-12)
+=====================
+
+- Fixed missing proper exception for unknown hosts with customer resolvers.
+
 2.19.905 (2026-04-10)
 =====================
 
