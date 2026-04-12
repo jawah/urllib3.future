@@ -241,7 +241,7 @@ def requires_network() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     flaky_marker = pytest.mark.flaky(reruns=3, reruns_delay=1)
 
     def decorator(func: _TestFuncT) -> _TestFuncT:
-        return flaky_marker(skip_marker(func))  # type: ignore[return-value]
+        return flaky_marker(skip_marker(func))  # type: ignore[no-any-return]
 
     return decorator
 
