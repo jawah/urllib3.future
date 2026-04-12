@@ -234,10 +234,16 @@ def requires_network() -> typing.Callable[[_TestFuncT], _TestFuncT]:
     if _requires_network_has_route is None:
         _requires_network_has_route = _has_route()
 
-    return pytest.mark.skipif(
+    skip_marker = pytest.mark.skipif(
         not _requires_network_has_route,
         reason="Can't run the test because the network is unreachable",
     )
+    flaky_marker = pytest.mark.flaky(reruns=3, reruns_delay=1)
+
+    def decorator(func: _TestFuncT) -> _TestFuncT:
+        return flaky_marker(skip_marker(func))  # type: ignore[return-value]
+
+    return decorator
 
 
 def resolvesLocalhostFQDN() -> typing.Callable[[_TestFuncT], _TestFuncT]:
