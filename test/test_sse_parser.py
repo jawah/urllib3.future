@@ -77,3 +77,29 @@ def test_last_event_id_preserved_across_multi_event_chunk() -> None:
     ev2 = ext.next_payload()
     assert isinstance(ev1, ServerSentEvent) and ev1.id == "42"
     assert isinstance(ev2, ServerSentEvent) and ev2.id == "42"
+
+
+def test_raw_preserves_lf_separator() -> None:
+    ext = _make_ext([b"data: hello\n\n"])
+    raw = ext.next_payload(raw=True)
+    assert raw == "data: hello\n\n"
+
+
+def test_raw_preserves_crlf_separator() -> None:
+    ext = _make_ext([b"data: hello\r\n\r\n"])
+    raw = ext.next_payload(raw=True)
+    assert raw == "data: hello\r\n\r\n"
+
+
+def test_comment_only_events_skipped_without_recursion() -> None:
+    """Consecutive comment-only events must not cause RecursionError.
+
+    A stream of 1500 comment events (each delimited by \\n\\n) followed by a
+    real event would blow the default recursion limit of 1000 if the parser
+    used recursive calls instead of an iterative loop.
+    """
+    payload = b": keepalive\n\n" * 1500 + b"data: real\n\n"
+    ext = _make_ext([payload])
+    ev = ext.next_payload()
+    assert isinstance(ev, ServerSentEvent)
+    assert ev.data == "real"

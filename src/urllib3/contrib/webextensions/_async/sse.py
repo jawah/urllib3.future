@@ -69,63 +69,64 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._response is None or self._stream is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        # Read chunks until the buffer contains at least one complete event
-        # (terminated by a blank line: \n\n or \r\n\r\n).
-        while "\n\n" not in self._buffer and "\r\n\r\n" not in self._buffer:
-            try:
-                self._buffer += (await self._stream.__anext__()).decode("utf-8")
-            except StopAsyncIteration:
-                await self._stream.aclose()
-                self._stream = None
-                return None
-
-        # Locate the first event boundary.
-        lf = self._buffer.find("\n\n")
-        crlf = self._buffer.find("\r\n\r\n")
-
-        if crlf != -1 and (lf == -1 or crlf < lf):
-            boundary, sep_len = crlf, 4
-        else:
-            boundary, sep_len = lf, 2
-
-        event_text = self._buffer[:boundary]
-        self._buffer = self._buffer[boundary + sep_len :]
-
-        kwargs: dict[str, typing.Any] = {}
-
-        for line in event_text.splitlines():
-            if not line:
-                continue
-            key, _, value = line.partition(":")
-            if key not in {"event", "data", "retry", "id"}:
-                continue
-            if value.startswith(" "):
-                value = value[1:]
-            if key == "id":
-                if "\u0000" in value:
-                    continue
-            if key == "retry":
+        while True:
+            # Read chunks until the buffer contains at least one complete event
+            # (terminated by a blank line: \n\n or \r\n\r\n).
+            while "\n\n" not in self._buffer and "\r\n\r\n" not in self._buffer:
                 try:
-                    value = int(value)  # type: ignore[assignment]
-                except (ValueError, TypeError):
+                    self._buffer += (await self._stream.__anext__()).decode("utf-8")
+                except StopAsyncIteration:
+                    await self._stream.aclose()
+                    self._stream = None
+                    return None
+
+            # Locate the first event boundary.
+            lf = self._buffer.find("\n\n")
+            crlf = self._buffer.find("\r\n\r\n")
+
+            if crlf != -1 and (lf == -1 or crlf < lf):
+                boundary, sep = crlf, "\r\n\r\n"
+            else:
+                boundary, sep = lf, "\n\n"
+
+            event_text = self._buffer[:boundary]
+            self._buffer = self._buffer[boundary + len(sep) :]
+
+            kwargs: dict[str, typing.Any] = {}
+
+            for line in event_text.splitlines():
+                if not line:
                     continue
-            kwargs[key] = value
+                key, _, value = line.partition(":")
+                if key not in {"event", "data", "retry", "id"}:
+                    continue
+                if value.startswith(" "):
+                    value = value[1:]
+                if key == "id":
+                    if "\u0000" in value:
+                        continue
+                if key == "retry":
+                    try:
+                        value = int(value)  # type: ignore[assignment]
+                    except (ValueError, TypeError):
+                        continue
+                kwargs[key] = value
 
-        if not kwargs:
-            return await self.next_payload(raw=raw)  # type: ignore[call-overload,no-any-return]
+            if not kwargs:
+                continue
 
-        if "id" not in kwargs and self._last_event_id is not None:
-            kwargs["id"] = self._last_event_id
+            if "id" not in kwargs and self._last_event_id is not None:
+                kwargs["id"] = self._last_event_id
 
-        event = ServerSentEvent(**kwargs)
+            event = ServerSentEvent(**kwargs)
 
-        if event.id:
-            self._last_event_id = event.id
+            if event.id:
+                self._last_event_id = event.id
 
-        if raw is True:
-            return event_text + "\n\n"
+            if raw is True:
+                return event_text + sep
 
-        return event
+            return event
 
     async def send_payload(self, buf: str | bytes) -> None:
         """Dispatch a buffer to remote."""
