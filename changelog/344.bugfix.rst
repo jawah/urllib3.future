@@ -1,1 +1,0 @@
-Fixed SSE parser dropping trailing events when a single chunk contained multiple SSE messages.
