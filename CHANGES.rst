@@ -1,3 +1,8 @@
+2.19.907 (2026-04-13)
+=====================
+
+- Fixed incomplete/partial background cleanup of expired connection.
+
 2.19.906 (2026-04-12)
 =====================
 
