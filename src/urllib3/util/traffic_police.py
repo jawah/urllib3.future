@@ -524,16 +524,7 @@ class TrafficPolice(typing.Generic[T]):
                         hasattr(conn_or_pool, "is_connected")
                         and not conn_or_pool.is_connected
                     ):
-                        try:
-                            conn_or_pool.close()
-                        except Exception:  # Defensive:
-                            pass
-
-                        self.release()
-
-                        del self._container[obj_id]
-                        del self._registry[obj_id]
-
+                        self.kill_cursor()
                         continue
 
                     try:
