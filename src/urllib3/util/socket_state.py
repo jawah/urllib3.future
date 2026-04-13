@@ -136,7 +136,10 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
         if sys.platform in {"darwin", "ios"}:
             TCP_CONNECTION_INFO = getattr(socket, "TCP_CONNECTION_INFO", 0x106)
         else:
-            TCP_CONNECTION_INFO = getattr(socket, "TCP_INFO", 11)
+            TCP_CONNECTION_INFO = getattr(socket, "TCP_INFO", None)
+
+            if TCP_CONNECTION_INFO is None:
+                return True
 
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_CONNECTION_INFO, 1024)

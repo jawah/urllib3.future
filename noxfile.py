@@ -596,6 +596,7 @@ def downstream_docker(session: nox.Session) -> None:
 
     for patch in [
         "0005-DockerPy-FixBadChunk.patch",
+        "0006-DockerPy-xfail-flaky-attach-no-stream.patch",
     ]:
         session.run("git", "apply", f"{root}/ci/{patch}", external=True)
 

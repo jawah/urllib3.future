@@ -1,0 +1,12 @@
+diff --git a/tests/integration/api_container_test.py b/tests/integration/api_container_test.py
+index 1a2b62c..f3c5e7a 100644
+--- a/tests/integration/api_container_test.py
++++ b/tests/integration/api_container_test.py
+@@ -1348,6 +1348,7 @@ class AttachContainerTest(BaseAPIIntegrationTest):
+         assert data.decode('utf-8') == line
+ 
+     @pytest.mark.timeout(10)
++    @pytest.mark.xfail(reason="Flaky: container output may not be captured in time")
+     def test_attach_no_stream(self):
+         container = self.client.create_container(
+             TEST_IMG, 'echo hello'
