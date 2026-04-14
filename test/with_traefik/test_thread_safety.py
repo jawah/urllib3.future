@@ -71,7 +71,9 @@ class TestThreadSafety(TraefikTestCase):
             responses = []
             for _ in range(16):
                 try:
-                    responses.append(s.urlopen("GET", f"{self.https_url}/get"))
+                    responses.append(
+                        s.urlopen("GET", f"{self.https_url}/get", timeout=10.0)
+                    )
                 except Exception as e:
                     print(e)
                     assert False
