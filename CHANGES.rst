@@ -3,6 +3,7 @@
 
 - Fixed a rare racing condition preventing the synchronous happy eyeballs algorithm to complete if all IP addresses are unreachable.
 - Fixed SSE unicode decode error on partial bytes chunk. (#349)
+- Fixed vcrpy compatibility. (#320)
 
 2.19.907 (2026-04-13)
 =====================
