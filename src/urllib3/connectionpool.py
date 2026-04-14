@@ -593,20 +593,22 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     event = threading.Event()
                     winning_task: Future[None] | None = None
                     completed_count: int = 0
+                    _heb_callback_lock = threading.Lock()
 
                     def _happy_eyeballs_completed(t: Future[None]) -> None:
                         nonlocal winning_task, event, completed_count
 
-                        if winning_task is None and t.exception() is None:
-                            winning_task = t
-                            event.set()
+                        with _heb_callback_lock:
+                            if winning_task is None and t.exception() is None:
+                                winning_task = t
+                                event.set()
 
-                            return
+                                return
 
-                        completed_count += 1
+                            completed_count += 1
 
-                        if completed_count >= len(challengers):
-                            event.set()
+                            if completed_count >= len(challengers):
+                                event.set()
 
                     tpe = ThreadPoolExecutor(max_workers=max_task)
 
@@ -618,16 +620,29 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
                         tasks.append(task)
 
-                    event.wait()
+                    event.wait(timeout=override_timeout + 1.0)
 
                     for task in tasks:
                         if task == winning_task:
                             continue
 
+                        associated_conn = challengers[tasks.index(task)]
+
                         if task.running():
+                            try:
+                                if associated_conn._resolver._sock_cursor:
+                                    associated_conn._resolver._sock_cursor.shutdown(0)
+                                    associated_conn._resolver._sock_cursor.close()
+                                elif associated_conn.sock:
+                                    associated_conn.sock.shutdown(0)
+                                    associated_conn.sock.close()
+                                    associated_conn.sock = None
+                            except OSError:
+                                pass
+                            associated_conn.close()
                             task.cancel()
                         else:
-                            challengers[tasks.index(task)].close()
+                            associated_conn.close()
 
                     if winning_task is None:
                         within_delay_msg: str = (
@@ -2235,19 +2250,21 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                     event = threading.Event()
                     winning_task: Future[None] | None = None
                     completed_count: int = 0
+                    _heb_callback_lock = threading.Lock()
 
                     def _happy_eyeballs_completed(t: Future[None]) -> None:
                         nonlocal winning_task, event, completed_count
 
-                        if winning_task is None and t.exception() is None:
-                            winning_task = t
-                            event.set()
-                            return
+                        with _heb_callback_lock:
+                            if winning_task is None and t.exception() is None:
+                                winning_task = t
+                                event.set()
+                                return
 
-                        completed_count += 1
+                            completed_count += 1
 
-                        if completed_count >= len(challengers):
-                            event.set()
+                            if completed_count >= len(challengers):
+                                event.set()
 
                     tpe = ThreadPoolExecutor(max_workers=max_task)
 
@@ -2259,7 +2276,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
 
                         tasks.append(task)
 
-                    event.wait()
+                    event.wait(timeout=override_timeout + 1.0)
 
                     for task in tasks:
                         if task == winning_task:
