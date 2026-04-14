@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import typing
 
 if typing.TYPE_CHECKING:
@@ -16,6 +17,7 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
 
         self._last_event_id: str | None = None
         self._buffer: str = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")()
         self._stream: typing.AsyncGenerator[bytes, None] | None = None
 
     @staticmethod
@@ -74,11 +76,15 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
             # (terminated by a blank line: \n\n or \r\n\r\n).
             while "\n\n" not in self._buffer and "\r\n\r\n" not in self._buffer:
                 try:
-                    self._buffer += (await self._stream.__anext__()).decode("utf-8")
+                    self._buffer += self._decoder.decode(await self._stream.__anext__())
                 except StopAsyncIteration:
-                    await self._stream.aclose()
-                    self._stream = None
-                    return None
+                    last_chunk = self._decoder.decode(b"", final=True)
+                    if not last_chunk:
+                        await self._stream.aclose()
+                        self._stream = None
+                        self._decoder.reset()
+                        return None
+                    self._buffer += last_chunk
 
             # Locate the first event boundary.
             lf = self._buffer.find("\n\n")
