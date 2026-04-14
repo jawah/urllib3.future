@@ -549,13 +549,15 @@ class BaseBackend:
     @property
     def _http_vsn_str(self) -> str:
         """Reimplemented for backward compatibility purposes."""
-        assert self._svn is not None
+        if self._svn is None:
+            return "HTTP/1.1"
         return self._svn.value
 
     @property
     def _http_vsn(self) -> int:
         """Reimplemented for backward compatibility purposes."""
-        assert self._svn is not None
+        if self._svn is None:
+            return 11
         if self._cached_http_vsn is None:
             self._cached_http_vsn = int(self._svn.value.split("/")[-1].replace(".", ""))
         return self._cached_http_vsn

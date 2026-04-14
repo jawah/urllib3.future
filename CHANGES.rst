@@ -1,3 +1,9 @@
+2.19.908 (2026-04-14)
+=====================
+
+- Fixed a rare racing condition preventing the synchronous happy eyeballs algorithm to complete if all IP addresses are unreachable.
+- Fixed SSE unicode decode error on partial bytes chunk. (#349)
+
 2.19.907 (2026-04-13)
 =====================
 

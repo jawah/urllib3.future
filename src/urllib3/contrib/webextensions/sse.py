@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import json
 import typing
 from threading import RLock
@@ -69,6 +70,7 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
 
         self._last_event_id: str | None = None
         self._buffer: str = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")()
         self._lock = RLock()
         self._stream: typing.Generator[bytes, None, None] | None = None
 
@@ -128,10 +130,14 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
                 # event (terminated by a blank line: \n\n or \r\n\r\n).
                 while "\n\n" not in self._buffer and "\r\n\r\n" not in self._buffer:
                     try:
-                        self._buffer += next(self._stream).decode("utf-8")
+                        self._buffer += self._decoder.decode(next(self._stream))
                     except StopIteration:
-                        self._stream = None
-                        return None
+                        last_chunk = self._decoder.decode(b"", final=True)
+                        if not last_chunk:
+                            self._stream = None
+                            self._decoder.reset()
+                            return None
+                        self._buffer += last_chunk
 
                 # Locate the first event boundary.
                 lf = self._buffer.find("\n\n")
