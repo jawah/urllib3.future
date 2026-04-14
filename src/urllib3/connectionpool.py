@@ -727,6 +727,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             with self.pool._lock:
                 if self.pool.busy_with_placeholder:
                     self.pool.kill_cursor()
+                elif self.pool.busy:
+                    self.pool.release()
                 self.pool.put(conn, immediately_unavailable=True)
             return conn
 
@@ -1741,7 +1743,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         try:
             # Request a connection from the queue.
             timeout_obj = self._get_timeout(timeout)
-            conn = self._get_conn(timeout=pool_timeout, heb_timeout=timeout_obj)
+
+            try:
+                conn = self._get_conn(timeout=pool_timeout, heb_timeout=timeout_obj)
+            except TypeError:  # Defensive: 3rd party conn hacks
+                conn = self._get_conn(timeout=pool_timeout)
 
             conn.timeout = timeout_obj.connect_timeout  # type: ignore[assignment]
 
