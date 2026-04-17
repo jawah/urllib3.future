@@ -182,7 +182,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             ):
                 self._events.extend(self._map_quic_event(self._quic._close_event))
                 self._terminated = True
-        return self._terminated or self._goaway_to_honor
+        return (
+            self._terminated or self._goaway_to_honor
+        ) and not self._events.stream_count
 
     @property
     def session_ticket(self) -> SessionTicket | None:

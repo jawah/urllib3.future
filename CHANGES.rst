@@ -2,6 +2,7 @@
 =====================
 
 - Changed python-socks upper bound to 2.8.1
+- Fixed a racing condition on http state machine "is_expired" condition. (https://github.com/jawah/niquests/issues/379)
 
 2.19.908 (2026-04-14)
 =====================
