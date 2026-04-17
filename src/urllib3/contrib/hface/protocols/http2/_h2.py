@@ -168,7 +168,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return self._terminated is False and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
-        return self._terminated or self._goaway_to_honor
+        return (
+            self._terminated or self._goaway_to_honor
+        ) and not self._events.stream_count
 
     def get_available_stream_id(self) -> int:
         return self._connection.get_next_available_stream_id()  # type: ignore[no-any-return]

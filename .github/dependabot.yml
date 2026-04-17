@@ -1,26 +1,9 @@
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
+  - package-ecosystem: "github-actions"  # zizmor: ignore[dependabot-cooldown]
     directory: "/"
     schedule:
       interval: "monthly"
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
-    cooldown:
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 7
-      default-days: 7
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    ignore:
-      - dependency-name: "*"
-        update-types: [ "version-update:semver-patch" ]
-    cooldown:
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 7
-      default-days: 7

@@ -170,7 +170,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         }
 
     def has_expired(self) -> bool:
-        return self._terminated
+        return self._terminated and not self._events.stream_count
 
     def get_available_stream_id(self) -> int:
         if not self.is_available():
