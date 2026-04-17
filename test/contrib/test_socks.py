@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import typing
 from socket import getaddrinfo as real_getaddrinfo
@@ -396,6 +397,9 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
             with pytest.raises(NewConnectionError):
                 pm.request("GET", "http://example.com", retries=False)
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 8), reason="python-socks needed patch out of reach"
+    )
     def test_proxy_rejection(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_up_fake_getaddrinfo(monkeypatch)
         evt = threading.Event()
@@ -667,6 +671,9 @@ class TestSOCKS4Proxy(IPV4SocketDummyServerTestCase):
             response = pm.request("GET", "http://example.com")
             assert response.status == 200
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 8), reason="python-socks needed patch out of reach"
+    )
     def test_proxy_rejection(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_up_fake_getaddrinfo(monkeypatch)
         evt = threading.Event()
