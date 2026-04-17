@@ -191,7 +191,7 @@ def tests_impl(
 ) -> None:
     # Install deps and the package itself.
     session.install("-U", "pip", "setuptools", silent=False)
-    session.install("-r", "dev-requirements.txt", silent=False)
+    session.install("-r", "dev-requirements.txt", "--require-hashes", silent=False)
 
     if "URLLIB3_NO_OVERRIDE" in os.environ:
         session.run("pip", "uninstall", "-y", "urllib3")
@@ -295,7 +295,7 @@ def tracemalloc(session: nox.Session) -> None:
 def test_ssl_large_resources(session: nox.Session) -> None:
     # Install deps and the package itself.
     session.install("-U", "pip", "setuptools", silent=False)
-    session.install("-r", "dev-requirements.txt", silent=False)
+    session.install("-r", "dev-requirements.txt", "--require-hashes", silent=False)
     session.install(".", silent=False)
 
     # Show the pip version.
@@ -332,7 +332,7 @@ def test_ssl_large_resources(session: nox.Session) -> None:
 def test_pysocks(session: nox.Session) -> None:
     # Install deps and the package itself.
     session.install("-U", "pip", "setuptools", silent=False)
-    session.install("-r", "dev-requirements.txt", silent=False)
+    session.install("-r", "dev-requirements.txt", "--require-hashes", silent=False)
     session.install(".", silent=False)
     session.run("pip", "uninstall", "-y", "python-socks")
     session.install("pysocks")
@@ -643,7 +643,7 @@ def lint(session: nox.Session) -> None:
 @nox.session
 def mypy(session: nox.Session) -> None:
     """Run mypy."""
-    session.install("-r", "mypy-requirements.txt")
+    session.install("-r", "mypy-requirements.txt", "--require-hashes")
     session.run("mypy", "--version")
     session.run(
         "mypy",
