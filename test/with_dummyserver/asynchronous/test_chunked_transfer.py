@@ -43,7 +43,11 @@ class TestAsyncChunkedTransfer(SocketDummyServerTestCase):
         self.start_chunked_handler()
         async with AsyncHTTPConnectionPool(self.host, self.port, retries=False) as pool:
             await pool.urlopen(
-                "GET", "/", body=chunks, headers=dict(DNT="1"), chunked=True  # type: ignore[arg-type]
+                "GET",
+                "/",
+                body=chunks,  # type: ignore[arg-type]
+                headers=dict(DNT="1"),
+                chunked=True,
             )
 
             assert b"Transfer-Encoding" in self.buffer
