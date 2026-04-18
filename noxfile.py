@@ -202,11 +202,6 @@ def tests_impl(
         session.run("pip", "uninstall", "-y", "urllib3")
 
     with traefik_boot(session, *session.posargs):
-        if "brotli" in extras and _IS_GIL_DISABLED:
-            list_of_extras = extras.split(",")
-            # waiting on https://github.com/python-hyper/brotlicffi/pull/205
-            list_of_extras.remove("brotli")
-            extras = ",".join(list_of_extras)
         session.install(f".[{extras}]", silent=False)
 
         # Show the pip version.
