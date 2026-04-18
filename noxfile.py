@@ -193,6 +193,11 @@ def tests_impl(
     session.install("-U", "pip", "setuptools", silent=False)
     session.install("-r", "dev-requirements.txt", "--require-hashes", silent=False)
 
+    if "FIPS_MODE" in os.environ:
+        # we must ensure cryptography is using the system OpenSSL build
+        session.run("pip", "uninstall", "cryptography", "-y")
+        session.run("pip", "install", "cryptography", "--no-binary", "cryptography")
+
     if "URLLIB3_NO_OVERRIDE" in os.environ:
         session.run("pip", "uninstall", "-y", "urllib3")
 
