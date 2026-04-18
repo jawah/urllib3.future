@@ -21,7 +21,7 @@ def inet4_ntoa(address: bytes) -> str:
     Convert an IPv4 address from bytes to str.
     """
     if len(address) != 4:
-        raise ValueError(
+        raise ValueError(  # Defensive: overly protective
             f"IPv4 addresses are 4 bytes long, got {len(address)} byte(s) instead"
         )
 
@@ -33,7 +33,7 @@ def inet6_ntoa(address: bytes) -> str:
     Convert an IPv6 address from bytes to str.
     """
     if len(address) != 16:
-        raise ValueError(
+        raise ValueError(  # Defensive: overly protective
             f"IPv6 addresses are 16 bytes long, got {len(address)} byte(s) instead"
         )
 

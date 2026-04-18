@@ -49,7 +49,7 @@ class ActiveCursor(typing.Generic[T]):
 def _current_task_or_die() -> asyncio.Task[typing.Any]:
     t = asyncio.current_task()
     if t is None:
-        raise RuntimeError(
+        raise RuntimeError(  # Defensive: overly protective
             "Attempt to call function outside of (async) running event loop"
         )
     return t

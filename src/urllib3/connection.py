@@ -173,7 +173,7 @@ class HTTPConnection(HfaceBackend):
         self._connect_timings: tuple[timedelta, timedelta, datetime] | None = None
 
         if socket_family not in [socket.AF_UNSPEC, socket.AF_INET, socket.AF_INET6]:
-            raise ValueError(
+            raise ValueError(  # Defensive: human error only
                 "Unsupported socket_family argument value. Supported values are: socket.AF_UNSPEC, socket.AF_INET, socket.AF_INET6"
             )
 

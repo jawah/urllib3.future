@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import warnings
 from functools import lru_cache
 
 import h11
@@ -117,14 +116,11 @@ class RelaxConnectionState(ConnectionState):
     ) -> None:
         if server_switch_event is not None:
             if server_switch_event not in self.pending_switch_proposals:
-                if server_switch_event is _SWITCH_UPGRADE:
-                    warnings.warn(
-                        f"Received server {server_switch_event} event without a pending proposal. "
-                        "This will raise an exception in a future version. It is temporarily relaxed to match the "
-                        "legacy http.client standard library.",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
+                if (  # Defensive: http.client old behavior kept
+                    server_switch_event is _SWITCH_UPGRADE
+                ):
+                    # Received server _SWITCH_UPGRADE event without a pending proposal.
+                    # kept for backward compatibility with stdlib http.client
                     self.pending_switch_proposals.add(_SWITCH_UPGRADE)
 
         return super().process_event(role, event_type, server_switch_event)
@@ -174,7 +170,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def get_available_stream_id(self) -> int:
         if not self.is_available():
-            raise RuntimeError(
+            raise RuntimeError(  # Defensive: should be unreachable in current state.
                 "Cannot generate a new stream ID because the connection is not idle. "
                 "HTTP/1.1 is not multiplexed and we do not support HTTP pipelining."
             )
@@ -187,7 +183,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
         if stream_id != self._current_stream_id:
-            raise ValueError("Invalid stream ID.")
+            raise ValueError("Invalid stream ID.")  # Defensive: overly protective
 
         self._h11_submit(headers_to_request(headers))
 
@@ -198,7 +194,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         self, stream_id: int, data: bytes, end_stream: bool = False
     ) -> None:
         if stream_id != self._current_stream_id:
-            raise ValueError("Invalid stream ID.")
+            raise ValueError("Invalid stream ID.")  # Defensive: overly protective
         if self._connection.their_state == h11.SWITCHED_PROTOCOL:
             self._data_buffer.append(data)
             if end_stream:
