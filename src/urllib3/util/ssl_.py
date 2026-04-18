@@ -304,8 +304,19 @@ try:  # Do we have ssl at all?
         if hasattr(ssl, "FIPS_mode") and callable(ssl.FIPS_mode):
             IS_FIPS = bool(ssl.FIPS_mode())
         else:  # messy detection
-            # md5 is available in Python 3.7 -- 3.13, so far. unless removed by FIPS patch
-            IS_FIPS = 32 not in HASHFUNC_MAP
+            try:
+                from _hashlib import openssl_md5
+
+                try:
+                    openssl_md5(b"x")
+                except ValueError:
+                    IS_FIPS = True
+            except ImportError:
+                pass
+
+            if not IS_FIPS:
+                # md5 is available in Python 3.7 -- 3.14, so far. unless removed by FIPS patch
+                IS_FIPS = 32 not in HASHFUNC_MAP
 
 except ImportError:
     OP_NO_COMPRESSION = 0x20000  # type: ignore[assignment]

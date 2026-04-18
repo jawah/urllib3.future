@@ -34,7 +34,7 @@ def stub_timezone_ctx(tzname: str | None) -> typing.Generator[None, None, None]:
     try:
         zoneinfo.ZoneInfo(tzname)
     except zoneinfo.ZoneInfoNotFoundError:
-        raise ValueError(f"Invalid timezone specified: {tzname!r}")
+        pytest.skip(f"Unsupported timezone specified: {tzname!r}")
 
     # Get the current timezone
     old_tzname = datetime.datetime.now().astimezone().tzname()

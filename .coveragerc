@@ -17,14 +17,13 @@ omit =
     src/urllib3/http2/*
 
 exclude_lines =
-    except ModuleNotFoundError:
-    except ImportError:
-    pass
-    import
-    raise NotImplementedError
-    .* # Platform-specific.*
-    .*:.* # Python \d.*
-    .* # Abstract
-    .* # Defensive:
-    if (?:typing.)?TYPE_CHECKING:
-    ^\s*?\.\.\.\s*$
+    ^\s*except ModuleNotFoundError:\s*$
+    ^\s*except ImportError:\s*$
+    ^\s*pass\s*$
+    ^\s*raise NotImplementedError\b
+    .*#\s*Platform-specific.*
+    .*:.*#\s*Python \d.*
+    .*#\s*Abstract\b
+    .*#\s*Defensive:
+    ^\s*if (?:typing\.)?TYPE_CHECKING:\s*$
+    ^\s*\.\.\.\s*$

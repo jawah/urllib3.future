@@ -234,7 +234,7 @@ try:
 
     stream.close()
     dgram.close()
-except OSError:
+except OSError:  # Defensive: should be unreachable, overly protective.
     DEFAULT_BLOCKSIZE = 131072
     UDP_DEFAULT_BLOCKSIZE = 212992
 

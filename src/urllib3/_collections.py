@@ -156,8 +156,8 @@ class RecentlyUsedContainer(typing.Generic[_KT, _VT], typing.MutableMapping[_KT,
                 self.dispose_func(value)
 
     def keys(self) -> set[_KT]:  # type: ignore[override]
-        with self.lock:
-            return set(self._container.keys())
+        with self.lock:  # Defensive: dead code
+            return set(self._container.keys())  # Defensive: dead code
 
 
 class HTTPHeaderDictItemView(typing.Set[typing.Tuple[str, str]]):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import typing
 
 from test import LONG_TIMEOUT
@@ -569,6 +570,242 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             url = f"http://{self.host}:{self.port}{target}"
             r = await http.request("GET", url)
             assert await r.data == expected_target
+
+    @pytest.mark.parametrize(
+        "retries",
+        (0, Retry(total=0), Retry(redirect=0), Retry(total=0, redirect=0)),
+    )
+    async def test_redirects_disabled_for_pool_manager_with_0(
+        self, retries: int | Retry
+    ) -> None:
+        """
+        Check handling redirects when retries is set to 0 on the pool
+        manager.
+        """
+        async with AsyncPoolManager(retries=retries) as http:
+            with pytest.raises(MaxRetryError):
+                await http.request("GET", f"{self.base_url}/redirect")
+
+            # Setting redirect=True should not change the behavior.
+            with pytest.raises(MaxRetryError):
+                await http.request("GET", f"{self.base_url}/redirect", redirect=True)
+
+            # Setting redirect=False should not make it follow the redirect,
+            # but MaxRetryError should not be raised.
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", redirect=False
+            )
+            assert response.status == 303
+
+    @pytest.mark.parametrize(
+        "retries",
+        (
+            False,
+            Retry(total=False),
+            Retry(redirect=False),
+            Retry(total=False, redirect=False),
+        ),
+    )
+    async def test_redirects_disabled_for_pool_manager_with_false(
+        self, retries: bool | Retry
+    ) -> None:
+        """
+        Check that setting retries set to False on the pool manager disables
+        raising MaxRetryError and redirect=True does not change the
+        behavior.
+        """
+        async with AsyncPoolManager(retries=retries) as http:
+            response = await http.request("GET", f"{self.base_url}/redirect")
+            assert response.status == 303
+
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", redirect=True
+            )
+            assert response.status == 303
+
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", redirect=False
+            )
+            assert response.status == 303
+
+    async def test_redirects_disabled_for_individual_request(self) -> None:
+        """
+        Check handling redirects when they are meant to be disabled
+        on the request level.
+        """
+        async with AsyncPoolManager() as http:
+            # Check when redirect is not passed.
+            with pytest.raises(MaxRetryError):
+                await http.request("GET", f"{self.base_url}/redirect", retries=0)
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", retries=False
+            )
+            assert response.status == 303
+
+            # Check when redirect=True.
+            with pytest.raises(MaxRetryError):
+                await http.request(
+                    "GET", f"{self.base_url}/redirect", retries=0, redirect=True
+                )
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", retries=False, redirect=True
+            )
+            assert response.status == 303
+
+            # Check when redirect=False.
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", retries=0, redirect=False
+            )
+            assert response.status == 303
+            response = await http.request(
+                "GET", f"{self.base_url}/redirect", retries=False, redirect=False
+            )
+            assert response.status == 303
+
+    async def test_top_level_request(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request("GET", f"{self.base_url}/")
+            assert r.status == 200
+            assert await r.data == b"Dummy server!"
+
+    async def test_top_level_request_with_body(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request("POST", f"{self.base_url}/echo", body=b"test")
+            assert r.status == 200
+            assert await r.data == b"test"
+
+    async def test_top_level_request_with_preload_content(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request("GET", f"{self.base_url}/echo", preload_content=False)
+            assert r.status == 200
+            assert r.connection is not None
+            await r.data
+            assert r.connection is None
+
+    async def test_top_level_request_with_decode_content(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request(
+                "GET",
+                f"{self.base_url}/encodingrequest",
+                headers={"accept-encoding": "gzip"},
+                decode_content=False,
+            )
+            assert r.status == 200
+            assert gzip.decompress(await r.data) == b"hello, world!"
+
+            r = await pm.request(
+                "GET",
+                f"{self.base_url}/encodingrequest",
+                headers={"accept-encoding": "gzip"},
+                decode_content=True,
+            )
+            assert r.status == 200
+            assert await r.data == b"hello, world!"
+
+    async def test_top_level_request_with_redirect(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request(
+                "GET",
+                f"{self.base_url}/redirect",
+                fields={"target": f"{self.base_url}/"},
+                redirect=False,
+            )
+
+            assert r.status == 303
+
+            r = await pm.request(
+                "GET",
+                f"{self.base_url}/redirect",
+                fields={"target": f"{self.base_url}/"},
+                redirect=True,
+            )
+
+            assert r.status == 200
+            assert await r.data == b"Dummy server!"
+
+    async def test_top_level_request_with_retries(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request("GET", f"{self.base_url}/redirect", retries=False)
+            assert r.status == 303
+
+            r = await pm.request("GET", f"{self.base_url}/redirect", retries=3)
+            assert r.status == 200
+
+    async def test_top_level_request_with_timeout(self) -> None:
+        async with AsyncPoolManager() as pm:
+            r = await pm.request(
+                "GET", f"{self.base_url}/redirect", timeout=2.5, retries=3
+            )
+            assert r.status == 200
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            None,
+            {"content-Type": "application/json"},
+            {"content-Type": "text/plain"},
+            {"attribute": "value", "CONTENT-TYPE": "application/json"},
+            HTTPHeaderDict(cookie="foo, bar"),
+        ],
+    )
+    async def test_request_with_json(self, headers: HTTPHeaderDict) -> None:
+        body = {"attribute": "value"}
+        async with AsyncPoolManager() as pm:
+            r = await pm.request(
+                method="POST",
+                url=f"{self.base_url}/echo_json",
+                headers=headers,
+                json=body,
+            )
+            assert r.status == 200
+            assert await r.json() == body
+            if headers is not None and "application/json" not in headers.values():
+                assert "text/plain" in r.headers["Content-Type"].replace(" ", "").split(
+                    ","
+                )
+            else:
+                assert "application/json" in r.headers["Content-Type"].replace(
+                    " ", ""
+                ).split(",")
+
+    async def test_top_level_request_with_json_with_httpheaderdict(self) -> None:
+        body = {"attribute": "value"}
+        header = HTTPHeaderDict(cookie="foo, bar")
+        async with AsyncPoolManager(headers=header) as pm:
+            r = await pm.request(
+                method="POST", url=f"{self.base_url}/echo_json", json=body
+            )
+            assert r.status == 200
+            assert await r.json() == body
+            assert "application/json" in r.headers["Content-Type"].replace(
+                " ", ""
+            ).split(",")
+
+    async def test_top_level_request_with_body_and_json(self) -> None:
+        match = "request got values for both 'body' and 'json' parameters which are mutually exclusive"
+        async with AsyncPoolManager() as pm:
+            with pytest.raises(TypeError, match=match):
+                body = {"attribute": "value"}
+                await pm.request(
+                    method="POST", url=f"{self.base_url}/echo", body="", json=body
+                )
+
+    async def test_top_level_request_with_invalid_body(self) -> None:
+        class BadBody:
+            def __repr__(self) -> str:
+                return "<BadBody>"
+
+        async with AsyncPoolManager() as pm:
+            with pytest.raises(TypeError) as e:
+                await pm.request(  # type: ignore[call-overload]
+                    method="POST",
+                    url=f"{self.base_url}/echo",
+                    body=BadBody(),
+                )
+            assert str(e.value) == (
+                "'body' must be a bytes-like object, file-like "
+                "object, or iterable. Instead was <BadBody>"
+            )
 
 
 @pytest.mark.skipif(not HAS_IPV6, reason="IPv6 is not supported on this system")

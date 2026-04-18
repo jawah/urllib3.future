@@ -251,11 +251,22 @@ def encrypt_key_pem(private_key_pem: trustme.Blob, password: bytes) -> trustme.B
     private_key = serialization.load_pem_private_key(
         private_key_pem.bytes(), password=None, backend=default_backend()
     )
-    encrypted_key = private_key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.TraditionalOpenSSL,
-        serialization.BestAvailableEncryption(password),
-    )
+
+    try:
+        encrypted_key = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.BestAvailableEncryption(password),
+        )
+    except (
+        ValueError
+    ):  # Defensive: Encrypted traditional OpenSSL format is not supported in FIPS mode
+        encrypted_key = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(password),
+        )
+
     return trustme.Blob(encrypted_key)
 
 

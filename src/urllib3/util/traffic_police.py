@@ -308,7 +308,7 @@ class TrafficPolice(typing.Generic[T]):
             self._map_clear(active_cursor.conn_or_pool)
 
             if active_cursor.obj_id not in self._registry:
-                raise UnavailableTraffic(
+                raise UnavailableTraffic(  # Defensive: bug-situation-detection
                     "Our internal thread safety mechanism seems out of sync. This is likely a bug in urllib3-future. "
                     "You may open a ticket at https://github.com/jawah/urllib3.future for support."
                 )
