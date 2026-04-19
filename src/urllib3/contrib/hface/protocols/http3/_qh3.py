@@ -168,19 +168,13 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if not self._terminated and not self._goaway_to_honor:
             now = monotonic()
             self._quic.handle_timer(now)
-            self._packets.extend(
-                map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
-            )
             if self._quic._state in {
                 QuicConnectionState.CLOSING,
                 QuicConnectionState.TERMINATED,
             }:
                 self._terminated = True
-            if (
-                hasattr(self._quic, "_close_event")
-                and self._quic._close_event is not None
-            ):
-                self._events.extend(self._map_quic_event(self._quic._close_event))
+            if getattr(self._quic, "_close_event", None) is not None:
+                self._events.extend(self._map_quic_event(self._quic._close_event))  # type: ignore[arg-type]
                 self._terminated = True
         return (
             self._terminated or self._goaway_to_honor
@@ -212,7 +206,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         assert self._http is not None
         self._open_stream_count += 1
         self._total_stream_count += 1
-        self._http.send_headers(stream_id, list(headers), end_stream)
+        self._http.send_headers(stream_id, headers, end_stream)  # type: ignore[arg-type]
 
     def submit_data(
         self, stream_id: int, data: bytes, end_stream: bool = False
@@ -292,9 +286,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             # the QUIC state machine returns datagrams (addr, packet)
             # the client never have to worry about the destination
             # unless server yield a preferred address?
-            self._packets.extend(
-                map(lambda e: e[0], self._quic.datagrams_to_send(now=now))
-            )
+            self._packets.extend(e[0] for e in self._quic.datagrams_to_send(now=now))
             self._next_timer = self._quic.get_timer()
 
         if not self._packets:
