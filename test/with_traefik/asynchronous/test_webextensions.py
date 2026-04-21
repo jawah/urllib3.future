@@ -435,6 +435,80 @@ class TestWebExtensions(TraefikTestCase):
     @pytest.mark.parametrize(
         "target_protocol, target_http",
         [
+            ("sse", 11),
+            ("sse", 20),
+            ("sse", 30),
+            ("psse", 11),
+            ("psse", 20),
+        ],
+    )
+    async def test_server_side_event_abort_during_read(
+        self, target_protocol: str, target_http: int
+    ) -> None:
+        target_url = self.https_url if target_protocol == "sse" else self.http_url
+        target_url = (
+            target_url.replace("https://", "sse://")
+            if target_protocol == "sse"
+            else target_url.replace("http://", "psse://")
+        )
+
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
+
+        disabled_svn = set()
+
+        if target_http == 11:
+            disabled_svn.add(HttpVersion.h2)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 20:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h3)
+        elif target_http == 30:
+            disabled_svn.add(HttpVersion.h11)
+            disabled_svn.add(HttpVersion.h2)
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn=disabled_svn,
+        ) as pm:
+            resp = await pm.urlopen("GET", target_url + "/sse?delay=1s&count=5")
+
+            # The response ends with a "200 OK"!
+            assert resp.status == 200
+
+            # The HTTP extension should be automatically loaded!
+            assert resp.extension is not None
+
+            assert isinstance(resp.extension, AsyncServerSideEventExtensionFromHTTP)
+
+            async def cancel() -> None:
+                await asyncio.sleep(2)
+                if resp.extension:
+                    await resp.extension.close()
+
+            asyncio.create_task(cancel(), name="cancel()")
+
+            events = []
+
+            while resp.extension.closed is False:
+                event = await resp.extension.next_payload()
+                if event:
+                    events.append(event)
+
+            assert len(events) == 2
+
+            assert resp.extension.closed is True
+
+            for event in events:
+                assert event.json()  # type: ignore
+                assert "timestamp" in event.json()  # type: ignore
+
+            assert not resp.trailers
+
+    @pytest.mark.parametrize(
+        "target_protocol, target_http",
+        [
             ("sse", 20),
             ("sse", 30),
             ("psse", 20),

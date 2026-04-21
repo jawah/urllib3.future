@@ -1,0 +1,1 @@
+Fixed SSE stream to gracefully terminate while waiting for the next payload.
