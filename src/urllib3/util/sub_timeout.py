@@ -59,7 +59,7 @@ class SubTimeout:
         self._original_timeout = self.sock.gettimeout()
 
         if self.next_timer is not None:
-            time_to_timer = self.next_timer - time.monotonic()
+            time_to_timer = self.next_timer - time.time()
             # Clamp to a tiny positive value so the socket stays in
             # blocking-with-timeout mode.  settimeout(0.0) would switch
             # to non-blocking and raise BlockingIOError instead of
@@ -122,7 +122,7 @@ class AsyncSubTimeout:
         self._original_timeout = self.sock.gettimeout()
 
         if self.next_timer is not None:
-            time_to_timer = self.next_timer - time.monotonic()
+            time_to_timer = self.next_timer - time.time()
             time_to_timer = max(time_to_timer, 1e-6)
 
             if self._original_timeout is None or time_to_timer < self._original_timeout:
