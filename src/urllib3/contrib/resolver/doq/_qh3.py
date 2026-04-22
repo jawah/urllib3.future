@@ -26,6 +26,7 @@ from qh3.quic.events import (
 )
 
 from ....util.ssl_ import IS_FIPS, resolve_cert_reqs
+from ....util.sub_timeout import SubTimeout
 from ...ssa._gro import _sock_has_gro, _sock_has_gso, sync_recv_gro, sync_sendmsg_gso
 from ..dou import PlainResolver
 from ..protocols import (
@@ -460,29 +461,55 @@ class QUICResolver(PlainResolver):
         | None = None,
         respect_end_stream_signal: bool = True,
     ) -> list[QuicEvent]:
+        quic = self._quic
+        sock = self._socket
+        gso_enabled = self._dgram_gso_enabled
+        gro_enabled = self._dgram_gro_enabled
+
+        def send_pending() -> None:
+            now = monotonic()
+            quic.handle_timer(now)
+            while True:
+                datagrams = quic.datagrams_to_send(now)
+                if not datagrams:
+                    break
+                if gso_enabled and len(datagrams) > 1:
+                    sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                else:
+                    for datagram in datagrams:
+                        sock.sendall(datagram[0])
+
         while True:
             if receive_first is False:
                 now = monotonic()
                 while True:
-                    datagrams = self._quic.datagrams_to_send(now)
+                    datagrams = quic.datagrams_to_send(now)
 
                     if not datagrams:
                         break
 
-                    if self._dgram_gso_enabled and len(datagrams) > 1:
-                        sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                    if gso_enabled and len(datagrams) > 1:
+                        sync_sendmsg_gso(sock, [d[0] for d in datagrams])
                     else:
                         for datagram in datagrams:
-                            self._socket.sendall(datagram[0])
+                            sock.sendall(datagram[0])
 
             events = []
 
             while True:
-                if not self._quic._events:
-                    if self._dgram_gro_enabled:
-                        data_in = sync_recv_gro(self._socket, 65535)
-                    else:
-                        data_in = self._socket.recv(1500)
+                if not quic._events:
+                    sub = SubTimeout(
+                        sock,
+                        quic.get_timer(),
+                        send_pending,
+                    )
+                    with sub:
+                        if gro_enabled:
+                            data_in = sync_recv_gro(sock, 65535)
+                        else:
+                            data_in = sock.recv(1500)
+                    if sub.timer_fired:
+                        continue
 
                     if not data_in:
                         break
@@ -491,28 +518,26 @@ class QUICResolver(PlainResolver):
 
                     if isinstance(data_in, list):
                         for gro_segment in data_in:
-                            self._quic.receive_datagram(
+                            quic.receive_datagram(
                                 gro_segment, (self._server, self._port), now
                             )
                     else:
-                        self._quic.receive_datagram(
-                            data_in, (self._server, self._port), now
-                        )
+                        quic.receive_datagram(data_in, (self._server, self._port), now)
 
                     while True:
                         now = monotonic()
-                        datagrams = self._quic.datagrams_to_send(now)
+                        datagrams = quic.datagrams_to_send(now)
 
                         if not datagrams:
                             break
 
-                        if self._dgram_gso_enabled and len(datagrams) > 1:
-                            sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                        if gso_enabled and len(datagrams) > 1:
+                            sync_sendmsg_gso(sock, [d[0] for d in datagrams])
                         else:
                             for datagram in datagrams:
-                                self._socket.sendall(datagram[0])
+                                sock.sendall(datagram[0])
 
-                for ev in iter(self._quic.next_event, None):
+                for ev in iter(quic.next_event, None):
                     if isinstance(ev, ConnectionTerminated):
                         if ev.error_code == 298:
                             raise SSLError(

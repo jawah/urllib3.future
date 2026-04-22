@@ -17,10 +17,19 @@ class InMemoryResolver(BaseResolver):
             kwargs.pop("server")
         if "port" in kwargs:
             kwargs.pop("port")
+
+        ech_config = kwargs.pop("ech_config", None)
+
         super().__init__(None, None, *patterns, **kwargs)
 
         self._maxsize = 65535 if "maxsize" not in kwargs else int(kwargs["maxsize"])
         self._hosts: dict[str, list[tuple[socket.AddressFamily, str]]] = {}
+
+        self._ech_config_list: bytes | None = None
+        if isinstance(ech_config, str) and ech_config:
+            self._ech_config_list = bytes.fromhex(ech_config)
+        elif isinstance(ech_config, bytes) and ech_config:
+            self._ech_config_list = ech_config
 
         if self._host_patterns:
             for record in self._host_patterns:
@@ -163,6 +172,10 @@ class InMemoryResolver(BaseResolver):
             ]
         ] = []
 
+        canonname: str | bytes = (
+            self._ech_config_list if self._ech_config_list is not None else ""
+        )
+
         with self._lock:
             if host not in self._hosts:
                 raise socket.gaierror(f"no records found for hostname {host} in-memory")
@@ -179,7 +192,7 @@ class InMemoryResolver(BaseResolver):
                         addr_type,
                         type,
                         6 if type == socket.SOCK_STREAM else 17,
-                        "",
+                        canonname,
                         (addr_target, port)
                         if addr_type == socket.AF_INET
                         else (addr_target, port, 0, 0),

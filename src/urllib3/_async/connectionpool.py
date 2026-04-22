@@ -580,6 +580,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                         else self.happy_eyeballs
                     )
 
+                    ech_config_hex = ""
+                    for ip_addr in ip_addresses:
+                        if isinstance(ip_addr[3], bytes) and ip_addr[3]:
+                            ech_config_hex = ip_addr[3].hex()
+                            break
+
                     for ip_address in ip_addresses[:max_task]:
                         conn_kw = self.conn_kw.copy()
                         target_solo_addr = (
@@ -587,8 +593,13 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                             if ip_address[0] == socket.AF_INET6
                             else ip_address[-1][0]
                         )
-                        conn_kw["resolver"] = AsyncResolverDescription.from_url(
+                        inmemory_url = (
                             f"in-memory://default?hosts={self.host}:{target_solo_addr}"
+                        )
+                        if ech_config_hex:
+                            inmemory_url += f"&ech_config={ech_config_hex}"
+                        conn_kw["resolver"] = AsyncResolverDescription.from_url(
+                            inmemory_url
                         ).new()
                         conn_kw["socket_family"] = ip_address[0]
 
@@ -2291,6 +2302,12 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                         else self.happy_eyeballs
                     )
 
+                    ech_config_hex = ""
+                    for ip_addr in ip_addresses:
+                        if isinstance(ip_addr[3], bytes) and ip_addr[3]:
+                            ech_config_hex = ip_addr[3].hex()
+                            break
+
                     for ip_address in ip_addresses[:max_task]:
                         conn_kw = self.conn_kw.copy()
                         target_solo_addr = (
@@ -2298,8 +2315,13 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                             if ip_address[0] == socket.AF_INET6
                             else ip_address[-1][0]
                         )
-                        conn_kw["resolver"] = AsyncResolverDescription.from_url(
+                        inmemory_url = (
                             f"in-memory://default?hosts={self.host}:{target_solo_addr}"
+                        )
+                        if ech_config_hex:
+                            inmemory_url += f"&ech_config={ech_config_hex}"
+                        conn_kw["resolver"] = AsyncResolverDescription.from_url(
+                            inmemory_url
                         ).new()
                         conn_kw["socket_family"] = ip_address[0]
                         conn_kw["preemptive_quic_cache"] = target_pqc

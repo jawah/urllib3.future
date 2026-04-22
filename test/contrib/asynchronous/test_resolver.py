@@ -30,6 +30,21 @@ from urllib3.contrib.resolver._async.null import NullResolver  # noqa: E402
 from urllib3.contrib.resolver._async.system import SystemResolver  # noqa: E402
 from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
+_DOQ_PARAM = pytest.param(
+    "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+    marks=[
+        pytest.mark.skipif(
+            QUICResolver is _MISSING_QUIC_SENTINEL,
+            reason="Test requires qh3 installed",
+        ),
+        pytest.mark.xfail(
+            condition=bool(os.environ.get("CI")),
+            reason="DoQ unreliable in CI (adguard unreachable)",
+            strict=False,
+        ),
+    ],
+)
+
 
 @pytest.mark.parametrize(
     "hostname, expect_error",
@@ -69,7 +84,21 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dou://1.1.1.1", PlainResolver),
         ("dox://ooooo.com", None),
         ("doh://dns.google/resolve", HTTPSResolver),
-        ("doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0", QUICResolver),
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            QUICResolver,
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+                pytest.mark.xfail(
+                    condition=bool(os.environ.get("CI")),
+                    reason="DoQ unreliable in CI (adguard unreachable)",
+                    strict=False,
+                ),
+            ],
+        ),
         ("dns://dns.adguard-dns.com", None),
         ("null://default", NullResolver),
         ("default://null", None),
@@ -83,9 +112,20 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
         ("dot://1.1.1.1/?implementation=nonexistent", None),
         ("system://", SystemResolver),
         ("dot://", None),
-        (
+        pytest.param(
             "doq://dns.adguard-dns.com/?implementation=qh3&timeout=1&cert_reqs=0",
             QUICResolver,
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+                pytest.mark.xfail(
+                    condition=bool(os.environ.get("CI")),
+                    reason="DoQ unreliable in CI (adguard unreachable)",
+                    strict=False,
+                ),
+            ],
         ),
     ],
 )
@@ -93,9 +133,6 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
 async def test_url_resolver(
     url: str, expected_resolver_class: type[AsyncBaseResolver] | None
 ) -> None:
-    if expected_resolver_class is _MISSING_QUIC_SENTINEL:
-        pytest.skip("Test requires qh3 installed")
-
     if expected_resolver_class is None:
         with pytest.raises(
             (
@@ -125,19 +162,13 @@ async def test_url_resolver(
         "system://default",
         "dot://dns.google",
         "dot://one.one.one.one",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "doh+google://",
         "doh+cloudflare://default",
     ],
 )
 @pytest.mark.asyncio
 async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     res = await resolver.getaddrinfo(
@@ -163,7 +194,7 @@ async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
         "doh://dns.google",
         "dot://dns.google",
         "dot://one.one.one.one",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
     ],
 )
 @pytest.mark.parametrize(
@@ -178,12 +209,6 @@ async def test_1_1_1_1_ipv4_resolution_across_protocols(dns_url: str) -> None:
 async def test_dnssec_exception(
     dns_url: str, hostname: str, expected_failure: bool
 ) -> None:
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     if expected_failure:
@@ -301,19 +326,13 @@ async def test_many_resolver_host_constraint_distribution() -> None:
     [
         "doh+google://default/?timeout=1",
         "doh+cloudflare://",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
 )
 @pytest.mark.asyncio
 async def test_short_endurance_sprint(dns_url: str) -> None:
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     for host in [
@@ -390,19 +409,13 @@ async def test_doh_rfc8484(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
 )
 @pytest.mark.asyncio
 async def test_task_safe_resolver(dns_url: str) -> None:
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     tasks = []
@@ -477,19 +490,13 @@ async def test_many_resolver_task_safe() -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
 )
 @pytest.mark.asyncio
 async def test_resolver_recycle(dns_url: str) -> None:
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     await resolver.close()
@@ -516,19 +523,13 @@ async def test_resolver_recycle(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
 )
 @pytest.mark.asyncio
 async def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     with pytest.raises(RuntimeError):
@@ -543,7 +544,7 @@ async def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -551,12 +552,6 @@ async def test_resolve_cannot_recycle_when_available(dns_url: str) -> None:
 @pytest.mark.asyncio
 async def test_ipv6_always_preferred(dns_url: str) -> None:
     """Our resolvers must place IPV6 address in the beginning of returned list."""
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     inet_classes = []
@@ -584,7 +579,7 @@ async def test_ipv6_always_preferred(dns_url: str) -> None:
     [
         "doh+google://",
         "doh+cloudflare://",
-        "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+        _DOQ_PARAM,
         "dot://one.one.one.one",
         "dou://one.one.one.one",
     ],
@@ -592,12 +587,6 @@ async def test_ipv6_always_preferred(dns_url: str) -> None:
 @pytest.mark.asyncio
 async def test_dgram_upgrade(dns_url: str) -> None:
     """www.cloudflare.com records HTTPS exist, we know it. This verify that we are able to propose a DGRAM upgrade."""
-    if dns_url.startswith("doq"):
-        if QUICResolver is _MISSING_QUIC_SENTINEL:
-            pytest.skip("Test requires qh3 installed")
-        if os.environ.get("CI"):
-            pytest.skip("DoQ unreliable in CI (adguard unreachable)")
-
     resolver = AsyncResolverDescription.from_url(dns_url).new()
 
     sock_types = []
