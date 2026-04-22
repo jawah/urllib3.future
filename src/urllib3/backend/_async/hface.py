@@ -1381,11 +1381,26 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         assert self._protocol is not None
         assert self.sock is not None
 
+        _has_next_timer = hasattr(self._protocol, "next_timer")
+
+        async def send_pending() -> None:
+            while True:
+                data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
+                if not data_out:
+                    break
+                await self.sock.sendall(data_out)  # type: ignore[union-attr]
+
         while (
             self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
             is True
         ):
-            data_in = await self.sock.recv(self.blocksize)
+            next_timer = self._protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
+            sub = AsyncSubTimeout(self.sock, next_timer, send_pending)
+            async with sub:
+                data_in = await self.sock.recv(self.blocksize)
+
+            if sub.timer_fired:
+                continue
 
             if isinstance(data_in, list):
                 for gro_segment in data_in:
@@ -1393,13 +1408,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             else:
                 self._protocol.bytes_received(data_in)
 
-            while True:
-                data_out = self._protocol.bytes_to_send()
-
-                if not data_out:
-                    break
-
-                await self.sock.sendall(data_out)
+            await send_pending()
 
         self._protocol.submit_data(
             __stream_id,
@@ -1702,6 +1711,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         ):
             self.__remaining_body_length = self.__expected_body_length
 
+        _has_next_timer = hasattr(self._protocol, "next_timer")
+
+        async def send_pending() -> None:
+            while True:
+                data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
+                if not data_out:
+                    break
+                await self.sock.sendall(data_out)  # type: ignore[union-attr]
+
         try:
             while (
                 self._protocol.should_wait_remote_flow_control(
@@ -1709,7 +1727,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 )
                 is True
             ):
-                data_in = await self.sock.recv(self.blocksize)
+                next_timer = self._protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
+                sub = AsyncSubTimeout(self.sock, next_timer, send_pending)
+                async with sub:
+                    data_in = await self.sock.recv(self.blocksize)
+
+                if sub.timer_fired:
+                    continue
 
                 if not isinstance(data_in, list):
                     self._protocol.bytes_received(data_in)
@@ -1732,13 +1756,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                     raise EarlyResponse(promise=rp)
 
-                while True:
-                    data_out = self._protocol.bytes_to_send()
-
-                    if not data_out:
-                        break
-
-                    await self.sock.sendall(data_out)
+                await send_pending()
 
             if self.__remaining_body_length:
                 self.__remaining_body_length -= len(data)

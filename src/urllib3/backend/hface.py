@@ -1485,14 +1485,29 @@ class HfaceBackend(BaseBackend):
         assert self._protocol is not None
         assert self.sock is not None
 
+        _has_next_timer = hasattr(self._protocol, "next_timer")
+
+        def send_pending() -> None:
+            while True:
+                data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
+                if not data_out:
+                    break
+                self.sock.sendall(data_out)  # type: ignore[union-attr]
+
         while (
             self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
             is True
         ):
-            if self._dgram_gro_enabled:
-                data_in = sync_recv_gro(self.sock, self.blocksize)
-            else:
-                data_in = self.sock.recv(self.blocksize)
+            next_timer = self._protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
+            sub = SubTimeout(self.sock, next_timer, send_pending)
+            with sub:
+                if self._dgram_gro_enabled:
+                    data_in = sync_recv_gro(self.sock, self.blocksize)
+                else:
+                    data_in = self.sock.recv(self.blocksize)
+
+            if sub.timer_fired:
+                continue
 
             if isinstance(data_in, list):
                 for gro_segment in data_in:
@@ -1500,13 +1515,7 @@ class HfaceBackend(BaseBackend):
             else:
                 self._protocol.bytes_received(data_in)
 
-            while True:
-                data_out = self._protocol.bytes_to_send()
-
-                if not data_out:
-                    break
-
-                self.sock.sendall(data_out)
+            send_pending()
 
         self._protocol.submit_data(
             __stream_id,
@@ -1810,6 +1819,15 @@ class HfaceBackend(BaseBackend):
         ):
             self.__remaining_body_length = self.__expected_body_length
 
+        _has_next_timer = hasattr(self._protocol, "next_timer")
+
+        def send_pending() -> None:
+            while True:
+                data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
+                if not data_out:
+                    break
+                self.sock.sendall(data_out)  # type: ignore[union-attr]
+
         try:
             while (
                 self._protocol.should_wait_remote_flow_control(
@@ -1817,10 +1835,16 @@ class HfaceBackend(BaseBackend):
                 )
                 is True
             ):
-                if self._dgram_gro_enabled:
-                    data_in = sync_recv_gro(self.sock, self.blocksize)
-                else:
-                    data_in = self.sock.recv(self.blocksize)
+                next_timer = self._protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
+                sub = SubTimeout(self.sock, next_timer, send_pending)
+                with sub:
+                    if self._dgram_gro_enabled:
+                        data_in = sync_recv_gro(self.sock, self.blocksize)
+                    else:
+                        data_in = self.sock.recv(self.blocksize)
+
+                if sub.timer_fired:
+                    continue
 
                 if not isinstance(data_in, list):
                     self._protocol.bytes_received(data_in)
@@ -1844,13 +1868,7 @@ class HfaceBackend(BaseBackend):
 
                     raise EarlyResponse(promise=rp)
 
-                while True:
-                    data_out = self._protocol.bytes_to_send()
-
-                    if not data_out:
-                        break
-
-                    self.sock.sendall(data_out)
+                send_pending()
 
             if self.__remaining_body_length:
                 self.__remaining_body_length -= len(data)
