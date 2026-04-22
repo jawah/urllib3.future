@@ -983,7 +983,11 @@ class HfaceBackend(BaseBackend):
                             data_in = sync_recv_gro(sock, blocksize)
                         else:
                             data_in = sock.recv(blocksize)
-                except (ConnectionAbortedError, ConnectionResetError) as e:
+                except (
+                    ConnectionAbortedError,
+                    ConnectionResetError,
+                    ConnectionRefusedError,
+                ) as e:
                     if isinstance(e, ConnectionResetError) and (
                         event_type is HandshakeCompleted
                         or (

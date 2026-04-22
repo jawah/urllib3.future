@@ -893,7 +893,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 try:
                     async with sub:
                         data_in = await sock.recv(blocksize)
-                except (ConnectionAbortedError, ConnectionResetError) as e:
+                except (
+                    ConnectionAbortedError,
+                    ConnectionResetError,
+                    ConnectionRefusedError,
+                ) as e:
                     if isinstance(e, ConnectionResetError) and (
                         event_type is HandshakeCompleted
                         or (
