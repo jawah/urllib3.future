@@ -1,3 +1,11 @@
+2.19.910 (2026-04-22)
+=====================
+
+- Fixed support for custom CPython build against FIPS OpenSSL.
+- Fixed HTTP/3 over QUIC conformance on pacing/ACKs.
+- Fixed handling of forcibly closed UDP socket by remote peer. Now raises proper ``ProtocolError("Remote end closed connection without response")``. (https://github.com/jawah/niquests/issues/380)
+- Fixed support for ECH when enabling happy eyeballs. ech_config_list was not propagated to concurrent connections. (https://github.com/jawah/niquests/issues/381)
+
 2.19.909 (2026-04-17)
 =====================
 
