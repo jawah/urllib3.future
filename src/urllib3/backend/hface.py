@@ -76,6 +76,7 @@ from ..exceptions import (
     SSLError,
 )
 from ..util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ..util.sub_timeout import SubTimeout
 from ._base import (
     BaseBackend,
     ConnectionInfo,
@@ -922,11 +923,36 @@ class HfaceBackend(BaseBackend):
         Can be used for the initial handshake for instance."""
         assert self.sock is not None and self._protocol is not None
 
+        protocol = self._protocol
+        sock = self.sock
+        gso_enabled = self._dgram_gso_enabled
+        gro_enabled = self._dgram_gro_enabled
+        blocksize = self.blocksize
+        _has_next_timer = hasattr(protocol, "next_timer")
+
+        def send_pending() -> None:
+            if gso_enabled:
+                tbs: list[bytes] = []
+                while True:
+                    data_out = protocol.bytes_to_send()
+                    if not data_out:
+                        break
+                    tbs.append(data_out)
+                if len(tbs) > 1:
+                    sync_sendmsg_gso(sock, tbs)
+                elif tbs:
+                    sock.sendall(tbs[0])
+            else:
+                while True:
+                    data_out = protocol.bytes_to_send()
+                    if not data_out:
+                        break
+                    sock.sendall(data_out)
+
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
                 maximal_data_in_read = None
 
-        data_out: bytes
         data_in: bytes | list[bytes]
 
         data_in_len: int = 0
@@ -945,33 +971,18 @@ class HfaceBackend(BaseBackend):
 
         while True:
             reach_socket: bool = False
-            if not self._protocol.has_pending_event(stream_id=stream_id):
+            if not protocol.has_pending_event(stream_id=stream_id):
                 if receive_first is False:
-                    if self._dgram_gso_enabled:
-                        tbs = []
-                        while True:
-                            data_out = self._protocol.bytes_to_send()
-                            if not data_out:
-                                break
-                            tbs.append(data_out)
-                        if len(tbs) > 1:
-                            sync_sendmsg_gso(self.sock, tbs)
-                        elif tbs:
-                            self.sock.sendall(tbs[0])
-                    else:
-                        while True:
-                            data_out = self._protocol.bytes_to_send()
+                    send_pending()
 
-                            if not data_out:
-                                break
-
-                            self.sock.sendall(data_out)
-
+                next_timer = protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
+                sub = SubTimeout(sock, next_timer, send_pending)
                 try:
-                    if self._dgram_gro_enabled:
-                        data_in = sync_recv_gro(self.sock, self.blocksize)
-                    else:
-                        data_in = self.sock.recv(self.blocksize)
+                    with sub:
+                        if gro_enabled:
+                            data_in = sync_recv_gro(sock, blocksize)
+                        else:
+                            data_in = sock.recv(blocksize)
                 except (ConnectionAbortedError, ConnectionResetError) as e:
                     if isinstance(e, ConnectionResetError) and (
                         event_type is HandshakeCompleted
@@ -986,7 +997,7 @@ class HfaceBackend(BaseBackend):
                     # Windows raises OSError target does not listen on given addr:port
                     # when using UDP sock. We want to translate the OSError into ConnResetError
                     # so that we can properly trigger the downgrade procedure anyway. (QUIC -> TCP)
-                    if self.sock.type is socket.SOCK_DGRAM and (
+                    if sock.type is socket.SOCK_DGRAM and (
                         event_type is HandshakeCompleted
                         or (
                             isinstance(event_type, tuple)
@@ -995,6 +1006,9 @@ class HfaceBackend(BaseBackend):
                     ):
                         raise ConnectionResetError() from e
                     raise
+
+                if sub.timer_fired:
+                    continue
 
                 reach_socket = True
 
@@ -1005,16 +1019,16 @@ class HfaceBackend(BaseBackend):
 
                     # must have at least one event received, otherwise we can't declare a proper eof.
                     if (events or self._response is not None) and hasattr(
-                        self._protocol, "eof_received"
+                        protocol, "eof_received"
                     ):
                         try:
-                            self._protocol.eof_received()
-                        except self._protocol.exceptions() as e:  # Defensive:
+                            protocol.eof_received()
+                        except protocol.exceptions() as e:  # Defensive:
                             # overly protective, we hide exception that are behind urllib3.
                             # should not happen, but one truly never known.
                             raise ProtocolError(e) from e  # Defensive:
                     else:
-                        self._protocol.connection_lost()
+                        protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
                         for udp_gro_segment in data_in:
@@ -1022,8 +1036,8 @@ class HfaceBackend(BaseBackend):
                                 data_in_len += len(udp_gro_segment)
 
                             try:
-                                self._protocol.bytes_received(udp_gro_segment)
-                            except self._protocol.exceptions() as e:
+                                protocol.bytes_received(udp_gro_segment)
+                            except protocol.exceptions() as e:
                                 if hasattr(e, "expected_length") and hasattr(
                                     e, "actual_length"
                                 ):
@@ -1037,8 +1051,8 @@ class HfaceBackend(BaseBackend):
                             data_in_len += len(data_in)
 
                         try:
-                            self._protocol.bytes_received(data_in)
-                        except self._protocol.exceptions() as e:
+                            protocol.bytes_received(data_in)
+                        except protocol.exceptions() as e:
                             # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
                             # we convert the exception to our "IncompleteRead" instead.
                             if hasattr(e, "expected_length") and hasattr(
@@ -1050,27 +1064,9 @@ class HfaceBackend(BaseBackend):
                             raise ProtocolError(e) from e  # Defensive:
 
                 if receive_first is True:
-                    if self._dgram_gso_enabled:
-                        tbs = []
-                        while True:
-                            data_out = self._protocol.bytes_to_send()
-                            if not data_out:
-                                break
-                            tbs.append(data_out)
-                        if len(tbs) > 1:
-                            sync_sendmsg_gso(self.sock, tbs)
-                        elif tbs:
-                            self.sock.sendall(tbs[0])
-                    else:
-                        while True:
-                            data_out = self._protocol.bytes_to_send()
+                    send_pending()
 
-                            if not data_out:
-                                break
-
-                            self.sock.sendall(data_out)
-
-            for event in self._protocol.events(stream_id=stream_id):  # type: Event
+            for event in protocol.events(stream_id=stream_id):  # type: Event
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
@@ -1216,12 +1212,12 @@ class HfaceBackend(BaseBackend):
                     ):
                         if event.end_stream is True:  # type: ignore[attr-defined]
                             if reshelve_events:
-                                self._protocol.reshelve(*reshelve_events)
+                                protocol.reshelve(*reshelve_events)
                             return events
                         continue
 
                     if reshelve_events:
-                        self._protocol.reshelve(*reshelve_events)
+                        protocol.reshelve(*reshelve_events)
                     return events
                 elif (
                     stream_related_event
@@ -1229,7 +1225,7 @@ class HfaceBackend(BaseBackend):
                     and respect_end_stream_signal is True
                 ):
                     if reshelve_events:
-                        self._protocol.reshelve(*reshelve_events)
+                        protocol.reshelve(*reshelve_events)
                     return events
                 elif (
                     stream_related_event
@@ -1239,7 +1235,7 @@ class HfaceBackend(BaseBackend):
                     and stream_id == event.stream_id  # type: ignore[attr-defined]
                 ):
                     if reshelve_events:
-                        self._protocol.reshelve(*reshelve_events)
+                        protocol.reshelve(*reshelve_events)
                     return events
 
     def putrequest(

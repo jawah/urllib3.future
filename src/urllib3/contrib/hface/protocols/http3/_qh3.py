@@ -144,6 +144,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._max_frame_size: int | None = None
         self._next_timer: float | None = None
 
+    def next_timer(self) -> float | None:
+        return self._quic.get_timer()
+
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
@@ -305,8 +308,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             for h3_event in self._http.handle_event(quic_event):
                 self._events.extend(self._map_h3_event(h3_event))
 
-        if hasattr(self._quic, "_close_event") and self._quic._close_event is not None:
-            self._events.extend(self._map_quic_event(self._quic._close_event))
+        if getattr(self._quic, "_close_event", None) is not None:
+            self._events.extend(self._map_quic_event(self._quic._close_event))  # type: ignore[arg-type]
 
     def _map_quic_event(self, quic_event: quic_events.QuicEvent) -> Iterable[Event]:
         ev_type = quic_event.__class__
@@ -359,6 +362,29 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
     ) -> bool | None:
+        # accessing our QUIC loss detector
+        # yes, we now, it's private, and we
+        # also maintain qh3, so we're aware.
+        loss = self._quic._loss
+
+        # At least 2 ack-eliciting packets outstanding.
+        # RFC 9000 section 13.2.1
+        # - ACK after the peer receives <= 2 ack-eliciting packets.
+        # - ACK within the peer's negotiated max_ack_delay (<= 25 ms by default).
+        n_outstanding = sum(s.ack_eliciting_in_flight for s in loss.spaces)
+
+        if n_outstanding >= 2:
+            return True
+
+        now = monotonic()
+
+        # Or max_ack_delay elapsed since the last ack-eliciting send.
+        # Yes, we know, it's approximative, borderline heuristic
+        if n_outstanding >= 1:
+            deadline = loss._time_of_last_sent_ack_eliciting_packet + loss.max_ack_delay
+            if now >= deadline:
+                return True
+
         return False
 
     @typing.overload

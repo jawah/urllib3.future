@@ -66,6 +66,7 @@ from ...exceptions import (
     SSLError,
 )
 from ...util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ...util.sub_timeout import AsyncSubTimeout
 from .._base import (
     ConnectionInfo,
     HttpVersion,
@@ -842,11 +843,29 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         Can be used for the initial handshake for instance."""
         assert self.sock is not None and self._protocol is not None
 
+        protocol = self._protocol
+        sock = self.sock
+        blocksize = self.blocksize
+        is_h3 = self._svn is HttpVersion.h3
+        _has_next_timer = hasattr(protocol, "next_timer")
+
+        async def send_pending() -> None:
+            tbs: list[bytes] = []
+            while True:
+                data_out = protocol.bytes_to_send()
+                if not data_out:
+                    break
+                tbs.append(data_out)
+            if is_h3 and len(tbs) > 1:
+                await sock.sendall(tbs)
+            else:
+                for chunk in tbs:
+                    await sock.sendall(chunk)
+
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
                 maximal_data_in_read = None
 
-        data_out: bytes
         data_in: bytes | list[bytes]
 
         data_in_len: int = 0
@@ -865,26 +884,15 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         while True:
             reach_socket: bool = False
-            if not self._protocol.has_pending_event(stream_id=stream_id):
+            if not protocol.has_pending_event(stream_id=stream_id):
                 if receive_first is False:
-                    tbs = []
+                    await send_pending()
 
-                    while True:
-                        data_out = self._protocol.bytes_to_send()
-
-                        if not data_out:
-                            break
-
-                        tbs.append(data_out)
-
-                    if self._svn is HttpVersion.h3 and len(tbs) > 1:
-                        await self.sock.sendall(tbs)
-                    else:
-                        for chunk in tbs:
-                            await self.sock.sendall(chunk)
-
+                next_timer = protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
+                sub = AsyncSubTimeout(sock, next_timer, send_pending)
                 try:
-                    data_in = await self.sock.recv(self.blocksize)
+                    async with sub:
+                        data_in = await sock.recv(blocksize)
                 except (ConnectionAbortedError, ConnectionResetError) as e:
                     if isinstance(e, ConnectionResetError) and (
                         event_type is HandshakeCompleted
@@ -896,6 +904,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         raise e
                     data_in = b""
 
+                if sub.timer_fired:
+                    continue
+
                 reach_socket = True
 
                 if not data_in:
@@ -905,16 +916,16 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                     # must have at least one event received, otherwise we can't declare a proper eof.
                     if (events or self._response is not None) and hasattr(
-                        self._protocol, "eof_received"
+                        protocol, "eof_received"
                     ):
                         try:
-                            self._protocol.eof_received()
-                        except self._protocol.exceptions() as e:  # Defensive:
+                            protocol.eof_received()
+                        except protocol.exceptions() as e:  # Defensive:
                             # overly protective, we hide exception that are behind urllib3.
                             # should not happen, but one truly never known.
                             raise ProtocolError(e) from e  # Defensive:
                     else:
-                        self._protocol.connection_lost()
+                        protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
                         for udp_gro_segment in data_in:
@@ -922,8 +933,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                                 data_in_len += len(udp_gro_segment)
 
                             try:
-                                self._protocol.bytes_received(udp_gro_segment)
-                            except self._protocol.exceptions() as e:
+                                protocol.bytes_received(udp_gro_segment)
+                            except protocol.exceptions() as e:
                                 # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
                                 # we convert the exception to our "IncompleteRead" instead.
                                 if hasattr(e, "expected_length") and hasattr(
@@ -944,8 +955,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                             data_in_len += incoming_buffer_size
 
                         try:
-                            self._protocol.bytes_received(data_in)
-                        except self._protocol.exceptions() as e:
+                            protocol.bytes_received(data_in)
+                        except protocol.exceptions() as e:
                             # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
                             # we convert the exception to our "IncompleteRead" instead.
                             if hasattr(e, "expected_length") and hasattr(
@@ -957,23 +968,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                             raise ProtocolError(e) from e  # Defensive:
 
                 if receive_first is True:
-                    tbs = []
+                    await send_pending()
 
-                    while True:
-                        data_out = self._protocol.bytes_to_send()
-
-                        if not data_out:
-                            break
-
-                        tbs.append(data_out)
-
-                    if self._svn is HttpVersion.h3 and len(tbs) > 1:
-                        await self.sock.sendall(tbs)
-                    else:
-                        for chunk in tbs:
-                            await self.sock.sendall(chunk)
-
-            for event in self._protocol.events(stream_id=stream_id):  # type: Event
+            for event in protocol.events(stream_id=stream_id):  # type: Event
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
@@ -1114,12 +1111,12 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     ):
                         if event.end_stream is True:  # type: ignore[attr-defined]
                             if reshelve_events:
-                                self._protocol.reshelve(*reshelve_events)
+                                protocol.reshelve(*reshelve_events)
                             return events
                         continue
 
                     if reshelve_events:
-                        self._protocol.reshelve(*reshelve_events)
+                        protocol.reshelve(*reshelve_events)
                     return events
                 elif (
                     stream_related_event
@@ -1127,7 +1124,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     and respect_end_stream_signal is True
                 ):
                     if reshelve_events:
-                        self._protocol.reshelve(*reshelve_events)
+                        protocol.reshelve(*reshelve_events)
                     return events
                 elif (
                     stream_related_event
@@ -1137,7 +1134,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     and stream_id == event.stream_id  # type: ignore[attr-defined]
                 ):
                     if reshelve_events:
-                        self._protocol.reshelve(*reshelve_events)
+                        protocol.reshelve(*reshelve_events)
                     return events
 
     def putrequest(
