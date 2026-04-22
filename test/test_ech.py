@@ -32,7 +32,7 @@ def test_sync_ech_accepted(happy_eyeballs: bool, http_version: int) -> None:
         pytest.skip("Test requires HTTP/3 support")
     if http_version != 30:
         try:
-            import rtls
+            import rtls  # noqa
         except ImportError:
             pytest.skip("Test requires rtls for ECH at TCP level")
 
@@ -61,7 +61,7 @@ def test_sync_ech_accepted(happy_eyeballs: bool, http_version: int) -> None:
     }
 
     with PoolManager(**pm_kwargs) as pm:
-        resp = pm.urlopen(
+        pm.urlopen(
             "GET",
             "https://encryptedsni.com/",
             redirect=False,
@@ -89,7 +89,7 @@ async def test_async_ech_accepted(happy_eyeballs: bool, http_version: int) -> No
         pytest.skip("Test requires HTTP/3 support")
     if http_version != 30:
         try:
-            import rtls
+            import rtls  # noqa
         except ImportError:
             pytest.skip("Test requires rtls for ECH at TCP level")
 
