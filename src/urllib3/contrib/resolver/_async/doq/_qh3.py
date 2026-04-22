@@ -27,6 +27,7 @@ from qh3.quic.events import (
 )
 
 from .....util.ssl_ import IS_FIPS, resolve_cert_reqs
+from .....util.sub_timeout import AsyncSubTimeout
 from ...protocols import (
     COMMON_RCODE_LABEL,
     DomainNameServerQuery,
@@ -484,24 +485,45 @@ class QUICResolver(PlainResolver):
     ) -> list[QuicEvent]:
         assert self._socket is not None
 
+        quic = self._quic
+        sock = self._socket
+
+        async def send_pending() -> None:
+            now = monotonic()
+            quic.handle_timer(now)
+            while True:
+                datagrams = quic.datagrams_to_send(now)
+                if not datagrams:
+                    break
+                for datagram in datagrams:
+                    await sock.sendall(datagram[0])
+
         while True:
             if receive_first is False:
                 now = monotonic()
                 while True:
-                    datagrams = self._quic.datagrams_to_send(now)
+                    datagrams = quic.datagrams_to_send(now)
 
                     if not datagrams:
                         break
 
                     for datagram in datagrams:
                         data, addr = datagram
-                        await self._socket.sendall(data)
+                        await sock.sendall(data)
 
             events = []
 
             while True:
-                if not self._quic._events:
-                    data_in = await self._socket.recv(1500)
+                if not quic._events:
+                    sub = AsyncSubTimeout(
+                        sock,
+                        quic.get_timer(),
+                        send_pending,
+                    )
+                    async with sub:
+                        data_in = await sock.recv(1500)
+                    if sub.timer_fired:
+                        continue
 
                     if not data_in:
                         break
@@ -509,26 +531,24 @@ class QUICResolver(PlainResolver):
                     now = monotonic()
 
                     if not isinstance(data_in, list):
-                        self._quic.receive_datagram(
-                            data_in, (self._server, self._port), now
-                        )
+                        quic.receive_datagram(data_in, (self._server, self._port), now)
                     else:
                         for gro_segment in data_in:
-                            self._quic.receive_datagram(
+                            quic.receive_datagram(
                                 gro_segment, (self._server, self._port), now
                             )
 
                     while True:
-                        datagrams = self._quic.datagrams_to_send(now)
+                        datagrams = quic.datagrams_to_send(now)
 
                         if not datagrams:
                             break
 
                         for datagram in datagrams:
                             data, addr = datagram
-                            await self._socket.sendall(data)
+                            await sock.sendall(data)
 
-                for ev in iter(self._quic.next_event, None):
+                for ev in iter(quic.next_event, None):
                     if isinstance(ev, ConnectionTerminated):
                         if ev.error_code == 298:
                             raise SSLError(

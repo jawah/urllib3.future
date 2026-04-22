@@ -89,6 +89,12 @@ class OverUDPProtocol(BaseProtocol, metaclass=ABCMeta):
 
 
 class OverQUICProtocol(OverUDPProtocol):
+    def next_timer(self) -> float | None:
+        """Return the absolute monotonic time of the next QUIC timer event.
+        Returns None when no timer is currently scheduled.
+        """
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def connection_ids(self) -> Sequence[bytes]:
