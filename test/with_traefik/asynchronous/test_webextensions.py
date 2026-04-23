@@ -487,7 +487,7 @@ class TestWebExtensions(TraefikTestCase):
                 if resp.extension:
                     await resp.extension.close()
 
-            asyncio.create_task(cancel(), name="cancel()")
+            asyncio.create_task(cancel())
 
             events = []
 
