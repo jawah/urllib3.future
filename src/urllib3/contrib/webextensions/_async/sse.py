@@ -36,9 +36,8 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
 
     async def close(self) -> None:
         if self._stream is not None and self._response is not None:
-            if self._next_value_task:
+            if self._next_value_task is not None:
                 self._next_value_task.cancel()
-                await self._next_value_task
 
             await self._stream.aclose()
             if (
@@ -88,7 +87,7 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
                     chunk = await self._next_value_task
                     self._buffer += self._decoder.decode(chunk)
                 except asyncio.CancelledError:
-                    pass
+                    return None
                 except StopAsyncIteration:
                     last_chunk = self._decoder.decode(b"", final=True)
                     if not last_chunk:
@@ -97,6 +96,8 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
                         self._decoder.reset()
                         return None
                     self._buffer += last_chunk
+                finally:
+                    self._next_value_task = None
 
             # Locate the first event boundary.
             lf = self._buffer.find("\n\n")
