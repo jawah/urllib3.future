@@ -5,6 +5,7 @@
 - Fixed HTTP/3 over QUIC conformance on pacing/ACKs.
 - Fixed handling of forcibly closed UDP socket by remote peer. Now raises proper ``ProtocolError("Remote end closed connection without response")``. (https://github.com/jawah/niquests/issues/380)
 - Fixed support for ECH when enabling happy eyeballs. ech_config_list was not propagated to concurrent connections. (https://github.com/jawah/niquests/issues/381)
+- Fixed async SSE stream to gracefully terminate while waiting for the next payload. (#354)
 - Removed the superfluous warning about "Received server switch protocol event without a pending proposal." with HTTP/1.
 
 2.19.909 (2026-04-17)
