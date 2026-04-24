@@ -342,7 +342,11 @@ class AsyncSocket:
                 def _force_close(self, exc):  # type: ignore[no-untyped-def]
                     self._closed = True
                     if self._ssl_protocol is not None:
-                        self._ssl_protocol._abort(exc)
+                        try:
+                            self._ssl_protocol._abort(exc)
+                        except TypeError:
+                            # Python < 3.11: _abort() takes no arguments
+                            self._ssl_protocol._abort()
 
                 _ssl_tp._force_close = _force_close
         except AttributeError:
