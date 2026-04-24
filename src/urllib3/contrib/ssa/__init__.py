@@ -350,10 +350,10 @@ class AsyncSocket:
             )
 
             if new_transport is None:
-                # Python < 3.11 only
+                # Most likely Python < 3.11 only.
                 # https://github.com/jawah/niquests/issues/383
                 raise OSError(
-                    "asyncio TLS-in-TLS tunnel failed. start_tls did not create a new transport."
+                    "Asyncio start TLS failed. The transport failed silently during TLS handshake."
                 )
 
             self._writer._transport = new_transport  # type: ignore[attr-defined]
