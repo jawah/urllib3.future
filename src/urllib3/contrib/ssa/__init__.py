@@ -332,6 +332,22 @@ class AsyncSocket:
         except AttributeError:
             pass
 
+        # CPython < 3.11 bug: _SSLProtocolTransport lacks _force_close(),
+        # but SSLProtocol._fatal_error() calls it during TLS-in-TLS
+        # handshake failures. Backport the 3.11+ implementation.
+        try:
+            _ssl_tp = asyncio.sslproto._SSLProtocolTransport  # type: ignore[attr-defined]
+            if not hasattr(_ssl_tp, "_force_close"):
+
+                def _force_close(self, exc):  # type: ignore[no-untyped-def]
+                    self._closed = True
+                    if self._ssl_protocol is not None:
+                        self._ssl_protocol._abort(exc)
+
+                _ssl_tp._force_close = _force_close
+        except AttributeError:
+            pass
+
         if self.type == socket.SOCK_STREAM:
             assert self._writer is not None
             assert isinstance(self._writer, asyncio.StreamWriter)
