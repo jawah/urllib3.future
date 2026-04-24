@@ -24,6 +24,7 @@ from urllib3.exceptions import (
     ConnectTimeoutError,
     InsecureRequestWarning,
     MaxRetryError,
+    NameResolutionError,
     ProxyError,
     ProxySchemeUnknown,
     ReadTimeoutError,
@@ -483,7 +484,14 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
                 await proxy.request("GET", target_url)
 
             assert type(e.value.reason) == ProxyError
-            assert type(e.value.reason.original_error) == ConnectTimeoutError
+            # The async resolver may raise NameResolutionError instead of
+            # ConnectTimeoutError on some platforms (Windows, PyPy) when
+            # the proxy address is an unreachable IP that times out at the
+            # DNS resolution stage rather than the TCP connect stage.
+            assert type(e.value.reason.original_error) in (
+                ConnectTimeoutError,
+                NameResolutionError,
+            )
 
     @requires_network()
     @pytest.mark.parametrize(
@@ -503,7 +511,11 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
                 await proxy.request("GET", target_url)
 
             assert type(e.value.reason) == ProxyError
-            assert type(e.value.reason.original_error) == ConnectTimeoutError
+            # See comment in test_forwarding_proxy_connect_timeout.
+            assert type(e.value.reason.original_error) in (
+                ConnectTimeoutError,
+                NameResolutionError,
+            )
 
     @requires_network()
     @pytest.mark.parametrize(
