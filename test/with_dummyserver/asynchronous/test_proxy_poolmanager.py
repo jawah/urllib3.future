@@ -35,9 +35,7 @@ from urllib3.util.timeout import Timeout
 from ... import TARPIT_HOST, requires_network
 
 
-def assert_is_verified(
-    pm: AsyncProxyManager, *, proxy: bool, target: bool
-) -> None:
+def assert_is_verified(pm: AsyncProxyManager, *, proxy: bool, target: bool) -> None:
     pool = list(pm.pools._container.values())[-1]  # retrieve last pool entry
     connection = (
         list(pool.pool._container.values())[-1] if pool.pool is not None else None
@@ -57,9 +55,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         cls.https_url = f"https://{cls.https_host}:{int(cls.https_port)}"
         cls.https_url_alt = f"https://{cls.https_host_alt}:{int(cls.https_port)}"
         cls.proxy_url = f"http://{cls.proxy_host}:{int(cls.proxy_port)}"
-        cls.https_proxy_url = (
-            f"https://{cls.proxy_host}:{int(cls.https_proxy_port)}"
-        )
+        cls.https_proxy_url = f"https://{cls.proxy_host}:{int(cls.https_proxy_port)}"
 
         # Generate another CA to test verification failure
         cls.certs_dir = tempfile.mkdtemp()
@@ -74,9 +70,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         shutil.rmtree(cls.certs_dir)
 
     async def test_basic_proxy(self) -> None:
-        async with async_proxy_from_url(
-            self.proxy_url, ca_certs=DEFAULT_CA
-        ) as http:
+        async with async_proxy_from_url(self.proxy_url, ca_certs=DEFAULT_CA) as http:
             r = await http.request("GET", f"{self.http_url}/")
             assert r.status == 200
 
@@ -94,17 +88,13 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert r.status == 200
 
     async def test_is_verified_http_proxy_to_http_target(self) -> None:
-        async with async_proxy_from_url(
-            self.proxy_url, ca_certs=DEFAULT_CA
-        ) as http:
+        async with async_proxy_from_url(self.proxy_url, ca_certs=DEFAULT_CA) as http:
             r = await http.request("GET", f"{self.http_url}/")
             assert r.status == 200
             assert_is_verified(http, proxy=False, target=False)
 
     async def test_is_verified_http_proxy_to_https_target(self) -> None:
-        async with async_proxy_from_url(
-            self.proxy_url, ca_certs=DEFAULT_CA
-        ) as http:
+        async with async_proxy_from_url(self.proxy_url, ca_certs=DEFAULT_CA) as http:
             r = await http.request("GET", f"{self.https_url}/")
             assert r.status == 200
             assert_is_verified(http, proxy=False, target=True)
@@ -217,9 +207,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert r._pool.host != self.http_host_alt
 
     async def test_cross_protocol_redirect(self) -> None:
-        async with async_proxy_from_url(
-            self.proxy_url, ca_certs=DEFAULT_CA
-        ) as http:
+        async with async_proxy_from_url(self.proxy_url, ca_certs=DEFAULT_CA) as http:
             cross_protocol_location = f"{self.https_url}/echo?a=b"
             with pytest.raises(MaxRetryError):
                 await http.request(
@@ -246,49 +234,33 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             proxy_headers={"Hickory": "dickory"},
             ca_certs=DEFAULT_CA,
         ) as http:
-            r = await http.request_encode_url(
-                "GET", f"{self.http_url}/headers"
-            )
+            r = await http.request_encode_url("GET", f"{self.http_url}/headers")
+            returned_headers = await r.json()
+            assert returned_headers.get("Foo") == "bar"
+            assert returned_headers.get("Hickory") == "dickory"
+            assert returned_headers.get("Host") == f"{self.http_host}:{self.http_port}"
+
+            r = await http.request_encode_url("GET", f"{self.http_url_alt}/headers")
             returned_headers = await r.json()
             assert returned_headers.get("Foo") == "bar"
             assert returned_headers.get("Hickory") == "dickory"
             assert (
-                returned_headers.get("Host")
-                == f"{self.http_host}:{self.http_port}"
+                returned_headers.get("Host") == f"{self.http_host_alt}:{self.http_port}"
             )
 
-            r = await http.request_encode_url(
-                "GET", f"{self.http_url_alt}/headers"
-            )
-            returned_headers = await r.json()
-            assert returned_headers.get("Foo") == "bar"
-            assert returned_headers.get("Hickory") == "dickory"
-            assert (
-                returned_headers.get("Host")
-                == f"{self.http_host_alt}:{self.http_port}"
-            )
-
-            r = await http.request_encode_url(
-                "GET", f"{self.https_url}/headers"
-            )
+            r = await http.request_encode_url("GET", f"{self.https_url}/headers")
             returned_headers = await r.json()
             assert returned_headers.get("Foo") == "bar"
             assert returned_headers.get("Hickory") is None
             assert (
-                returned_headers.get("Host")
-                == f"{self.https_host}:{self.https_port}"
+                returned_headers.get("Host") == f"{self.https_host}:{self.https_port}"
             )
 
-            r = await http.request_encode_body(
-                "POST", f"{self.http_url}/headers"
-            )
+            r = await http.request_encode_body("POST", f"{self.http_url}/headers")
             returned_headers = await r.json()
             assert returned_headers.get("Foo") == "bar"
             assert returned_headers.get("Hickory") == "dickory"
-            assert (
-                returned_headers.get("Host")
-                == f"{self.http_host}:{self.http_port}"
-            )
+            assert returned_headers.get("Host") == f"{self.http_host}:{self.http_port}"
 
             r = await http.request_encode_url(
                 "GET",
@@ -299,10 +271,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert returned_headers.get("Foo") is None
             assert returned_headers.get("Baz") == "quux"
             assert returned_headers.get("Hickory") == "dickory"
-            assert (
-                returned_headers.get("Host")
-                == f"{self.http_host}:{self.http_port}"
-            )
+            assert returned_headers.get("Host") == f"{self.http_host}:{self.http_port}"
 
             r = await http.request_encode_url(
                 "GET",
@@ -314,8 +283,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert returned_headers.get("Baz") == "quux"
             assert returned_headers.get("Hickory") is None
             assert (
-                returned_headers.get("Host")
-                == f"{self.https_host}:{self.https_port}"
+                returned_headers.get("Host") == f"{self.https_host}:{self.https_port}"
             )
 
             r = await http.request_encode_body(
@@ -327,10 +295,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert returned_headers.get("Foo") is None
             assert returned_headers.get("Baz") == "quux"
             assert returned_headers.get("Hickory") == "dickory"
-            assert (
-                returned_headers.get("Host")
-                == f"{self.http_host}:{self.http_port}"
-            )
+            assert returned_headers.get("Host") == f"{self.http_host}:{self.http_port}"
 
             r = await http.request_encode_body(
                 "GET",
@@ -342,8 +307,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert returned_headers.get("Baz") == "quux"
             assert returned_headers.get("Hickory") is None
             assert (
-                returned_headers.get("Host")
-                == f"{self.https_host}:{self.https_port}"
+                returned_headers.get("Host") == f"{self.https_host}:{self.https_port}"
             )
 
     async def test_https_headers(self) -> None:
@@ -353,26 +317,18 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             proxy_headers={"Hickory": "dickory"},
             ca_certs=DEFAULT_CA,
         ) as http:
-            r = await http.request_encode_url(
-                "GET", f"{self.http_url}/headers"
-            )
+            r = await http.request_encode_url("GET", f"{self.http_url}/headers")
             returned_headers = await r.json()
             assert returned_headers.get("Foo") == "bar"
             assert returned_headers.get("Hickory") == "dickory"
-            assert (
-                returned_headers.get("Host")
-                == f"{self.http_host}:{self.http_port}"
-            )
+            assert returned_headers.get("Host") == f"{self.http_host}:{self.http_port}"
 
-            r = await http.request_encode_url(
-                "GET", f"{self.http_url_alt}/headers"
-            )
+            r = await http.request_encode_url("GET", f"{self.http_url_alt}/headers")
             returned_headers = await r.json()
             assert returned_headers.get("Foo") == "bar"
             assert returned_headers.get("Hickory") == "dickory"
             assert (
-                returned_headers.get("Host")
-                == f"{self.http_host_alt}:{self.http_port}"
+                returned_headers.get("Host") == f"{self.http_host_alt}:{self.http_port}"
             )
 
             r = await http.request_encode_body(
@@ -385,8 +341,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert returned_headers.get("Baz") == "quux"
             assert returned_headers.get("Hickory") is None
             assert (
-                returned_headers.get("Host")
-                == f"{self.https_host}:{self.https_port}"
+                returned_headers.get("Host") == f"{self.https_host}:{self.https_port}"
             )
 
     async def test_https_headers_forwarding_for_https(self) -> None:
@@ -397,15 +352,12 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             ca_certs=DEFAULT_CA,
             use_forwarding_for_https=True,
         ) as http:
-            r = await http.request_encode_url(
-                "GET", f"{self.https_url}/headers"
-            )
+            r = await http.request_encode_url("GET", f"{self.https_url}/headers")
             returned_headers = await r.json()
             assert returned_headers.get("Foo") == "bar"
             assert returned_headers.get("Hickory") == "dickory"
             assert (
-                returned_headers.get("Host")
-                == f"{self.https_host}:{self.https_port}"
+                returned_headers.get("Host") == f"{self.https_host}:{self.https_port}"
             )
 
     async def test_headerdict(self) -> None:
@@ -429,9 +381,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert returned_headers.get("Baz") == "quux"
 
     async def test_proxy_pooling(self) -> None:
-        async with async_proxy_from_url(
-            self.proxy_url, cert_reqs="NONE"
-        ) as http:
+        async with async_proxy_from_url(self.proxy_url, cert_reqs="NONE") as http:
             for x in range(2):
                 await http.urlopen("GET", self.http_url)
             assert len(http.pools) == 1
@@ -466,11 +416,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         target_scheme: str,
         use_forwarding_for_https: bool,
     ) -> None:
-        proxy_url = (
-            self.https_proxy_url
-            if proxy_scheme == "https"
-            else self.proxy_url
-        )
+        proxy_url = self.https_proxy_url if proxy_scheme == "https" else self.proxy_url
         target_url = f"{target_scheme}://{TARPIT_HOST}"
 
         async with async_proxy_from_url(
@@ -495,11 +441,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
     async def test_tunneling_proxy_request_timeout(
         self, proxy_scheme: str, target_scheme: str
     ) -> None:
-        proxy_url = (
-            self.https_proxy_url
-            if proxy_scheme == "https"
-            else self.proxy_url
-        )
+        proxy_url = self.https_proxy_url if proxy_scheme == "https" else self.proxy_url
         target_url = f"{target_scheme}://{TARPIT_HOST}"
 
         async with async_proxy_from_url(
@@ -529,9 +471,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         use_forwarding_for_https: bool,
     ) -> None:
         proxy_url = f"{proxy_scheme}://{TARPIT_HOST}"
-        target_url = (
-            self.https_url if target_scheme == "https" else self.http_url
-        )
+        target_url = self.https_url if target_scheme == "https" else self.http_url
 
         async with async_proxy_from_url(
             proxy_url,
@@ -554,9 +494,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         self, proxy_scheme: str, target_scheme: str
     ) -> None:
         proxy_url = f"{proxy_scheme}://{TARPIT_HOST}"
-        target_url = (
-            self.https_url if target_scheme == "https" else self.http_url
-        )
+        target_url = self.https_url if target_scheme == "https" else self.http_url
 
         async with async_proxy_from_url(
             proxy_url, ca_certs=DEFAULT_CA, timeout=SHORT_TIMEOUT
@@ -579,9 +517,7 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
     async def test_https_proxy_tls_error(
         self, target_scheme: str, use_forwarding_for_https: str
     ) -> None:
-        target_url = (
-            self.https_url if target_scheme == "https" else self.http_url
-        )
+        target_url = self.https_url if target_scheme == "https" else self.http_url
         proxy_ctx = ssl.create_default_context()
         async with async_proxy_from_url(
             self.https_proxy_url,
@@ -606,20 +542,14 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         self, proxy_scheme: str, use_forwarding_for_https: str
     ) -> None:
         if proxy_scheme == "https" and use_forwarding_for_https:
-            pytest.skip(
-                "Test is expected to fail due to urllib3/urllib3#2577"
-            )
+            pytest.skip("Test is expected to fail due to urllib3/urllib3#2577")
 
         try:
             import rtls as alt_ssl
         except ImportError:
             alt_ssl = None  # type: ignore[assignment]
 
-        proxy_url = (
-            self.https_proxy_url
-            if proxy_scheme == "https"
-            else self.proxy_url
-        )
+        proxy_url = self.https_proxy_url if proxy_scheme == "https" else self.proxy_url
         if alt_ssl is None:
             proxy_ctx = ssl.create_default_context()
         else:
@@ -656,24 +586,19 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         [
             (
                 "127.0.0.1",
-                "Proxy URL had no scheme, should start with"
-                " http:// or https://",
+                "Proxy URL had no scheme, should start with http:// or https://",
             ),
             (
                 "localhost:8080",
-                "Proxy URL had no scheme, should start with"
-                " http:// or https://",
+                "Proxy URL had no scheme, should start with http:// or https://",
             ),
             (
                 "ftp://google.com",
-                "Proxy URL had unsupported scheme ftp, should use"
-                " http:// or https://",
+                "Proxy URL had unsupported scheme ftp, should use http:// or https://",
             ),
         ],
     )
-    async def test_invalid_schema(
-        self, url: str, error_msg: str
-    ) -> None:
+    async def test_invalid_schema(self, url: str, error_msg: str) -> None:
         with pytest.raises(ProxySchemeUnknown, match=error_msg):
             async_proxy_from_url(url)
 
@@ -687,17 +612,11 @@ class TestAsyncIPv6HTTPProxyManager(IPv6HTTPDummyProxyTestCase):
         cls.http_url = f"http://{cls.http_host}:{int(cls.http_port)}"
         cls.http_url_alt = f"http://{cls.http_host_alt}:{int(cls.http_port)}"
         cls.https_url = f"https://{cls.https_host}:{int(cls.https_port)}"
-        cls.https_url_alt = (
-            f"https://{cls.https_host_alt}:{int(cls.https_port)}"
-        )
-        cls.proxy_url = (
-            f"http://[{cls.proxy_host}]:{int(cls.proxy_port)}"
-        )
+        cls.https_url_alt = f"https://{cls.https_host_alt}:{int(cls.https_port)}"
+        cls.proxy_url = f"http://[{cls.proxy_host}]:{int(cls.proxy_port)}"
 
     async def test_basic_ipv6_proxy(self) -> None:
-        async with async_proxy_from_url(
-            self.proxy_url, ca_certs=DEFAULT_CA
-        ) as http:
+        async with async_proxy_from_url(self.proxy_url, ca_certs=DEFAULT_CA) as http:
             r = await http.request("GET", f"{self.http_url}/")
             assert r.status == 200
 
@@ -759,9 +678,7 @@ class TestAsyncHTTPSProxyVerification:
             proxy.ca_certs  # type: ignore[arg-type]
         )
         new_char = "b" if proxy_fingerprint[5] == "a" else "a"
-        proxy_fingerprint = (
-            proxy_fingerprint[:5] + new_char + proxy_fingerprint[6:]
-        )
+        proxy_fingerprint = proxy_fingerprint[:5] + new_char + proxy_fingerprint[6:]
 
         async with async_proxy_from_url(
             proxy_url,
@@ -803,22 +720,15 @@ class TestAsyncHTTPSProxyVerification:
             with pytest.raises(MaxRetryError) as e:
                 await https.request("GET", destination_url)
 
-            proxy_host = self._get_certificate_formatted_proxy_host(
-                proxy.host
-            )
-            msg = (
-                f"hostname \\'{proxy_hostname}\\'"
-                f" doesn\\'t match \\'{proxy_host}"
-            )
+            proxy_host = self._get_certificate_formatted_proxy_host(proxy.host)
+            msg = f"hostname \\'{proxy_hostname}\\' doesn\\'t match \\'{proxy_host}"
             assert msg in str(e)
 
     async def test_https_proxy_hostname_verification(
         self, no_localhost_san_server: ServerConfig
     ) -> None:
         bad_server = no_localhost_san_server
-        bad_proxy_url = (
-            f"https://{bad_server.host}:{bad_server.port}"
-        )
+        bad_proxy_url = f"https://{bad_server.host}:{bad_server.port}"
 
         # An exception will be raised before we contact the destination
         # domain.
@@ -859,15 +769,11 @@ class TestAsyncHTTPSProxyVerification:
         proxy, server = ipv4_san_proxy_with_server
         proxy_url = f"https://{proxy.host}:{proxy.port}"
         destination_url = f"https://{server.host}:{server.port}"
-        async with async_proxy_from_url(
-            proxy_url, ca_certs=proxy.ca_certs
-        ) as https:
+        async with async_proxy_from_url(proxy_url, ca_certs=proxy.ca_certs) as https:
             r = await https.request("GET", destination_url)
             assert r.status == 200
 
-    @pytest.mark.skipif(
-        HAS_IPV6 is False, reason="Only runs on IPv6 systems"
-    )
+    @pytest.mark.skipif(HAS_IPV6 is False, reason="Only runs on IPv6 systems")
     async def test_https_proxy_ipv6_san(
         self,
         ipv6_san_proxy_with_server: tuple[ServerConfig, ServerConfig],
@@ -875,9 +781,7 @@ class TestAsyncHTTPSProxyVerification:
         proxy, server = ipv6_san_proxy_with_server
         proxy_url = f"https://[{proxy.host}]:{proxy.port}"
         destination_url = f"https://{server.host}:{server.port}"
-        async with async_proxy_from_url(
-            proxy_url, ca_certs=proxy.ca_certs
-        ) as https:
+        async with async_proxy_from_url(proxy_url, ca_certs=proxy.ca_certs) as https:
             r = await https.request("GET", destination_url)
             assert r.status == 200
 
@@ -889,13 +793,9 @@ class TestAsyncHTTPSProxyVerification:
     ) -> None:
         proxy, server = no_san_proxy_with_server
         proxy_url = f"https://{proxy.host}:{proxy.port}"
-        destination_url = (
-            f"{target_scheme}://{server.host}:{server.port}"
-        )
+        destination_url = f"{target_scheme}://{server.host}:{server.port}"
 
-        async with async_proxy_from_url(
-            proxy_url, ca_certs=proxy.ca_certs
-        ) as https:
+        async with async_proxy_from_url(proxy_url, ca_certs=proxy.ca_certs) as https:
             with pytest.raises(MaxRetryError) as e:
                 await https.request("GET", destination_url)
             assert isinstance(e.value.reason, ProxyError)
@@ -903,12 +803,11 @@ class TestAsyncHTTPSProxyVerification:
             ssl_error = e.value.reason.original_error
             assert isinstance(ssl_error, SSLError)
             assert (
-                "no appropriate subjectAltName fields were found"
+                "no appropriate subjectAltName fields were found" in str(ssl_error)
+                or "Hostname mismatch, certificate is not valid for 'localhost'"
                 in str(ssl_error)
-                or "Hostname mismatch, certificate is not valid"
-                " for 'localhost'" in str(ssl_error)
-                or "invalid peer certificate: certificate not valid"
-                " for name" in str(ssl_error)
+                or "invalid peer certificate: certificate not valid for name"
+                in str(ssl_error)
             )
 
     async def test_https_proxy_no_san_hostname_checks_common_name(
@@ -926,14 +825,8 @@ class TestAsyncHTTPSProxyVerification:
         # but also has it enabled by default so we need to handle that.
         except AttributeError:
             pass
-        if (
-            getattr(proxy_ctx, "hostname_checks_common_name", False)
-            is not True
-        ):
-            pytest.skip(
-                "Test requires"
-                " 'SSLContext.hostname_checks_common_name=True'"
-            )
+        if getattr(proxy_ctx, "hostname_checks_common_name", False) is not True:
+            pytest.skip("Test requires 'SSLContext.hostname_checks_common_name=True'")
 
         async with async_proxy_from_url(
             proxy_url,

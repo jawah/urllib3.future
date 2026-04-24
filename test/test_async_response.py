@@ -473,9 +473,7 @@ class TestAsyncResponse:
         # chain validation happens on first read(), not at construction.
         resp = AsyncHTTPResponse(
             fp,
-            headers={
-                "content-encoding": "gzip, deflate, br, zstd, gzip, deflate"
-            },
+            headers={"content-encoding": "gzip, deflate, br, zstd, gzip, deflate"},
             preload_content=False,
         )
         with pytest.raises(
@@ -641,13 +639,9 @@ class TestAsyncResponse:
             ``NUMBER_OF_READS`` calls to ``read``.
             """
 
-            def __init__(
-                self, payload: bytes, payload_part_size: int
-            ) -> None:
+            def __init__(self, payload: bytes, payload_part_size: int) -> None:
                 self.payloads = [
-                    payload[
-                        i * payload_part_size : (i + 1) * payload_part_size
-                    ]
+                    payload[i * payload_part_size : (i + 1) * payload_part_size]
                     for i in range(NUMBER_OF_READS + 1)
                 ]
 
@@ -696,9 +690,7 @@ class TestAsyncResponse:
         if expected_last_part_size == 0:
             expected_lengths = [PART_SIZE] * whole_parts
         else:
-            expected_lengths = [PART_SIZE] * whole_parts + [
-                expected_last_part_size
-            ]
+            expected_lengths = [PART_SIZE] * whole_parts + [expected_last_part_size]
         assert expected_lengths == [len(part) for part in parts]
 
     async def test_deflate_streaming(self) -> None:
@@ -759,16 +751,12 @@ class TestAsyncResponse:
         garbage = {"content-length": "foo"}
         fp = _make_async_fp(b"12345")
 
-        resp = AsyncHTTPResponse(
-            fp, headers=garbage, preload_content=False
-        )
+        resp = AsyncHTTPResponse(fp, headers=garbage, preload_content=False)
         assert resp.length_remaining is None
 
         garbage["content-length"] = "-10"
         fp2 = _make_async_fp(b"12345")
-        resp = AsyncHTTPResponse(
-            fp2, headers=garbage, preload_content=False
-        )
+        resp = AsyncHTTPResponse(fp2, headers=garbage, preload_content=False)
         assert resp.length_remaining is None
 
     async def test_length_when_chunked(self) -> None:
@@ -794,9 +782,7 @@ class TestAsyncResponse:
 
         fp2 = _make_async_fp(b"abcde")
         with pytest.raises(InvalidHeader):
-            AsyncHTTPResponse(
-                fp2, headers=garbage, preload_content=False
-            )
+            AsyncHTTPResponse(fp2, headers=garbage, preload_content=False)
 
     async def test_length_after_read(self) -> None:
         headers = {"content-length": "5"}
@@ -809,17 +795,13 @@ class TestAsyncResponse:
 
         # Test our update from content-length
         fp = _make_async_fp(b"12345")
-        resp = AsyncHTTPResponse(
-            fp, headers=headers, preload_content=False
-        )
+        resp = AsyncHTTPResponse(fp, headers=headers, preload_content=False)
         await resp.read()
         assert resp.length_remaining == 0
 
         # Test partial read
         fp = _make_async_fp(b"12345")
-        resp = AsyncHTTPResponse(
-            fp, headers=headers, preload_content=False
-        )
+        resp = AsyncHTTPResponse(fp, headers=headers, preload_content=False)
         stream = resp.stream(2)
         await stream.__anext__()
         assert resp.length_remaining == 3
@@ -847,7 +829,8 @@ class TestAsyncResponse:
         fp = MockHTTPRequest()
         fp.fp = bio
         resp = AsyncHTTPResponse(
-            fp, preload_content=False  # type: ignore[arg-type]
+            fp,  # type: ignore[arg-type]
+            preload_content=False,
         )
         stream = resp.stream(2)
 
@@ -878,9 +861,7 @@ class TestAsyncResponse:
         ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
             return b"", True, None
 
-        r = AsyncLowLevelResponse(
-            "HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock
-        )
+        r = AsyncLowLevelResponse("HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
         resp = AsyncHTTPResponse(
             r,
             preload_content=False,
@@ -960,9 +941,7 @@ class TestAsyncResponse:
             ),
         ],
     )
-    async def test__aiter__(
-        self, payload: bytes, expected_stream: list[bytes]
-    ) -> None:
+    async def test__aiter__(self, payload: bytes, expected_stream: list[bytes]) -> None:
         actual_stream = []
         fp = _make_async_fp(payload)
         async for chunk in AsyncHTTPResponse(fp, preload_content=False):
@@ -973,9 +952,7 @@ class TestAsyncResponse:
     async def test__aiter__decode_content(self) -> None:
         def stream() -> typing.Generator[bytes, None, None]:
             # Set up a generator to chunk the gzipped body
-            compress = zlib.compressobj(
-                6, zlib.DEFLATED, 16 + zlib.MAX_WBITS
-            )
+            compress = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
             data = compress.compress(b"foo\nbar")
             data += compress.flush()
             for i in range(0, len(data), 2):
@@ -994,17 +971,13 @@ class TestAsyncResponse:
             idx += 1
             return d, False, None
 
-        r = AsyncLowLevelResponse(
-            "GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock
-        )
+        r = AsyncLowLevelResponse("GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
 
         headers = {
             "transfer-encoding": "chunked",
             "content-encoding": "gzip",
         }
-        resp = AsyncHTTPResponse(
-            r, preload_content=False, headers=headers
-        )
+        resp = AsyncHTTPResponse(r, preload_content=False, headers=headers)
 
         data = b""
         async for c in resp:
