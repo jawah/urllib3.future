@@ -25,6 +25,7 @@ from urllib3.exceptions import (
     InsecureRequestWarning,
     MaxRetryError,
     NameResolutionError,
+    ProtocolError,
     ProxyError,
     ProxySchemeUnknown,
     ReadTimeoutError,
@@ -580,7 +581,10 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
         ) as proxy:
             with pytest.raises(MaxRetryError) as e:
                 await proxy.request("GET", self.https_url)
-            assert type(e.value.reason) == SSLError
+            # Python >= 3.11: start_tls() raises the SSL error directly → SSLError.
+            # Python < 3.11: start_tls() swallows the error and returns None →
+            # ProtocolError('Connection aborted.', OSError('Asyncio start TLS failed...'))
+            assert type(e.value.reason) in (SSLError, ProtocolError)
 
     async def test_scheme_host_case_insensitive(self) -> None:
         """Assert that upper-case schemes and hosts are normalized."""
