@@ -349,6 +349,13 @@ class AsyncSocket:
                 ssl_handshake_timeout=ssl_handshake_timeout,
             )
 
+            if new_transport is None:
+                # Python < 3.11 only
+                # https://github.com/jawah/niquests/issues/383
+                raise OSError(
+                    "asyncio TLS-in-TLS tunnel failed. start_tls did not create a new transport."
+                )
+
             self._writer._transport = new_transport  # type: ignore[attr-defined]
 
             transport = self._writer.transport
