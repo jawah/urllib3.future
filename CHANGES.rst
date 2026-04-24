@@ -1,3 +1,8 @@
+2.19.911 (2026-04-24)
+=====================
+
+- Fixed exception raised when asyncio TLS-in-TLS (start_tls) silently fail under Python < 3.11 (https://github.com/jawah/niquests/issues/383)
+
 2.19.910 (2026-04-23)
 =====================
 
