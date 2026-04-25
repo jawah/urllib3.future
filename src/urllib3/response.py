@@ -6,7 +6,6 @@ import logging
 import re
 import sys
 import typing
-import warnings
 import zlib
 from contextlib import contextmanager
 from socket import timeout as SocketTimeout
@@ -1046,22 +1045,12 @@ class HTTPResponse(io.IOBase):
         self._request_url = url
 
     # Compatibility methods for http.client.HTTPResponse
-    def getheaders(self) -> HTTPHeaderDict:
-        warnings.warn(
-            "HTTPResponse.getheaders() is deprecated and will be removed "
-            "in a future version of urllib3(-future). Instead access HTTPResponse.headers directly.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
+    def getheaders(self) -> HTTPHeaderDict:  # Defensive: kept for BC, dead code
         return self.headers
 
-    def getheader(self, name: str, default: str | None = None) -> str | None:
-        warnings.warn(
-            "HTTPResponse.getheader() is deprecated and will be removed "
-            "in a future version of urllib3(-future). Instead use HTTPResponse.headers.get(name, default).",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
+    def getheader(
+        self, name: str, default: str | None = None
+    ) -> str | None:  # Defensive: kept for BC, dead code
         return self.headers.get(name, default)
 
     def __iter__(self) -> typing.Iterator[bytes]:

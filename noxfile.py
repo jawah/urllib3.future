@@ -101,23 +101,40 @@ def traefik_boot(
                 "./traefik/patched.Dockerfile", "./go-httpbin/patched.Dockerfile"
             )
 
-            dc_process = subprocess.Popen(
-                [
-                    "docker",
-                    "compose",
-                    "-f",
-                    "docker-compose.win.yaml",
-                    "up",
-                    "-d",
-                ]
-            )
+            dc_cmd = [
+                "docker",
+                "compose",
+                "-f",
+                "docker-compose.win.yaml",
+                "up",
+                "-d",
+            ]
         else:
             if dc_v1_legacy:
-                dc_process = subprocess.Popen(["docker-compose", "up", "-d"])
+                dc_cmd = ["docker-compose", "up", "-d"]
             else:
-                dc_process = subprocess.Popen(["docker", "compose", "up", "-d"])
+                dc_cmd = ["docker", "compose", "up", "-d"]
 
+        dc_process = subprocess.Popen(dc_cmd)
         dc_process.wait()
+
+        if dc_process.returncode != 0:
+            session.warn(
+                f"docker compose exited with code {dc_process.returncode}, "
+                "retrying in 30s..."
+            )
+            time.sleep(30)
+            dc_process = subprocess.Popen(dc_cmd)
+            dc_process.wait()
+
+        if dc_process.returncode != 0:
+            session.warn("docker compose failed after retry, disabling Traefik tests")
+            # Clean up any partially-started containers.
+            subprocess.Popen(dc_cmd[:-2] + ["stop"]).wait()
+            os.environ["TRAEFIK_HTTPBIN_ENABLE"] = "false"
+            yield
+            return
+
     except OSError as e:
         session.warn(
             f"Traefik server cannot be run due to an error with containers: {e}"
@@ -175,11 +192,7 @@ def traefik_boot(
     yield
 
     if external_stack_started:
-        if dc_v1_legacy:
-            dc_process = subprocess.Popen(["docker-compose", "stop"])
-        else:
-            dc_process = subprocess.Popen(["docker", "compose", "stop"])
-
+        dc_process = subprocess.Popen(dc_cmd[:-2] + ["stop"])
         dc_process.wait()
 
 

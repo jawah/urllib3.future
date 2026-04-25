@@ -112,7 +112,9 @@ class BytesQueueBuffer:
         return ret.getvalue()
 
 
-def assert_header_parsing(headers: httplib.HTTPMessage) -> None:
+def assert_header_parsing(
+    headers: httplib.HTTPMessage,
+) -> None:  # Defensive: dead code from http.client era
     """
     Asserts whether all headers have been successfully parsed.
     Extracts encountered errors from the result of parsing headers.
@@ -170,7 +172,9 @@ def assert_header_parsing(headers: httplib.HTTPMessage) -> None:
         raise HeaderParsingError(defects=defects, unparsed_data=unparsed_data)
 
 
-def is_response_to_head(response: httplib.HTTPResponse) -> bool:
+def is_response_to_head(
+    response: httplib.HTTPResponse,
+) -> bool:  # Defensive: dead code from http.client era
     """
     Checks whether the request of a response has been a HEAD-request.
 

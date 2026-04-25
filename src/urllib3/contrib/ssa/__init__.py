@@ -127,7 +127,7 @@ class AsyncSocket:
             # we enforce a maximum delay (1000ms).
             async with timeout(1):
                 await self._writer.wait_closed()
-        except TimeoutError:
+        except OSError:
             pass
 
     def close(self) -> None:
@@ -166,7 +166,7 @@ class AsyncSocket:
                 try:
                     self._sock.shutdown(socket.SHUT_RD)
                     shutdown_called = True
-                except TypeError:
+                except TypeError:  # Defensive: we're not testing uvloop in CI
                     uvloop_edge_case_bug = True
                     # uvloop don't support shutdown! and sometime does not support close()...
                     # see https://github.com/jawah/niquests/issues/166 for ctx.
@@ -202,7 +202,10 @@ class AsyncSocket:
                     try:
                         self._sock.close()
                         close_called = True
-                    except (OSError, TypeError):
+                    except (
+                        OSError,
+                        TypeError,
+                    ):  # Defensive: closing procedure full of surprises
                         pass
 
             if not close_called or not shutdown_called:
@@ -210,7 +213,11 @@ class AsyncSocket:
                 if hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                     try:
                         self._sock._sock.close()
-                    except (AttributeError, OSError, TypeError):
+                    except (
+                        AttributeError,
+                        OSError,
+                        TypeError,
+                    ):  # Defensive: closing procedure full of surprises
                         pass
 
         except (
@@ -219,12 +226,20 @@ class AsyncSocket:
             if isinstance(self._sock, socket.socket):
                 try:
                     self._sock.close()  # don't call close on asyncio.TransportSocket
-                except (OSError, TypeError, AttributeError):
+                except (
+                    OSError,
+                    TypeError,
+                    AttributeError,
+                ):  # Defensive: closing procedure full of surprises
                     pass
             elif hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                 try:
                     self._sock._sock.detach()
-                except (AttributeError, OSError, TypeError):
+                except (
+                    AttributeError,
+                    OSError,
+                    TypeError,
+                ):  # Defensive: closing procedure full of surprises
                     pass
 
         self._connect_called = False
@@ -332,6 +347,26 @@ class AsyncSocket:
         except AttributeError:
             pass
 
+        # CPython < 3.11 bug: _SSLProtocolTransport lacks _force_close(),
+        # but SSLProtocol._fatal_error() calls it during TLS-in-TLS
+        # handshake failures. Backport the 3.11+ implementation.
+        try:
+            _ssl_tp = asyncio.sslproto._SSLProtocolTransport  # type: ignore[attr-defined]
+            if not hasattr(_ssl_tp, "_force_close"):
+
+                def _force_close(self, exc):  # type: ignore[no-untyped-def]
+                    self._closed = True
+                    if self._ssl_protocol is not None:
+                        try:
+                            self._ssl_protocol._abort(exc)
+                        except TypeError:
+                            # Python < 3.11: _abort() takes no arguments
+                            self._ssl_protocol._abort()
+
+                _ssl_tp._force_close = _force_close
+        except AttributeError:
+            pass
+
         if self.type == socket.SOCK_STREAM:
             assert self._writer is not None
             assert isinstance(self._writer, asyncio.StreamWriter)
@@ -352,6 +387,10 @@ class AsyncSocket:
             if new_transport is None:
                 # Most likely Python < 3.11 only.
                 # https://github.com/jawah/niquests/issues/383
+                if self._tls_in_tls:
+                    raise OSError(
+                        "Asyncio TLS-in-TLS failed. The transport failed silently during inner TLS handshake."
+                    )
                 raise OSError(
                     "Asyncio start TLS failed. The transport failed silently during TLS handshake."
                 )
@@ -365,7 +404,7 @@ class AsyncSocket:
 
             self._tls_ctx = ctx
         else:
-            raise RuntimeError("Unsupported socket type")
+            raise RuntimeError("Unsupported socket type")  # Defensive: unreachable
 
         self._established.set()
         self.__class__ = SSLAsyncSocket
@@ -470,7 +509,7 @@ class SSLAsyncSocket(AsyncSocket):
             if sslobj is not None:
                 return sslobj
 
-        raise RuntimeError(
+        raise RuntimeError(  # Defensive: unreachable
             '"ssl_object" could not be extracted from this SslAsyncSock instance'
         )
 

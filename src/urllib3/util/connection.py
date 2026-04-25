@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import socket
 import typing
-import warnings
 
 if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
@@ -42,13 +41,6 @@ def create_connection(
     for the socket to bind as a source address before making the connection.
     An host of '' or port 0 tells the OS to use the default.
     """
-    warnings.warn(
-        "util.connection.create_connection() is deprecated and scheduled for removal in a next major of urllib3.future. "
-        "Use contrib.resolver from now on to manually create connection.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
     from ..contrib.resolver import ResolverDescription
 
     return (
