@@ -372,6 +372,10 @@ class AsyncSocket:
             if new_transport is None:
                 # Most likely Python < 3.11 only.
                 # https://github.com/jawah/niquests/issues/383
+                if self._tls_in_tls:
+                    raise OSError(
+                        "Asyncio TLS-in-TLS failed. The transport failed silently during inner TLS handshake."
+                    )
                 raise OSError(
                     "Asyncio start TLS failed. The transport failed silently during TLS handshake."
                 )
