@@ -166,7 +166,7 @@ class AsyncSocket:
                 try:
                     self._sock.shutdown(socket.SHUT_RD)
                     shutdown_called = True
-                except TypeError:
+                except TypeError:  # Defensive: we're not testing uvloop in CI
                     uvloop_edge_case_bug = True
                     # uvloop don't support shutdown! and sometime does not support close()...
                     # see https://github.com/jawah/niquests/issues/166 for ctx.
@@ -202,7 +202,10 @@ class AsyncSocket:
                     try:
                         self._sock.close()
                         close_called = True
-                    except (OSError, TypeError):
+                    except (
+                        OSError,
+                        TypeError,
+                    ):  # Defensive: closing procedure full of surprises
                         pass
 
             if not close_called or not shutdown_called:
@@ -210,7 +213,11 @@ class AsyncSocket:
                 if hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                     try:
                         self._sock._sock.close()
-                    except (AttributeError, OSError, TypeError):
+                    except (
+                        AttributeError,
+                        OSError,
+                        TypeError,
+                    ):  # Defensive: closing procedure full of surprises
                         pass
 
         except (
@@ -219,12 +226,20 @@ class AsyncSocket:
             if isinstance(self._sock, socket.socket):
                 try:
                     self._sock.close()  # don't call close on asyncio.TransportSocket
-                except (OSError, TypeError, AttributeError):
+                except (
+                    OSError,
+                    TypeError,
+                    AttributeError,
+                ):  # Defensive: closing procedure full of surprises
                     pass
             elif hasattr(self._sock, "_sock") and not edge_case_close_bug_exist:
                 try:
                     self._sock._sock.detach()
-                except (AttributeError, OSError, TypeError):
+                except (
+                    AttributeError,
+                    OSError,
+                    TypeError,
+                ):  # Defensive: closing procedure full of surprises
                     pass
 
         self._connect_called = False
@@ -389,7 +404,7 @@ class AsyncSocket:
 
             self._tls_ctx = ctx
         else:
-            raise RuntimeError("Unsupported socket type")
+            raise RuntimeError("Unsupported socket type")  # Defensive: unreachable
 
         self._established.set()
         self.__class__ = SSLAsyncSocket
@@ -494,7 +509,7 @@ class SSLAsyncSocket(AsyncSocket):
             if sslobj is not None:
                 return sslobj
 
-        raise RuntimeError(
+        raise RuntimeError(  # Defensive: unreachable
             '"ssl_object" could not be extracted from this SslAsyncSock instance'
         )
 
