@@ -68,7 +68,7 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
     def _open_streams(self, *args, **kwargs) -> int:  # type: ignore[no-untyped-def]
         if self._observable_impl is not None:
             return self._observable_impl._open_stream_count
-        return super()._open_streams(*args, **kwargs)  # type: ignore[no-any-return]
+        return super()._open_streams(*args, **kwargs)  # type: ignore[no-any-return]  # Defensive: unreachable
 
     def _receive_goaway_frame(self, frame):  # type: ignore[no-untyped-def]
         """
