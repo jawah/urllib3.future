@@ -1,3 +1,11 @@
+2.19.912 (2026-04-25)
+=====================
+
+- Changed error message when asyncio TLS handshake silently fails. We now differentiate TLS-in-TLS failure from regular TLS failure.
+- Fixed default disabled Linux GSO.
+- Fixed handling of asyncio TLS abort procedure for older CPython distribution <= 3.10
+- Removed old warnings on some legacy functions/methods.
+
 2.19.911 (2026-04-24)
 =====================
 
