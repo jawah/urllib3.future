@@ -834,3 +834,288 @@ def test_recycle_in_memory_with_mock() -> None:
 )
 def test_parse_rdata(rdata: bytes, expected: dict[str, list[str] | int | str]) -> None:
     pass
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "dns_url",
+    [
+        "null://default",
+        "system://default",
+        "in-memory://default",
+        "dou://1.1.1.1",
+        "doh+google://default",
+        "dot://1.1.1.1",
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "ipv4_addr",
+    [
+        "1.1.1.1",
+        "127.0.0.1",
+        "192.168.1.1",
+        "10.0.0.1",
+        "255.255.255.255",
+        "0.0.0.0",
+    ],
+)
+def test_ipv4_passthrough(dns_url: str, ipv4_addr: str) -> None:
+    """All resolvers must pass through raw IPv4 addresses without performing DNS resolution."""
+    resolver = ResolverDescription.from_url(dns_url).new()
+
+    res = resolver.getaddrinfo(
+        ipv4_addr,
+        80,
+        socket.AF_UNSPEC,
+        socket.SOCK_STREAM,
+    )
+
+    assert len(res) == 1
+    assert res[0][0] == socket.AF_INET
+    assert res[0][1] == socket.SOCK_STREAM
+    assert res[0][-1][0] == ipv4_addr
+    assert res[0][-1][1] == 80
+
+    resolver.close()
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "dns_url",
+    [
+        "null://default",
+        "system://default",
+        "in-memory://default",
+        "dou://1.1.1.1",
+        "doh+google://default",
+        "dot://1.1.1.1",
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "ipv4_addr",
+    [
+        "1.1.1.1",
+        "127.0.0.1",
+        "192.168.1.1",
+    ],
+)
+def test_ipv4_passthrough_with_af_inet(dns_url: str, ipv4_addr: str) -> None:
+    """Passing an IPv4 address with AF_INET family should succeed."""
+    resolver = ResolverDescription.from_url(dns_url).new()
+
+    res = resolver.getaddrinfo(
+        ipv4_addr,
+        443,
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+    )
+
+    assert len(res) >= 1
+    assert all(r[0] == socket.AF_INET for r in res)
+    assert any(r[-1][0] == ipv4_addr for r in res)
+
+    resolver.close()
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "dns_url",
+    [
+        "null://default",
+        "in-memory://default",
+        "dou://1.1.1.1",
+        "doh+google://default",
+        "dot://1.1.1.1",
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "ipv4_addr",
+    [
+        "1.1.1.1",
+        "127.0.0.1",
+    ],
+)
+def test_ipv4_passthrough_with_af_inet6_raises(dns_url: str, ipv4_addr: str) -> None:
+    """Passing an IPv4 address with AF_INET6 family must raise socket.gaierror."""
+    resolver = ResolverDescription.from_url(dns_url).new()
+
+    with pytest.raises(
+        socket.gaierror, match="Address family for hostname not supported"
+    ):
+        resolver.getaddrinfo(
+            ipv4_addr,
+            80,
+            socket.AF_INET6,
+            socket.SOCK_STREAM,
+        )
+
+    resolver.close()
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "dns_url",
+    [
+        "null://default",
+        "system://default",
+        "in-memory://default",
+        "dou://1.1.1.1",
+        "doh+google://default",
+        "dot://1.1.1.1",
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "ipv6_addr",
+    [
+        "::1",
+        "::ffff:127.0.0.1",
+        "2606:4700:4700::1111",
+        "fe80::1",
+        "fd12:3456:789a::1",
+        "::",
+    ],
+)
+def test_ipv6_passthrough(dns_url: str, ipv6_addr: str) -> None:
+    """All resolvers must pass through raw IPv6 addresses without performing DNS resolution."""
+    resolver = ResolverDescription.from_url(dns_url).new()
+
+    res = resolver.getaddrinfo(
+        ipv6_addr,
+        80,
+        socket.AF_UNSPEC,
+        socket.SOCK_STREAM,
+    )
+
+    assert len(res) >= 1
+    assert all(r[0] == socket.AF_INET6 for r in res)
+    assert any(r[-1][0] == ipv6_addr for r in res)
+    assert all(r[-1][1] == 80 for r in res)
+
+    resolver.close()
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "dns_url",
+    [
+        "null://default",
+        "system://default",
+        "in-memory://default",
+        "dou://1.1.1.1",
+        "doh+google://default",
+        "dot://1.1.1.1",
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "ipv6_addr",
+    [
+        "::1",
+        "2606:4700:4700::1111",
+        "fe80::1",
+    ],
+)
+def test_ipv6_passthrough_with_af_inet6(dns_url: str, ipv6_addr: str) -> None:
+    """Passing an IPv6 address with AF_INET6 family should succeed."""
+    resolver = ResolverDescription.from_url(dns_url).new()
+
+    res = resolver.getaddrinfo(
+        ipv6_addr,
+        443,
+        socket.AF_INET6,
+        socket.SOCK_STREAM,
+    )
+
+    assert len(res) >= 1
+    assert all(r[0] == socket.AF_INET6 for r in res)
+    assert any(r[-1][0] == ipv6_addr for r in res)
+
+    resolver.close()
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "dns_url",
+    [
+        "null://default",
+        "in-memory://default",
+        "dou://1.1.1.1",
+        "doh+google://default",
+        "dot://1.1.1.1",
+        pytest.param(
+            "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
+            marks=[
+                pytest.mark.skipif(
+                    QUICResolver is _MISSING_QUIC_SENTINEL,
+                    reason="Test requires qh3 installed",
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "ipv6_addr",
+    [
+        "::1",
+        "2606:4700:4700::1111",
+    ],
+)
+def test_ipv6_passthrough_with_af_inet_raises(dns_url: str, ipv6_addr: str) -> None:
+    """Passing an IPv6 address with AF_INET family must raise socket.gaierror."""
+    resolver = ResolverDescription.from_url(dns_url).new()
+
+    with pytest.raises(
+        socket.gaierror, match="Address family for hostname not supported"
+    ):
+        resolver.getaddrinfo(
+            ipv6_addr,
+            80,
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+        )
+
+    resolver.close()
