@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from random import randint
 
-from ..._constant import UDP_LINUX_GRO
+from ..._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
 from ..._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
 from ...exceptions import LocationParseError
 from ...util.connection import _set_socket_options, allowed_gai_family
@@ -270,6 +270,11 @@ class BaseResolver(metaclass=ABCMeta):
                     try:
                         sock.setsockopt(socket.SOL_UDP, UDP_LINUX_GRO, 1)
                     except OSError:  # Defensive: oh, well(...) anyway!
+                        pass
+
+                    try:
+                        sock.setsockopt(socket.SOL_UDP, UDP_LINUX_SEGMENT, 1280)
+                    except OSError:  # Defensive:
                         pass
 
                 # If provided, set socket level options before connecting.
