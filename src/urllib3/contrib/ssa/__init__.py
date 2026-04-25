@@ -127,7 +127,7 @@ class AsyncSocket:
             # we enforce a maximum delay (1000ms).
             async with timeout(1):
                 await self._writer.wait_closed()
-        except TimeoutError:
+        except OSError:
             pass
 
     def close(self) -> None:
