@@ -23,7 +23,7 @@ from collections import deque
 from os import environ
 from random import randint
 from time import time as monotonic
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -113,7 +113,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                         available_ciphers[cipher["name"].replace("TLS_", "")]
                     )
 
-            if len(chosen_ciphers) == 0:
+            if not chosen_ciphers:
                 raise ValueError(
                     f"Unable to find a compatible cipher in '{tls_config.ciphers}' to establish a QUIC connection. "
                     f"QUIC support one of '{['TLS_' + e for e in available_ciphers.keys()]}' only."
@@ -230,10 +230,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         excl_event: tuple[type[Event], ...] | None = None,
     ) -> bool:
         return self._events.has(stream_id=stream_id, excl_event=excl_event)
-
-    @property
-    def connection_ids(self) -> Sequence[bytes]:
-        return list(self._connection_ids)
 
     def connection_lost(self) -> None:
         self._terminated = True
