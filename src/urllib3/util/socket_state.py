@@ -88,7 +88,7 @@ if IS_NT:
         WSAGetLastError_Fn = ctypes.windll.ws2_32.WSAGetLastError  # type: ignore[attr-defined]
         WSAGetLastError_Fn.argtypes = []
         WSAGetLastError_Fn.restype = ctypes.c_int
-    except AttributeError:
+    except AttributeError:  # Defensive: very old Windows distribution
         WSAGetLastError_Fn = None
 
     SIO_TCP_INFO = ctypes.wintypes.DWORD(
@@ -113,7 +113,7 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     must be carefully thought before even suggesting a change.
     """
     if sock.fileno() == -1:
-        return False
+        return False  # Defensive: checked higher in stack already
 
     # catch earlier the most catastrophic states
     # this pre-check avoid wasting time on TCP probing
@@ -135,7 +135,8 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     if IS_DARWIN_OR_BSD:
         if sys.platform in {"darwin", "ios"}:
             TCP_CONNECTION_INFO = getattr(socket, "TCP_CONNECTION_INFO", 0x106)
-        else:
+        else:  # Defensive: FreeBSD not tested in CI (yet)
+            # TODO: Find a way to continuously test against FreeBSD!
             TCP_CONNECTION_INFO = getattr(socket, "TCP_INFO", None)
 
             if TCP_CONNECTION_INFO is None:
@@ -143,7 +144,8 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
 
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_CONNECTION_INFO, 1024)
-        except OSError as e:
+        except OSError as e:  # Defensive: unlikely as closed state checked higher
+            # this path is there for tight racing condition. e.g. fd closed OS level while is_connected proceed.
             if e.errno in SOCKET_CLOSED_ERRNOS:
                 return False
             return True
@@ -171,7 +173,8 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
 
         try:
             info = sock.getsockopt(socket.IPPROTO_TCP, TCP_INFO, 1024)
-        except OSError as e:
+        except OSError as e:  # Defensive: unlikely as closed state checked higher
+            # this path is there for tight racing condition. e.g. fd closed OS level while is_connected proceed.
             if e.errno in SOCKET_CLOSED_ERRNOS:
                 return False
             return True
@@ -197,7 +200,7 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
         # };
         return state == 1
     elif IS_NT:
-        if WSAIoctl_Fn is None:
+        if WSAIoctl_Fn is None:  # Defensive: old Windows distro
             return True
 
         sockfd = ctypes.c_void_p(sock.fileno())

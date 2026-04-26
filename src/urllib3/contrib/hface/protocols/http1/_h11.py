@@ -63,7 +63,7 @@ def headers_to_request(headers: HeadersType) -> h11.Event:
                 authority = value
             elif name == b":path":
                 path = value
-            else:
+            else:  # Defensive: unreachable, upper stack filter it early.
                 raise ValueError("Unexpected request header: " + name.decode())
         else:
             if host is None and name == b"host":
@@ -74,7 +74,9 @@ def headers_to_request(headers: HeadersType) -> h11.Event:
             regular_headers.append((capitalize_header_name(name), value))
 
     if authority is None:
-        raise ValueError("Missing request header: :authority")
+        raise ValueError(  # Defensive: raise an error higher in stack
+            "Missing request header: :authority"
+        )
 
     if method == b"CONNECT" and path is None:
         # CONNECT requests are a special case.
