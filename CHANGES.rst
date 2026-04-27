@@ -1,3 +1,8 @@
+2.19.913 (2026-04-27)
+=====================
+
+- Fixed async SSE race condition with close procedure. (https://github.com/jawah/urllib3.future/pull/355#discussion_r3141651004)
+
 2.19.912 (2026-04-25)
 =====================
 
