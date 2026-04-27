@@ -32,6 +32,8 @@ from ...events import (
 )
 from .._protocols import HTTP1Protocol
 
+_IDLE_STATES = frozenset({h11.IDLE, h11.MUST_CLOSE})
+
 
 @lru_cache(maxsize=64)
 def capitalize_header_name(name: bytes) -> bytes:
@@ -162,10 +164,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         return 1
 
     def is_idle(self) -> bool:
-        return self._connection.their_state in {
-            h11.IDLE,
-            h11.MUST_CLOSE,
-        }
+        return self._connection.their_state in _IDLE_STATES
 
     def has_expired(self) -> bool:
         return self._terminated and not self._events.stream_count
@@ -263,7 +262,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
     def _h11_submit(self, h11_event: h11.Event) -> None:
         chunks = self._connection.send_with_data_passthrough(h11_event)
         if chunks:
-            self._data_buffer += chunks
+            self._data_buffer.extend(chunks)
 
     def _h11_data_received(self, data: bytes) -> None:
         self._connection.receive_data(data)
@@ -271,9 +270,10 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def _fetch_events(self) -> None:
         a = self._events.append
+        conn = self._connection
         while not self._terminated:
             try:
-                h11_event = self._connection.next_event()
+                h11_event = conn.next_event()
             except h11.RemoteProtocolError as e:
                 a(self._connection_terminated(e.error_status_hint, str(e)))
                 break
@@ -281,7 +281,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             ev_type = h11_event.__class__
 
             if h11_event is h11.NEED_DATA or h11_event is h11.PAUSED:
-                if h11.MUST_CLOSE == self._connection.their_state:
+                if h11.MUST_CLOSE == conn.their_state:
                     a(self._connection_terminated())
                 else:
                     break
@@ -316,13 +316,13 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     last_event: HeadersReceived | DataReceived = HeadersReceived(
                         self._current_stream_id,
                         h11_event.headers,  # type: ignore[union-attr]
-                        self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
+                        conn.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
                     )
                 else:
                     last_event = DataReceived(
                         self._current_stream_id,
                         b"",
-                        self._connection.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
+                        conn.their_state != h11.MIGHT_SWITCH_PROTOCOL,  # type: ignore[attr-defined]
                     )
                 a(last_event)
                 self._maybe_start_next_cycle()

@@ -41,6 +41,7 @@ from .._constant import (
     DEFAULT_KEEPALIVE_DELAY,
     UDP_DEFAULT_BLOCKSIZE,
     responses,
+    HTTP1_ONLY_HEADERS,
 )
 from ..contrib.hface import (
     HTTP1Protocol,
@@ -176,8 +177,8 @@ class HfaceBackend(BaseBackend):
             return False
         # is_available also includes whether we must goaway
         # we want to focus on stream capacity here.
-        if self._protocol.is_available() is False:
-            return self._protocol.has_expired() is False
+        if not self._protocol.is_available():
+            return not self._protocol.has_expired()
         return False
 
     @property
@@ -286,7 +287,7 @@ class HfaceBackend(BaseBackend):
             if self._svn == HttpVersion.h3:
                 return
 
-            if is_h3_disabled is False and has_h3_support is True:
+            if not is_h3_disabled and has_h3_support:
                 upgradable_svn = HttpVersion.h3
                 self.__alt_authority = self.__altsvc_probe(svc="h3")
 
@@ -359,18 +360,17 @@ class HfaceBackend(BaseBackend):
         if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
             allow_insecure = True
 
-        ssl_ctx_have_certs: bool = (
-            ssl_context is not None
-            and "x509_ca" in ssl_context.cert_store_stats()
-            and ssl_context.cert_store_stats()["x509_ca"] > 0
-        )
+        ssl_ctx_have_certs: bool = False
+        if ssl_context is not None:
+            cert_stats = ssl_context.cert_store_stats()
+            ssl_ctx_have_certs = "x509_ca" in cert_stats and cert_stats["x509_ca"] > 0
 
         if (
             not allow_insecure
             and ca_certs is None
             and ca_cert_dir is None
             and ca_cert_data is None
-            and ssl_ctx_have_certs is False
+            and not ssl_ctx_have_certs
         ):
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
@@ -929,6 +929,7 @@ class HfaceBackend(BaseBackend):
         gro_enabled = self._dgram_gro_enabled
         blocksize = self.blocksize
         _has_next_timer = hasattr(protocol, "next_timer")
+        _proto_exc = protocol.exceptions()
 
         def send_pending() -> None:
             if gso_enabled:
@@ -972,7 +973,7 @@ class HfaceBackend(BaseBackend):
         while True:
             reach_socket: bool = False
             if not protocol.has_pending_event(stream_id=stream_id):
-                if receive_first is False:
+                if not receive_first:
                     send_pending()
 
                 next_timer = protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
@@ -1027,7 +1028,7 @@ class HfaceBackend(BaseBackend):
                     ):
                         try:
                             protocol.eof_received()
-                        except protocol.exceptions() as e:  # Defensive:
+                        except _proto_exc as e:  # Defensive:
                             # overly protective, we hide exception that are behind urllib3.
                             # should not happen, but one truly never known.
                             raise ProtocolError(e) from e  # Defensive:
@@ -1041,7 +1042,7 @@ class HfaceBackend(BaseBackend):
 
                             try:
                                 protocol.bytes_received(udp_gro_segment)
-                            except protocol.exceptions() as e:
+                            except _proto_exc as e:
                                 if hasattr(e, "expected_length") and hasattr(
                                     e, "actual_length"
                                 ):
@@ -1056,7 +1057,7 @@ class HfaceBackend(BaseBackend):
 
                         try:
                             protocol.bytes_received(data_in)
-                        except protocol.exceptions() as e:
+                        except _proto_exc as e:
                             # h2 has a dedicated exception for IncompleteRead (InvalidBodyLengthError)
                             # we convert the exception to our "IncompleteRead" instead.
                             if hasattr(e, "expected_length") and hasattr(
@@ -1067,7 +1068,7 @@ class HfaceBackend(BaseBackend):
                                 ) from e  # Defensive:
                             raise ProtocolError(e) from e  # Defensive:
 
-                if receive_first is True:
+                if receive_first:
                     send_pending()
 
             for event in protocol.events(stream_id=stream_id):  # type: Event
@@ -1110,7 +1111,7 @@ class HfaceBackend(BaseBackend):
                     # where a request could actually be executed without you knowing so.
                     # see https://github.com/jawah/urllib3.future/issues/280 for the rationale behind this change.
                     if (
-                        reach_socket is True
+                        reach_socket
                         and data_in == b""
                         and (
                             (
@@ -1119,7 +1120,7 @@ class HfaceBackend(BaseBackend):
                             )
                             or (event_type is HeadersReceived)
                         )
-                        and all(isinstance(e, HeadersReceived) is False for e in events)
+                        and not any(isinstance(e, HeadersReceived) for e in events)
                     ):
                         self._protocol = None
                         self.close()
@@ -1210,11 +1211,11 @@ class HfaceBackend(BaseBackend):
                     # if event type match, make sure it is the latest one
                     # simply put, end_stream should be True.
                     if (
-                        target_cap_reached is False
+                        not target_cap_reached
                         and respect_end_stream_signal
                         and stream_related_event
                     ):
-                        if event.end_stream is True:  # type: ignore[attr-defined]
+                        if event.end_stream:  # type: ignore[attr-defined]
                             if reshelve_events:
                                 protocol.reshelve(*reshelve_events)
                             return events
@@ -1225,15 +1226,15 @@ class HfaceBackend(BaseBackend):
                     return events
                 elif (
                     stream_related_event
-                    and event.end_stream is True  # type: ignore[attr-defined]
-                    and respect_end_stream_signal is True
+                    and event.end_stream  # type: ignore[attr-defined]
+                    and respect_end_stream_signal
                 ):
                     if reshelve_events:
                         protocol.reshelve(*reshelve_events)
                     return events
                 elif (
                     stream_related_event
-                    and event.end_stream is True  # type: ignore[attr-defined]
+                    and event.end_stream  # type: ignore[attr-defined]
                     and maximal_data_in_read is None
                     and event_type_collectable is not None
                     and stream_id == event.stream_id  # type: ignore[attr-defined]
@@ -1318,12 +1319,7 @@ class HfaceBackend(BaseBackend):
         # We assume it is passed as-is (meaning 'keep-alive' lower-cased)
         # It may(should) break the connection.
         if not support_te_chunked:
-            if encoded_header in {
-                b"transfer-encoding",
-                b"connection",
-                b"upgrade",
-                b"keep-alive",
-            }:
+            if encoded_header in HTTP1_ONLY_HEADERS:
                 return
 
         if self.__expected_body_length is None and encoded_header == b"content-length":
@@ -1400,7 +1396,7 @@ class HfaceBackend(BaseBackend):
         self._stream_id = self._protocol.get_available_stream_id()
         # unless anything hint the opposite, the request head frame is the end stream
         should_end_stream: bool = (
-            expect_body_afterward is False and self.__protocol_bit_set is False
+            not expect_body_afterward and not self.__protocol_bit_set
         )
 
         # handle cases where 'Host' header is set manually
@@ -1420,7 +1416,7 @@ class HfaceBackend(BaseBackend):
             self.__headers.insert(3, (b":authority", self.__legacy_host_entry))
             self.__authority_bit_set = True
 
-        if self.__authority_bit_set is False:
+        if not self.__authority_bit_set:
             raise ProtocolError(
                 (
                     "urllib3.future do not support emitting HTTP requests without the `Host` header ",
@@ -1466,7 +1462,7 @@ class HfaceBackend(BaseBackend):
         else:
             self._last_used_at = time.monotonic()
 
-        if expect_body_afterward is False:
+        if not expect_body_afterward:
             if self._start_last_request and self.conn_info:
                 self.conn_info.request_sent_latency = (
                     datetime.now(tz=timezone.utc) - self._start_last_request
@@ -1755,7 +1751,7 @@ class HfaceBackend(BaseBackend):
                 self, promise=promise, early_response_callback=early_response_callback
             )
 
-        eot = head_event.end_stream is True
+        eot = head_event.end_stream
 
         if status == 101 or (http_verb == b"CONNECT" and (200 <= status < 300)):
             dsa: DirectStreamAccess | None = DirectStreamAccess(
@@ -1772,7 +1768,7 @@ class HfaceBackend(BaseBackend):
             self._http_vsn,
             reason,
             headers,
-            self.__read_st if eot is False and dsa is None else None,
+            self.__read_st if not eot and dsa is None else None,
             authority=self.host,
             port=self.port,
             stream_id=promise.stream_id,
@@ -1780,7 +1776,7 @@ class HfaceBackend(BaseBackend):
             if self._http_vsn == 11
             else None,  # kept for BC purposes[...] one should not try to read from it.
             dsa=dsa,
-            stream_abort=self.__abort_st if eot is False else None,
+            stream_abort=self.__abort_st if not eot else None,
         )
         promise.response = self._response
         self._response.from_promise = promise

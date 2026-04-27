@@ -30,7 +30,7 @@ class StreamMatrix:
 
     @property
     def streams(self) -> list[int]:
-        return sorted(i for i in self._matrix.keys() if i is not None)
+        return sorted(i for i in self._matrix if i is not None)
 
     @property
     def stream_count(self) -> int:
@@ -113,7 +113,7 @@ class StreamMatrix:
             and self._matrix[None][0]._id < self._matrix[stream_id][0]._id
         ):
             stream_id = None
-        elif have_global_event is True and stream_id not in self._matrix:
+        elif have_global_event and stream_id not in self._matrix:
             stream_id = None
 
         if stream_id not in self._matrix:
@@ -126,8 +126,7 @@ class StreamMatrix:
 
             if stream_id is not None and not self._matrix[stream_id]:
                 del self._matrix[stream_id]
-                if stream_id is not None:
-                    self._stream_count -= 1
+                self._stream_count -= 1
 
         return ev
 
@@ -155,7 +154,7 @@ class StreamMatrix:
         excl_event: tuple[type[Event], ...] | None = None,
     ) -> bool:
         if stream_id is None:
-            return True if self._count else False
+            return self._count > 0
         if stream_id not in self._matrix:
             return False
 
@@ -164,4 +163,4 @@ class StreamMatrix:
                 e for e in self._matrix[stream_id] if not isinstance(e, excl_event)
             )
 
-        return True if self._matrix[stream_id] else False
+        return bool(self._matrix[stream_id])

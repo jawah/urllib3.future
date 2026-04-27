@@ -1284,33 +1284,32 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
             raise new_e
 
-        if on_post_connection is not None and conn.conn_info is not None:
+        conn_info = getattr(conn, "conn_info", None)
+        if on_post_connection is not None and conn_info is not None:
             # A second request does not redo handshake or DNS resolution.
-            if (
-                hasattr(conn, "_start_last_request")
-                and conn._start_last_request is not None
-            ):
-                if conn.conn_info.tls_handshake_latency:
-                    conn.conn_info.tls_handshake_latency = timedelta()
-                if conn.conn_info.established_latency:
-                    conn.conn_info.established_latency = timedelta()
-                if conn.conn_info.resolution_latency:
-                    conn.conn_info.resolution_latency = timedelta()
-                if conn.conn_info.request_sent_latency:
-                    conn.conn_info.request_sent_latency = None
-            on_post_connection(conn.conn_info)
+            if getattr(conn, "_start_last_request", None) is not None:
+                if conn_info.tls_handshake_latency:
+                    conn_info.tls_handshake_latency = timedelta()
+                if conn_info.established_latency:
+                    conn_info.established_latency = timedelta()
+                if conn_info.resolution_latency:
+                    conn_info.resolution_latency = timedelta()
+                if conn_info.request_sent_latency:
+                    conn_info.request_sent_latency = None
+            on_post_connection(conn_info)
 
-        if conn.is_multiplexed is False and multiplexed is True:
+        if not conn.is_multiplexed and multiplexed:
             # overruling
             multiplexed = False
 
         if (
             extension is not None
-            and conn.conn_info is not None
-            and conn.conn_info.http_version is not None
+            and conn_info is not None
+            and conn_info.http_version is not None
         ):
-            extension_headers = HTTPHeaderDict(
-                extension.headers(conn.conn_info.http_version)
+            raw_ext_headers = extension.headers(conn_info.http_version)
+            extension_headers = (
+                HTTPHeaderDict(raw_ext_headers) if raw_ext_headers else None
             )
 
             if extension_headers:
@@ -1888,19 +1887,19 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 release_this_conn = True
 
             if (
-                clean_exit is True
+                clean_exit
                 and conn is not None
-                and isinstance(response, ResponsePromise) is True
+                and isinstance(response, ResponsePromise)
             ):
                 self.pool.memorize(response, conn)  # type: ignore[union-attr]
                 if self.pool.parent is not None:  # type: ignore[union-attr]
                     self.pool.parent.memorize(response, self)  # type: ignore[union-attr]
 
             if (
-                release_this_conn is True and self.pool is not None
+                release_this_conn and self.pool is not None
             ):  # the pool could be in shutdown procedure here.
                 if conn is not None:
-                    if self.pool.is_held(conn) is True:
+                    if self.pool.is_held(conn):
                         self._put_conn(conn)
                 else:
                     self.pool.kill_cursor()

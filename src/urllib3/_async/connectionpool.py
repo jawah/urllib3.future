@@ -669,7 +669,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     if conn.conn_info:
                         conn.conn_info.resolution_latency = delta_post_resolve
 
-                    if len(remnant_tasks):
+                    if remnant_tasks:
                         # we may have more than one conn ready, we shall then carefully close the others.
                         for disposable_remnant in remnant_tasks:
                             await challengers[tasks.index(disposable_remnant)].close()
@@ -1111,11 +1111,6 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 200 <= response.status < 300
                 and (method == "CONNECT" or extension is not None)
             ):
-                if extension is None:
-                    from ..contrib.webextensions._async import load_extension
-
-                    extension = load_extension(None)()
-
                 await response.start_extension(extension)
 
         return response
@@ -1297,33 +1292,31 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
             raise new_e
 
-        if on_post_connection is not None and conn.conn_info is not None:
+        conn_info = getattr(conn, "conn_info", None)
+        if on_post_connection is not None and conn_info is not None:
             # A second request does not redo handshake or DNS resolution.
-            if (
-                hasattr(conn, "_start_last_request")
-                and conn._start_last_request is not None
-            ):
-                if conn.conn_info.tls_handshake_latency:
-                    conn.conn_info.tls_handshake_latency = timedelta()
-                if conn.conn_info.established_latency:
-                    conn.conn_info.established_latency = timedelta()
-                if conn.conn_info.resolution_latency:
-                    conn.conn_info.resolution_latency = timedelta()
-                if conn.conn_info.request_sent_latency:
-                    conn.conn_info.request_sent_latency = None
-            await on_post_connection(conn.conn_info)
+            if getattr(conn, "_start_last_request", None) is not None:
+                if conn_info.tls_handshake_latency:
+                    conn_info.tls_handshake_latency = timedelta()
+                if conn_info.established_latency:
+                    conn_info.established_latency = timedelta()
+                if conn_info.resolution_latency:
+                    conn_info.resolution_latency = timedelta()
+                if conn_info.request_sent_latency:
+                    conn_info.request_sent_latency = None
+            await on_post_connection(conn_info)
 
-        if conn.is_multiplexed is False and multiplexed is True:
+        if not conn.is_multiplexed and multiplexed:
             # overruling
             multiplexed = False
 
         if (
             extension is not None
-            and conn.conn_info is not None
-            and conn.conn_info.http_version is not None
+            and conn_info is not None
+            and conn_info.http_version is not None
         ):
             extension_headers = HTTPHeaderDict(
-                extension.headers(conn.conn_info.http_version)
+                extension.headers(conn_info.http_version)
             )
 
             if extension_headers:
@@ -1920,21 +1913,21 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
             if self.pool is not None:
                 if (
-                    clean_exit is True
+                    clean_exit
                     and conn is not None
-                    and isinstance(response, ResponsePromise) is True
+                    and isinstance(response, ResponsePromise)
                 ):
                     self.pool.memorize(response, conn)
                     # we can always use ConnectionPool without PoolManager!
                     if self.pool.parent is not None:
                         self.pool.parent.memorize(response, self)
 
-                if release_this_conn is True:
+                if release_this_conn:
                     if conn is not None:
                         # Put the connection back to be reused. If the connection is
                         # expired then it will be None, which will get replaced with a
                         # fresh connection during _get_conn.
-                        if self.pool.is_held(conn) is True:
+                        if self.pool.is_held(conn):
                             await self._put_conn(conn)
                     else:
                         await self.pool.kill_cursor()
@@ -2402,7 +2395,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                     if conn.conn_info:
                         conn.conn_info.resolution_latency = delta_post_resolve
 
-                    if len(remnant_tasks):
+                    if remnant_tasks:
                         # we may have more than one conn ready, we shall then carefully close the others.
                         for disposable_remnant in remnant_tasks:
                             await challengers[tasks.index(disposable_remnant)].close()

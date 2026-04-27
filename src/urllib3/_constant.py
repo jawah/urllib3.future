@@ -253,3 +253,15 @@ MINIMAL_BACKGROUND_WATCH_WINDOW: float = 0.05
 DEFAULT_KEEPALIVE_DELAY: float = 600.0
 DEFAULT_KEEPALIVE_IDLE_WINDOW: float = 60.0
 MINIMAL_KEEPALIVE_IDLE_WINDOW: float = 1.0
+
+C_INT_MAX = 2**31 - 1
+CHUNK_AMT_MAX = 2**28
+
+HTTP1_ONLY_HEADERS = frozenset(
+    {
+        b"transfer-encoding",
+        b"connection",
+        b"upgrade",
+        b"keep-alive",
+    }
+)
