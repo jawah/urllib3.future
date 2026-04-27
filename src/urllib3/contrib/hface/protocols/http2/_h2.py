@@ -113,6 +113,11 @@ HEADER_OR_TRAILER_TYPE_SET = {
     jh2.events.TrailersReceived,
 }
 
+SETTINGS_EVENT_SET = {
+    jh2.events.SettingsAcknowledged,
+    jh2.events.RemoteSettingsChanged,
+}
+
 
 class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     implementation: str = "h2"
@@ -165,7 +170,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def is_idle(self) -> bool:
         if self._events.stream_count:
             return False
-        return self._terminated is False and self._open_stream_count == 0
+        return not self._terminated and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
         return (
@@ -205,26 +210,27 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return self._events.has(stream_id=stream_id, excl_event=excl_event)
 
     def _map_events(self, h2_events: list[jh2.events.Event]) -> Iterator[Event]:
+        conn = self._connection
         for e in h2_events:
             ev_type = e.__class__
 
             if ev_type in HEADER_OR_TRAILER_TYPE_SET:
+                stream_id = e.stream_id
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
-                    stream = self._connection.streams.pop(e.stream_id)
-                    self._connection._closed_streams[e.stream_id] = stream.closed_by
-                yield HeadersReceived(e.stream_id, e.headers, end_stream=end_stream)
+                    stream = conn.streams.pop(stream_id)
+                    conn._closed_streams[stream_id] = stream.closed_by
+                yield HeadersReceived(stream_id, e.headers, end_stream=end_stream)
             elif ev_type is jh2.events.DataReceived:
+                stream_id = e.stream_id
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_stream_count -= 1
-                    stream = self._connection.streams.pop(e.stream_id)
-                    self._connection._closed_streams[e.stream_id] = stream.closed_by
-                self._connection.acknowledge_received_data(
-                    e.flow_controlled_length, e.stream_id
-                )
-                yield DataReceived(e.stream_id, e.data, end_stream=end_stream)
+                    stream = conn.streams.pop(stream_id)
+                    conn._closed_streams[stream_id] = stream.closed_by
+                conn.acknowledge_received_data(e.flow_controlled_length, stream_id)
+                yield DataReceived(stream_id, e.data, end_stream=end_stream)
             elif ev_type is jh2.events.InformationalResponseReceived:
                 yield EarlyHeadersReceived(
                     e.stream_id,
@@ -233,10 +239,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             elif ev_type is jh2.events.StreamReset:
                 self._open_stream_count -= 1
                 # event StreamEnded may occur before StreamReset
-                if e.stream_id in self._connection.streams:
-                    stream = self._connection.streams.pop(e.stream_id)
-                    self._connection._closed_streams[e.stream_id] = stream.closed_by
-                yield StreamResetReceived(e.stream_id, e.error_code)
+                stream_id = e.stream_id
+                if stream_id in conn.streams:
+                    stream = conn.streams.pop(stream_id)
+                    conn._closed_streams[stream_id] = stream.closed_by
+                yield StreamResetReceived(stream_id, e.error_code)
             elif ev_type is jh2.events.ConnectionTerminated:
                 # ConnectionTerminated from h2 means that GOAWAY was received.
                 # A server can send GOAWAY for graceful shutdown, where clients
@@ -250,10 +257,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 else:
                     self._terminated = True
                     yield ConnectionTerminated(e.error_code, None)
-            elif ev_type in {
-                jh2.events.SettingsAcknowledged,
-                jh2.events.RemoteSettingsChanged,
-            }:
+            elif ev_type in SETTINGS_EVENT_SET:
                 yield HandshakeCompleted(alpn_protocol="h2")
 
     def connection_lost(self) -> None:

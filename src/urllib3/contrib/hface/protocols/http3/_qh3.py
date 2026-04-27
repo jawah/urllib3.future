@@ -23,7 +23,7 @@ from collections import deque
 from os import environ
 from random import randint
 from time import time as monotonic
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -63,6 +63,18 @@ QUIC_RELEVANT_EVENT_TYPES = {
     quic_events.HandshakeCompleted,
     quic_events.ConnectionTerminated,
     quic_events.StreamReset,
+}
+
+_SHORT_NAME_ASSOC = {
+    "CN": "commonName",
+    "L": "localityName",
+    "ST": "stateOrProvinceName",
+    "O": "organizationName",
+    "OU": "organizationalUnitName",
+    "C": "countryName",
+    "STREET": "streetAddress",
+    "DC": "domainComponent",
+    "E": "email",
 }
 
 
@@ -113,7 +125,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                         available_ciphers[cipher["name"].replace("TLS_", "")]
                     )
 
-            if len(chosen_ciphers) == 0:
+            if not chosen_ciphers:
                 raise ValueError(
                     f"Unable to find a compatible cipher in '{tls_config.ciphers}' to establish a QUIC connection. "
                     f"QUIC support one of '{['TLS_' + e for e in available_ciphers.keys()]}' only."
@@ -157,15 +169,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def is_available(self) -> bool:
         return (
-            self._terminated is False
-            and self._goaway_to_honor is False
+            not self._terminated
+            and not self._goaway_to_honor
             and self._max_stream_count > self._quic.open_outbound_streams
         )
 
     def is_idle(self) -> bool:
         if self._events.stream_count:
             return False
-        return self._terminated is False and self._open_stream_count == 0
+        return not self._terminated and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
         if not self._terminated and not self._goaway_to_honor:
@@ -231,16 +243,13 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> bool:
         return self._events.has(stream_id=stream_id, excl_event=excl_event)
 
-    @property
-    def connection_ids(self) -> Sequence[bytes]:
-        return list(self._connection_ids)
-
     def connection_lost(self) -> None:
         self._terminated = True
         self._events.append(ConnectionTerminated())
 
     def bytes_received(self, data: bytes) -> None:
-        self._quic.receive_datagram(data, self._remote_address, now=monotonic())
+        quic = self._quic
+        quic.receive_datagram(data, self._remote_address, now=monotonic())
         self._fetch_events()
 
         # we want to perpetually mark the connection as "saturated"
@@ -256,23 +265,14 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             #    well as those that are open.
             #
             # so, finding that remote_max_streams_bidi is increasing constantly is normal.
-            new_stream_limit = (
-                self._quic._remote_max_streams_bidi - self._total_stream_count
-            )
+            new_stream_limit = quic._remote_max_streams_bidi - self._total_stream_count
 
-            if (
-                new_stream_limit
-                and new_stream_limit != self._max_stream_count
-                and new_stream_limit > 0
-            ):
+            if new_stream_limit > 0 and new_stream_limit != self._max_stream_count:
                 self._max_stream_count = new_stream_limit
 
-            if (
-                self._quic._remote_max_stream_data_bidi_remote
-                and self._quic._remote_max_stream_data_bidi_remote
-                != self._max_frame_size
-            ):
-                self._max_frame_size = self._quic._remote_max_stream_data_bidi_remote
+            remote_max = quic._remote_max_stream_data_bidi_remote
+            if remote_max and remote_max != self._max_frame_size:
+                self._max_frame_size = remote_max
 
     def bytes_to_send(self) -> bytes:
         now = monotonic()
@@ -411,10 +411,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if binary_form:
             return x509_certificate.public_bytes()
 
-        datetime.datetime.fromtimestamp(
-            x509_certificate.not_valid_before, tz=datetime.timezone.utc
-        )
-
         issuer_info = {
             "version": x509_certificate.version + 1,
             "serialNumber": x509_certificate.serial_number.upper(),
@@ -430,37 +426,25 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             + " UTC",
         }
 
-        _short_name_assoc = {
-            "CN": "commonName",
-            "L": "localityName",
-            "ST": "stateOrProvinceName",
-            "O": "organizationName",
-            "OU": "organizationalUnitName",
-            "C": "countryName",
-            "STREET": "streetAddress",
-            "DC": "domainComponent",
-            "E": "email",
-        }
-
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
-            if rfc4514_attribute_name not in _short_name_assoc:
+            if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
                 continue
             issuer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        _short_name_assoc[rfc4514_attribute_name],
+                        _SHORT_NAME_ASSOC[rfc4514_attribute_name],
                         value.decode(),
                     ),
                 )
             )
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
-            if rfc4514_attribute_name not in _short_name_assoc:
+            if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
                 continue
             issuer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        _short_name_assoc[rfc4514_attribute_name],
+                        _SHORT_NAME_ASSOC[rfc4514_attribute_name],
                         value.decode(),
                     ),
                 )
@@ -504,37 +488,25 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             "crlDistributionPoints": [],
         }
 
-        _short_name_assoc = {
-            "CN": "commonName",
-            "L": "localityName",
-            "ST": "stateOrProvinceName",
-            "O": "organizationName",
-            "OU": "organizationalUnitName",
-            "C": "countryName",
-            "STREET": "streetAddress",
-            "DC": "domainComponent",
-            "E": "email",
-        }
-
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
-            if rfc4514_attribute_name not in _short_name_assoc:
+            if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
                 continue
             peer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        _short_name_assoc[rfc4514_attribute_name],
+                        _SHORT_NAME_ASSOC[rfc4514_attribute_name],
                         value.decode(),
                     ),
                 )
             )
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
-            if rfc4514_attribute_name not in _short_name_assoc:
+            if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
                 continue
             peer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
-                        _short_name_assoc[rfc4514_attribute_name],
+                        _SHORT_NAME_ASSOC[rfc4514_attribute_name],
                         value.decode(),
                     ),
                 )
@@ -560,8 +532,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                     )
                 peer_info["subjectAltName"].append(("IP Address", ip_address_decoded))  # type: ignore[attr-defined]
 
-        peer_info["OCSP"] = []
-
         for endpoint in x509_certificate.get_ocsp_endpoints():
             decoded_endpoint = endpoint.decode()
 
@@ -569,15 +539,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
             )
 
-        peer_info["caIssuers"] = []
-
         for endpoint in x509_certificate.get_issuer_endpoints():
             decoded_endpoint = endpoint.decode()
             peer_info["caIssuers"].append(  # type: ignore[attr-defined]
                 decoded_endpoint[decoded_endpoint.index("(") + 1 : -1]
             )
-
-        peer_info["crlDistributionPoints"] = []
 
         for endpoint in x509_certificate.get_crl_endpoints():
             decoded_endpoint = endpoint.decode()

@@ -10,6 +10,7 @@ from socket import timeout as SocketTimeout
 
 from .._collections import HTTPHeaderDict
 from .._typing import _TYPE_BODY
+from .._constant import C_INT_MAX, CHUNK_AMT_MAX
 from ..backend._async import AsyncLowLevelResponse
 from ..exceptions import (
     BaseSSLError,
@@ -252,8 +253,7 @@ class AsyncHTTPResponse(HTTPResponse):
 
         Read more :ref:`here <json>`.
         """
-        data = (await self.data).decode("utf-8")
-        return _json.loads(data)
+        return _json.loads(await self.data)
 
     @property
     async def data(self) -> bytes:  # type: ignore[override]
@@ -281,10 +281,9 @@ class AsyncHTTPResponse(HTTPResponse):
           * CPython < 3.10 only when `amt` does not fit 32-bit int.
         """
         assert self._fp
-        c_int_max = 2**31 - 1
         if (
-            (amt and amt > c_int_max)
-            or (self.length_remaining and self.length_remaining > c_int_max)
+            (amt and amt > C_INT_MAX)
+            or (self.length_remaining and self.length_remaining > C_INT_MAX)
         ) and sys.version_info < (3, 10):
             buffer = io.BytesIO()
             # Besides `max_chunk_amt` being a maximum chunk size, it
@@ -293,15 +292,15 @@ class AsyncHTTPResponse(HTTPResponse):
             # `c_int_max` equal to 2 GiB - 1 byte is the actual maximum
             # chunk size that does not lead to an overflow error, but
             # 256 MiB is a compromise.
-            max_chunk_amt = 2**28
+            is_async_ll = isinstance(self._fp, AsyncLowLevelResponse)
             while amt is None or amt != 0:
                 if amt is not None:
-                    chunk_amt = min(amt, max_chunk_amt)
+                    chunk_amt = min(amt, CHUNK_AMT_MAX)
                     amt -= chunk_amt
                 else:
-                    chunk_amt = max_chunk_amt
+                    chunk_amt = CHUNK_AMT_MAX
                 try:
-                    if isinstance(self._fp, AsyncLowLevelResponse):
+                    if is_async_ll:
                         data = await self._fp.read(chunk_amt)
                     else:
                         data = self._fp.read(chunk_amt)  # type: ignore[attr-defined]
@@ -336,15 +335,16 @@ class AsyncHTTPResponse(HTTPResponse):
             # Mocking library often use io.BytesIO
             # which does not auto-close when reading data
             # with amt=None.
-            is_foreign_fp_unclosed = (
-                amt is None and getattr(self._fp, "closed", False) is False
+            is_foreign_fp_unclosed = amt is None and not getattr(
+                self._fp, "closed", False
             )
 
             if (amt is not None and amt != 0 and not data) or is_foreign_fp_unclosed:
                 if is_foreign_fp_unclosed:
-                    self._fp_bytes_read += len(data)
+                    data_len = len(data)
+                    self._fp_bytes_read += data_len
                     if self.length_remaining is not None:
-                        self.length_remaining -= len(data)
+                        self.length_remaining -= data_len
 
                 # Platform-specific: Buggy versions of Python.
                 # Close the connection when no data is returned
@@ -368,9 +368,10 @@ class AsyncHTTPResponse(HTTPResponse):
                     raise IncompleteRead(self._fp_bytes_read, self.length_remaining)
 
         if data and not is_foreign_fp_unclosed:
-            self._fp_bytes_read += len(data)
+            data_len = len(data)
+            self._fp_bytes_read += data_len
             if self.length_remaining is not None:
-                self.length_remaining -= len(data)
+                self.length_remaining -= data_len
 
         return data
 
@@ -476,15 +477,14 @@ class AsyncHTTPResponse(HTTPResponse):
         finally:
             if (
                 self._fp
-                and hasattr(self._fp, "_eot")
-                and self._fp._eot
+                and getattr(self._fp, "_eot", False)
                 and self._police_officer is not None
             ):
                 # an HTTP extension could be live, we don't want to accidentally kill it!
                 if (
                     not hasattr(self._fp, "_dsa")
                     or self._fp._dsa is None
-                    or self._fp._dsa.closed is True
+                    or self._fp._dsa.closed
                 ):
                     self._police_officer.forget(self)
                     self._police_officer = None
@@ -494,14 +494,14 @@ class AsyncHTTPResponse(HTTPResponse):
     ) -> typing.AsyncGenerator[bytes, None]:
         if self._fp is None:
             return
-        while not is_fp_closed(self._fp) or len(self._decoded_buffer) > 0:
+        while not is_fp_closed(self._fp) or self._decoded_buffer:
             data = await self.read(amt=amt, decode_content=decode_content)
 
             if data:
                 yield data
 
     async def close(self) -> None:  # type: ignore[override]
-        if self.extension is not None and self.extension.closed is False:
+        if self.extension is not None and not self.extension.closed:
             await self.extension.close()
 
         if not self.closed and self._fp:
@@ -518,7 +518,7 @@ class AsyncHTTPResponse(HTTPResponse):
         async for chunk in self.stream(-1, decode_content=True):
             if b"\n" in chunk:
                 chunks = chunk.split(b"\n")
-                yield b"".join(buffer) + chunks[0] + b"\n"
+                yield b"".join([*buffer, chunks[0], b"\n"])
                 for x in chunks[1:-1]:
                     yield x + b"\n"
                 if chunks[-1]:
@@ -532,7 +532,7 @@ class AsyncHTTPResponse(HTTPResponse):
 
     def __del__(self) -> None:
         if not self.closed:
-            if not self.closed and self._fp:
+            if self._fp:
                 self._fp.close()
 
             if not self.auto_close:

@@ -38,6 +38,7 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._stream is not None and self._response is not None:
             if self._next_value_task is not None:
                 self._next_value_task.cancel()
+                await self._next_value_task
 
             await self._stream.aclose()
             if (

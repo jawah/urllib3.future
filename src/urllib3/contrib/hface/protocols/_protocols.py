@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import typing
 from abc import ABCMeta, abstractmethod
-from typing import Any, Sequence
+from typing import Any
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -92,18 +92,6 @@ class OverQUICProtocol(OverUDPProtocol):
     def next_timer(self) -> float | None:
         """Return the absolute monotonic time of the next QUIC timer event.
         Returns None when no timer is currently scheduled.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def connection_ids(self) -> Sequence[bytes]:
-        """
-        QUIC connection IDs
-
-        This property can be used to assign UDP packets to QUIC connections.
-
-        :return: a sequence of connection IDs
         """
         raise NotImplementedError
 

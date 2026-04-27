@@ -39,6 +39,7 @@ except (AttributeError, ImportError, ValueError):  # Defensive:
 
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
+from ._constant import C_INT_MAX, CHUNK_AMT_MAX
 from .backend import LowLevelResponse, ResponsePromise
 from .exceptions import (
     BaseSSLError,
@@ -122,7 +123,7 @@ class GzipDecoder(ContentDecoder):
     def decompress(self, data: bytes) -> bytes:
         ret = bytearray()
         if self._state == GzipDecoderState.SWALLOW_DATA or not data:
-            return bytes(ret)
+            return b""
         while True:
             try:
                 ret += self._obj.decompress(data)
@@ -451,8 +452,7 @@ class HTTPResponse(io.IOBase):
 
         Read more :ref:`here <json>`.
         """
-        data = self.data.decode("utf-8")
-        return _json.loads(data)
+        return _json.loads(self.data)
 
     @property
     def retries(self) -> Retry | None:
@@ -722,10 +722,9 @@ class HTTPResponse(io.IOBase):
           * CPython < 3.10 only when `amt` does not fit 32-bit int.
         """
         assert self._fp
-        c_int_max = 2**31 - 1
         if (
-            (amt and amt > c_int_max)
-            or (self.length_remaining and self.length_remaining > c_int_max)
+            (amt and amt > C_INT_MAX)
+            or (self.length_remaining and self.length_remaining > C_INT_MAX)
         ) and sys.version_info < (3, 10):
             buffer = io.BytesIO()
             # Besides `max_chunk_amt` being a maximum chunk size, it
@@ -734,13 +733,12 @@ class HTTPResponse(io.IOBase):
             # `c_int_max` equal to 2 GiB - 1 byte is the actual maximum
             # chunk size that does not lead to an overflow error, but
             # 256 MiB is a compromise.
-            max_chunk_amt = 2**28
             while amt is None or amt != 0:
                 if amt is not None:
-                    chunk_amt = min(amt, max_chunk_amt)
+                    chunk_amt = min(amt, CHUNK_AMT_MAX)
                     amt -= chunk_amt
                 else:
-                    chunk_amt = max_chunk_amt
+                    chunk_amt = CHUNK_AMT_MAX
                 try:
                     data = self._fp.read(chunk_amt)
                 except ValueError:  # Defensive: overly protective
@@ -775,15 +773,16 @@ class HTTPResponse(io.IOBase):
             # with amt=None.
             is_foreign_fp_unclosed = (
                 amt is None
-                and getattr(self._fp, "closed", False) is False
+                and not getattr(self._fp, "closed", False)
                 and not fp_upgraded
             )
 
             if (amt is not None and amt != 0 and not data) or is_foreign_fp_unclosed:
                 if is_foreign_fp_unclosed:
-                    self._fp_bytes_read += len(data)
+                    data_len = len(data)
+                    self._fp_bytes_read += data_len
                     if self.length_remaining is not None:
-                        self.length_remaining -= len(data)
+                        self.length_remaining -= data_len
                 # Platform-specific: Buggy versions of Python.
                 # Close the connection when no data is returned
                 #
@@ -806,9 +805,10 @@ class HTTPResponse(io.IOBase):
                     raise IncompleteRead(self._fp_bytes_read, self.length_remaining)
 
         if data and not is_foreign_fp_unclosed:
-            self._fp_bytes_read += len(data)
+            data_len = len(data)
+            self._fp_bytes_read += data_len
             if self.length_remaining is not None:
-                self.length_remaining -= len(data)
+                self.length_remaining -= data_len
 
         return data
 

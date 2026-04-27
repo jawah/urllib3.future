@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import typing
 from dataclasses import dataclass, field
 
 from .._typing import HeadersType
@@ -190,13 +189,12 @@ class EarlyHeadersReceived(StreamEvent):
     #: The received HTTP headers
     headers: HeadersType
 
+    #: Early headers never signal end of stream.
+    end_stream: bool = False
+
     def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return (
             f"{cls}(stream_id={self.stream_id!r}, "
             f"len(headers)={len(self.headers)}, end_stream=False)"
         )
-
-    @property
-    def end_stream(self) -> typing.Literal[False]:
-        return False

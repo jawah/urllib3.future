@@ -76,7 +76,9 @@ def create_connector(
             resolver=resolver,
         )
 
-    raise ValueError(f"Invalid proxy type: {proxy_type}")
+    raise ValueError(  # Defensive: cpy from original code
+        f"Invalid proxy type: {proxy_type}"
+    )
 
 
 class AsyncioProxy:
@@ -157,17 +159,19 @@ class AsyncioProxy:
 
     @property
     def proxy_host(self) -> str:
-        return self._proxy_host
+        return self._proxy_host  # Defensive: unused, just for conformance inherit
 
     @property
     def proxy_port(self) -> int:
-        return self._proxy_port
+        return self._proxy_port  # Defensive: unused, just for conformance inherit
 
     @classmethod
     def create(cls, *args: typing.Any, **kwargs: typing.Any) -> AsyncioProxy:
-        return cls(*args, **kwargs)
+        return cls(*args, **kwargs)  # Defensive: unused, just for conformance inherit
 
     @classmethod
     def from_url(cls, url: str, **kwargs: typing.Any) -> AsyncioProxy:
-        url_args = parse_proxy_url(url)
-        return cls(*url_args, **kwargs)
+        url_args = parse_proxy_url(  # Defensive: unused, just for conformance inherit
+            url
+        )
+        return cls(*url_args, **kwargs)  # Defensive:

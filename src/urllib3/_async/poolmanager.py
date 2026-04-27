@@ -343,7 +343,7 @@ class AsyncPoolManager(AsyncRequestMethods):
                     else set()
                 )
 
-                if len(extension.supported_svn()) != 3:
+                if len(supported_svn) != 3:
                     if HttpVersion.h11 not in supported_svn:
                         disabled_svn.add(HttpVersion.h11)
 
@@ -665,13 +665,8 @@ class AsyncPoolManager(AsyncRequestMethods):
 
         if extension is not None and response.extension is None:
             if response.status == 101 or (
-                200 <= response.status < 300
-                and (method == "CONNECT" or extension is not None)
+                200 <= response.status < 300 and method == "CONNECT"
             ):
-                if extension is None:
-                    from ..contrib.webextensions._async import load_extension
-
-                    extension = load_extension(None)()
                 await response.start_extension(extension)
 
         return response
@@ -725,18 +720,19 @@ class AsyncPoolManager(AsyncRequestMethods):
         # disable svn if they are incompatible with said extension.
         pool_kwargs = None
 
-        if "extension" in kw and kw["extension"] is not None:
-            extension = kw["extension"]
+        extension = kw.get("extension")
+        if extension is not None:
             disabled_svn = set()
 
             pool_kwargs = {}
 
-            if len(extension.supported_svn()) != 3:
-                if HttpVersion.h11 not in extension.supported_svn():
+            supported = extension.supported_svn()
+            if len(supported) != 3:
+                if HttpVersion.h11 not in supported:
                     disabled_svn.add(HttpVersion.h11)
-                if HttpVersion.h2 not in extension.supported_svn():
+                if HttpVersion.h2 not in supported:
                     disabled_svn.add(HttpVersion.h2)
-                if HttpVersion.h3 not in extension.supported_svn():
+                if HttpVersion.h3 not in supported:
                     disabled_svn.add(HttpVersion.h3)
 
             pool_kwargs["disabled_svn"] = disabled_svn
@@ -765,11 +761,10 @@ class AsyncPoolManager(AsyncRequestMethods):
 
         self.pools.release()
 
-        if "multiplexed" in kw and kw["multiplexed"]:
+        if kw.get("multiplexed"):
             if isinstance(response, ResponsePromise):
                 response.set_parameter("pm_redirect", redirect)
                 response.set_parameter("pm_url", url)
-                assert isinstance(response, ResponsePromise)
 
                 return response
 

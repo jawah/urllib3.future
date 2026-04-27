@@ -18,6 +18,12 @@ def test_single_ev_in_matrix() -> None:
 
     assert sm.count() == 1
 
+    sm.append(HeadersReceived(headers=(), stream_id=1, end_stream=True))
+
+    assert sm.count() == 2
+    assert sm.count(stream_id=0) == 0
+    assert sm.count(stream_id=1) == 1
+
     assert isinstance(sm.popleft(), HandshakeCompleted)
 
 
