@@ -84,6 +84,14 @@ def allowed_gai_family() -> socket.AddressFamily:
     return family
 
 
+class _with_attr_sock(socket.socket):
+    """socket.socket subclass that carries extra protocol metadata."""
+
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        self._ech_config: bytes | None = None
+        super().__init__(*args, **kwargs)
+
+
 def _has_ipv6() -> bool:
     """Returns True if the system can bind an IPv6 address."""
     sock = None
@@ -96,7 +104,7 @@ def _has_ipv6() -> bool:
         # https://github.com/urllib3/urllib3/pull/611
         # https://bugs.python.org/issue658327
         try:
-            sock = socket.socket(socket.AF_INET6)
+            sock = _with_attr_sock(socket.AF_INET6)
             sock.bind(("::1", 0))
             has_ipv6 = True
         except Exception:

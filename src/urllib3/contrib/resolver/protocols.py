@@ -15,19 +15,17 @@ from random import randint
 from ..._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
 from ..._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
 from ...exceptions import LocationParseError
-from ...util.connection import _set_socket_options, allowed_gai_family
+from ...util.connection import (
+    _set_socket_options,
+    _with_attr_sock,
+    allowed_gai_family,
+)
 from ...util.ssl_match_hostname import CertificateError, match_hostname
 from ...util.timeout import _DEFAULT_TIMEOUT
 from .utils import inet4_ntoa, inet6_ntoa, parse_https_rdata, read_name
 
 if typing.TYPE_CHECKING:
     from .utils import HttpsRecord
-
-
-class _with_attr_sock(socket.socket):
-    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        self._ech_config: bytes | None = None
-        super().__init__(*args, **kwargs)
 
 
 class ProtocolResolver(str, Enum):

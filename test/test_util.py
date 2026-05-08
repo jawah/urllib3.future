@@ -784,14 +784,14 @@ class TestUtil:
 
     def test_has_ipv6_enabled_but_fails(self) -> None:
         with patch("socket.has_ipv6", True):
-            with patch("socket.socket") as mock:
+            with patch("urllib3.util.connection._with_attr_sock") as mock:
                 instance = mock.return_value
                 instance.bind = Mock(side_effect=Exception("No IPv6 here!"))
                 assert not _has_ipv6()
 
     def test_has_ipv6_enabled_and_working(self) -> None:
         with patch("socket.has_ipv6", True):
-            with patch("socket.socket") as mock:
+            with patch("urllib3.util.connection._with_attr_sock") as mock:
                 instance = mock.return_value
                 instance.bind.return_value = True
                 assert _has_ipv6()
