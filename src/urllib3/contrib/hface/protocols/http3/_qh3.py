@@ -188,7 +188,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 self._terminated = True
             else:
                 now = monotonic()
-                self._quic.handle_timer(now)
+                try:
+                    self._quic.handle_timer(now)
+                except TypeError:  # Defensive: old qh3 bug
+                    pass
                 if self._quic._state in {
                     QuicConnectionState.CLOSING,
                     QuicConnectionState.TERMINATED,
@@ -274,7 +277,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if not self._packets or timer_expired:
             if timer_expired:
-                self._quic.handle_timer(now)
+                try:
+                    self._quic.handle_timer(now)
+                except TypeError:  # Defensive: old qh3 bug
+                    pass
             # the QUIC state machine returns datagrams (addr, packet)
             # the client never have to worry about the destination
             # unless server yield a preferred address?
