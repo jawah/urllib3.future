@@ -17,13 +17,6 @@ import sys
 from collections import deque
 import typing
 
-try:
-    from qh3.asyncio._transport import (
-        OptimizedDatagramTransport as _OptimizedDatagramTransport,
-    )
-except ImportError:
-    _OptimizedDatagramTransport = None  # type: ignore[misc,assignment]
-
 
 from ..._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
 
@@ -251,520 +244,524 @@ def sync_sendmsg_gso(sock: socket.socket, datagrams: list[bytes]) -> None:
                 sock.send(dgram)
 
 
-# qh3 have a faster Rust native optimized UDP I/O
-# based on the quinn-udp crate.
-if _OptimizedDatagramTransport is None:
+# qh3 ships a Rust-native, quinn-udp backed optimized UDP I/O
+# transport. When the package is installed we prefer it (faster batch
+# I/O, native GRO/GSO handling). When it is not, this Python
+# implementation provides functionally equivalent semantics.
+#
+# The qh3 import is intentionally deferred to ``create_udp_endpoint``
+# below so that merely importing this module never triggers an eager
+# qh3 import (qh3 is an optional dependency).
+class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
+    __slots__ = (
+        "_loop",
+        "_sock",
+        "_sock_fd",
+        "_protocol",
+        "_address",
+        "_connected",
+        "_gro_enabled",
+        "_gso_enabled",
+        "_gro_segment_size",
+        "_recv_buf_size",
+        "_closing",
+        "_closed",
+        "_closed_fut",
+        "_extra",
+        "_paused",
+        "_write_ready",
+        "_send_queue",
+        "_buffer_size",
+        "_protocol_paused",
+        "_writer_registered",
+        "_reader_registered",
+        "_protocol_supports_batch",
+    )
 
-    class _OptimizedDatagramTransport(asyncio.DatagramTransport):  # type: ignore[no-redef]
-        __slots__ = (
-            "_loop",
-            "_sock",
-            "_sock_fd",
-            "_protocol",
-            "_address",
-            "_connected",
-            "_gro_enabled",
-            "_gso_enabled",
-            "_gro_segment_size",
-            "_recv_buf_size",
-            "_closing",
-            "_closed",
-            "_closed_fut",
-            "_extra",
-            "_paused",
-            "_write_ready",
-            "_send_queue",
-            "_buffer_size",
-            "_protocol_paused",
-            "_writer_registered",
-            "_reader_registered",
-            "_protocol_supports_batch",
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        sock: socket.socket,
+        protocol: asyncio.DatagramProtocol,
+        address: tuple[str, int] | None,
+        gro_enabled: bool,
+        gso_enabled: bool,
+        gro_segment_size: int,
+    ) -> None:
+        super().__init__()
+        self._loop = loop
+        self._sock = sock
+        self._sock_fd = sock.fileno()
+        self._protocol = protocol
+        self._address = address
+
+        # Detect whether the socket is connect()-ed. When it is, we MUST
+        # use send() -- sendto(addr) returns EISCONN on Linux/BSD.
+        try:
+            sock.getpeername()
+            self._connected = True
+        except OSError:
+            self._connected = False
+
+        self._gro_enabled = gro_enabled
+        self._gso_enabled = gso_enabled
+        self._gro_segment_size = gro_segment_size
+        self._closing = False
+        self._closed = False
+        self._closed_fut: asyncio.Future[None] = loop.create_future()
+        self._paused = False
+        self._write_ready = True
+        self._writer_registered = False
+        self._reader_registered = False
+
+        # Write buffer state.
+        self._send_queue: deque[tuple[bytes, tuple[str, int] | None]] = deque()
+        self._buffer_size = 0
+        self._protocol_paused = False
+
+        # When GRO is enabled we always need room for a fully coalesced
+        # burst; otherwise a single MTU-sized datagram suffices.
+        self._recv_buf_size = (
+            _DEFAULT_GRO_BUF if gro_enabled else max(gro_segment_size, 1500)
         )
 
-        def __init__(
-            self,
-            loop: asyncio.AbstractEventLoop,
-            sock: socket.socket,
-            protocol: asyncio.DatagramProtocol,
-            address: tuple[str, int] | None,
-            gro_enabled: bool,
-            gso_enabled: bool,
-            gro_segment_size: int,
-        ) -> None:
-            super().__init__()
-            self._loop = loop
-            self._sock = sock
-            self._sock_fd = sock.fileno()
-            self._protocol = protocol
-            self._address = address
+        # Cache whether the protocol opts in to the batch callback so
+        # we can skip the per-recvmsg getattr.
+        self._protocol_supports_batch = hasattr(protocol, "datagrams_received")
 
-            # Detect whether the socket is connect()-ed. When it is, we MUST
-            # use send() -- sendto(addr) returns EISCONN on Linux/BSD.
-            try:
-                sock.getpeername()
-                self._connected = True
-            except OSError:
-                self._connected = False
+        try:
+            sockname = sock.getsockname()
+        except OSError:
+            sockname = None
 
-            self._gro_enabled = gro_enabled
-            self._gso_enabled = gso_enabled
-            self._gro_segment_size = gro_segment_size
-            self._closing = False
-            self._closed = False
-            self._closed_fut: asyncio.Future[None] = loop.create_future()
-            self._paused = False
-            self._write_ready = True
-            self._writer_registered = False
-            self._reader_registered = False
+        self._extra = {
+            "peername": address,
+            "socket": sock,
+            "sockname": sockname,
+            "family": sock.family,
+            "type": sock.type,
+        }
 
-            # Write buffer state.
-            self._send_queue: deque[tuple[bytes, tuple[str, int] | None]] = deque()
-            self._buffer_size = 0
-            self._protocol_paused = False
+    def get_extra_info(self, name: str, default: typing.Any = None) -> typing.Any:
+        return self._extra.get(name, default)
 
-            # When GRO is enabled we always need room for a fully coalesced
-            # burst; otherwise a single MTU-sized datagram suffices.
-            self._recv_buf_size = (
-                _DEFAULT_GRO_BUF if gro_enabled else max(gro_segment_size, 1500)
-            )
+    def is_closing(self) -> bool:
+        return self._closing
 
-            # Cache whether the protocol opts in to the batch callback so
-            # we can skip the per-recvmsg getattr.
-            self._protocol_supports_batch = hasattr(protocol, "datagrams_received")
+    def get_protocol(self) -> asyncio.BaseProtocol:
+        return self._protocol
 
-            try:
-                sockname = sock.getsockname()
-            except OSError:
-                sockname = None
+    def set_protocol(self, protocol: asyncio.BaseProtocol) -> None:
+        self._protocol = protocol  # type: ignore[assignment]
+        self._protocol_supports_batch = hasattr(protocol, "datagrams_received")
 
-            self._extra = {
-                "peername": address,
-                "socket": sock,
-                "sockname": sockname,
-                "family": sock.family,
-                "type": sock.type,
-            }
+    def get_write_buffer_size(self) -> int:
+        return self._buffer_size
 
-        def get_extra_info(self, name: str, default: typing.Any = None) -> typing.Any:
-            return self._extra.get(name, default)
-
-        def is_closing(self) -> bool:
-            return self._closing
-
-        def get_protocol(self) -> asyncio.BaseProtocol:
-            return self._protocol
-
-        def set_protocol(self, protocol: asyncio.BaseProtocol) -> None:
-            self._protocol = protocol  # type: ignore[assignment]
-            self._protocol_supports_batch = hasattr(protocol, "datagrams_received")
-
-        def get_write_buffer_size(self) -> int:
-            return self._buffer_size
-
-        def close(self) -> None:
-            if self._closing:
-                return
-            self._closing = True
-            self._unregister_reader()
-            # Drain the write queue gracefully in the background.
-            if not self._send_queue:
-                self._loop.call_soon(self._call_connection_lost, None)
-
-        def abort(self) -> None:
-            if self._closing:
-                return
-            self._closing = True
-            # Per asyncio contract, connection_lost MUST be invoked
-            # asynchronously -- never re-entrantly from inside abort().
-            self._send_queue.clear()
-            self._buffer_size = 0
+    def close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._unregister_reader()
+        # Drain the write queue gracefully in the background.
+        if not self._send_queue:
             self._loop.call_soon(self._call_connection_lost, None)
 
-        def _call_connection_lost(self, exc: Exception | None) -> None:
-            if self._closed:
-                return
-            self._closed = True
-            self._unregister_reader()
-            self._unregister_writer()
+    def abort(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        # Per asyncio contract, connection_lost MUST be invoked
+        # asynchronously -- never re-entrantly from inside abort().
+        self._send_queue.clear()
+        self._buffer_size = 0
+        self._loop.call_soon(self._call_connection_lost, None)
+
+    def _call_connection_lost(self, exc: Exception | None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._unregister_reader()
+        self._unregister_writer()
+        try:
+            self._protocol.connection_lost(exc)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:  # noqa: BLE001 - protocol callbacks must not kill us
+            pass
+        finally:
             try:
-                self._protocol.connection_lost(exc)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException:  # noqa: BLE001 - protocol callbacks must not kill us
+                self._sock.close()
+            except OSError:
                 pass
-            finally:
-                try:
-                    self._sock.close()
-                except OSError:
-                    pass
-                if not self._closed_fut.done():
-                    self._closed_fut.set_result(None)
+            if not self._closed_fut.done():
+                self._closed_fut.set_result(None)
 
-        def _register_reader(self) -> None:
-            if self._reader_registered or self._closed:
-                return
-            try:
-                self._loop.add_reader(self._sock_fd, self._on_readable)
-                self._reader_registered = True
-            except (OSError, ValueError):
-                pass
+    def _register_reader(self) -> None:
+        if self._reader_registered or self._closed:
+            return
+        try:
+            self._loop.add_reader(self._sock_fd, self._on_readable)
+            self._reader_registered = True
+        except (OSError, ValueError):
+            pass
 
-        def _unregister_reader(self) -> None:
-            if not self._reader_registered:
-                return
-            self._reader_registered = False
-            try:
-                self._loop.remove_reader(self._sock_fd)
-            except (OSError, ValueError):
-                pass
+    def _unregister_reader(self) -> None:
+        if not self._reader_registered:
+            return
+        self._reader_registered = False
+        try:
+            self._loop.remove_reader(self._sock_fd)
+        except (OSError, ValueError):
+            pass
 
-        def _register_writer(self) -> None:
-            if self._writer_registered or self._closed:
-                return
-            try:
-                self._loop.add_writer(self._sock_fd, self._on_write_ready)
-                self._writer_registered = True
-            except (OSError, ValueError):
-                pass
+    def _register_writer(self) -> None:
+        if self._writer_registered or self._closed:
+            return
+        try:
+            self._loop.add_writer(self._sock_fd, self._on_write_ready)
+            self._writer_registered = True
+        except (OSError, ValueError):
+            pass
 
-        def _unregister_writer(self) -> None:
-            if not self._writer_registered:
-                return
-            self._writer_registered = False
-            try:
-                self._loop.remove_writer(self._sock_fd)
-            except (OSError, ValueError):
-                pass
+    def _unregister_writer(self) -> None:
+        if not self._writer_registered:
+            return
+        self._writer_registered = False
+        try:
+            self._loop.remove_writer(self._sock_fd)
+        except (OSError, ValueError):
+            pass
 
-        def _raw_send(self, data: bytes, addr: tuple[str, int] | None) -> None:
-            """Issue a single send/sendto on the underlying socket.
+    def _raw_send(self, data: bytes, addr: tuple[str, int] | None) -> None:
+        """Issue a single send/sendto on the underlying socket.
 
-            Picks the right syscall based on whether the socket is
-            ``connect()``-ed: a connected UDP socket rejects ``sendto`` with
-            ``EISCONN`` on Linux and macOS.
-            """
-            if self._connected:
+        Picks the right syscall based on whether the socket is
+        ``connect()``-ed: a connected UDP socket rejects ``sendto`` with
+        ``EISCONN`` on Linux and macOS.
+        """
+        if self._connected:
+            self._sock.send(data)
+        else:
+            target = addr if addr is not None else self._address
+            if target is None:
+                # Last-resort: try send() and let the kernel raise.
                 self._sock.send(data)
             else:
-                target = addr if addr is not None else self._address
-                if target is None:
-                    # Last-resort: try send() and let the kernel raise.
-                    self._sock.send(data)
-                else:
-                    self._sock.sendto(data, target)
+                self._sock.sendto(data, target)
 
-        def sendto(self, data: bytes, addr: tuple[str, int] | None = None) -> None:  # type: ignore[override]
-            if self._closing:
-                raise OSError("Transport is closing")
+    def sendto(self, data: bytes, addr: tuple[str, int] | None = None) -> None:  # type: ignore[override]
+        if self._closing:
+            raise OSError("Transport is closing")
 
-            target = addr if addr is not None else self._address
+        target = addr if addr is not None else self._address
 
-            # If the writer is currently busy draining backlog, queue this
-            # datagram behind whatever is already there to preserve order.
-            if not self._write_ready or self._send_queue:
-                self._queue_write(data, target)
-                return
+        # If the writer is currently busy draining backlog, queue this
+        # datagram behind whatever is already there to preserve order.
+        if not self._write_ready or self._send_queue:
+            self._queue_write(data, target)
+            return
 
+        try:
+            self._raw_send(data, target)
+            return
+        except BlockingIOError:
+            pass
+        except InterruptedError:
+            # Retry once on EINTR; if it fails again, queue.
             try:
                 self._raw_send(data, target)
                 return
             except BlockingIOError:
                 pass
-            except InterruptedError:
-                # Retry once on EINTR; if it fails again, queue.
-                try:
-                    self._raw_send(data, target)
-                    return
-                except BlockingIOError:
-                    pass
-                except OSError as exc:
-                    self._protocol.error_received(exc)
-                    return
             except OSError as exc:
                 self._protocol.error_received(exc)
                 return
+        except OSError as exc:
+            self._protocol.error_received(exc)
+            return
 
-            # Fell through with EAGAIN -- queue and arm the writer.
-            self._write_ready = False
-            self._register_writer()
-            self._queue_write(data, target)
+        # Fell through with EAGAIN -- queue and arm the writer.
+        self._write_ready = False
+        self._register_writer()
+        self._queue_write(data, target)
 
-        def sendto_many(self, datagrams: list[bytes]) -> None:
-            """Send multiple datagrams, using GSO when available.
+    def sendto_many(self, datagrams: list[bytes]) -> None:
+        """Send multiple datagrams, using GSO when available.
 
-            Falls back to individual ``sendto`` calls when GSO is not
-            supported or the socket write buffer is full. Guarantees that
-            *every* input datagram is either transmitted or queued -- none
-            are silently dropped.
-            """
-            if self._closing:
-                raise OSError("Transport is closing")
-            if not datagrams:
+        Falls back to individual ``sendto`` calls when GSO is not
+        supported or the socket write buffer is full. Guarantees that
+        *every* input datagram is either transmitted or queued -- none
+        are silently dropped.
+        """
+        if self._closing:
+            raise OSError("Transport is closing")
+        if not datagrams:
+            return
+
+        # If the writer is busy, append everything to the backlog so
+        # ordering is preserved.
+        if not self._write_ready or self._send_queue:
+            target = self._address
+            for dgram in datagrams:
+                self._queue_write(dgram, target)
+            return
+
+        if self._gso_enabled:
+            self._send_linux_gso(datagrams)
+        else:
+            for dgram in datagrams:
+                # sendto() will queue automatically on EAGAIN.
+                self.sendto(dgram)
+                if self._closing or self._closed:
+                    return
+
+    def _send_linux_gso(self, datagrams: list[bytes]) -> None:
+        """Send a list of datagrams using UDP_SEGMENT.
+
+        On EAGAIN at any point, *all* not-yet-sent datagrams (including
+        the failing group's contents) are pushed into the write queue
+        in order, the writer is armed, and the function returns. Nothing
+        is ever silently dropped.
+        """
+        groups = _group_by_segment_size(datagrams)
+        addr = self._address
+        sock = self._sock
+
+        for i, (segment_size, group) in enumerate(groups):
+            try:
+                if len(group) == 1:
+                    self._raw_send(group[0], addr)
+                else:
+                    # Multi-buffer iov -> single concatenated UDP message
+                    # split server-side at segment_size boundaries.
+                    sock.sendmsg(
+                        group,
+                        [
+                            (
+                                _SOL_UDP,
+                                UDP_LINUX_SEGMENT,
+                                _UINT16.pack(segment_size),
+                            )
+                        ],
+                    )
+            except BlockingIOError:
+                self._write_ready = False
+                self._register_writer()
+                # Queue this group + every remaining group so nothing
+                # gets lost.
+                for _sz, g in groups[i:]:
+                    for dgram in g:
+                        self._queue_write(dgram, addr)
                 return
-
-            # If the writer is busy, append everything to the backlog so
-            # ordering is preserved.
-            if not self._write_ready or self._send_queue:
-                target = self._address
-                for dgram in datagrams:
-                    self._queue_write(dgram, target)
+            except InterruptedError:
+                # Push what we haven't sent yet onto the queue and let
+                # the writer retry. Avoids unbounded retry loops here.
+                for _sz, g in groups[i:]:
+                    for dgram in g:
+                        self._queue_write(dgram, addr)
+                self._write_ready = False
+                self._register_writer()
                 return
-
-            if self._gso_enabled:
-                self._send_linux_gso(datagrams)
-            else:
-                for dgram in datagrams:
-                    # sendto() will queue automatically on EAGAIN.
-                    self.sendto(dgram)
+            except OSError as exc:
+                # The kernel rejected this entire batch. If it was a
+                # GSO send, fall back to per-datagram sends so partial
+                # progress is still possible.
+                if len(group) > 1:
+                    for dgram in group:
+                        try:
+                            self._raw_send(dgram, addr)
+                        except BlockingIOError:
+                            self._write_ready = False
+                            self._register_writer()
+                            self._queue_write(dgram, addr)
+                            # Push the rest of this group + everything after.
+                            idx = group.index(dgram) + 1
+                            for tail in group[idx:]:
+                                self._queue_write(tail, addr)
+                            for _sz, g in groups[i + 1 :]:
+                                for d in g:
+                                    self._queue_write(d, addr)
+                            return
+                        except OSError as inner:
+                            self._protocol.error_received(inner)
+                            if self._closing or self._closed:
+                                return
+                else:
+                    self._protocol.error_received(exc)
                     if self._closing or self._closed:
                         return
 
-        def _send_linux_gso(self, datagrams: list[bytes]) -> None:
-            """Send a list of datagrams using UDP_SEGMENT.
+    def _queue_write(self, data: bytes, addr: tuple[str, int] | None) -> None:
+        self._send_queue.append((data, addr))
+        self._buffer_size += len(data)
+        if self._buffer_size >= _HIGH_WATERMARK and not self._protocol_paused:
+            self._protocol_paused = True
+            try:
+                self._protocol.pause_writing()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:  # noqa: BLE001
+                pass
 
-            On EAGAIN at any point, *all* not-yet-sent datagrams (including
-            the failing group's contents) are pushed into the write queue
-            in order, the writer is armed, and the function returns. Nothing
-            is ever silently dropped.
-            """
-            groups = _group_by_segment_size(datagrams)
-            addr = self._address
-            sock = self._sock
+    def _maybe_resume_protocol(self) -> None:
+        if self._protocol_paused and self._buffer_size <= _LOW_WATERMARK:
+            self._protocol_paused = False
+            try:
+                self._protocol.resume_writing()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException:  # noqa: BLE001
+                pass
 
-            for i, (segment_size, group) in enumerate(groups):
-                try:
-                    if len(group) == 1:
-                        self._raw_send(group[0], addr)
-                    else:
-                        # Multi-buffer iov -> single concatenated UDP message
-                        # split server-side at segment_size boundaries.
-                        sock.sendmsg(
-                            group,
-                            [
-                                (
-                                    _SOL_UDP,
-                                    UDP_LINUX_SEGMENT,
-                                    _UINT16.pack(segment_size),
-                                )
-                            ],
-                        )
-                except BlockingIOError:
-                    self._write_ready = False
-                    self._register_writer()
-                    # Queue this group + every remaining group so nothing
-                    # gets lost.
-                    for _sz, g in groups[i:]:
-                        for dgram in g:
-                            self._queue_write(dgram, addr)
-                    return
-                except InterruptedError:
-                    # Push what we haven't sent yet onto the queue and let
-                    # the writer retry. Avoids unbounded retry loops here.
-                    for _sz, g in groups[i:]:
-                        for dgram in g:
-                            self._queue_write(dgram, addr)
-                    self._write_ready = False
-                    self._register_writer()
-                    return
-                except OSError as exc:
-                    # The kernel rejected this entire batch. If it was a
-                    # GSO send, fall back to per-datagram sends so partial
-                    # progress is still possible.
-                    if len(group) > 1:
-                        for dgram in group:
-                            try:
-                                self._raw_send(dgram, addr)
-                            except BlockingIOError:
-                                self._write_ready = False
-                                self._register_writer()
-                                self._queue_write(dgram, addr)
-                                # Push the rest of this group + everything after.
-                                idx = group.index(dgram) + 1
-                                for tail in group[idx:]:
-                                    self._queue_write(tail, addr)
-                                for _sz, g in groups[i + 1 :]:
-                                    for d in g:
-                                        self._queue_write(d, addr)
-                                return
-                            except OSError as inner:
-                                self._protocol.error_received(inner)
-                                if self._closing or self._closed:
-                                    return
-                    else:
-                        self._protocol.error_received(exc)
-                        if self._closing or self._closed:
-                            return
+    def _on_write_ready(self) -> None:
+        """Drain the write backlog when the socket becomes writable."""
+        queue = self._send_queue
+        raw_send = self._raw_send
 
-        def _queue_write(self, data: bytes, addr: tuple[str, int] | None) -> None:
-            self._send_queue.append((data, addr))
-            self._buffer_size += len(data)
-            if self._buffer_size >= _HIGH_WATERMARK and not self._protocol_paused:
-                self._protocol_paused = True
-                try:
-                    self._protocol.pause_writing()
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except BaseException:  # noqa: BLE001
-                    pass
-
-        def _maybe_resume_protocol(self) -> None:
-            if self._protocol_paused and self._buffer_size <= _LOW_WATERMARK:
-                self._protocol_paused = False
-                try:
-                    self._protocol.resume_writing()
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except BaseException:  # noqa: BLE001
-                    pass
-
-        def _on_write_ready(self) -> None:
-            """Drain the write backlog when the socket becomes writable."""
-            queue = self._send_queue
-            raw_send = self._raw_send
-
-            while queue:
-                data, addr = queue[0]
-                try:
-                    raw_send(data, addr)
-                except BlockingIOError:
-                    # Still not writable -- keep the writer armed and bail.
-                    return
-                except InterruptedError:
-                    continue
-                except OSError as exc:
-                    # Drop *only* this datagram (it was rejected by the
-                    # kernel) and continue with the rest. Then surface the
-                    # error to the protocol so it can react.
-                    queue.popleft()
-                    self._buffer_size -= len(data)
-                    self._maybe_resume_protocol()
-                    try:
-                        self._protocol.error_received(exc)
-                    except (KeyboardInterrupt, SystemExit):
-                        raise
-                    except BaseException:  # noqa: BLE001
-                        pass
-                    if self._closing or self._closed:
-                        break
-                    continue
-
+        while queue:
+            data, addr = queue[0]
+            try:
+                raw_send(data, addr)
+            except BlockingIOError:
+                # Still not writable -- keep the writer armed and bail.
+                return
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                # Drop *only* this datagram (it was rejected by the
+                # kernel) and continue with the rest. Then surface the
+                # error to the protocol so it can react.
                 queue.popleft()
                 self._buffer_size -= len(data)
                 self._maybe_resume_protocol()
+                try:
+                    self._protocol.error_received(exc)
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException:  # noqa: BLE001
+                    pass
+                if self._closing or self._closed:
+                    break
+                continue
 
-            # Only relinquish the writer if the queue truly drained.
-            # (A protocol callback may have re-queued during this loop.)
-            if not queue:
-                self._write_ready = True
-                self._unregister_writer()
+            queue.popleft()
+            self._buffer_size -= len(data)
+            self._maybe_resume_protocol()
 
-                if self._closing and not self._closed:
-                    self._loop.call_soon(self._call_connection_lost, None)
+        # Only relinquish the writer if the queue truly drained.
+        # (A protocol callback may have re-queued during this loop.)
+        if not queue:
+            self._write_ready = True
+            self._unregister_writer()
 
-        def pause_reading(self) -> None:
-            if not self._paused:
-                self._paused = True
-                self._unregister_reader()
+            if self._closing and not self._closed:
+                self._loop.call_soon(self._call_connection_lost, None)
 
-        def resume_reading(self) -> None:
-            if self._paused:
-                self._paused = False
-                self._register_reader()
+    def pause_reading(self) -> None:
+        if not self._paused:
+            self._paused = True
+            self._unregister_reader()
 
-        def _start(self) -> None:
-            self._loop.call_soon(self._protocol.connection_made, self)
+    def resume_reading(self) -> None:
+        if self._paused:
+            self._paused = False
             self._register_reader()
 
-        def _on_readable(self) -> None:
-            if self._closing:
+    def _start(self) -> None:
+        self._loop.call_soon(self._protocol.connection_made, self)
+        self._register_reader()
+
+    def _on_readable(self) -> None:
+        if self._closing:
+            return
+        self._recv_linux_gro()
+
+    def _recv_linux_gro(self) -> None:
+        # Hoist hot attribute lookups into locals for the burst loop.
+        sock_recvmsg = self._sock.recvmsg
+        protocol = self._protocol
+        datagram_received = protocol.datagram_received
+        batch_cb = (
+            protocol.datagrams_received  # type: ignore[attr-defined]
+            if self._protocol_supports_batch
+            else None
+        )
+        default_segment_size = self._gro_segment_size
+        ancbufsize = _ANCBUFSIZE
+
+        for _ in range(_RECV_BURST_LIMIT):
+            try:
+                data, ancdata, flags, addr = sock_recvmsg(
+                    self._recv_buf_size, ancbufsize
+                )
+            except BlockingIOError:
                 return
-            self._recv_linux_gro()
-
-        def _recv_linux_gro(self) -> None:
-            # Hoist hot attribute lookups into locals for the burst loop.
-            sock_recvmsg = self._sock.recvmsg
-            protocol = self._protocol
-            datagram_received = protocol.datagram_received
-            batch_cb = (
-                protocol.datagrams_received  # type: ignore[attr-defined]
-                if self._protocol_supports_batch
-                else None
-            )
-            default_segment_size = self._gro_segment_size
-            ancbufsize = _ANCBUFSIZE
-
-            for _ in range(_RECV_BURST_LIMIT):
+            except InterruptedError:
+                continue
+            except OSError as exc:
                 try:
-                    data, ancdata, flags, addr = sock_recvmsg(
-                        self._recv_buf_size, ancbufsize
-                    )
-                except BlockingIOError:
-                    return
-                except InterruptedError:
-                    continue
-                except OSError as exc:
-                    try:
-                        protocol.error_received(exc)
-                    except (KeyboardInterrupt, SystemExit):
-                        raise
-                    except BaseException as e:  # noqa: BLE001
-                        print(e)
-                        pass
-                    return
+                    protocol.error_received(exc)
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException as e:  # noqa: BLE001
+                    print(e)
+                    pass
+                return
 
-                if not data:
-                    return
+            if not data:
+                return
 
-                # Detect payload truncation -- if we ever hit this we are
-                # silently losing tail bytes, which manifests as opaque
-                # QUIC decryption failures upstream.
-                if flags & _MSG_TRUNC:
-                    bufsize = self._recv_buf_size
-                    try:
-                        protocol.error_received(
-                            OSError(
-                                f"recvmsg payload truncated; recv buffer "
-                                f"({bufsize}) is too small for the coalesced "
-                                f"GRO buffer"
-                            )
+            # Detect payload truncation -- if we ever hit this we are
+            # silently losing tail bytes, which manifests as opaque
+            # QUIC decryption failures upstream.
+            if flags & _MSG_TRUNC:
+                bufsize = self._recv_buf_size
+                try:
+                    protocol.error_received(
+                        OSError(
+                            f"recvmsg payload truncated; recv buffer "
+                            f"({bufsize}) is too small for the coalesced "
+                            f"GRO buffer"
                         )
-                    except (KeyboardInterrupt, SystemExit):
-                        raise
-                    except BaseException as e:  # noqa: BLE001
-                        print(e)
-                        pass
-                    # Grow the buffer for next time, up to the kernel max.
-                    if bufsize < _MAX_GRO_BUF:
-                        self._recv_buf_size = min(bufsize * 2, _MAX_GRO_BUF)
-                    continue
+                    )
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException as e:  # noqa: BLE001
+                    print(e)
+                    pass
+                # Grow the buffer for next time, up to the kernel max.
+                if bufsize < _MAX_GRO_BUF:
+                    self._recv_buf_size = min(bufsize * 2, _MAX_GRO_BUF)
+                continue
 
-                if flags & _MSG_CTRUNC:
-                    # Ancillary truncated; we cannot trust segment_size.
-                    # Treat as single datagram to avoid mis-splitting.
-                    datagram_received(data, addr)
-                    continue
+            if flags & _MSG_CTRUNC:
+                # Ancillary truncated; we cannot trust segment_size.
+                # Treat as single datagram to avoid mis-splitting.
+                datagram_received(data, addr)
+                continue
 
-                parsed = _parse_gro_segment_size(ancdata)
-                if parsed is None:
-                    # No GRO cmsg -- kernel delivered a single datagram.
-                    datagram_received(data, addr)
-                    continue
+            parsed = _parse_gro_segment_size(ancdata)
+            if parsed is None:
+                # No GRO cmsg -- kernel delivered a single datagram.
+                datagram_received(data, addr)
+                continue
 
-                segment_size = parsed if parsed > 0 else default_segment_size
-                if len(data) <= segment_size:
-                    datagram_received(data, addr)
-                    continue
+            segment_size = parsed if parsed > 0 else default_segment_size
+            if len(data) <= segment_size:
+                datagram_received(data, addr)
+                continue
 
-                segments = _split_gro_buffer(data, segment_size)
-                if batch_cb is not None:
-                    batch_cb(segments, addr)
-                else:
-                    for seg in segments:
-                        datagram_received(seg, addr)
+            segments = _split_gro_buffer(data, segment_size)
+            if batch_cb is not None:
+                batch_cb(segments, addr)
+            else:
+                for seg in segments:
+                    datagram_received(seg, addr)
 
-            # Hit the burst limit -- yield to the loop and reschedule.
-            if not self._closing and self._reader_registered:
-                self._loop.call_soon(self._on_readable)
+        # Hit the burst limit -- yield to the loop and reschedule.
+        if not self._closing and self._reader_registered:
+            self._loop.call_soon(self._on_readable)
 
 
 async def create_udp_endpoint(
@@ -824,9 +821,20 @@ async def create_udp_endpoint(
     if not gro_enabled and not gso_enabled:
         return await loop.create_datagram_endpoint(protocol_factory, sock=sock)
 
-    # 4. Wire up the optimized transport.
+    # 4. Wire up the optimized transport. Prefer qh3's Rust-native
+    #    implementation when the package is available; fall back to the
+    #    pure-Python native one otherwise. The qh3 import is performed
+    #    here (not at module load) so that this module never forces an
+    #    eager import of qh3 just to be importable.
+    try:
+        from qh3.asyncio._transport import (
+            OptimizedDatagramTransport as _TransportImpl,
+        )
+    except ImportError:
+        _TransportImpl = _NativeOptimizedDatagramTransport  # type: ignore[misc,assignment]
+
     protocol = protocol_factory()
-    transport = _OptimizedDatagramTransport(
+    transport = _TransportImpl(
         loop=loop,
         sock=sock,
         protocol=protocol,
