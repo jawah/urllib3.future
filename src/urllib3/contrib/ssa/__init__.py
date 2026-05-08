@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import platform
 import socket
+import sys
 import typing
 import warnings
 
@@ -248,6 +249,13 @@ class AsyncSocket:
     async def wait_for_readiness(self) -> None:
         await self._established.wait()
 
+    if sys.platform == "win32":
+
+        def ioctl(
+            self, control: int, option: int | tuple[int, int, int] | bool
+        ) -> None:
+            return self._sock.ioctl(control, option)
+
     def setsockopt(self, __level: int, __optname: int, __value: int | bytes) -> None:
         self._sock.setsockopt(__level, __optname, __value)
 
@@ -422,7 +430,9 @@ class AsyncSocket:
         if size == -1:
             size = 65536
         assert self._reader is not None
-        await self._established.wait()
+
+        if not self._established.is_set():
+            await self._established.wait()
         await self._reader_semaphore.acquire()
 
         try:
@@ -431,7 +441,6 @@ class AsyncSocket:
                     async with timeout(self._external_timeout):
                         return await self._reader.read(n=size)
                 except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
-                    self._reader_semaphore.release()
                     raise StandardTimeoutError from e
                 except OSError as e:  # Defensive: treat any OSError as ConnReset!
                     raise ConnectionResetError() from e

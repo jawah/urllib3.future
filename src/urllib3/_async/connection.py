@@ -24,7 +24,12 @@ if typing.TYPE_CHECKING:
     from ..util._async.traffic_police import AsyncTrafficPolice
     from ..backend._async._base import AsyncLowLevelResponse
 
-from .._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
+from .._constant import (
+    DEFAULT_BLOCKSIZE,
+    DEFAULT_KEEPALIVE_DELAY,
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
+)
 from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
 from ..util.util import to_str
 
@@ -136,6 +141,8 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         resolver: AsyncBaseResolver | None = None,
         socket_family: socket.AddressFamily = socket.AF_UNSPEC,
         keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
+        background_watch_delay: int | float | None = DEFAULT_BACKGROUND_WATCH_WINDOW,
+        keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
     ) -> None:
         super().__init__(
             host=host,
@@ -147,6 +154,8 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
             keepalive_delay=keepalive_delay,
+            background_watch_delay=background_watch_delay,
+            keepalive_idle_window=keepalive_idle_window,
         )
         self.proxy = proxy
         self.proxy_config = proxy_config

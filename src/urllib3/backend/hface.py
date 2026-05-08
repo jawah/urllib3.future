@@ -42,6 +42,8 @@ from .._constant import (
     UDP_DEFAULT_BLOCKSIZE,
     responses,
     HTTP1_ONLY_HEADERS,
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
 )
 from ..contrib.hface import (
     HTTP1Protocol,
@@ -77,6 +79,7 @@ from ..exceptions import (
     SSLError,
 )
 from ..util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ..util.socket_state import enable_keepalive
 from ..util.sub_timeout import SubTimeout
 from ._base import (
     BaseBackend,
@@ -125,6 +128,8 @@ class HfaceBackend(BaseBackend):
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
+        background_watch_delay: int | float | None = DEFAULT_BACKGROUND_WATCH_WINDOW,
+        keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
     ):
         if not _HAS_HTTP3_SUPPORT():
             if disabled_svn is None:
@@ -141,6 +146,8 @@ class HfaceBackend(BaseBackend):
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
             keepalive_delay=keepalive_delay,
+            background_watch_delay=background_watch_delay,
+            keepalive_idle_window=keepalive_idle_window,
         )
 
         self._proxy_protocol: HTTPOverTCPProtocol | None = None
@@ -182,14 +189,14 @@ class HfaceBackend(BaseBackend):
         return False
 
     @property
-    def max_stream_count(self) -> int:
-        if self._protocol is None:
-            return 0
-        return self._protocol.max_stream_count
-
-    @property
     def is_multiplexed(self) -> bool:
         return self._protocol is not None and self._protocol.multiplexed
+
+    @property
+    def expect_pong(self) -> bool:
+        if self._protocol is None:
+            return False
+        return self._protocol.expect_pong()
 
     @property
     def max_frame_size(self) -> int:
@@ -668,6 +675,13 @@ class HfaceBackend(BaseBackend):
             else:
                 self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
                 self._svn = HttpVersion.h11
+
+                if self._background_watch_delay and self._keepalive_idle_window:
+                    enable_keepalive(
+                        self.sock,
+                        int(self._keepalive_idle_window),
+                        int(self._background_watch_delay),
+                    )
 
             self.conn_info.http_version = self._svn
 

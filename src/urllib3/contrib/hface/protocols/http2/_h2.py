@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from secrets import token_bytes
 from typing import Iterator
 
@@ -151,6 +152,8 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
         self._max_frame_size: int = self._connection.remote_settings.max_frame_size
 
+        self._pending_ping_ack: deque[bytes] = deque()
+
     def max_frame_size(self) -> int:
         return self._max_frame_size
 
@@ -173,6 +176,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         return not self._terminated and self._open_stream_count == 0
 
     def has_expired(self) -> bool:
+        if len(self._pending_ping_ack) >= 2:
+            self._connection.close_connection()
+            self._terminated = True
         return (
             self._terminated or self._goaway_to_honor
         ) and not self._events.stream_count
@@ -259,6 +265,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     yield ConnectionTerminated(e.error_code, None)
             elif ev_type in SETTINGS_EVENT_SET:
                 yield HandshakeCompleted(alpn_protocol="h2")
+            elif ev_type is jh2.events.PingAckReceived:
+                uid = e.ping_data
+
+                if uid in self._pending_ping_ack:
+                    self._pending_ping_ack.remove(uid)
 
     def connection_lost(self) -> None:
         self._connection_terminated()
@@ -317,4 +328,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             self._events.appendleft(ev)
 
     def ping(self) -> None:
-        self._connection.ping(token_bytes(8))
+        uid = token_bytes(8)
+        self._pending_ping_ack.append(uid)
+        self._connection.ping(uid)
+
+    def expect_pong(self) -> bool:
+        return bool(self._pending_ping_ack)

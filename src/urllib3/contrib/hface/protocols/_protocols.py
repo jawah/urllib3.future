@@ -156,12 +156,6 @@ class HTTPProtocol(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
-    @property
-    @abstractmethod
-    def max_stream_count(self) -> int:
-        """Determine how much concurrent stream the connection can handle."""
-        raise NotImplementedError
-
     @abstractmethod
     def is_idle(self) -> bool:
         """
@@ -291,6 +285,11 @@ class HTTPProtocol(metaclass=ABCMeta):
     @abstractmethod
     def ping(self) -> None:
         """Send a PING frame to the remote peer. Thus keeping the connection alive."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def expect_pong(self) -> bool:
+        """Tell if we should expect a ping ack frame to confirm connection liveness."""
         raise NotImplementedError
 
 

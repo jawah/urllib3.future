@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import typing
 
 if typing.TYPE_CHECKING:
@@ -185,6 +186,16 @@ class SSLTransport:
 
     def gettimeout(self) -> float | None:
         return self.socket.gettimeout()
+
+    if sys.platform == "win32":
+
+        def ioctl(
+            self, control: int, option: int | tuple[int, int, int] | bool
+        ) -> None:
+            return self.socket.ioctl(control, option)
+
+    def setsockopt(self, __level: int, __optname: int, __value: int | bytes) -> None:
+        self.socket.setsockopt(__level, __optname, __value)
 
     @typing.overload
     def getsockopt(self, __level: int, __optname: int) -> int: ...

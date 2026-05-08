@@ -6,6 +6,12 @@ import socket
 import struct
 import typing
 
+from .._constant import (
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_TCP_KEEPALIVE_ATTEMPT_COUNT,
+)
+
 if typing.TYPE_CHECKING:
     from ..contrib.ssa import AsyncSocket
     from ..util.ssltransport import SSLTransport
@@ -17,6 +23,8 @@ IS_DARWIN_OR_BSD = not IS_NT and (
     or "dragonfly" in sys.platform
     or sys.platform == "ios"
 )
+IS_BSD = "bsd" in sys.platform or "dragonfly" in sys.platform
+IS_DARWIN = sys.platform == "darwin" or sys.platform == "ios"
 IS_LINUX = not IS_DARWIN_OR_BSD and sys.platform == "linux"
 SOCKET_CLOSED_ERRNOS: frozenset[int] = frozenset(
     filter(
@@ -114,6 +122,13 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
     """
     if sock.fileno() == -1:
         return False  # Defensive: checked higher in stack already
+
+    # shortcut async closed via transport state
+    if hasattr(sock, "_writer"):
+        transport = getattr(sock._writer, "_transport", None)
+
+        if transport and transport.is_closing():
+            return False
 
     # catch earlier the most catastrophic states
     # this pre-check avoid wasting time on TCP probing
@@ -247,3 +262,73 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
                 return False
 
     return True
+
+
+def enable_keepalive(
+    sock: socket.socket | AsyncSocket | SSLTransport,
+    idle: int = int(DEFAULT_KEEPALIVE_IDLE_WINDOW),
+    interval: int = int(DEFAULT_BACKGROUND_WATCH_WINDOW),
+    count: int = DEFAULT_TCP_KEEPALIVE_ATTEMPT_COUNT,
+) -> None:
+    """Enable SO_KEEPALIVE and tune timers as portably as possible.
+
+    Per-platform timer tuning is best-effort and silently skipped on failure.
+    Do not use outside an HTTP/1.1 connection. Ping frame is the recommended
+    alternative.
+    """
+
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:  # Defensive: edge OSes
+        return
+
+    if IS_LINUX or IS_BSD or IS_DARWIN:
+        # Idle option name differs on Darwin
+        if IS_DARWIN:
+            idle_opt = getattr(socket, "TCP_KEEPALIVE", 0x10)
+        else:
+            idle_opt = getattr(socket, "TCP_KEEPIDLE", None)
+
+        if idle_opt is None:  # Defensive: edge OSes
+            return
+
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, idle_opt, idle)
+        except OSError:  # Defensive: edge OSes
+            return
+
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
+            except OSError:  # Defensive: edge OSes
+                pass
+        if hasattr(socket, "TCP_KEEPCNT"):
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
+            except OSError:  # Defensive: edge OSes
+                pass
+    elif IS_NT:
+        # Prefer modern setsockopt path (Win10 1709+).
+        # It's the ONLY path that honors TCP_KEEPCNT on Windows.
+        # See: https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-tcp-socket-options
+        modern_ok = False
+        if (
+            hasattr(socket, "TCP_KEEPIDLE")
+            and hasattr(socket, "TCP_KEEPINTVL")
+            and hasattr(socket, "TCP_KEEPCNT")
+        ):
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
+                modern_ok = True
+            except OSError:  # Defensive: edge OSes
+                pass  # likely pre-1709 Windows; fall through to ioctl
+        if not modern_ok and hasattr(socket, "SIO_KEEPALIVE_VALS"):
+            try:
+                sock.ioctl(  # type: ignore[union-attr]
+                    socket.SIO_KEEPALIVE_VALS,
+                    (1, idle * 1000, interval * 1000),
+                )
+            except OSError:  # Defensive: edge OSes
+                pass

@@ -37,6 +37,8 @@ from ..._constant import (
     UDP_DEFAULT_BLOCKSIZE,
     responses,
     HTTP1_ONLY_HEADERS,
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
 )
 from ...contrib.hface import (
     HTTP1Protocol,
@@ -67,6 +69,7 @@ from ...exceptions import (
     SSLError,
 )
 from ...util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ...util.socket_state import enable_keepalive
 from ...util.sub_timeout import AsyncSubTimeout
 from .._base import (
     ConnectionInfo,
@@ -99,6 +102,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
+        background_watch_delay: int | float | None = DEFAULT_BACKGROUND_WATCH_WINDOW,
+        keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
     ):
         if not _HAS_HTTP3_SUPPORT() or not _HAS_DGRAM_SUPPORT:
             if disabled_svn is None:
@@ -115,6 +120,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             disabled_svn=disabled_svn,
             preemptive_quic_cache=preemptive_quic_cache,
             keepalive_delay=keepalive_delay,
+            background_watch_delay=background_watch_delay,
+            keepalive_idle_window=keepalive_idle_window,
         )
 
         self._proxy_protocol: HTTPOverTCPProtocol | None = None
@@ -152,10 +159,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         return False
 
     @property
-    def max_stream_count(self) -> int:
+    def expect_pong(self) -> bool:
         if self._protocol is None:
-            return 0
-        return self._protocol.max_stream_count
+            return False
+        return self._protocol.expect_pong()
 
     @property
     def is_multiplexed(self) -> bool:
@@ -592,6 +599,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
                 self._svn = HttpVersion.h11
 
+                if self._background_watch_delay and self._keepalive_idle_window:
+                    enable_keepalive(
+                        self.sock,
+                        int(self._keepalive_idle_window),
+                        int(self._background_watch_delay),
+                    )
+
             self.conn_info.http_version = self._svn
 
             if (
@@ -986,6 +1000,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
+                    self._protocol = (
+                        None  # the state machine protocol reached final state and
+                    )
+
+                    await self.close()
                     # A server may end the transmission without error
                     # to mark the end of SSE for example. While it's not ideal
                     # it's not forbidden either.
@@ -1000,13 +1019,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                             )
                         )
                     ):
-                        self._protocol = (
-                            None  # the state machine protocol reached final state and
-                        )
-                        # the close procedure attempt to call close on the said state machine. we
-                        # want to avoid that.
-                        await self.close()
-
                         events.append(
                             DataReceived(
                                 stream_id,
@@ -1033,8 +1045,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         )
                         and not any(isinstance(e, HeadersReceived) for e in events)
                     ):
-                        self._protocol = None
-                        await self.close()
                         raise ProtocolError(
                             "Remote end closed connection without response"
                         )
