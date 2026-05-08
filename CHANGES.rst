@@ -1,3 +1,18 @@
+2.20.900 (2026-05-08)
+=====================
+
+- Fixed remote peer abrupt termination of a HTTP/3 over QUIC connection handling and exception raised.
+- Fixed svn target not reset when using a proxy. (#360)
+- Improved raw UDP I/O performance on both MacOS and Linux when ``qh3>=1.8`` is installed (benefit HTTP/3 only).
+- Improved our connection keepalive algorithm. Connections are to be evicted once we build up confidence that the remote no longer answer our ping frames past initial keepalive delay (default 60s).
+- Backported ``HTTPResponse.stream()`` (and ``AsyncHTTPResponse.stream()``) to handle ``amt=0`` instead of falling into an infinite loop. (https://github.com/urllib3/urllib3/issues/3793)
+- Backported ``HTTPResponse.read()`` (and ``AsyncHTTPResponse.read()``) could cache only part of the response after a partial read when ``cache_content=True``. (https://github.com/urllib3/urllib3/pull/4967)
+- Backported HTTP pools created using ProxyManager.connection_from_url did not strip sensitive headers specified in Retry.remove_headers_on_redirect when redirecting to a different host. (GHSA-qccp-gfcp-xxvc)
+- Backported decompression-bomb safeguards in the streaming API. Two high-severity issues were addressed: (1) ``HTTPResponse.drain_conn()`` (and async equivalent) no longer triggers decompression of the remaining
+  body when partial decoding has already started; (2) ``HTTPResponse.read(amt=N)`` / ``stream(amt=N)`` (and async equivalents) now propagate a ``max_length`` argument to all content decoders
+  (``Deflate``, ``Gzip``, ``Brotli``, ``Zstd``, ``Multi``), preventing a single small read from triggering full decompression of a maliciously crafted response. Brotli decoders require Brotli >= 1.2.0 (or brotlicffi >= 1.2.0.0) f
+  or the cap to be honoured; older versions emit a ``DependencyWarning``. (GHSA-mf9v-mfxr-j63j)
+
 2.19.913 (2026-04-27)
 =====================
 
