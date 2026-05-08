@@ -63,6 +63,7 @@ _GSO_MAX_PAYLOAD: typing.Final = 65000  # safety margin under IP_MAXPACKET (6553
 _RECV_BURST_LIMIT: typing.Final = 32
 
 _IS_LINUX: typing.Final = sys.platform == "linux"
+_IS_DARWIN: typing.Final = sys.platform in {"darwin", "ios"}
 
 # Pre-resolved socket constants (avoid repeated attribute lookups in hot paths).
 _SOL_UDP: typing.Final = getattr(socket, "SOL_UDP", 17)
@@ -818,7 +819,9 @@ async def create_udp_endpoint(
     gro_enabled = _sock_has_gro(sock)
     gso_enabled = _sock_has_gso(sock)
 
-    if not gro_enabled and not gso_enabled:
+    # so far we can only benefit from reduced syscalls
+    # with Linux and MacOS (+iOS)
+    if not _IS_LINUX and not _IS_DARWIN:
         return await loop.create_datagram_endpoint(protocol_factory, sock=sock)
 
     # 4. Wire up the optimized transport. Prefer qh3's Rust-native
