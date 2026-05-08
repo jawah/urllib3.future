@@ -272,13 +272,18 @@ if zstd is not None:
         def __init__(self) -> None:
             self._obj = _new_zstd_obj()
 
+        def _decompress_chunk(self, data: bytes, max_length: int) -> bytes:
+            if _zstd_native:
+                return self._obj.decompress(data, max_length=max_length)  # type: ignore[no-any-return]
+            return self._obj.decompress(data)  # type: ignore[no-any-return]
+
         def decompress(self, data: bytes, max_length: int = -1) -> bytes:
             if not data and not self.has_unconsumed_tail:
                 return b""
             if self._obj.eof:
                 data = self._obj.unused_data + data
                 self._obj = _new_zstd_obj()
-            part = self._obj.decompress(data, max_length=max_length)
+            part = self._decompress_chunk(data, max_length)
             length = len(part)
             data_parts = [part]
             # Every loop iteration is supposed to read data from a separate frame.
@@ -293,11 +298,14 @@ if zstd is not None:
                 and (max_length < 0 or length < max_length)
             ):
                 unused_data = self._obj.unused_data
-                if not getattr(self._obj, "needs_input", True):
+                # The third-party `zstandard` decompressobj cannot be reused
+                # after eof; stdlib `compression.zstd` can be reused while it
+                # still `needs_input`. Reset accordingly.
+                if not _zstd_native or not getattr(self._obj, "needs_input", True):
                     self._obj = _new_zstd_obj()
-                part = self._obj.decompress(
+                part = self._decompress_chunk(
                     unused_data,
-                    max_length=(max_length - length) if max_length > 0 else -1,
+                    (max_length - length) if max_length > 0 else -1,
                 )
                 part_length = len(part)
                 if part_length:

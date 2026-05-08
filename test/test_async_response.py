@@ -796,6 +796,14 @@ class TestAsyncResponse:
         if data is None:
             pytest.skip(f"Proper {request.node.callspec.id} decoder is not available")
         name, compress_func = data
+        if name == "zstd":
+            from urllib3.response import _zstd_native
+
+            if not _zstd_native:
+                pytest.skip(
+                    "third-party `zstandard` decompressobj does not support "
+                    "max_length; bomb-prevention requires stdlib `compression.zstd`"
+                )
         original = b"A" * (50 * 2**20)  # 50 MiB
         compressed = compress_func(original)
         limit = 1024 * 1024  # 1 MiB
