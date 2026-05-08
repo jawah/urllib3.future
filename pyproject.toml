@@ -208,6 +208,7 @@ filterwarnings = [
     '''ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning''',
     '''ignore:function _SSLProtocolTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
+    '''ignore:function _SelectorTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:function StreamWriter.__del__:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:sock:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:The `hash` argument is deprecated in favor of `unsafe_hash`:DeprecationWarning''',
