@@ -353,6 +353,7 @@ class HTTPResponse(io.IOBase):
         self.auto_close = auto_close
 
         self._body = None
+        self._uncached_read_occurred = False
         self._fp: LowLevelResponse | typing.IO[typing.Any] | None = None
         self._original_response = original_response
         self._fp_bytes_read = 0
@@ -834,6 +835,7 @@ class HTTPResponse(io.IOBase):
             amt=amt or -1,
             decode_content=decode_content,
         )
+        self._uncached_read_occurred = True
 
         if amt is not None and len(data) > amt:
             self._decoded_buffer.put(data)
@@ -887,6 +889,9 @@ class HTTPResponse(io.IOBase):
             else:
                 data = self._raw_read(amt)
 
+            if not cache_content:
+                self._uncached_read_occurred = True
+
             if amt and amt < 0:
                 amt = len(data)
 
@@ -901,7 +906,7 @@ class HTTPResponse(io.IOBase):
 
             if amt is None:
                 data = self._decode(data, decode_content, flush_decoder)
-                if cache_content:
+                if cache_content and not self._uncached_read_occurred:
                     self._body = data
             else:
                 # do not waste memory on buffer when not decoding
