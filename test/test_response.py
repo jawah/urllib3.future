@@ -126,6 +126,40 @@ class TestResponse:
         assert r._body == b"foo"  # type: ignore[comparison-overlap]
         assert r.data == b"foo"
 
+    @pytest.mark.parametrize("read_args", ((), (None,)))
+    def test_cache_content_with_explicit_read_call(
+        self, read_args: tuple[typing.Any, ...]
+    ) -> None:
+        # todo: investigate how to handle the read(-1, cache_content=True)
+        #       we differ from urllib3 on behavior
+        fp = BytesIO(b"foo")
+        r = HTTPResponse(fp, preload_content=False)
+        assert r.read(*read_args, cache_content=True) == b"foo"  # type: ignore[misc]
+        assert r._body == b"foo"
+        assert r.data == b"foo"
+
+    @pytest.mark.parametrize(
+        "initial_read_method", ("read", "read1")
+    )
+    def test_cache_content_ignored_during_and_after_partial_read(
+        self, initial_read_method: str
+    ) -> None:
+        data = b"foo"
+        initial_limit = 1
+
+        fp = BytesIO(data)
+        r = HTTPResponse(fp, preload_content=False)
+        # Partial read.
+        if initial_read_method == "read":
+            r.read(initial_limit, cache_content=True)
+        else:
+            getattr(r, initial_read_method)(initial_limit)
+        assert r._body is None
+        # Full read (remaining content).
+        r.read(cache_content=True)
+        assert r._body is None
+        assert r.data == b""
+
     def test_default(self) -> None:
         r = HTTPResponse()
         assert r.data is None
