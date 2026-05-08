@@ -197,10 +197,13 @@ class AsyncSignals(typing.Generic[T]):
         signal: AsyncPendingSignal[T],
         unblock: bool = False,
     ) -> None:
-        if signal in self._priority_signals:
-            self._priority_signals.remove(signal)
-        else:
-            self._furthest_signals.remove(signal)
+        try:
+            if signal in self._priority_signals:
+                self._priority_signals.remove(signal)
+            else:
+                self._furthest_signals.remove(signal)
+        except ValueError:  # Defensive: no longer in deque racing.
+            pass
         if unblock:
             signal.event.set()
 
