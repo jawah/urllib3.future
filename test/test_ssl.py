@@ -12,6 +12,16 @@ from urllib3.util import ssl_
 
 
 class TestSSL:
+    @pytest.fixture(autouse=True)
+    def _clear_ssl_context_cache(self) -> typing.Iterator[None]:
+        from urllib3.util.ssl_ import _SSLContextCache
+
+        _SSLContextCache.clear()
+        try:
+            yield
+        finally:
+            _SSLContextCache.clear()
+
     @pytest.mark.parametrize(
         "addr",
         [
@@ -92,10 +102,6 @@ class TestSSL:
     def test_wrap_socket_default_loads_default_certs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from urllib3.util.ssl_ import _SSLContextCache
-
-        _SSLContextCache.clear()
-
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
         context.options = 0
