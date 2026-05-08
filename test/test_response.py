@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import http.client as httplib
 import socket
 import ssl
@@ -846,6 +847,116 @@ class TestResponse:
         resp = HTTPResponse(fp, preload_content=preload_content, decode_content=False)
         data = resp.data if preload_content else resp.read(amt)
         assert len(data) == content_length
+
+    # GHSA-mf9v-mfxr-j63j: ensure decoders honor `max_length` and that
+    # streaming reads do not trigger full decompression of the response.
+    _ghsa_mf9v_compressors: list[
+        tuple[str, tuple[str, typing.Callable[[bytes], bytes]] | None]
+    ] = [
+        ("deflate1", ("deflate", zlib.compress)),
+        (
+            "deflate2",
+            (
+                "deflate",
+                lambda data: (
+                    zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS).compress(data)
+                    + zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS).flush()
+                ),
+            ),
+        ),
+        ("gzip", ("gzip", gzip.compress)),
+    ]
+    if brotli is not None:
+        _ghsa_mf9v_compressors.append(("brotli", ("br", brotli.compress)))
+    else:
+        _ghsa_mf9v_compressors.append(("brotli", None))
+    if zstd is not None:
+        _ghsa_mf9v_compressors.append(
+            (
+                "zstd",
+                (
+                    "zstd",
+                    lambda data: zstd.ZstdCompressor().compress(data)
+                    if hasattr(zstd, "ZstdCompressor")
+                    else zstd.compress(data),
+                ),
+            )
+        )
+    else:
+        _ghsa_mf9v_compressors.append(("zstd", None))
+
+    @pytest.mark.parametrize("read_method", ("read", "read1", "stream"))
+    @pytest.mark.parametrize(
+        "data",
+        [d[1] for d in _ghsa_mf9v_compressors],
+        ids=[d[0] for d in _ghsa_mf9v_compressors],
+    )
+    @pytest.mark.limit_memory("12 MB", current_thread_only=True)
+    def test_memory_usage_decode_with_max_length(
+        self,
+        request: pytest.FixtureRequest,
+        read_method: str,
+        data: tuple[str, typing.Callable[[bytes], bytes]] | None,
+    ) -> None:
+        """
+        GHSA-mf9v-mfxr-j63j: a single small read of a highly-compressed
+        body must not trigger full decompression. We only check that the
+        ``_decoded_buffer`` does not hold the fully decoded payload.
+        Brotli (the official C library) does not respect the buffer
+        limit fully; we still ensure the buffer is bounded.
+        """
+        if data is None:
+            pytest.skip(f"Proper {request.node.callspec.id} decoder is not available")
+        name, compress_func = data
+        original = b"A" * (50 * 2**20)  # 50 MiB
+        compressed = compress_func(original)
+        limit = 1024 * 1024  # 1 MiB
+        fp = BytesIO(compressed)
+        r = HTTPResponse(
+            fp, headers={"content-encoding": name}, preload_content=False
+        )
+        if read_method == "stream":
+            chunk = next(r.stream(amt=limit, decode_content=True))
+        else:
+            chunk = getattr(r, read_method)(amt=limit, decode_content=True)
+        assert chunk
+        # Brotli (google) and brotlipy do not respect output_buffer_limit,
+        # so we cannot enforce an empty buffer there. For all other
+        # decoders the buffer must not contain the full payload.
+        if name != "br" or (brotli is not None and brotli.__name__ == "brotlicffi"):
+            assert len(r._decoded_buffer) < len(original) // 2
+
+    @pytest.mark.parametrize(
+        "data",
+        [d[1] for d in _ghsa_mf9v_compressors],
+        ids=[d[0] for d in _ghsa_mf9v_compressors],
+    )
+    def test_drain_conn_skips_decompression(
+        self,
+        request: pytest.FixtureRequest,
+        data: tuple[str, typing.Callable[[bytes], bytes]] | None,
+    ) -> None:
+        """
+        GHSA-mf9v-mfxr-j63j: ``drain_conn`` must not trigger
+        decompression of the remaining body when partial decoding has
+        already started.
+        """
+        if data is None:
+            pytest.skip(f"Proper {request.node.callspec.id} decoder is not available")
+        name, compress_func = data
+        original = b"B" * (10 * 2**20)  # 10 MiB
+        compressed = compress_func(original)
+        fp = BytesIO(compressed)
+        r = HTTPResponse(
+            fp, headers={"content-encoding": name}, preload_content=False
+        )
+        # Start decoding so `_has_decoded_content` becomes True.
+        first = r.read(1024, decode_content=True)
+        assert first
+        assert r._has_decoded_content is True
+        r.drain_conn()
+        assert r._decoder is None
+        assert len(r._decoded_buffer) == 0
 
     def test_length_no_header(self) -> None:
         fp = BytesIO(b"12345")

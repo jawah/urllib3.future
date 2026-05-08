@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import ssl
 import typing
 import zlib
@@ -740,6 +741,99 @@ class TestAsyncResponse:
         resp = AsyncHTTPResponse(fp, preload_content=False)
         assert resp.length_remaining is None
 
+    # GHSA-mf9v-mfxr-j63j: ensure decoders honor `max_length` and that
+    # streaming reads do not trigger full decompression of the response.
+    _ghsa_mf9v_compressors: list[
+        tuple[str, tuple[str, typing.Callable[[bytes], bytes]] | None]
+    ] = [
+        ("deflate1", ("deflate", zlib.compress)),
+        (
+            "deflate2",
+            (
+                "deflate",
+                lambda data: (
+                    zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS).compress(data)
+                    + zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS).flush()
+                ),
+            ),
+        ),
+        ("gzip", ("gzip", gzip.compress)),
+    ]
+    if brotli is not None:
+        _ghsa_mf9v_compressors.append(("brotli", ("br", brotli.compress)))
+    else:
+        _ghsa_mf9v_compressors.append(("brotli", None))
+    if zstd is not None:
+        _ghsa_mf9v_compressors.append(
+            (
+                "zstd",
+                (
+                    "zstd",
+                    lambda data: zstd.ZstdCompressor().compress(data)
+                    if hasattr(zstd, "ZstdCompressor")
+                    else zstd.compress(data),
+                ),
+            )
+        )
+    else:
+        _ghsa_mf9v_compressors.append(("zstd", None))
+
+    @pytest.mark.parametrize("read_method", ("read", "read1", "stream"))
+    @pytest.mark.parametrize(
+        "data",
+        [d[1] for d in _ghsa_mf9v_compressors],
+        ids=[d[0] for d in _ghsa_mf9v_compressors],
+    )
+    @pytest.mark.limit_memory("12 MB", current_thread_only=True)
+    async def test_memory_usage_decode_with_max_length(
+        self,
+        request: pytest.FixtureRequest,
+        read_method: str,
+        data: tuple[str, typing.Callable[[bytes], bytes]] | None,
+    ) -> None:
+        if data is None:
+            pytest.skip(f"Proper {request.node.callspec.id} decoder is not available")
+        name, compress_func = data
+        original = b"A" * (50 * 2**20)  # 50 MiB
+        compressed = compress_func(original)
+        limit = 1024 * 1024  # 1 MiB
+        fp = _make_async_fp(compressed, headers={"content-encoding": name})
+        r = AsyncHTTPResponse(
+            fp, headers={"content-encoding": name}, preload_content=False
+        )
+        if read_method == "stream":
+            chunk = await r.stream(amt=limit, decode_content=True).__anext__()
+        else:
+            chunk = await getattr(r, read_method)(amt=limit, decode_content=True)
+        assert chunk
+        if name != "br" or (brotli is not None and brotli.__name__ == "brotlicffi"):
+            assert len(r._decoded_buffer) < len(original) // 2
+
+    @pytest.mark.parametrize(
+        "data",
+        [d[1] for d in _ghsa_mf9v_compressors],
+        ids=[d[0] for d in _ghsa_mf9v_compressors],
+    )
+    async def test_drain_conn_skips_decompression(
+        self,
+        request: pytest.FixtureRequest,
+        data: tuple[str, typing.Callable[[bytes], bytes]] | None,
+    ) -> None:
+        if data is None:
+            pytest.skip(f"Proper {request.node.callspec.id} decoder is not available")
+        name, compress_func = data
+        original = b"B" * (10 * 2**20)
+        compressed = compress_func(original)
+        fp = _make_async_fp(compressed, headers={"content-encoding": name})
+        r = AsyncHTTPResponse(
+            fp, headers={"content-encoding": name}, preload_content=False
+        )
+        first = await r.read(1024, decode_content=True)
+        assert first
+        assert r._has_decoded_content is True
+        await r.drain_conn()
+        assert r._decoder is None
+        assert len(r._decoded_buffer) == 0
     async def test_length_w_valid_header(self) -> None:
         headers = {"content-length": "5"}
         fp = _make_async_fp(b"12345")
