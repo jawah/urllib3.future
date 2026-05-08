@@ -215,6 +215,7 @@ filterwarnings = [
     '''ignore:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
     '''ignore:loop is closed:ResourceWarning''',
     '''ignore:.*SOCKS support in urllib3 requires the installation of optional dependencies.*:Warning''',
+    '''ignore:.*is required to prevent decompression bombs.*:Warning''',
     '''ignore:.*module has been removed in urllib3.*:Warning''',
 ]
 
