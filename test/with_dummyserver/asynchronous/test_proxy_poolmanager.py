@@ -33,6 +33,7 @@ from urllib3.exceptions import (
 )
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib3.util.timeout import Timeout
+from urllib3.util.retry import RequestHistory
 
 from ... import TARPIT_HOST, requires_network
 
@@ -207,6 +208,79 @@ class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
             assert isinstance(r, AsyncHTTPResponse)
             assert r._pool is not None
             assert r._pool.host != self.http_host_alt
+
+    _sensitive_headers = {
+        "Authorization": "foo",
+        "Proxy-Authorization": "bar",
+        "Cookie": "foo=bar",
+    }
+
+    @pytest.mark.parametrize(
+        "sensitive_headers",
+        (_sensitive_headers, {k.lower(): v for k, v in _sensitive_headers.items()}),
+        ids=("capitalized", "lowercase"),
+    )
+    async def test_cross_host_redirect_remove_headers_via_proxy_manager(
+        self, sensitive_headers: dict[str, str]
+    ) -> None:
+        headers_url = f"{self.http_url_alt}/headers"
+        initial_url = f"{self.http_url}/redirect?target={headers_url}"
+        async with async_proxy_from_url(self.proxy_url) as proxy_mgr:
+            r = await proxy_mgr.request(
+                "GET", initial_url, headers=sensitive_headers, retries=1
+            )
+            assert r.status == 200
+            assert r.retries is not None
+            assert r.retries.history == (
+                RequestHistory(
+                    method="GET",
+                    url=initial_url,
+                    error=None,
+                    status=303,
+                    redirect_location=headers_url,
+                ),
+            )
+            data = await r.json()
+            for header in sensitive_headers:
+                assert header not in data
+                assert header.title() not in data
+
+    @pytest.mark.parametrize(
+        "sensitive_headers",
+        (_sensitive_headers, {k.lower(): v for k, v in _sensitive_headers.items()}),
+        ids=("capitalized", "lowercase"),
+    )
+    async def test_cross_host_redirect_remove_headers_via_pool(
+        self, sensitive_headers: dict[str, str]
+    ) -> None:
+        headers_url = f"{self.http_url_alt}/headers"
+        initial_url = f"{self.http_url}/redirect?target={headers_url}"
+        async with async_proxy_from_url(self.proxy_url) as proxy_mgr:
+            pool = await proxy_mgr.connection_from_url(self.http_url)
+            r = await pool.urlopen(
+                "GET",
+                initial_url,
+                headers=sensitive_headers,
+                retries=1,
+                redirect=True,
+                assert_same_host=False,
+                preload_content=True,
+            )
+            assert r.status == 200
+            assert r.retries is not None
+            assert r.retries.history == (
+                RequestHistory(
+                    method="GET",
+                    url=initial_url,
+                    error=None,
+                    status=303,
+                    redirect_location=headers_url,
+                ),
+            )
+            data = await r.json()
+            for header in sensitive_headers:
+                assert header not in data
+                assert header.title() not in data
 
     async def test_cross_protocol_redirect(self) -> None:
         async with async_proxy_from_url(self.proxy_url, ca_certs=DEFAULT_CA) as http:

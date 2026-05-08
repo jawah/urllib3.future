@@ -1013,6 +1013,17 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
                     headers.discard(should_be_removed_header)
 
+            # Strip headers marked as unsafe to forward to the redirected location.
+            # Check remove_headers_on_redirect to avoid a potential network call within
+            # self.is_same_host() which may use socket.gethostbyname() in the future.
+            if retries.remove_headers_on_redirect and not self.is_same_host(
+                redirect_location
+            ):
+                headers = HTTPHeaderDict(headers)
+                for header in list(headers):
+                    if header.lower() in retries.remove_headers_on_redirect:
+                        headers.discard(header)
+
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)
             except MaxRetryError:
@@ -1959,6 +1970,17 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
                     headers.discard(should_be_removed_header)
+
+            # Strip headers marked as unsafe to forward to the redirected location.
+            # Check remove_headers_on_redirect to avoid a potential network call within
+            # self.is_same_host() which may use socket.gethostbyname() in the future.
+            if retries.remove_headers_on_redirect and not self.is_same_host(
+                redirect_location
+            ):
+                headers = HTTPHeaderDict(headers)
+                for header in list(headers):
+                    if header.lower() in retries.remove_headers_on_redirect:
+                        headers.discard(header)
 
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)
