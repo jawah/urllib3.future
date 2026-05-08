@@ -908,6 +908,26 @@ class TestResponse:
         if data is None:
             pytest.skip(f"Proper {request.node.callspec.id} decoder is not available")
         name, compress_func = data
+        if name == "br":
+            # Older Brotli/brotlicffi releases (notably brotlicffi 1.x and
+            # Brotli < 1.2.0) silently ignore ``output_buffer_limit`` and
+            # decompress the entire payload, which defeats the bomb
+            # protection this test asserts on. Probe support and skip when
+            # it's missing.
+            from urllib3.response import BrotliDecoder
+
+            try:
+                BrotliDecoder()._decompress(b"", output_buffer_limit=1)
+            except TypeError:
+                pytest.skip(
+                    "installed Brotli library does not support "
+                    "output_buffer_limit; bomb-prevention requires "
+                    "Brotli >= 1.2.0 (and not brotlicffi)"
+                )
+            except Exception:
+                # Any decoder-side error other than TypeError means the
+                # parameter was accepted; that is enough for our probe.
+                pass
         if name == "zstd":
             from urllib3.response import _zstd_native
 
