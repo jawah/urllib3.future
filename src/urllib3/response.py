@@ -970,6 +970,8 @@ class HTTPResponse(io.IOBase):
             If True, will attempt to decode the body based on the
             'content-encoding' header.
         """
+        if amt == 0:
+            return
         if self._fp is None:
             return
         while not is_fp_closed(self._fp) or len(self._decoded_buffer) > 0:
