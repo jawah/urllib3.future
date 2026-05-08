@@ -861,10 +861,10 @@ class TestUtil:
     @patch("socket.getaddrinfo")
     @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
     def test_create_connection_with_valid_idna_labels(
-        self, socket: MagicMock, getaddrinfo: MagicMock, host: str
+        self, with_attr_sock: MagicMock, getaddrinfo: MagicMock, host: str
     ) -> None:
         getaddrinfo.return_value = [(None, None, None, None, None)]
-        socket.return_value = Mock()
+        with_attr_sock.return_value = Mock()
         ResolverDescription.from_url("system://").new().create_connection((host, 80))
 
     @patch("socket.getaddrinfo")
@@ -896,7 +896,7 @@ class TestUtil:
     @patch("socket.getaddrinfo")
     @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
     def test_create_connection_with_scoped_ipv6(
-        self, socket: MagicMock, getaddrinfo: MagicMock
+        self, with_attr_sock: MagicMock, getaddrinfo: MagicMock
     ) -> None:
         # Check that providing create_connection with a scoped IPv6 address
         # properly propagates the scope to getaddrinfo, and that the returned
@@ -912,7 +912,7 @@ class TestUtil:
                 fake_scoped_sa6,
             )
         ]
-        socket.return_value = fake_sock = MagicMock()
+        with_attr_sock.return_value = fake_sock = MagicMock()
         resolver.create_connection(("a::b%iface", 80))
         assert getaddrinfo.call_args[1]["host"] == "a::b%iface"
         fake_sock.connect.assert_called_once_with(fake_scoped_sa6)
