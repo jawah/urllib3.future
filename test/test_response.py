@@ -139,9 +139,7 @@ class TestResponse:
         assert r._body == b"foo"
         assert r.data == b"foo"
 
-    @pytest.mark.parametrize(
-        "initial_read_method", ("read", "read1")
-    )
+    @pytest.mark.parametrize("initial_read_method", ("read", "read1"))
     def test_cache_content_ignored_during_and_after_partial_read(
         self, initial_read_method: str
     ) -> None:
@@ -876,9 +874,11 @@ class TestResponse:
                 "zstd",
                 (
                     "zstd",
-                    lambda data: zstd.ZstdCompressor().compress(data)
-                    if hasattr(zstd, "ZstdCompressor")
-                    else zstd.compress(data),
+                    lambda data: (
+                        zstd.ZstdCompressor().compress(data)
+                        if hasattr(zstd, "ZstdCompressor")
+                        else zstd.compress(data)
+                    ),
                 ),
             )
         )
@@ -912,9 +912,7 @@ class TestResponse:
         compressed = compress_func(original)
         limit = 1024 * 1024  # 1 MiB
         fp = BytesIO(compressed)
-        r = HTTPResponse(
-            fp, headers={"content-encoding": name}, preload_content=False
-        )
+        r = HTTPResponse(fp, headers={"content-encoding": name}, preload_content=False)
         if read_method == "stream":
             chunk = next(r.stream(amt=limit, decode_content=True))
         else:
@@ -947,9 +945,7 @@ class TestResponse:
         original = b"B" * (10 * 2**20)  # 10 MiB
         compressed = compress_func(original)
         fp = BytesIO(compressed)
-        r = HTTPResponse(
-            fp, headers={"content-encoding": name}, preload_content=False
-        )
+        r = HTTPResponse(fp, headers={"content-encoding": name}, preload_content=False)
         # Start decoding so `_has_decoded_content` becomes True.
         first = r.read(1024, decode_content=True)
         assert first

@@ -769,9 +769,11 @@ class TestAsyncResponse:
                 "zstd",
                 (
                     "zstd",
-                    lambda data: zstd.ZstdCompressor().compress(data)
-                    if hasattr(zstd, "ZstdCompressor")
-                    else zstd.compress(data),
+                    lambda data: (
+                        zstd.ZstdCompressor().compress(data)
+                        if hasattr(zstd, "ZstdCompressor")
+                        else zstd.compress(data)
+                    ),
                 ),
             )
         )
@@ -834,6 +836,7 @@ class TestAsyncResponse:
         await r.drain_conn()
         assert r._decoder is None
         assert len(r._decoded_buffer) == 0
+
     async def test_length_w_valid_header(self) -> None:
         headers = {"content-length": "5"}
         fp = _make_async_fp(b"12345")

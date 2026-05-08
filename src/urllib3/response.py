@@ -275,10 +275,10 @@ if zstd is not None:
         def decompress(self, data: bytes, max_length: int = -1) -> bytes:
             if not data and not self.has_unconsumed_tail:
                 return b""
-            if self._obj.eof:  # type: ignore[union-attr]
-                data = self._obj.unused_data + data  # type: ignore[union-attr]
+            if self._obj.eof:
+                data = self._obj.unused_data + data
                 self._obj = _new_zstd_obj()
-            part = self._obj.decompress(data, max_length=max_length)  # type: ignore[union-attr]
+            part = self._obj.decompress(data, max_length=max_length)
             length = len(part)
             data_parts = [part]
             # Every loop iteration is supposed to read data from a separate frame.
@@ -288,18 +288,19 @@ if zstd is not None:
             #   - end of the last read frame has not been reached (i.e.,
             #     more data has to be fed).
             while (
-                self._obj.eof  # type: ignore[union-attr]
-                and self._obj.unused_data  # type: ignore[union-attr]
+                self._obj.eof
+                and self._obj.unused_data
                 and (max_length < 0 or length < max_length)
             ):
-                unused_data = self._obj.unused_data  # type: ignore[union-attr]
+                unused_data = self._obj.unused_data
                 if not getattr(self._obj, "needs_input", True):
                     self._obj = _new_zstd_obj()
-                part = self._obj.decompress(  # type: ignore[union-attr]
+                part = self._obj.decompress(
                     unused_data,
                     max_length=(max_length - length) if max_length > 0 else -1,
                 )
-                if part_length := len(part):
+                part_length = len(part)
+                if part_length:
                     data_parts.append(part)
                     length += part_length
                 elif getattr(self._obj, "needs_input", True):
@@ -309,16 +310,14 @@ if zstd is not None:
         @property
         def has_unconsumed_tail(self) -> bool:
             return not (
-                getattr(self._obj, "needs_input", True) or self._obj.eof  # type: ignore[union-attr]
-            ) or bool(
-                self._obj.unused_data  # type: ignore[union-attr]
-            )
+                getattr(self._obj, "needs_input", True) or self._obj.eof
+            ) or bool(self._obj.unused_data)
 
         def flush(self) -> bytes:
-            ret = self._obj.flush()  # type: ignore[union-attr]
-            if not self._obj.eof:  # type: ignore[union-attr]
+            ret = self._obj.flush()
+            if not self._obj.eof:
                 raise DecodeError("Zstandard data is incomplete")
-            return ret
+            return ret  # type: ignore[no-any-return]
 
 
 class MultiDecoder(ContentDecoder):

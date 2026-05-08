@@ -15,7 +15,7 @@ import socket
 import struct
 import sys
 from collections import deque
-from typing import Any, Callable, Final
+import typing
 
 try:
     from qh3.asyncio._transport import (
@@ -37,48 +37,52 @@ __all__ = (
 )
 
 # UDP_SEGMENT cmsg payload is __u16 (2 bytes, native endian).
-_UINT16: Final = struct.Struct("=H")
+_UINT16: typing.Final = struct.Struct("=H")
 
 # UDP_GRO cmsg payload is `int` (sizeof(int) bytes, native endian) -- see
 # net/ipv4/udp.c:udp_cmsg_recv() in the Linux kernel.
-_GRO_CMSG: Final = struct.Struct("@i")
+_GRO_CMSG: typing.Final = struct.Struct("@i")
 
 # Maximum size of a single coalesced GRO buffer the kernel can deliver.
 # 65535 is the IPv4 datagram cap; the kernel may stitch several MTU-sized
 # UDP datagrams together up to this total before delivering them in one
 # recvmsg(). Do *not* tighten to 65507 (which is only the per-datagram
 # UDP payload limit).
-_DEFAULT_GRO_BUF: Final = 65535
+_DEFAULT_GRO_BUF: typing.Final = 65535
 
 # Hard upper bound for the receive buffer when we grow it to recover from
 # truncation. 256 KiB safely accommodates any GRO-coalesced burst the
 # kernel will produce.
-_MAX_GRO_BUF: Final = 262144
+_MAX_GRO_BUF: typing.Final = 262144
 
 # Flow control watermarks for the custom write queue.
-_HIGH_WATERMARK: Final = 64 * 1024
-_LOW_WATERMARK: Final = 16 * 1024
+_HIGH_WATERMARK: typing.Final = 64 * 1024
+_LOW_WATERMARK: typing.Final = 16 * 1024
 
 # GSO kernel limit: max segments per sendmsg call.
 # UDP_MAX_SEGMENTS in the kernel is 64; the total payload must also be
 # <= 64 KiB, so the effective cap depends on segment size.
-_GSO_MAX_SEGMENTS: Final = 64
-_GSO_MAX_PAYLOAD: Final = 65000  # safety margin under IP_MAXPACKET (65535)
+_GSO_MAX_SEGMENTS: typing.Final = 64
+_GSO_MAX_PAYLOAD: typing.Final = 65000  # safety margin under IP_MAXPACKET (65535)
 
 # Bound the number of recvmsg calls in a single readiness callback so we
 # never starve the event loop under sustained inbound traffic.
-_RECV_BURST_LIMIT: Final = 32
+_RECV_BURST_LIMIT: typing.Final = 32
 
-_IS_LINUX: Final = sys.platform == "linux"
+_IS_LINUX: typing.Final = sys.platform == "linux"
 
 # Pre-resolved socket constants (avoid repeated attribute lookups in hot paths).
-_SOL_UDP: Final = socket.SOL_UDP
-_MSG_TRUNC: Final = getattr(socket, "MSG_TRUNC", 0)
-_MSG_CTRUNC: Final = getattr(socket, "MSG_CTRUNC", 0)
+_SOL_UDP: typing.Final = getattr(socket, "SOL_UDP", 17)
+_MSG_TRUNC: typing.Final = getattr(socket, "MSG_TRUNC", 0)
+_MSG_CTRUNC: typing.Final = getattr(socket, "MSG_CTRUNC", 0)
 
 # Ancillary buffer size for the GRO cmsg. Computed once, the kernel never
 # returns more than one UDP_GRO cmsg per recvmsg().
-_ANCBUFSIZE: Final = socket.CMSG_SPACE(_GRO_CMSG.size)
+if hasattr(socket, "CMSG_SPACE"):
+    _ANCBUFSIZE: typing.Final = socket.CMSG_SPACE(_GRO_CMSG.size)
+else:
+    # Conservative fallback (e.g. Windows)
+    _ANCBUFSIZE = 64  # type: ignore[misc]
 
 
 def _sock_has_gro(sock: socket.socket) -> bool:
@@ -341,7 +345,7 @@ if _OptimizedDatagramTransport is None:
                 "type": sock.type,
             }
 
-        def get_extra_info(self, name: str, default: Any = None) -> Any:
+        def get_extra_info(self, name: str, default: typing.Any = None) -> typing.Any:
             return self._extra.get(name, default)
 
         def is_closing(self) -> bool:
@@ -765,7 +769,7 @@ if _OptimizedDatagramTransport is None:
 
 async def create_udp_endpoint(
     loop: asyncio.AbstractEventLoop,
-    protocol_factory: Callable[[], asyncio.DatagramProtocol],
+    protocol_factory: typing.Callable[[], asyncio.DatagramProtocol],
     *,
     local_addr: tuple[str, int] | None = None,
     remote_addr: tuple[str, int] | None = None,
@@ -855,7 +859,7 @@ class DatagramReader:
         self._exception: BaseException | None = None
         self._eof = False
 
-    def feed_datagram(self, data: bytes, addr: Any) -> None:
+    def feed_datagram(self, data: bytes, addr: typing.Any) -> None:
         """Feed a single (non-coalesced) datagram."""
         if self._eof:
             return
@@ -864,7 +868,7 @@ class DatagramReader:
         if waiter is not None and not waiter.done():
             waiter.set_result(None)
 
-    def feed_datagrams(self, data: list[bytes], addr: Any) -> None:
+    def feed_datagrams(self, data: list[bytes], addr: typing.Any) -> None:
         """Feed a batch of coalesced datagrams as a single entry."""
         if self._eof or not data:
             return
@@ -1007,7 +1011,7 @@ class DatagramWriter:
     async def wait_closed(self) -> None:
         await self._closed_event.wait()
 
-    def get_extra_info(self, name: str, default: Any = None) -> Any:
+    def get_extra_info(self, name: str, default: typing.Any = None) -> typing.Any:
         return self._transport.get_extra_info(name, default)
 
     def _pause_writing(self) -> None:

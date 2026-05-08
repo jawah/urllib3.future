@@ -1998,7 +1998,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # Check remove_headers_on_redirect to avoid a potential network call within
             # self.is_same_host() which may use socket.gethostbyname() in the future.
             if retries.remove_headers_on_redirect and not self.is_same_host(
-                redirect_location
+                redirect_location  # type: ignore[arg-type]
             ):
                 headers = HTTPHeaderDict(headers)
                 for header in list(headers):
