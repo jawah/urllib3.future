@@ -425,7 +425,12 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         return None
 
     async def _post_conn(self) -> None:  # type: ignore[override]
-        if self._tunnel_host is None:
+        if self._tunnel_host is not None:
+            # Proxy-side connection: discard any stale _svn from a previous
+            # target-side negotiation so ALPN (or the h11 default) takes effect.
+            self._svn = None
+            self._protocol = None
+        else:
             assert self._protocol is None, (
                 "_post_conn() must be called when socket is closed or unset"
             )
