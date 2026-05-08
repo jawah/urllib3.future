@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
@@ -37,11 +36,6 @@ _DOQ_PARAM = pytest.param(
         pytest.mark.skipif(
             QUICResolver is _MISSING_QUIC_SENTINEL,
             reason="Test requires qh3 installed",
-        ),
-        pytest.mark.xfail(
-            condition=bool(os.environ.get("CI")),
-            reason="DoQ unreliable in CI (adguard unreachable)",
-            strict=False,
         ),
     ],
 )
@@ -92,11 +86,6 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
                     QUICResolver is _MISSING_QUIC_SENTINEL,
                     reason="Test requires qh3 installed",
                 ),
-                pytest.mark.xfail(
-                    condition=bool(os.environ.get("CI")),
-                    reason="DoQ unreliable in CI (adguard unreachable)",
-                    strict=False,
-                ),
             ],
         ),
         ("dns://dns.adguard-dns.com", None),
@@ -119,11 +108,6 @@ def test_null_resolver(hostname: str, expect_error: bool) -> None:
                 pytest.mark.skipif(
                     QUICResolver is _MISSING_QUIC_SENTINEL,
                     reason="Test requires qh3 installed",
-                ),
-                pytest.mark.xfail(
-                    condition=bool(os.environ.get("CI")),
-                    reason="DoQ unreliable in CI (adguard unreachable)",
-                    strict=False,
                 ),
             ],
         ),
