@@ -14,7 +14,12 @@ if typing.TYPE_CHECKING:
     from ._async import AsyncLowLevelResponse
 
 from .._collections import HTTPHeaderDict
-from .._constant import DEFAULT_BLOCKSIZE, DEFAULT_KEEPALIVE_DELAY
+from .._constant import (
+    DEFAULT_BLOCKSIZE,
+    DEFAULT_KEEPALIVE_DELAY,
+    DEFAULT_BACKGROUND_WATCH_WINDOW,
+    DEFAULT_KEEPALIVE_IDLE_WINDOW,
+)
 from ..util.response import BytesQueueBuffer
 
 
@@ -475,6 +480,8 @@ class BaseBackend:
         disabled_svn: set[HttpVersion] | None = None,
         preemptive_quic_cache: QuicPreemptiveCacheType | None = None,
         keepalive_delay: float | int | None = DEFAULT_KEEPALIVE_DELAY,
+        background_watch_delay: int | float | None = DEFAULT_BACKGROUND_WATCH_WINDOW,
+        keepalive_idle_window: int | float | None = DEFAULT_KEEPALIVE_IDLE_WINDOW,
     ):
         self.host = host
         self.port = port
@@ -518,6 +525,12 @@ class BaseBackend:
 
         self._keepalive_delay: float | None = (
             keepalive_delay  # just forwarded for qh3 idle_timeout conf.
+        )
+        self._background_watch_delay = (
+            background_watch_delay  # tcp keepalive http1.1 only
+        )
+        self._keepalive_idle_window = (
+            keepalive_idle_window  # tcp keepalive http1.1 only
         )
         self._connected_at: float | None = None
         self._last_used_at: float = time.monotonic()
@@ -571,7 +584,7 @@ class BaseBackend:
         return not self._promises and not self._pending_responses
 
     @property
-    def max_stream_count(self) -> int:
+    def expect_pong(self) -> bool:
         raise NotImplementedError
 
     @property

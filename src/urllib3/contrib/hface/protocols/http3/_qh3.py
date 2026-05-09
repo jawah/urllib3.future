@@ -21,7 +21,6 @@ import ssl
 import typing
 from collections import deque
 from os import environ
-from random import randint
 from time import time as monotonic
 from typing import Any, Iterable
 
@@ -41,7 +40,6 @@ from qh3 import (
     h3_events,
     quic_events,
 )
-from qh3.h3.connection import FrameType
 from qh3.quic.connection import QuicConnectionState
 
 from ..._configuration import QuicTLSConfig
@@ -54,8 +52,11 @@ from ...events import (
     Event,
     GoawayReceived,
 )
-from ...events import HandshakeCompleted as _HandshakeCompleted
-from ...events import HeadersReceived, StreamResetReceived
+from ...events import (
+    HandshakeCompleted as _HandshakeCompleted,
+    HeadersReceived,
+    StreamResetReceived,
+)
 from .._protocols import HTTP3Protocol
 
 
@@ -63,6 +64,7 @@ QUIC_RELEVANT_EVENT_TYPES = {
     quic_events.HandshakeCompleted,
     quic_events.ConnectionTerminated,
     quic_events.StreamReset,
+    quic_events.PingAcknowledged,
 }
 
 _SHORT_NAME_ASSOC = {
@@ -76,6 +78,9 @@ _SHORT_NAME_ASSOC = {
     "DC": "domainComponent",
     "E": "email",
 }
+
+# v1.8+ introduced H3 Goaway event
+_QH3_H3_HAVE_GA_EV: bool = hasattr(h3_events, "GoawayReceived")
 
 
 class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
@@ -150,29 +155,26 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._open_stream_count: int = 0
         self._total_stream_count: int = 0
         self._goaway_to_honor: bool = False
-        self._max_stream_count: int = (
-            100  # safe-default, broadly used. (and set by qh3)
-        )
         self._max_frame_size: int | None = None
         self._next_timer: float | None = None
 
+        self._last_ping_uid: int = 0
+        self._pending_ping_ack: deque[int] = deque()
+
     def next_timer(self) -> float | None:
-        return self._quic.get_timer()
+        self._next_timer = self._quic.get_timer()
+        return self._next_timer
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:
         return ProtocolError, H3Error, QuicConnectionError, AssertionError
 
-    @property
-    def max_stream_count(self) -> int:
-        return self._max_stream_count
-
     def is_available(self) -> bool:
-        return (
-            not self._terminated
-            and not self._goaway_to_honor
-            and self._max_stream_count > self._quic.open_outbound_streams
-        )
+        if self._terminated or self._goaway_to_honor:
+            return False
+        opened = self._quic._local_next_stream_id_bidi // 4
+        granted = self._quic.max_concurrent_bidi_streams
+        return granted > opened
 
     def is_idle(self) -> bool:
         if self._events.stream_count:
@@ -181,16 +183,23 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     def has_expired(self) -> bool:
         if not self._terminated and not self._goaway_to_honor:
-            now = monotonic()
-            self._quic.handle_timer(now)
-            if self._quic._state in {
-                QuicConnectionState.CLOSING,
-                QuicConnectionState.TERMINATED,
-            }:
+            if len(self._pending_ping_ack) >= 2:
+                self._quic.close()
                 self._terminated = True
-            if getattr(self._quic, "_close_event", None) is not None:
-                self._events.extend(self._map_quic_event(self._quic._close_event))  # type: ignore[arg-type]
-                self._terminated = True
+            else:
+                now = monotonic()
+                try:
+                    self._quic.handle_timer(now)
+                except TypeError:  # Defensive: old qh3 bug
+                    pass
+                if self._quic._state in {
+                    QuicConnectionState.CLOSING,
+                    QuicConnectionState.TERMINATED,
+                }:
+                    self._terminated = True
+                if getattr(self._quic, "_close_event", None) is not None:
+                    self._events.extend(self._map_quic_event(self._quic._close_event))  # type: ignore[arg-type]
+                    self._terminated = True
         return (
             self._terminated or self._goaway_to_honor
         ) and not self._events.stream_count
@@ -252,27 +261,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         quic.receive_datagram(data, self._remote_address, now=monotonic())
         self._fetch_events()
 
-        # we want to perpetually mark the connection as "saturated"
-        if self._goaway_to_honor:
-            self._max_stream_count = self._open_stream_count
-        else:
-            # This section may confuse beginners
-            # See RFC 9000 -> 19.11.  MAX_STREAMS Frames
-            # footer extract:
-            # Note that these frames (and the corresponding transport parameters)
-            #    do not describe the number of streams that can be opened
-            #    concurrently.  The limit includes streams that have been closed as
-            #    well as those that are open.
-            #
-            # so, finding that remote_max_streams_bidi is increasing constantly is normal.
-            new_stream_limit = quic._remote_max_streams_bidi - self._total_stream_count
+        remote_max = quic._remote_max_stream_data_bidi_remote
 
-            if new_stream_limit > 0 and new_stream_limit != self._max_stream_count:
-                self._max_stream_count = new_stream_limit
-
-            remote_max = quic._remote_max_stream_data_bidi_remote
-            if remote_max and remote_max != self._max_frame_size:
-                self._max_frame_size = remote_max
+        if remote_max and remote_max != self._max_frame_size:
+            self._max_frame_size = remote_max
 
     def bytes_to_send(self) -> bytes:
         now = monotonic()
@@ -285,7 +277,10 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if not self._packets or timer_expired:
             if timer_expired:
-                self._quic.handle_timer(now)
+                try:
+                    self._quic.handle_timer(now)
+                except TypeError:  # Defensive: old qh3 bug
+                    pass
             # the QUIC state machine returns datagrams (addr, packet)
             # the client never have to worry about the destination
             # unless server yield a preferred address?
@@ -322,21 +317,18 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if ev_type is quic_events.HandshakeCompleted:
             yield _HandshakeCompleted(quic_event.alpn_protocol)  # type: ignore[attr-defined]
         elif ev_type is quic_events.ConnectionTerminated:
-            if quic_event.frame_type == FrameType.GOAWAY.value:  # type: ignore[attr-defined]
-                self._goaway_to_honor = True
-                stream_list: list[int] = [
-                    e for e in self._events._matrix.keys() if e is not None
-                ]
-                yield GoawayReceived(stream_list[-1], quic_event.error_code)  # type: ignore[attr-defined]
-            else:
-                self._terminated = True
-                yield ConnectionTerminated(
-                    quic_event.error_code,  # type: ignore[attr-defined]
-                    quic_event.reason_phrase,  # type: ignore[attr-defined]
-                )
+            self._terminated = True
+            yield ConnectionTerminated(
+                quic_event.error_code,  # type: ignore[attr-defined]
+                quic_event.reason_phrase  # type: ignore[attr-defined]
+                or "Remote end closed connection (not gracefully)",
+            )
         elif ev_type is quic_events.StreamReset:
             self._open_stream_count -= 1
             yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)  # type: ignore[attr-defined]
+        elif ev_type is quic_events.PingAcknowledged:
+            if quic_event.uid in self._pending_ping_ack:  # type: ignore[attr-defined]
+                self._pending_ping_ack.remove(quic_event.uid)  # type: ignore[attr-defined]
 
     def _map_h3_event(self, h3_event: h3_events.H3Event) -> Iterable[Event]:
         ev_type = h3_event.__class__
@@ -357,6 +349,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             yield EarlyHeadersReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.headers,  # type: ignore[attr-defined]
+            )
+        elif _QH3_H3_HAVE_GA_EV and ev_type is h3_events.GoawayReceived:
+            self._goaway_to_honor = True
+            yield GoawayReceived(
+                h3_event.stream_id,  # type: ignore[attr-defined]
             )
 
     def should_wait_remote_flow_control(
@@ -582,7 +579,12 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             self._events.appendleft(ev)
 
     def ping(self) -> None:
-        self._quic.send_ping(randint(0, 65535))
+        self._pending_ping_ack.append(self._last_ping_uid)
+        self._quic.send_ping(self._last_ping_uid)
+        self._last_ping_uid += 1
+
+    def expect_pong(self) -> bool:
+        return bool(self._pending_ping_ack)
 
     def max_frame_size(self) -> int:
         if self._max_frame_size is not None:

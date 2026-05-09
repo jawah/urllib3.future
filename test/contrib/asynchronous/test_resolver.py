@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import socket
 from test import requires_network
 
@@ -36,11 +35,6 @@ _DOQ_PARAM = pytest.param(
         pytest.mark.skipif(
             QUICResolver is _MISSING_QUIC_SENTINEL,
             reason="Test requires qh3 installed",
-        ),
-        pytest.mark.xfail(
-            condition=bool(os.environ.get("CI")),
-            reason="DoQ unreliable in CI (adguard unreachable)",
-            strict=False,
         ),
     ],
 )
@@ -92,11 +86,6 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
                     QUICResolver is _MISSING_QUIC_SENTINEL,
                     reason="Test requires qh3 installed",
                 ),
-                pytest.mark.xfail(
-                    condition=bool(os.environ.get("CI")),
-                    reason="DoQ unreliable in CI (adguard unreachable)",
-                    strict=False,
-                ),
             ],
         ),
         ("dns://dns.adguard-dns.com", None),
@@ -119,11 +108,6 @@ async def test_null_resolver(hostname: str, expect_error: bool) -> None:
                 pytest.mark.skipif(
                     QUICResolver is _MISSING_QUIC_SENTINEL,
                     reason="Test requires qh3 installed",
-                ),
-                pytest.mark.xfail(
-                    condition=bool(os.environ.get("CI")),
-                    reason="DoQ unreliable in CI (adguard unreachable)",
-                    strict=False,
                 ),
             ],
         ),

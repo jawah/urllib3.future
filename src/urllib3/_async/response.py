@@ -91,6 +91,7 @@ class AsyncHTTPResponse(HTTPResponse):
         self.auto_close = auto_close
 
         self._body = None
+        self._uncached_read_occurred = False
         self._fp: AsyncLowLevelResponse | typing.IO[typing.Any] | None = None  # type: ignore[assignment]
         self._original_response = original_response  # type: ignore[assignment]
         self._fp_bytes_read = 0
@@ -206,13 +207,14 @@ class AsyncHTTPResponse(HTTPResponse):
         Unread data in the HTTPResponse connection blocks the connection from being released back to the pool.
         """
         try:
-            await self.read(
-                # Do not spend resources decoding the content unless
-                # decoding has already been initiated.
-                decode_content=self._has_decoded_content,
-            )
+            await self._raw_read()
         except (HTTPError, OSError, BaseSSLError):
             pass
+        if self._has_decoded_content:
+            # `_raw_read` skips decompression, so we should clean up the
+            # decoder to avoid keeping unnecessary data in memory.
+            self._decoded_buffer = BytesQueueBuffer()
+            self._decoder = None
 
     @property
     def trailers(self) -> HTTPHeaderDict | None:
@@ -397,6 +399,7 @@ class AsyncHTTPResponse(HTTPResponse):
             amt=amt or -1,
             decode_content=decode_content,
         )
+        self._uncached_read_occurred = True
 
         if amt is not None and len(data) > amt:
             self._decoded_buffer.put(data)
@@ -421,14 +424,36 @@ class AsyncHTTPResponse(HTTPResponse):
                 if amt < 0 and len(self._decoded_buffer):
                     return self._decoded_buffer.get(len(self._decoded_buffer))
 
-                if 0 < amt <= len(self._decoded_buffer):
-                    return self._decoded_buffer.get(amt)
+                if amt > 0:
+                    # Drain any pending data already buffered inside the
+                    # decoder before triggering another raw read. This
+                    # prevents decompression bombs where a single raw
+                    # chunk would otherwise produce a huge decoded
+                    # output (see GHSA-mf9v-mfxr-j63j).
+                    if (
+                        self._decoder
+                        and self._decoder.has_unconsumed_tail
+                        and len(self._decoded_buffer) < amt
+                    ):
+                        decoded_data = self._decode(
+                            b"",
+                            decode_content,
+                            flush_decoder=False,
+                            max_length=amt - len(self._decoded_buffer),
+                        )
+                        self._decoded_buffer.put(decoded_data)
+
+                    if amt <= len(self._decoded_buffer):
+                        return self._decoded_buffer.get(amt)
 
             if self._police_officer is not None:
                 async with self._police_officer.borrow(self):
                     data = await self._raw_read(amt)
             else:
                 data = await self._raw_read(amt)
+
+            if not cache_content:
+                self._uncached_read_occurred = True
 
             if amt and amt < 0:
                 amt = len(data)
@@ -439,12 +464,16 @@ class AsyncHTTPResponse(HTTPResponse):
             elif amt != 0 and not data:
                 flush_decoder = True
 
-            if not data and len(self._decoded_buffer) == 0:
+            if (
+                not data
+                and len(self._decoded_buffer) == 0
+                and not (self._decoder and self._decoder.has_unconsumed_tail)
+            ):
                 return data
 
             if amt is None:
                 data = self._decode(data, decode_content, flush_decoder)
-                if cache_content:
+                if cache_content and not self._uncached_read_occurred:
                     self._body = data
             else:
                 # do not waste memory on buffer when not decoding
@@ -456,7 +485,12 @@ class AsyncHTTPResponse(HTTPResponse):
                         )
                     return data
 
-                decoded_data = self._decode(data, decode_content, flush_decoder)
+                decoded_data = self._decode(
+                    data,
+                    decode_content,
+                    flush_decoder,
+                    max_length=amt - len(self._decoded_buffer),
+                )
                 self._decoded_buffer.put(decoded_data)
 
                 while len(self._decoded_buffer) < amt and data:
@@ -469,7 +503,12 @@ class AsyncHTTPResponse(HTTPResponse):
                     else:
                         data = await self._raw_read(amt)
 
-                    decoded_data = self._decode(data, decode_content, flush_decoder)
+                    decoded_data = self._decode(
+                        data,
+                        decode_content,
+                        flush_decoder,
+                        max_length=amt - len(self._decoded_buffer),
+                    )
                     self._decoded_buffer.put(decoded_data)
                 data = self._decoded_buffer.get(amt)
 
@@ -492,9 +531,15 @@ class AsyncHTTPResponse(HTTPResponse):
     async def stream(  # type: ignore[override]
         self, amt: int | None = 2**16, decode_content: bool | None = None
     ) -> typing.AsyncGenerator[bytes, None]:
+        if amt == 0:
+            return
         if self._fp is None:
             return
-        while not is_fp_closed(self._fp) or self._decoded_buffer:
+        while (
+            not is_fp_closed(self._fp)
+            or self._decoded_buffer
+            or (self._decoder and self._decoder.has_unconsumed_tail)
+        ):
             data = await self.read(amt=amt, decode_content=decode_content)
 
             if data:

@@ -351,3 +351,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def ping(self) -> None:
         raise NotImplementedError("http1 does not support PING")
+
+    def expect_pong(self) -> bool:
+        return False

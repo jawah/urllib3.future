@@ -730,6 +730,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         if conn and is_connection_dropped(conn):
             log.debug("Resetting dropped connection: %s", self.host)
             await conn.close()
+        elif conn and getattr(conn, "expect_pong", False):
+            await conn.peek_and_react()
+
+            if conn.expect_pong:
+                log.debug("Resetting dropped connection: %s", self.host)
+                await conn.close()
 
         try:
             return conn or await self._new_conn(heb_timeout=heb_timeout)
@@ -1006,6 +1012,17 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
                     headers.discard(should_be_removed_header)
+
+            # Strip headers marked as unsafe to forward to the redirected location.
+            # Check remove_headers_on_redirect to avoid a potential network call within
+            # self.is_same_host() which may use socket.gethostbyname() in the future.
+            if retries.remove_headers_on_redirect and not self.is_same_host(
+                redirect_location
+            ):
+                headers = HTTPHeaderDict(headers)
+                for header in list(headers):
+                    if header.lower() in retries.remove_headers_on_redirect:
+                        headers.discard(header)
 
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)
@@ -1976,6 +1993,17 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
                     headers.discard(should_be_removed_header)
+
+            # Strip headers marked as unsafe to forward to the redirected location.
+            # Check remove_headers_on_redirect to avoid a potential network call within
+            # self.is_same_host() which may use socket.gethostbyname() in the future.
+            if retries.remove_headers_on_redirect and not self.is_same_host(
+                redirect_location  # type: ignore[arg-type]
+            ):
+                headers = HTTPHeaderDict(headers)
+                for header in list(headers):
+                    if header.lower() in retries.remove_headers_on_redirect:
+                        headers.discard(header)
 
             try:
                 retries = retries.increment(method, url, response=response, _pool=self)

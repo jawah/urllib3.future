@@ -98,7 +98,7 @@ mypy = [
   "types-backports==0.1.3",
   "nox==2024.4.15; python_version == '3.7'",
   "nox==2026.2.9; python_version >= '3.8'",
-  "qh3==1.7.1",
+  "qh3==1.8.1",
   "h11==0.14.0; python_version == '3.7'",
   "h11>=0.16.0,<1; python_version >= '3.8'",
   "jh2==5.0.11",
@@ -109,7 +109,7 @@ mypy = [
   "zstandard>=0.25.0,<1; python_version >= '3.9'",
   "types-PySocks==1.7.1.20251001; python_version == '3.9'",
   "types-PySocks>=1.7.1.20260408; python_version >= '3.10'",
-  "rtls==2026.3.29",
+  "rtls==2026.4.24",
 ]
 dev = [
   {include-group = "common"},
@@ -208,13 +208,16 @@ filterwarnings = [
     '''ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning''',
     '''ignore:function _SSLProtocolTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
+    '''ignore:function _SelectorTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:function StreamWriter.__del__:pytest.PytestUnraisableExceptionWarning''',
+    '''ignore:An exception occurred during teardown of an asyncio\.Runner:RuntimeWarning''',
     '''ignore:sock:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:The `hash` argument is deprecated in favor of `unsafe_hash`:DeprecationWarning''',
     '''ignore:ssl\.TLSVersion\.TLSv1 is deprecated:DeprecationWarning''',
     '''ignore:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',
     '''ignore:loop is closed:ResourceWarning''',
     '''ignore:.*SOCKS support in urllib3 requires the installation of optional dependencies.*:Warning''',
+    '''ignore:.*is required to prevent decompression bombs.*:Warning''',
     '''ignore:.*module has been removed in urllib3.*:Warning''',
 ]
 
