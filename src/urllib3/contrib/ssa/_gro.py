@@ -819,9 +819,10 @@ async def create_udp_endpoint(
     gro_enabled = _sock_has_gro(sock)
     gso_enabled = _sock_has_gso(sock)
 
-    # so far we can only benefit from reduced syscalls
-    # with Linux and MacOS (+iOS)
+    # so far we can only trust Linux for GRO/GSO.
     if not _IS_LINUX and not _IS_DARWIN:
+        # Windows have different paradigm around transport. can't register/listen fd.
+        # see Proactor loop.
         return await loop.create_datagram_endpoint(protocol_factory, sock=sock)
 
     # 4. Wire up the optimized transport. Prefer qh3's Rust-native
@@ -829,11 +830,14 @@ async def create_udp_endpoint(
     #    pure-Python native one otherwise. The qh3 import is performed
     #    here (not at module load) so that this module never forces an
     #    eager import of qh3 just to be importable.
-    try:
-        from qh3.asyncio._transport import (
-            OptimizedDatagramTransport as _TransportImpl,
-        )
-    except ImportError:
+    if _IS_LINUX:
+        try:
+            from qh3.asyncio._transport import (
+                OptimizedDatagramTransport as _TransportImpl,
+            )
+        except ImportError:
+            _TransportImpl = _NativeOptimizedDatagramTransport  # type: ignore[misc,assignment]
+    else:
         _TransportImpl = _NativeOptimizedDatagramTransport  # type: ignore[misc,assignment]
 
     protocol = protocol_factory()
@@ -905,6 +909,24 @@ class DatagramReader:
     def at_eof(self) -> bool:
         return self._eof and not self._buffer
 
+    def _drain_buf(self) -> bytes | list[bytes]:
+        if not self._buffer:
+            raise IOError
+        datagrams: list[bytes] = []
+        for entry in self._buffer:
+            # An entry is either a single datagram (bytes) or a batch
+            # of coalesced datagrams (list[bytes]) from one GRO syscall.
+            if isinstance(entry, bytes):
+                datagrams.append(entry)
+            else:
+                datagrams.extend(entry)
+        self._buffer.clear()
+        # Preserve the public contract: a single datagram is returned as
+        # bytes; multiple datagrams are returned as list[bytes].
+        if len(datagrams) == 1:
+            return datagrams[0]
+        return datagrams
+
     async def read(self, n: int = -1) -> bytes | list[bytes]:
         """Return the next entry from the buffer.
 
@@ -917,7 +939,7 @@ class DatagramReader:
         is raised, so callers can drain the stream cleanly on shutdown.
         """
         if self._buffer:
-            return self._buffer.popleft()
+            return self._drain_buf()
 
         if self._exception is not None:
             exc, self._exception = self._exception, None
@@ -939,7 +961,7 @@ class DatagramReader:
             self._waiter = None
 
         if self._buffer:
-            return self._buffer.popleft()
+            return self._drain_buf()
 
         if self._exception is not None:
             exc, self._exception = self._exception, None

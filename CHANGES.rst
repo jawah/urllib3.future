@@ -1,9 +1,9 @@
-2.20.900 (2026-05-08)
+2.20.900 (2026-05-09)
 =====================
 
 - Fixed remote peer abrupt termination of a HTTP/3 over QUIC connection handling and exception raised.
 - Fixed svn target not reset when using a proxy. (#360)
-- Improved raw UDP I/O performance on both MacOS and Linux when ``qh3>=1.8`` is installed (benefit HTTP/3 only).
+- Improved raw UDP I/O performance on Linux when ``qh3>=1.8`` is installed (benefit HTTP/3 only).
 - Improved our connection keepalive algorithm. Connections are to be evicted once we build up confidence that the remote no longer answer our ping frames past initial keepalive delay (default 60s).
 - Backported ``HTTPResponse.stream()`` (and ``AsyncHTTPResponse.stream()``) to handle ``amt=0`` instead of falling into an infinite loop. (https://github.com/urllib3/urllib3/issues/3793)
 - Backported ``HTTPResponse.read()`` (and ``AsyncHTTPResponse.read()``) could cache only part of the response after a partial read when ``cache_content=True``. (https://github.com/urllib3/urllib3/pull/4967)
