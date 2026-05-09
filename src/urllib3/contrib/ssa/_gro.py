@@ -910,8 +910,6 @@ class DatagramReader:
         return self._eof and not self._buffer
 
     def _drain_buf(self) -> bytes | list[bytes]:
-        if not self._buffer:
-            raise IOError
         datagrams: list[bytes] = []
         for entry in self._buffer:
             # An entry is either a single datagram (bytes) or a batch
