@@ -1,3 +1,8 @@
+2.20.901 (2026-05-10)
+=====================
+
+- Fixed a rare TOCTOU race in the synchronous happy eyeballs algorithm leading to an error while attempting to close/clean challenger connections.
+
 2.20.900 (2026-05-09)
 =====================
 

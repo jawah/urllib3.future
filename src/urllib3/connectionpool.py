@@ -641,9 +641,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
                         if task.running():
                             try:
-                                if associated_conn._resolver._sock_cursor:
-                                    associated_conn._resolver._sock_cursor.shutdown(0)
-                                    associated_conn._resolver._sock_cursor.close()
+                                sock_cursor = associated_conn._resolver._sock_cursor
+                                if sock_cursor is not None:
+                                    sock_cursor.shutdown(0)
+                                    sock_cursor.close()
                                 elif associated_conn.sock:
                                     associated_conn.sock.shutdown(0)
                                     associated_conn.sock.close()
@@ -2342,9 +2343,10 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                         if task.running():
                             # dangling TCP conn
                             try:
-                                if associated_conn._resolver._sock_cursor:
-                                    associated_conn._resolver._sock_cursor.shutdown(0)
-                                    associated_conn._resolver._sock_cursor.close()
+                                sock_cursor = associated_conn._resolver._sock_cursor
+                                if sock_cursor is not None:
+                                    sock_cursor.shutdown(0)
+                                    sock_cursor.close()
                                 # dangling UDP conn (they usually stuck later in the process)
                                 elif associated_conn.sock:
                                     associated_conn.sock.shutdown(0)
