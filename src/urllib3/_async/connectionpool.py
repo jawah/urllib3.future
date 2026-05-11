@@ -1872,6 +1872,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             release_this_conn = False
             raise
 
+        except UnavailableTraffic:
+            clean_exit = False
+            release_this_conn = False
+
         except (
             TimeoutError,
             OSError,
