@@ -808,6 +808,57 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             )
 
 
+@pytest.mark.asyncio
+class TestAsyncPoolManagerSSERetry(HTTPDummyServerTestCase):
+    @classmethod
+    def setup_class(cls) -> None:
+        super().setup_class()
+        cls.base_url = f"http://{cls.host}:{cls.port}"
+
+    async def test_sse_retry_on_status_forcelist(self) -> None:
+        """Async counterpart of TestPoolManagerSSERetry.
+
+        A request to an sse:// (psse:// over HTTP) URL must respect retries
+        configured with status_forcelist. The flaky_sse endpoint returns 500
+        on the first call and a valid event-stream on the second.
+        """
+        from urllib3.contrib.webextensions._async import (
+            AsyncServerSideEventExtensionFromHTTP,
+        )
+
+        retry = Retry(total=2, status_forcelist=[500])
+
+        sse_url = self.base_url.replace("http://", "psse://") + "/flaky_sse"
+
+        async with AsyncPoolManager(retries=retry) as http:
+            resp = await http.urlopen(
+                "GET",
+                sse_url,
+                headers={"test-name": "async_test_sse_retry_on_status_forcelist"},
+            )
+
+            # the second attempt should have succeeded
+            assert resp.status == 200
+
+            # the SSE extension must be auto-attached
+            assert resp.extension is not None
+            assert isinstance(resp.extension, AsyncServerSideEventExtensionFromHTTP)
+
+            events = []
+            while resp.extension.closed is False:
+                ev = await resp.extension.next_payload()
+                if ev is not None:
+                    events.append(ev)
+
+            assert len(events) == 2
+            assert resp.extension.closed is True
+
+            for event in events:
+                payload = event.json()  # type: ignore[attr-defined]
+                assert "timestamp" in payload
+                assert "msg" in payload
+
+
 @pytest.mark.skipif(not HAS_IPV6, reason="IPv6 is not supported on this system")
 @pytest.mark.asyncio
 class TestIPv6AsyncPoolManager(IPv6HTTPDummyServerTestCase):

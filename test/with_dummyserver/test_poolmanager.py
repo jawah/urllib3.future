@@ -792,6 +792,54 @@ class TestPoolManager(HTTPDummyServerTestCase):
         )
 
 
+class TestPoolManagerSSERetry(HTTPDummyServerTestCase):
+    @classmethod
+    def setup_class(cls) -> None:
+        super().setup_class()
+        cls.base_url = f"http://{cls.host}:{cls.port}"
+
+    def test_sse_retry_on_status_forcelist(self) -> None:
+        """A request to an sse:// (psse:// over HTTP) URL must respect retries
+        configured with status_forcelist. The flaky_sse endpoint returns 500
+        on the first call and a valid event-stream on the second. With
+        retries=2 and status_forcelist=[500] we expect to obtain a 200 and a
+        usable ServerSideEventExtensionFromHTTP attached to the response.
+        """
+        from urllib3.contrib.webextensions import ServerSideEventExtensionFromHTTP
+
+        retry = Retry(total=2, status_forcelist=[500])
+
+        sse_url = self.base_url.replace("http://", "psse://") + "/flaky_sse"
+
+        with PoolManager(retries=retry) as http:
+            resp = http.urlopen(
+                "GET",
+                sse_url,
+                headers={"test-name": "test_sse_retry_on_status_forcelist"},
+            )
+
+            # the second attempt should have succeeded
+            assert resp.status == 200
+
+            # the SSE extension must be auto-attached
+            assert resp.extension is not None
+            assert isinstance(resp.extension, ServerSideEventExtensionFromHTTP)
+
+            events = []
+            while resp.extension.closed is False:
+                ev = resp.extension.next_payload()
+                if ev is not None:
+                    events.append(ev)
+
+            assert len(events) == 2
+            assert resp.extension.closed is True
+
+            for event in events:
+                payload = event.json()  # type: ignore[attr-defined]
+                assert "timestamp" in payload
+                assert "msg" in payload
+
+
 @pytest.mark.skipif(not HAS_IPV6, reason="IPv6 is not supported on this system")
 class TestIPv6PoolManager(IPv6HTTPDummyServerTestCase):
     @classmethod

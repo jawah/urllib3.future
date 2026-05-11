@@ -322,6 +322,39 @@ class TestingApp(RequestHandler):
     def chunked(self, request: httputil.HTTPServerRequest) -> Response:
         return Response(["123"] * 4)
 
+    def flaky_sse(self, request: httputil.HTTPServerRequest) -> Response:
+        """First request returns 500, subsequent requests return a valid SSE
+        event-stream. Used to validate that retries (with status_forcelist)
+        work correctly when the target URL uses the sse:// (or psse://)
+        scheme/extension.
+        """
+        test_name = request.headers.get("test-name", None)
+        if not test_name:
+            return Response("test-name header not set", status="400 Bad Request")
+
+        RETRY_TEST_NAMES[test_name] += 1
+
+        if RETRY_TEST_NAMES[test_name] < 2:
+            return Response(
+                "flaky failure",
+                status="500 Internal Server Error",
+            )
+
+        body = (
+            "event: message\n"
+            'data: {"timestamp": 1, "msg": "hello"}\n\n'
+            "event: message\n"
+            'data: {"timestamp": 2, "msg": "world"}\n\n'
+        )
+
+        return Response(
+            body,
+            headers=[
+                ("Content-Type", "text/event-stream"),
+                ("Cache-Control", "no-store"),
+            ],
+        )
+
     def chunked_gzip(self, request: httputil.HTTPServerRequest) -> Response:
         chunks = []
         compressor = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
