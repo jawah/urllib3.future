@@ -705,8 +705,7 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                     protocol.error_received(exc)
                 except (KeyboardInterrupt, SystemExit):
                     raise
-                except BaseException as e:  # noqa: BLE001
-                    print(e)
+                except BaseException:  # noqa: BLE001
                     pass
                 return
 
@@ -728,8 +727,7 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                     )
                 except (KeyboardInterrupt, SystemExit):
                     raise
-                except BaseException as e:  # noqa: BLE001
-                    print(e)
+                except BaseException:  # noqa: BLE001
                     pass
                 # Grow the buffer for next time, up to the kernel max.
                 if bufsize < _MAX_GRO_BUF:
