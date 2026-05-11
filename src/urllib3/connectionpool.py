@@ -1847,10 +1847,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             release_this_conn = False
             raise
 
-        except UnavailableTraffic:
-            clean_exit = False
-            release_this_conn = False
-
         except (
             TimeoutError,
             OSError,
@@ -1860,6 +1856,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             CertificateError,
             ProxyError,
             RecoverableError,
+            UnavailableTraffic,
         ) as e:
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.

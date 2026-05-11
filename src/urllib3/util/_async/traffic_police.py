@@ -1086,7 +1086,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         timeout: float | None = None,
         not_idle_only: bool = False,
     ) -> typing.AsyncGenerator[T, None]:
-        conn_or_pool = None
+        clean_exit = True
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -1134,14 +1134,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     )
                 raise UnavailableTraffic("No connection are available")
             yield conn_or_pool
+        except Exception:
+            clean_exit = False
+            raise
         finally:
             # do not release back to the pool a broken connection
             # we need kill_cursor() to take over soon.
-            if conn_or_pool is not None and not getattr(
-                conn_or_pool, "is_closed", False
-            ):
-                if self.release():
-                    await asyncio.sleep(0)
+            if clean_exit and self.release():
+                await asyncio.sleep(0)
 
     def release(self) -> bool:
         active_cursor = self._cursor
