@@ -1052,6 +1052,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 preload_content=preload_content,
                 decode_content=decode_content,
                 multiplexed=True,
+                extension=from_promise.get_parameter("extension"),
                 **response_kw,
             )
 
@@ -1116,6 +1117,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 preload_content=preload_content,
                 decode_content=decode_content,
                 multiplexed=True,
+                extension=from_promise.get_parameter("extension"),
                 **response_kw,
             )
 
@@ -1854,6 +1856,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             CertificateError,
             ProxyError,
             RecoverableError,
+            UnavailableTraffic,
         ) as e:
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
@@ -1946,6 +1949,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 on_upload_body=on_upload_body,
                 on_post_connection=on_post_connection,
                 multiplexed=multiplexed,
+                extension=extension,
                 **response_kw,
             )
 
@@ -2010,6 +2014,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 preload_content=preload_content,
                 decode_content=decode_content,
                 multiplexed=False,
+                extension=extension,
                 **response_kw,
             )
 
@@ -2043,6 +2048,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 preload_content=preload_content,
                 decode_content=decode_content,
                 multiplexed=False,
+                extension=extension,
                 **response_kw,
             )
 

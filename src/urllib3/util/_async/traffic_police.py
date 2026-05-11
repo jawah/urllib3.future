@@ -256,10 +256,7 @@ class AsyncSignals(typing.Generic[T]):
                 awoken_signals.append(signal)
 
         for awoken_signal in awoken_signals:
-            if awoken_signal in self._priority_signals:
-                self._priority_signals.remove(awoken_signal)
-            else:
-                self._furthest_signals.remove(awoken_signal)
+            self._furthest_signals.remove(awoken_signal)
 
         del self._cursors[current_task]
 
@@ -568,17 +565,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         del self._registry[active_cursor.obj_id]
 
+        if not self.concurrency:
+            if self._signals.kill():
+                await asyncio.sleep(0)
+        else:
+            del self._container[active_cursor.obj_id]
+            self._unset_cursor()
+
         try:
             await active_cursor.conn_or_pool.close()
         except Exception:
             pass
-
-        if not self.concurrency:
-            self._signals.kill()
-            await asyncio.sleep(0)
-        else:
-            del self._container[active_cursor.obj_id]
-            self._unset_cursor()
 
     async def _sacrifice_first_idle(self, block: bool = True) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
@@ -1067,6 +1064,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
             except asyncio.CancelledError:
                 self._signals.unregister(signal)
                 raise
+
+            if (
+                signal.conn_or_pool is None
+                or signal.target_obj_id not in self._registry
+            ):
+                raise UnavailableTraffic("Connection was killed in flight")
         else:
             self._cursors[_current_task_or_die()] = ActiveCursor(obj_id, conn_or_pool)
 
@@ -1083,6 +1086,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         timeout: float | None = None,
         not_idle_only: bool = False,
     ) -> typing.AsyncGenerator[T, None]:
+        clean_exit = True
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -1130,8 +1134,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     )
                 raise UnavailableTraffic("No connection are available")
             yield conn_or_pool
+        except Exception:
+            clean_exit = False
+            raise
         finally:
-            if self.release():
+            # do not release back to the pool a broken connection
+            # we need kill_cursor() to take over soon.
+            if clean_exit and self.release():
                 await asyncio.sleep(0)
 
     def release(self) -> bool:

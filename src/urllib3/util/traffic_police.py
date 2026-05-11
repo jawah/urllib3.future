@@ -864,7 +864,7 @@ class TrafficPolice(typing.Generic[T]):
                 "Timed out while waiting for conn_or_pool to become available"
             )
 
-        if signal.conn_or_pool is None:
+        if signal.conn_or_pool is None or obj_id not in self._registry:
             raise UnavailableTraffic(
                 "The signal was awaken without conn_or_pool assignment. "
                 "This means that a connection was broken, presumably in another thread."
@@ -880,6 +880,7 @@ class TrafficPolice(typing.Generic[T]):
         timeout: float | None = None,
         not_idle_only: bool = False,
     ) -> typing.Generator[T, None, None]:
+        clean_exit = True
         try:
             cursor_key = get_ident()
 
@@ -935,8 +936,14 @@ class TrafficPolice(typing.Generic[T]):
                     )
                 raise UnavailableTraffic("No connection are available")
             yield conn_or_pool
+        except Exception:
+            clean_exit = False
+            raise
         finally:
-            self.release()
+            # do not release back to the pool a broken connection
+            # we need kill_cursor() to take over soon.
+            if clean_exit:
+                self.release()
 
     def release(self) -> None:
         with self._lock:
