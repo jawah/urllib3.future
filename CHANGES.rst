@@ -1,3 +1,9 @@
+2.20.902 (2026-05-11)
+=====================
+
+- Fixed webextensions (e.g. sse/websocket) not forwarded in retries.
+- Fixed retries in high pressure (i.e. many stream unresolved in multiplexed context) while remote peer abruptly interrupt the connection.
+
 2.20.901 (2026-05-10)
 =====================
 
