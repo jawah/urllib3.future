@@ -259,6 +259,22 @@ DEFAULT_TCP_KEEPALIVE_ATTEMPT_COUNT: int = 2
 C_INT_MAX = 2**31 - 1
 CHUNK_AMT_MAX = 2**28
 
+# Bound the amount of decompressed bytes a single ``read(amt=-1)`` (or one
+# iteration of ``stream(amt=-1)``) is allowed to drain from the decoder's
+# internal buffer at once. The cap is expressed as a multiple of the most
+# recent raw read size so that small frames still produce usable chunks while
+# pathological "decompression-bomb" payloads cannot expand a single recv into
+# arbitrarily large memory allocations. See GHSA-mf9v-mfxr-j63j and
+# https://github.com/jawah/urllib3.future/issues/364
+DECODE_GROWTH_FACTOR: int = 128
+# Floor used as the reference raw size before any raw read has occurred (or
+# when the last raw read returned an unusually small amount of body bytes).
+# This is a safety net only: in practice ``_last_raw_read_size`` is already
+# populated by the time the drain path runs (the decoder only has an
+# unconsumed tail because a previous raw read fed it). 1 KiB combined with
+# ``DECODE_GROWTH_FACTOR`` still yields a sensible minimum decoded chunk.
+DECODE_MIN_RAW_REFERENCE: int = 1024
+
 HTTP1_ONLY_HEADERS = frozenset(
     {
         b"transfer-encoding",

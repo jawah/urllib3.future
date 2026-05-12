@@ -821,6 +821,24 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
             assert b"123" * 4 == response.read()
 
+    def test_chunked_gzip_stream_amt_negative_one(self) -> None:
+        # Regression test for https://github.com/jawah/urllib3.future/issues/364
+        # ``stream(amt=-1)`` over a chunked gzip body must terminate.
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            response = pool.request(
+                "GET",
+                "/chunked_gzip",
+                preload_content=False,
+                decode_content=True,
+            )
+
+            chunks: list[bytes] = []
+            for chunk in response.stream(amt=-1):
+                chunks.append(chunk)
+                assert len(chunks) < 64
+
+            assert b"".join(chunks) == b"123" * 4
+
     def test_cleanup_on_connection_error(self) -> None:
         """
         Test that connections are recycled to the pool on

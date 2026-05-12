@@ -603,6 +603,58 @@ class TestAsyncResponse:
         with pytest.raises(StopAsyncIteration):
             await stream.__anext__()
 
+    async def test_gzipped_streaming_amt_negative_one_does_not_hang(self) -> None:
+        # Async mirror of the regression test for issue #364.
+        uncompressed = b"abcdefghij" * 4096
+        compressor = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+        data = compressor.compress(uncompressed) + compressor.flush()
+
+        fp = _make_async_fp(data)
+        resp = AsyncHTTPResponse(
+            fp,
+            headers={"content-encoding": "gzip"},
+            preload_content=False,
+        )
+
+        chunks: list[bytes] = []
+        async for chunk in resp.stream(amt=-1):
+            chunks.append(chunk)
+            assert len(chunks) < 64, "stream(amt=-1) iterates too many times"
+
+        assert b"".join(chunks) == uncompressed
+
+    async def test_gzipped_stream_amt_negative_one_bounds_decoded_chunk(
+        self,
+    ) -> None:
+        # Bomb-safety regression in async path.
+        from urllib3._constant import (
+            DECODE_GROWTH_FACTOR,
+            DECODE_MIN_RAW_REFERENCE,
+        )
+
+        uncompressed = b"\x00" * (DECODE_MIN_RAW_REFERENCE * DECODE_GROWTH_FACTOR * 4)
+        compressor = zlib.compressobj(9, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+        data = compressor.compress(uncompressed) + compressor.flush()
+        assert len(uncompressed) > len(data) * DECODE_GROWTH_FACTOR
+
+        fp = _make_async_fp(data)
+        resp = AsyncHTTPResponse(
+            fp,
+            headers={"content-encoding": "gzip"},
+            preload_content=False,
+        )
+
+        stream = resp.stream(amt=-1)
+        first_chunk = await stream.__anext__()
+        assert (
+            len(first_chunk)
+            <= max(len(data), DECODE_MIN_RAW_REFERENCE) * DECODE_GROWTH_FACTOR
+        )
+        rest = b""
+        async for chunk in stream:
+            rest += chunk
+        assert first_chunk + rest == uncompressed
+
     async def test_gzipped_streaming_tell(self) -> None:
         compress = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
         uncompressed_data = b"foo"
