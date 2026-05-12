@@ -1,3 +1,13 @@
+2.20.903 (2026-05-12)
+=====================
+
+- Fixed an infinite loop in ``HTTPResponse.stream(amt=-1)`` (and ``AsyncHTTPResponse.stream(amt=-1)``) when iterating a
+  compressed (gzip / deflate / brotli / zstd) response body. Regression introduced by the decompression-bomb safeguards
+  backport: the decoder's internal unconsumed tail was never drained on the negative amt path, so the stream loop
+  kept looping forever once any tail bytes remained. The ``read(amt=-1)`` fast path now drains the decoder before
+  issuing another raw read, with the decoded chunk bounded by a reasonable growth factor of the most recent raw read so
+  the original bomb safeguard is preserved. (#364)
+
 2.20.902 (2026-05-11)
 =====================
 
