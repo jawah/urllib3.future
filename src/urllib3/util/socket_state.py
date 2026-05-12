@@ -275,7 +275,18 @@ def enable_keepalive(
     Per-platform timer tuning is best-effort and silently skipped on failure.
     Do not use outside an HTTP/1.1 connection. Ping frame is the recommended
     alternative.
+
+    If the end user already enabled tcp keepalive on the socket (e.g. via
+    ``socket_options``), this function is a no-op: their configuration prime.
     """
+
+    try:
+        already_enabled = bool(sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE))
+    except OSError:  # Defensive: edge OSes
+        return
+
+    if already_enabled:
+        return
 
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)

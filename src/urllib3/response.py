@@ -40,7 +40,12 @@ except (AttributeError, ImportError, ValueError):  # Defensive:
 
 from ._collections import HTTPHeaderDict
 from ._typing import _TYPE_BODY
-from ._constant import C_INT_MAX, CHUNK_AMT_MAX
+from ._constant import (
+    C_INT_MAX,
+    CHUNK_AMT_MAX,
+    DECODE_GROWTH_FACTOR,
+    DECODE_MIN_RAW_REFERENCE,
+)
 from .backend import LowLevelResponse, ResponsePromise
 from .exceptions import (
     BaseSSLError,
@@ -535,6 +540,11 @@ class HTTPResponse(io.IOBase):
         # Used to return the correct amount of bytes for partial read()s
         self._decoded_buffer = BytesQueueBuffer()
 
+        # Tracks the size of the last successful raw read so that
+        # ``read(amt=-1)`` can bound how much it drains from the decoder's
+        # internal buffer per call (issue #364, GHSA-mf9v-mfxr-j63j).
+        self._last_raw_read_size: int = 0
+
         self._police_officer: TrafficPolice[HTTPConnection] | None = police_officer
 
         if self._police_officer is not None:
@@ -975,6 +985,9 @@ class HTTPResponse(io.IOBase):
             if self.length_remaining is not None:
                 self.length_remaining -= data_len
 
+        if isinstance(data, (bytes, bytearray)) and data:
+            self._last_raw_read_size = len(data)
+
         return data
 
     def read1(
@@ -1041,8 +1054,37 @@ class HTTPResponse(io.IOBase):
             if amt is not None:
                 cache_content = False
 
-                if amt < 0 and len(self._decoded_buffer):
-                    return self._decoded_buffer.get(len(self._decoded_buffer))
+                if amt < 0:
+                    # Drain any pending data already buffered inside the
+                    # decoder before triggering another raw read. Without
+                    # this, ``stream(amt=-1)`` would loop forever on
+                    # ``_decoder.has_unconsumed_tail`` whenever the decoder
+                    # retains bytes (e.g., gzip body whose decoded output
+                    # exceeded the previous ``max_length`` cap). The
+                    # decoded chunk is bounded by a reasonable growth
+                    # factor of the most recent raw read so a single recv
+                    # carrying many HTTP/2/3 frames cannot expand into
+                    # arbitrarily large memory (issue #364, see also
+                    # GHSA-mf9v-mfxr-j63j).
+                    if self._decoder and self._decoder.has_unconsumed_tail:
+                        cap = (
+                            max(
+                                self._last_raw_read_size,
+                                DECODE_MIN_RAW_REFERENCE,
+                            )
+                            * DECODE_GROWTH_FACTOR
+                        )
+                        decoded_data = self._decode(
+                            b"",
+                            decode_content,
+                            flush_decoder=False,
+                            max_length=cap,
+                        )
+                        if decoded_data:
+                            self._decoded_buffer.put(decoded_data)
+
+                    if len(self._decoded_buffer):
+                        return self._decoded_buffer.get(len(self._decoded_buffer))
 
                 if amt > 0:
                     # Drain any pending data already buffered inside the

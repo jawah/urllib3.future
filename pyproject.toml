@@ -212,6 +212,7 @@ filterwarnings = [
     '''ignore:function StreamWriter.__del__:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:An exception occurred during teardown of an asyncio\.Runner:RuntimeWarning''',
     '''ignore:sock:pytest.PytestUnraisableExceptionWarning''',
+    '''ignore:.*<socket\.socket.*:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:The `hash` argument is deprecated in favor of `unsafe_hash`:DeprecationWarning''',
     '''ignore:ssl\.TLSVersion\.TLSv1 is deprecated:DeprecationWarning''',
     '''ignore:ssl\.TLSVersion\.TLSv1_1 is deprecated:DeprecationWarning''',

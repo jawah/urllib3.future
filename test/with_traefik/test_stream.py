@@ -70,6 +70,39 @@ class TestStreamResponse(TraefikTestCase):
                     f"HTTP/{resp.version / 10} stream failure"
                 )
 
+    def test_h2n3_stream_gzip_amt_negative_one(self) -> None:
+        # Regression test for https://github.com/jawah/urllib3.future/issues/364
+        # ``stream(amt=-1)`` over an HTTP/2 (or HTTP/3) gzip-encoded response
+        # used to loop forever when the decoder still had unconsumed tail
+        # bytes after the bomb-safe ``max_length`` cap was reached.
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=[self.test_resolver_raw],
+        ) as p:
+            resp = p.request("GET", "/gzip", preload_content=False)
+            assert resp.status == 200
+            assert resp.headers.get("Content-Encoding", "").lower() == "gzip"
+
+            chunks: list[bytes] = []
+            for chunk in resp.stream(amt=-1):
+                chunks.append(chunk)
+                # Defensive: at the time of writing /gzip returns < 1 KiB
+                # decoded; allow ample slack but never an infinite loop.
+                assert len(chunks) < 256, (
+                    f"stream(amt=-1) iterates too many times (HTTP/{resp.version / 10})"
+                )
+
+            try:
+                payload = loads(b"".join(chunks))
+            except JSONDecodeError as e:
+                pytest.fail(
+                    f"HTTP/{resp.version / 10} gzip stream(amt=-1) "
+                    f"did not yield decodable JSON: {e}"
+                )
+            assert payload.get("gzipped") is True
+
     def test_read_zero(self) -> None:
         with HTTPSConnectionPool(
             self.host,

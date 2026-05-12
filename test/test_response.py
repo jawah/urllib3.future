@@ -685,6 +685,61 @@ class TestResponse:
         with pytest.raises(StopIteration):
             next(stream)
 
+    def test_gzipped_streaming_amt_negative_one_does_not_hang(self) -> None:
+        # Regression test for https://github.com/jawah/urllib3.future/issues/364
+        # ``stream(amt=-1)`` used to loop forever when the gzip decoder still
+        # had unconsumed tail bytes (which always happens when the bomb-safe
+        # ``max_length`` cap was reached on the first decode call). The
+        # iterator must terminate and yield the full payload.
+        uncompressed = b"abcdefghij" * 4096  # 40 KiB, very compressible
+        compressor = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+        data = compressor.compress(uncompressed) + compressor.flush()
+
+        fp = BytesIO(data)
+        resp = HTTPResponse(
+            fp, headers={"content-encoding": "gzip"}, preload_content=False
+        )
+
+        chunks = list(resp.stream(amt=-1))
+        # Joined payload must equal original uncompressed bytes.
+        assert b"".join(chunks) == uncompressed
+        # Must terminate in a bounded number of iterations.
+        assert 0 < len(chunks) < 64
+
+    def test_gzipped_stream_amt_negative_one_bounds_decoded_chunk(self) -> None:
+        # Bomb-safety regression: even when raw input is tiny, a single
+        # ``read(amt=-1)`` must not return an unbounded amount of decoded
+        # bytes. We craft a payload that compresses extremely well and
+        # verify the first decoded chunk size is bounded by the configured
+        # growth factor relative to the most recent raw read size.
+        from urllib3._constant import (
+            DECODE_GROWTH_FACTOR,
+            DECODE_MIN_RAW_REFERENCE,
+        )
+
+        uncompressed = b"\x00" * (DECODE_MIN_RAW_REFERENCE * DECODE_GROWTH_FACTOR * 4)
+        compressor = zlib.compressobj(9, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+        data = compressor.compress(uncompressed) + compressor.flush()
+        # Sanity: ratio is high enough for the test to be meaningful.
+        assert len(uncompressed) > len(data) * DECODE_GROWTH_FACTOR
+
+        fp = BytesIO(data)
+        resp = HTTPResponse(
+            fp, headers={"content-encoding": "gzip"}, preload_content=False
+        )
+
+        stream = resp.stream(amt=-1)
+        first_chunk = next(stream)
+        # First chunk is bounded by raw_size * growth_factor (raw_size here
+        # is at least DECODE_MIN_RAW_REFERENCE due to the floor applied).
+        assert (
+            len(first_chunk)
+            <= max(len(data), DECODE_MIN_RAW_REFERENCE) * DECODE_GROWTH_FACTOR
+        )
+        # And the iterator still terminates with the full payload.
+        rest = b"".join(stream)
+        assert first_chunk + rest == uncompressed
+
     def test_gzipped_streaming_tell(self) -> None:
         compress = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
         uncompressed_data = b"foo"

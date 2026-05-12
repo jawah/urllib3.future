@@ -71,6 +71,34 @@ class TestStreamResponse(TraefikTestCase):
                     f"HTTP/{resp.version / 10} stream failure"
                 )
 
+    async def test_h2n3_stream_gzip_amt_negative_one(self) -> None:
+        # Async mirror of the regression test for issue #364.
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
+        ) as p:
+            resp = await p.request("GET", "/gzip", preload_content=False)
+            assert resp.status == 200
+            assert resp.headers.get("Content-Encoding", "").lower() == "gzip"
+
+            chunks: list[bytes] = []
+            async for chunk in resp.stream(amt=-1):
+                chunks.append(chunk)
+                assert len(chunks) < 256, (
+                    f"stream(amt=-1) iterates too many times (HTTP/{resp.version / 10})"
+                )
+
+            try:
+                payload = loads(b"".join(chunks))
+            except JSONDecodeError as e:
+                pytest.fail(
+                    f"HTTP/{resp.version / 10} gzip stream(amt=-1) "
+                    f"did not yield decodable JSON: {e}"
+                )
+            assert payload.get("gzipped") is True
+
     async def test_read_zero(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,

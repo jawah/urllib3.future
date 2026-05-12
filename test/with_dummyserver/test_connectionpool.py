@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import socket
+import sys
 import time
 import typing
 import warnings
@@ -357,6 +358,50 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             finally:
                 conn.close()
                 s.close()
+
+    @pytest.mark.skipif(
+        not sys.platform.startswith("linux"),
+        reason="TCP_KEEPIDLE introspection is Linux-specific",
+    )
+    def test_user_keepalive_settings_are_preserved(self) -> None:
+        """Regression: ``enable_keepalive`` must not override SO_KEEPALIVE
+        timers when the end user already enabled keepalive via
+        ``socket_options`` (e.g. with custom TCP_KEEPIDLE)."""
+        sentinel_idle = 4242  # distinct from DEFAULT_KEEPALIVE_IDLE_WINDOW (60)
+        # Sanity check: the value really differs from our default so that the
+        # assertion below would catch an accidental override.
+        from urllib3._constant import DEFAULT_KEEPALIVE_IDLE_WINDOW
+
+        assert sentinel_idle != int(DEFAULT_KEEPALIVE_IDLE_WINDOW)
+
+        user_socket_options = [
+            (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
+            (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+            (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, sentinel_idle),
+        ]
+
+        with HTTPConnectionPool(
+            self.host, self.port, socket_options=user_socket_options
+        ) as pool:
+            conn = pool._get_conn()
+            try:
+                # Issue a real request so that the backend's
+                # ``enable_keepalive`` path actually runs.
+                pool._make_request(conn, "GET", "/")
+                assert conn.sock is not None
+                using_keepalive = (
+                    conn.sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) > 0
+                )
+                tcp_keepidle = conn.sock.getsockopt(
+                    socket.IPPROTO_TCP, socket.TCP_KEEPIDLE
+                )
+                assert using_keepalive
+                assert tcp_keepidle == sentinel_idle, (
+                    f"enable_keepalive overrode user TCP_KEEPIDLE "
+                    f"(expected {sentinel_idle}, got {tcp_keepidle})"
+                )
+            finally:
+                conn.close()
 
     def test_connection_error_retries(self) -> None:
         """ECONNREFUSED error should raise a connection error, with retries"""
@@ -820,6 +865,24 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             )
 
             assert b"123" * 4 == response.read()
+
+    def test_chunked_gzip_stream_amt_negative_one(self) -> None:
+        # Regression test for https://github.com/jawah/urllib3.future/issues/364
+        # ``stream(amt=-1)`` over a chunked gzip body must terminate.
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            response = pool.request(
+                "GET",
+                "/chunked_gzip",
+                preload_content=False,
+                decode_content=True,
+            )
+
+            chunks: list[bytes] = []
+            for chunk in response.stream(amt=-1):
+                chunks.append(chunk)
+                assert len(chunks) < 64
+
+            assert b"".join(chunks) == b"123" * 4
 
     def test_cleanup_on_connection_error(self) -> None:
         """

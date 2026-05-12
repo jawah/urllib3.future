@@ -926,6 +926,23 @@ class TestConnectionPool(HTTPDummyServerTestCase):
 
             assert b"123" * 4 == await response.read()
 
+    async def test_chunked_gzip_stream_amt_negative_one(self) -> None:
+        # Async mirror of the regression test for issue #364.
+        async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+            response = await pool.request(
+                "GET",
+                "/chunked_gzip",
+                preload_content=False,
+                decode_content=True,
+            )
+
+            chunks: list[bytes] = []
+            async for chunk in response.stream(amt=-1):
+                chunks.append(chunk)
+                assert len(chunks) < 64
+
+            assert b"".join(chunks) == b"123" * 4
+
     async def test_cleanup_on_connection_error(self) -> None:
         """
         Test that connections are recycled to the pool on
