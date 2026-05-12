@@ -7,6 +7,7 @@
   kept looping forever once any tail bytes remained. The ``read(amt=-1)`` fast path now drains the decoder before
   issuing another raw read, with the decoded chunk bounded by a reasonable growth factor of the most recent raw read so
   the original bomb safeguard is preserved. (#364)
+- Fixed accidental override of user defined ``SO_KEEPALIVE`` when remote only support HTTP/1.
 
 2.20.902 (2026-05-11)
 =====================
