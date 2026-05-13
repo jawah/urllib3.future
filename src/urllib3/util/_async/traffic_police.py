@@ -1087,6 +1087,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         not_idle_only: bool = False,
     ) -> typing.AsyncGenerator[T, None]:
         clean_exit = True
+        conn_or_pool: T | None = None
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -1140,7 +1141,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
         finally:
             # do not release back to the pool a broken connection
             # we need kill_cursor() to take over soon.
-            if clean_exit and self.release():
+            # clean_exit=False not necessarily mean conn broken.
+            # see https://github.com/jawah/urllib3.future/issues/366
+            withhold_conn: bool = not clean_exit and getattr(
+                conn_or_pool, "is_closed", False
+            )
+
+            if not withhold_conn and self.release():
                 await asyncio.sleep(0)
 
     def release(self) -> bool:
