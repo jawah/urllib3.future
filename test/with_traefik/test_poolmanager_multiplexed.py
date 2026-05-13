@@ -259,3 +259,51 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             Retry.increment = bck_method  # type: ignore[method-assign]
 
             assert incr > 0
+
+    def test_multiplexed_retry_exhausted_returns_response_when_not_raising(
+        self,
+    ) -> None:
+        """Covers the retry-from-promise branch in ``PoolManager.get_response``.
+        Forces a deterministic 503 via ``/status/503`` so the retry path is taken on every attempt;
+        """
+        with PoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+        ) as pool:
+            retry = Retry(
+                1, status_forcelist=[503], backoff_factor=0.0, raise_on_status=False
+            )
+            promise = pool.urlopen(
+                "GET",
+                f"{self.https_url}/status/503",
+                retries=retry,
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+
+            response = pool.get_response(promise=promise)
+            assert response is not None
+            # Retries exhausted but raise_on_status=False -> final 503 returned.
+            assert response.status == 503
+
+    def test_multiplexed_retry_exhausted_raises_when_configured(self) -> None:
+        """Companion to the previous test -- with ``raise_on_status=True`` the
+        exhaustion path drains the response and re-raises ``MaxRetryError``.
+        """
+        with PoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+        ) as pool:
+            retry = Retry(
+                1, status_forcelist=[503], backoff_factor=0.0, raise_on_status=True
+            )
+            promise = pool.urlopen(
+                "GET",
+                f"{self.https_url}/status/503",
+                retries=retry,
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+
+            with pytest.raises(MaxRetryError):
+                pool.get_response(promise=promise)

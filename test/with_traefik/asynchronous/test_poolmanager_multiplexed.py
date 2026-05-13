@@ -261,3 +261,50 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             Retry.increment = bck_method  # type: ignore[method-assign]
 
             assert incr > 0
+
+    async def test_multiplexed_retry_exhausted_returns_response_when_not_raising(
+        self,
+    ) -> None:
+        """Async mirror covering ``src/urllib3/_async/poolmanager.py`` retry-
+        from-promise branch in ``AsyncPoolManager.get_response``.
+        """
+        async with AsyncPoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver_raw,
+        ) as pool:
+            retry = Retry(
+                1, status_forcelist=[503], backoff_factor=0.0, raise_on_status=False
+            )
+            promise = await pool.urlopen(
+                "GET",
+                f"{self.https_url}/status/503",
+                retries=retry,
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+
+            response = await pool.get_response(promise=promise)
+            assert response is not None
+            assert response.status == 503
+
+    async def test_multiplexed_retry_exhausted_raises_when_configured(
+        self,
+    ) -> None:
+        """Async companion -- exhaustion + raise_on_status=True path."""
+        async with AsyncPoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver_raw,
+        ) as pool:
+            retry = Retry(
+                1, status_forcelist=[503], backoff_factor=0.0, raise_on_status=True
+            )
+            promise = await pool.urlopen(
+                "GET",
+                f"{self.https_url}/status/503",
+                retries=retry,
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+
+            with pytest.raises(MaxRetryError):
+                await pool.get_response(promise=promise)

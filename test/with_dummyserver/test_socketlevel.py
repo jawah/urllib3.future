@@ -2912,3 +2912,135 @@ class TestContentFraming(SocketDummyServerTestCase):
 
             sent_bytes = bytes(buffer)
             assert sent_bytes.endswith(expected)
+
+
+class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
+    """Covers the ``ConnectionTerminated`` event branch in ``__exchange_until``
+    where the server closes the connection after the request was sent but
+    before any HTTP/1.1 response headers are emitted. See ``"Remote end closed connection without response"``
+    raise (and async mirror).
+    """
+
+    def test_server_closes_socket_before_status_line(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            # Drain the request, then close immediately without sending anything.
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+            sock.close()
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises(
+                ProtocolError, match="Remote end closed connection without response"
+            ):
+                pool.request("GET", "/")
+
+
+class TestInvalidHTTPResponse(SocketDummyServerTestCase):
+    """Covers the h11 ``RemoteProtocolError`` -> ``InvalidHeader`` translation
+    in ``__exchange_until`` (lines ~1150-1155 sync, async mirror). h11 raises
+    400 with a message containing ``header`` when it sees a malformed response
+    header on the wire.
+    """
+
+    def test_garbage_header_separator_raises_invalid_header(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+            # Status line is OK; the header line is malformed (no colon).
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\nNoColonHeaderLine\r\nContent-Length: 0\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises((InvalidHeader, ProtocolError)):
+                pool.request("GET", "/")
+
+
+class TestPartialBodyClose(SocketDummyServerTestCase):
+    """Covers the alternative ``IncompleteRead`` message-string parsing path
+    when h11 surfaces a ``RemoteProtocolError`` with
+    ``peer closed connection without sending complete message body``. This is
+    distinct from ``InvalidBodyLengthError`` which already has structured
+    attributes and is covered by ``TestBadContentLength``.
+    """
+
+    def test_server_closes_after_partial_body(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+            # Announce 50 bytes, send 10, then drop the connection.
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Length: 50\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"\r\n"
+                b"0123456789"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            resp = pool.request("GET", "/", preload_content=False, retries=False)
+            with pytest.raises((IncompleteRead, ProtocolError)):
+                resp.read()
+
+
+class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
+    """Covers the ``hasattr(chunks, "__aiter__")`` rejection branch in
+    ``src/urllib3/connection.py`` request body sending path. A synchronous
+    connection cannot drive an ``async`` iterator, so the library raises
+    ``RuntimeError`` rather than silently mis-sending the body.
+    """
+
+    def test_async_iter_body_raises_runtime_error(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            # Drain whatever headers arrive, then echo back a minimal 200 so
+            # the request lifecycle can complete cleanly if it ever gets that
+            # far (it should not -- RuntimeError fires before any body byte).
+            buf = b""
+            try:
+                while b"\r\n\r\n" not in buf:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            except OSError:
+                pass
+            finally:
+                sock.close()
+
+        async def _async_body() -> typing.AsyncIterator[bytes]:
+            yield b"hello"
+            yield b"world"
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises(
+                RuntimeError,
+                match="Unable to send an async iterable through a synchronous connection",
+            ):
+                pool.urlopen(  # type: ignore[call-overload]
+                    "POST",
+                    "/",
+                    body=_async_body(),
+                    chunked=True,
+                )

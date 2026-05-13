@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client as httplib
 import ssl
+import threading
 import typing
 from socket import error as SocketError
 from ssl import SSLError as BaseSSLError
@@ -585,3 +586,76 @@ class TestConnectionPool:
                 timeout = Timeout(1, 1, 1)
                 with pytest.raises(ReadTimeoutError):
                     pool._make_request(conn, "", "", timeout=timeout)
+
+    def test_legacy_queue_cls_emits_deprecation_warning(self) -> None:
+        # Covers connectionpool.py: warns + auto-fallback to TrafficPolice when
+        # QueueCls is not a TrafficPolice subclass. We also exercise the
+        # TypeError fallback branch by giving a QueueCls whose constructor
+        # rejects the ``concurrency`` kwarg -- but TrafficPolice supplants it
+        # via the auto-fallback, so the second pool creation succeeds.
+        import queue
+
+        class LegacyQueuePool(HTTPConnectionPool):
+            QueueCls = queue.LifoQueue  # type: ignore[assignment]
+
+        with pytest.warns(
+            DeprecationWarning, match="QueueCls no longer support typical queue"
+        ):
+            pool = LegacyQueuePool(host="localhost", maxsize=1)
+        # Auto-fallback should have restored TrafficPolice on the instance.
+        from urllib3.util.traffic_police import TrafficPolice
+
+        assert pool.QueueCls is TrafficPolice  # type: ignore[comparison-overlap]
+        pool.close()
+
+    def test_keepalive_idle_window_clamps_to_minimum(self) -> None:
+        # Covers connectionpool.py keepalive_idle_window clamp to
+        # MINIMAL_KEEPALIVE_IDLE_WINDOW when an absurdly small value is given.
+        from urllib3._constant import MINIMAL_KEEPALIVE_IDLE_WINDOW
+
+        captured: dict[str, typing.Any] = {}
+
+        real_thread = threading.Thread
+
+        def _capture(*args: typing.Any, **kwargs: typing.Any) -> threading.Thread:
+            captured["args"] = kwargs.get("args", args[1] if len(args) > 1 else ())
+            # Return a daemon thread that never starts the real task.
+            t = real_thread(target=lambda: None)
+            return t
+
+        with patch("urllib3.connectionpool.threading.Thread", side_effect=_capture):
+            pool = HTTPConnectionPool(
+                host="localhost",
+                maxsize=1,
+                background_watch_delay=0.1,
+                keepalive_idle_window=0.001,
+            )
+            try:
+                # args = (proxy(self), background_watch_delay, keepalive_delay, keepalive_idle_window)
+                assert captured["args"][3] >= MINIMAL_KEEPALIVE_IDLE_WINDOW
+            finally:
+                pool.close()
+
+    def test_background_watch_delay_clamped_below_idle_window(self) -> None:
+        # Covers connectionpool.py background_watch_delay > keepalive_idle_window
+        # override branch.
+        captured: dict[str, typing.Any] = {}
+
+        real_thread = threading.Thread
+
+        def _capture(*args: typing.Any, **kwargs: typing.Any) -> threading.Thread:
+            captured["args"] = kwargs.get("args", args[1] if len(args) > 1 else ())
+            return real_thread(target=lambda: None)
+
+        with patch("urllib3.connectionpool.threading.Thread", side_effect=_capture):
+            pool = HTTPConnectionPool(
+                host="localhost",
+                maxsize=1,
+                background_watch_delay=5.0,
+                keepalive_idle_window=1.5,
+            )
+            try:
+                # background_watch_delay should have been reduced to idle window.
+                assert captured["args"][1] <= 1.5
+            finally:
+                pool.close()

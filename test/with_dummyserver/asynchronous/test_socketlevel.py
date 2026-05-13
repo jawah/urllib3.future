@@ -1,5 +1,6 @@
 import pytest
 from urllib3 import AsyncHTTPConnectionPool
+from urllib3.exceptions import IncompleteRead, InvalidHeader, ProtocolError
 
 from dummyserver.testcase import SocketDummyServerTestCase
 from threading import Event
@@ -48,3 +49,74 @@ class TestSocketClosing(SocketDummyServerTestCase):
             response = await pool.request("GET", "/", retries=0)
             assert response.status == 200
             assert (await response.data) == b"Response 1"
+
+
+@pytest.mark.asyncio
+class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
+    """Async mirror of the sync test of the same name in
+    ``test/with_dummyserver/test_socketlevel.py``. Exercises the
+    ``"Remote end closed connection without response"`` raise in
+    ``src/urllib3/backend/_async/hface.py`` ``__exchange_until``.
+    """
+
+    async def test_server_closes_socket_before_status_line(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+            sock.close()
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            with pytest.raises(
+                ProtocolError, match="Remote end closed connection without response"
+            ):
+                await pool.request("GET", "/")
+
+
+@pytest.mark.asyncio
+class TestInvalidHTTPResponse(SocketDummyServerTestCase):
+    """Async mirror covering the malformed-header path."""
+
+    async def test_garbage_header_separator_raises_invalid_header(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\nNoColonHeaderLine\r\nContent-Length: 0\r\n\r\n"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            with pytest.raises((InvalidHeader, ProtocolError)):
+                await pool.request("GET", "/")
+
+
+@pytest.mark.asyncio
+class TestPartialBodyClose(SocketDummyServerTestCase):
+    """Async mirror covering the partial-body close path."""
+
+    async def test_server_closes_after_partial_body(self) -> None:
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Length: 50\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"\r\n"
+                b"0123456789"
+            )
+            sock.close()
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            resp = await pool.request("GET", "/", preload_content=False, retries=False)
+            with pytest.raises((IncompleteRead, ProtocolError)):
+                await resp.read()

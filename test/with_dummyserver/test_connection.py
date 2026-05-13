@@ -150,3 +150,87 @@ def test_invalid_tunnel_scheme(pool: HTTPConnectionPool) -> None:
         str(e.value)
         == "Invalid proxy scheme for tunneling: 'socks', must be either 'http' or 'https'"
     )
+
+
+def test_is_connected_false_after_keepalive_delay_elapsed(
+    pool: HTTPConnectionPool,
+) -> None:
+    """Covers ``HTTPConnection.is_connected`` early-return branch when the
+    connection has outlived its configured ``keepalive_delay`` window.
+    """
+    import time
+
+    conn = pool._get_conn()
+    conn.connect()
+
+    assert conn.is_connected is True
+
+    # Force the connection to look as if it was established a long time ago
+    # and configure a vanishingly small keepalive delay. The next is_connected
+    # probe should reject it without performing the os-level liveness check.
+    conn._keepalive_delay = 0.001
+    conn._connected_at = time.monotonic() - 10.0
+
+    assert conn.is_connected is False
+
+    conn.close()
+
+
+def test_is_connected_false_when_socket_fileno_invalid(
+    pool: HTTPConnectionPool,
+) -> None:
+    """Covers ``HTTPConnection.is_connected`` early-return at
+    ``src/urllib3/connection.py:310`` when the underlying socket has been
+    closed at the file-descriptor level (``fileno() == -1``).
+    """
+    conn = pool._get_conn()
+    conn.connect()
+
+    assert conn.is_connected is True
+
+    # Forcefully close the socket without going through conn.close() so that
+    # _protocol is preserved and only the fileno()==-1 branch fires.
+    assert conn.sock is not None
+    conn.sock.close()
+
+    assert conn.is_connected is False
+
+    conn.close()
+
+
+def test_aws_style_send_override_typeerror_fallback() -> None:
+    """Covers ``src/urllib3/connection.py:548-554`` -- when a subclass
+    overrides ``send()`` with a signature that rejects ``eot`` (as the
+    historic ``botocore.awsrequest.AWSConnection`` did), the request path
+    must fall back to ``super().send(b"", eot=True)`` so that uploads still
+    terminate cleanly.
+    """
+    from urllib3.connection import HTTPConnection
+
+    captured: dict[str, int] = {"calls": 0, "fallbacks": 0}
+
+    class AWSStyleHTTPConnection(HTTPConnection):
+        def send(
+            self,
+            data: typing.Any,
+            *,
+            eot: bool = False,
+        ) -> typing.Any:
+            captured["calls"] += 1
+            if data == b"" and eot:
+                captured["fallbacks"] += 1
+                raise TypeError("send() got an unexpected keyword argument 'eot'")
+            return super().send(data, eot=eot)
+
+    class AWSStylePool(HTTPConnectionPool):
+        ConnectionCls = AWSStyleHTTPConnection
+
+    server.setup_class()
+    try:
+        with AWSStylePool(server.host, server.port) as pool:
+            resp = pool.request("POST", "/echo", body=b"hello-aws-style")
+            assert resp.status == 200
+            assert b"hello-aws-style" in resp.data
+            assert captured["fallbacks"] == 1
+    finally:
+        server.teardown_class()
