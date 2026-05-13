@@ -111,6 +111,19 @@ class TestAsyncResponse:
         r = AsyncHTTPResponse(None)  # type: ignore[arg-type]
         assert await r.data is None
 
+    async def test_non_integer_status_falls_back_to_zero(self) -> None:
+        # Covers AsyncHTTPResponse.__init__ ValueError fallback when the
+        # status cannot be cast to int. Historically supported by
+        # http.client's broken httplib. See src/urllib3/_async/response.py.
+        r = AsyncHTTPResponse(status="not-a-number")  # type: ignore[arg-type]
+        assert r.status == 0
+
+    async def test_msg_kwarg_emits_deprecation_warning(self) -> None:
+        # Covers AsyncHTTPResponse.__init__ DeprecationWarning emitted when
+        # the legacy ``msg=`` keyword is supplied.
+        with pytest.warns(DeprecationWarning, match="msg=.* is deprecated"):
+            AsyncHTTPResponse(msg="legacy")  # type: ignore[arg-type]
+
     async def test_preload(self) -> None:
         fp = _make_async_fp(b"foo")
 

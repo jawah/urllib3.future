@@ -318,13 +318,16 @@ class HfaceBackend(BaseBackend):
                     self._max_tolerable_delay_for_upgrade += (
                         self.conn_info.tls_handshake_latency.total_seconds()
                     )
-                self._max_tolerable_delay_for_upgrade *= 10.0
-                # we can, in rare case get self._max_tolerable_delay_for_upgrade == 0.0
-                # we want to avoid this at all cost.
-                if self._max_tolerable_delay_for_upgrade <= 0.01:
-                    self._max_tolerable_delay_for_upgrade = 3.0
-            else:  # by default (safe/conservative fallback) to 3000ms
-                self._max_tolerable_delay_for_upgrade = 3.0
+                # initial rtt for HTTP/3 is set to 333ms
+                # we need to let the QUIC state machine
+                # to start loss detector at least once or
+                # two before giving up.
+                self._max_tolerable_delay_for_upgrade = max(
+                    self._max_tolerable_delay_for_upgrade,
+                    1.0,
+                )
+            else:  # by default (safe/conservative fallback) to 1000ms (3x 333ms rrt initial)
+                self._max_tolerable_delay_for_upgrade = 1.0
 
             if upgradable_svn == HttpVersion.h3:
                 if self._preemptive_quic_cache is not None:

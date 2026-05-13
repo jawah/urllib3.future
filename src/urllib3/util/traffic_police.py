@@ -881,6 +881,7 @@ class TrafficPolice(typing.Generic[T]):
         not_idle_only: bool = False,
     ) -> typing.Generator[T, None, None]:
         clean_exit = True
+        conn_or_pool: T | None = None
         try:
             cursor_key = get_ident()
 
@@ -942,7 +943,13 @@ class TrafficPolice(typing.Generic[T]):
         finally:
             # do not release back to the pool a broken connection
             # we need kill_cursor() to take over soon.
-            if clean_exit:
+            # clean_exit=False not necessarily mean conn broken.
+            # see https://github.com/jawah/urllib3.future/issues/366
+            withhold_conn: bool = not clean_exit and getattr(
+                conn_or_pool, "is_closed", False
+            )
+
+            if not withhold_conn:
                 self.release()
 
     def release(self) -> None:

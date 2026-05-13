@@ -117,6 +117,12 @@ class TestResponse:
         assert r.data == b"foo"
         assert r._body == b"foo"
 
+    def test_non_integer_status_falls_back_to_zero(self) -> None:
+        # Covers HTTPResponse.__init__ ValueError fallback when the status
+        # cannot be cast to int. See src/urllib3/response.py.
+        r = HTTPResponse(status="not-a-number")  # type: ignore[arg-type]
+        assert r.status == 0
+
     def test_cache_content_preload_false(self) -> None:
         fp = BytesIO(b"foo")
         r = HTTPResponse(fp, preload_content=False)

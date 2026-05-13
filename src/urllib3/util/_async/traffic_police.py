@@ -600,6 +600,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
             del self._registry[eligible_obj_id]
             del self._container[eligible_obj_id]
 
+            await self.put(
+                ItemPlaceholder(),  # type: ignore[arg-type]
+                immediately_unavailable=True,
+                block=block,
+            )
+
             try:
                 await eligible_conn_or_pool.close()
             except Exception:
@@ -696,6 +702,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
             and id(conn_or_pool) not in self._registry
         ):
             await self._sacrifice_first_idle(block=block)
+
+            # we need this because we await conn close
+            # in sacrifice idle, and asyncio scheduler
+            # yield control to another task.
+            # so we placed a placeholder to avoid
+            # another task taking the spot.
+            if self._cursor is not None:
+                del self._registry[self._cursor.obj_id]
+                self._unset_cursor()
 
         should_schedule_another_task: bool = False
         current_task = _current_task_or_die()
@@ -1087,6 +1102,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         not_idle_only: bool = False,
     ) -> typing.AsyncGenerator[T, None]:
         clean_exit = True
+        conn_or_pool: T | None = None
         try:
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
@@ -1140,7 +1156,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
         finally:
             # do not release back to the pool a broken connection
             # we need kill_cursor() to take over soon.
-            if clean_exit and self.release():
+            # clean_exit=False not necessarily mean conn broken.
+            # see https://github.com/jawah/urllib3.future/issues/366
+            withhold_conn: bool = not clean_exit and getattr(
+                conn_or_pool, "is_closed", False
+            )
+
+            if not withhold_conn and self.release():
                 await asyncio.sleep(0)
 
     def release(self) -> bool:
