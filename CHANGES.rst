@@ -1,3 +1,11 @@
+2.20.904 (2026-05-13)
+=====================
+
+- Fixed ``PoolManager.get_response`` (and ``AsyncPoolManager.get_response``) crashing with ``AssertionError`` when a
+  (manual) multiplexed request reached the retry-on-status branch (e.g. ``Retry(status_forcelist=[503])``). The branch
+  erroneously looked up a redirect ``Location`` header and ``assert isinstance(redirect_location, str)`` failed.
+- Fixed withholding of non broken connection in read phase after one non fatal exception. (#366)
+
 2.20.903 (2026-05-12)
 =====================
 
