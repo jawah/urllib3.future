@@ -766,9 +766,6 @@ class PoolManager(RequestMethods):
                 _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
             )
 
-            redirect_location = response.get_redirect_location()
-            assert isinstance(redirect_location, str)
-
             try:
                 retries = retries.increment(
                     method, url, response=response, _pool=response._pool
@@ -784,7 +781,7 @@ class PoolManager(RequestMethods):
             log.debug("Retry: %s", url)
             new_promise = self.urlopen(
                 method,
-                urljoin(url, redirect_location),
+                url,
                 True,
                 body=body,
                 headers=headers,
