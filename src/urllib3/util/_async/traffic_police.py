@@ -600,6 +600,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
             del self._registry[eligible_obj_id]
             del self._container[eligible_obj_id]
 
+            await self.put(
+                ItemPlaceholder(),  # type: ignore[arg-type]
+                immediately_unavailable=True,
+                block=block,
+            )
+
             try:
                 await eligible_conn_or_pool.close()
             except Exception:
@@ -696,6 +702,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
             and id(conn_or_pool) not in self._registry
         ):
             await self._sacrifice_first_idle(block=block)
+
+            # we need this because we await conn close
+            # in sacrifice idle, and asyncio scheduler
+            # yield control to another task.
+            # so we placed a placeholder to avoid
+            # another task taking the spot.
+            if self._cursor is not None:
+                del self._registry[self._cursor.obj_id]
+                self._unset_cursor()
 
         should_schedule_another_task: bool = False
         current_task = _current_task_or_die()
