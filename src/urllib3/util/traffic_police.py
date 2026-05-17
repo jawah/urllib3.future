@@ -297,30 +297,32 @@ class TrafficPolice(typing.Generic[T]):
                 if obj_id in self._container:
                     return conn_or_pool
 
-        if not block or not eligible_object_count:
-            return None
+            if not block or not eligible_object_count:
+                return None
 
-        signal = self._register_signal(
-            None,
-            TrafficState.USED,
-            TrafficState.SATURATED,
-        )
+            signal = self._register_signal(
+                None,
+                TrafficState.USED,
+                TrafficState.SATURATED,
+            )
 
         signal.event.wait()
 
         if signal.conn_or_pool is None:
             return None
 
-        for mk in self._map.keys_for(signal.conn_or_pool):
-            if self._map_types[mk] is not traffic_type:
-                continue
-            return signal.conn_or_pool
+        with self._lock:
+            for mk in self._map.keys_for(signal.conn_or_pool):
+                if self._map_types[mk] is not traffic_type:
+                    continue
+                return signal.conn_or_pool
+
+            any_remaining_eligible_object = (
+                next(self._map_types.keys_for(traffic_type).__iter__(), None)
+                is not None
+            )
 
         self.release()
-
-        any_remaining_eligible_object = (
-            next(self._map_types.keys_for(traffic_type).__iter__(), None) is not None
-        )
 
         if not any_remaining_eligible_object:
             return None
