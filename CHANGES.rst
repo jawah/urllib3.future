@@ -1,3 +1,11 @@
+2.20.905 (2026-05-17)
+=====================
+
+- Fixed performance and reliability issue when using blind multiplexing promise resolution at scale. (#369)
+  Issuing many request using ``multiplexed=True`` and attempting to resolve them unordered (blind ``get_response``)
+  could lead to significant performance downside itself leading to possible hangs (async or sync).
+- Added explicit support for Python 3.15
+
 2.20.904 (2026-05-13)
 =====================
 

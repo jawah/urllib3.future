@@ -875,7 +875,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             async with self.pool.borrow(
                 promise or ResponsePromise,
                 block=promise is not None,
-                not_idle_only=promise is None,
+                not_idle_only=True,
             ) as conn:
                 try:
                     response = await conn.getresponse(

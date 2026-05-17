@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from asyncio import sleep
 from random import randint
 from test import notMacOS
@@ -308,3 +309,47 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
 
             with pytest.raises(MaxRetryError):
                 await pool.get_response(promise=promise)
+
+    async def test_multiplexed_concurrent_get_response_drain(self) -> None:
+        """Regression: concurrent ``get_response()`` callers on a single
+        multiplexed pool must each receive a distinct response while any
+        promises remain, then ``None`` once the pool is drained.
+
+        This guards against races in ``_find_by`` / ``TrafficPolice`` where
+        two or more tasks calling ``get_response()`` simultaneously could
+        otherwise corrupt the shared connection state (e.g. ``ResponseNotReady``
+        or ``RecursionError`` reported under high producer count).
+        """
+        async with AsyncPoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+        ) as pool:
+            promises = await asyncio.gather(
+                *[
+                    pool.urlopen("GET", f"{self.https_url}/get", multiplexed=True)
+                    for _ in range(32)
+                ]
+            )
+
+            assert len(promises) == 32
+            assert all(isinstance(p, ResponsePromise) for p in promises)
+
+            for iter_count in range(16):
+                responses = await asyncio.gather(
+                    pool.get_response(),
+                    pool.get_response(),
+                    pool.get_response(),
+                    pool.get_response(),
+                )
+
+                if iter_count < 8:
+                    assert all(r is not None for r in responses), (
+                        f"iter {iter_count}: expected 4 responses, "
+                        f"got {[r is not None for r in responses]}"
+                    )
+                    assert all(r.status == 200 for r in responses if r is not None)
+                else:
+                    assert all(r is None for r in responses), (
+                        f"iter {iter_count}: expected pool drained, "
+                        f"got {[r is not None for r in responses]}"
+                    )

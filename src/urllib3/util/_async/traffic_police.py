@@ -17,6 +17,7 @@ from ..traffic_police import (
     ItemPlaceholder,
 )
 from ...contrib.ssa._timeout import timeout as ctx_expire_in
+from ..._collections import GroupedDict
 
 if typing.TYPE_CHECKING:
     from ..._async.connection import AsyncHTTPConnection
@@ -410,8 +411,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self._registry: dict[int, T] = {}
         self._container: dict[int, T] = {}
 
-        self._map: dict[int | PoolKey, T] = {}
-        self._map_types: dict[int | PoolKey, type] = {}
+        self._map: GroupedDict[int | PoolKey, T] = GroupedDict(key_fn=id)
+        self._map_types: GroupedDict[int | PoolKey, type] = GroupedDict()
 
         self._shutdown: bool = False
 
@@ -496,62 +497,49 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
     async def _find_by(self, traffic_type: type, block: bool = True) -> T | None:
         """Find the first available conn or pool that is linked to at least one traffic type."""
-        any_of: list[T] = []
+        eligible_object_count = 0
 
-        for k, v in self._map_types.items():
-            if v is traffic_type:
-                conn_or_pool = self._map[k]
-                obj_id = id(conn_or_pool)
+        for tk in self._map_types.keys_for(traffic_type):
+            eligible_object_count += 1
 
-                if obj_id in self._container:
-                    return conn_or_pool
+            conn_or_pool = self._map[tk]
+            obj_id = id(conn_or_pool)
 
-                any_of.append(conn_or_pool)
+            if obj_id in self._container:
+                return conn_or_pool
 
-        if not block:
+        if not block or not eligible_object_count:
             return None
 
-        if any_of:
-            signals = [
-                self._signals.register(
-                    conn_or_pool, TrafficState.USED, TrafficState.SATURATED
-                )
-                for conn_or_pool in any_of
-            ]
+        signal = self._signals.register(
+            None,
+            TrafficState.USED,
+            TrafficState.SATURATED,
+        )
 
-            coros_to_signal: dict[asyncio.Task[typing.Any], AsyncPendingSignal[T]] = {
-                asyncio.ensure_future(s.event.wait()): s for s in signals
-            }
-            futs = list(coros_to_signal.keys())
+        await signal.event.wait()
 
-            try:
-                done, pending = await asyncio.wait(
-                    futs, return_when=asyncio.FIRST_COMPLETED
-                )
-            except asyncio.CancelledError:
-                for task, signal in coros_to_signal.items():
-                    self._signals.unregister(signal)
-                    task.cancel()
+        if signal.conn_or_pool is None:
+            return None
 
-                await asyncio.gather(*futs, return_exceptions=True)
-            else:
-                for task in pending:
-                    task.cancel()
+        for mk in self._map.keys_for(signal.conn_or_pool):
+            if self._map_types[mk] is not traffic_type:
+                continue
+            return signal.conn_or_pool
 
-                first_coro = done.pop()
-                target_signal = coros_to_signal[first_coro]
+        self.release()
 
-                for signal in signals:
-                    if target_signal == signal:
-                        continue
+        any_remaining_eligible_object = (
+            next(self._map_types.keys_for(traffic_type).__iter__(), None) is not None
+        )
 
-                    self._signals.unregister(signal)
+        if not any_remaining_eligible_object:
+            return None
 
-                await asyncio.gather(*pending, return_exceptions=True)
-
-                return target_signal.target_conn_or_pool
-
-        return None
+        return await self._find_by(
+            traffic_type=traffic_type,
+            block=block,
+        )
 
     async def kill_cursor(self) -> None:
         """In case there is no other way, a conn or pool may be unusable and should be destroyed.
@@ -1117,7 +1105,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
                                 raise AtomicTraffic(
                                     "Seeking to locate a connection when having another one used, did you forget a call to release?"
                                 )
-                            active_cursor.depth += 1
                         else:
                             self._cursors[_current_task_or_die()] = ActiveCursor(
                                 obj_id, conn_or_pool
@@ -1232,7 +1219,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 else id(traffic_indicator)
             )
             return key in self._map
-        return await self._find_by(traffic_indicator) is not None
+
+        pre_acquired_conn: bool = self.busy
+
+        try:
+            return await self._find_by(traffic_indicator) is not None
+        finally:
+            if not pre_acquired_conn and self.busy:
+                self.release()
 
     def __repr__(self) -> str:
         is_saturated = self.bag_only_saturated
