@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock, Event, get_ident
 
+from .._collections import GroupedDict
+
 if typing.TYPE_CHECKING:
     from ..backend._base import ResponsePromise
     from ..connection import HTTPConnection
@@ -146,8 +148,8 @@ class TrafficPolice(typing.Generic[T]):
 
         #: we want to keep a mapping to know what object belong to what conn_or_pool
         #: this allows basic GPS
-        self._map: dict[int | PoolKey, T] = {}
-        self._map_types: dict[int | PoolKey, type] = {}
+        self._map: GroupedDict[int | PoolKey, T] = GroupedDict(key_fn=id)
+        self._map_types: GroupedDict[int | PoolKey, type] = GroupedDict()
 
         #: the police officer is unable to do more than one thread order at a time.
         self._lock = RLock()
@@ -281,19 +283,52 @@ class TrafficPolice(typing.Generic[T]):
             del self._map[key]
             del self._map_types[key]
 
-    def _find_by(self, traffic_type: type) -> T | None:
+    def _find_by(self, traffic_type: type, block: bool = True) -> T | None:
         """Find the first available conn or pool that is linked to at least one traffic type."""
-        for k, v in self._map_types.items():
-            if v is traffic_type:
-                conn_or_pool = self._map[k]
+        eligible_object_count = 0
 
-                if conn_or_pool.is_idle:
-                    continue
-                with self._lock:
-                    obj_id = id(conn_or_pool)
-                    if obj_id in self._container:
-                        return conn_or_pool
-        return None
+        with self._lock:
+            for kt in self._map_types.keys_for(traffic_type):
+                eligible_object_count += 1
+
+                conn_or_pool = self._map[kt]
+                obj_id = id(conn_or_pool)
+
+                if obj_id in self._container:
+                    return conn_or_pool
+
+        if not block or not eligible_object_count:
+            return None
+
+        signal = self._register_signal(
+            None,
+            TrafficState.USED,
+            TrafficState.SATURATED,
+        )
+
+        signal.event.wait()
+
+        if signal.conn_or_pool is None:
+            return None
+
+        for mk in self._map.keys_for(signal.conn_or_pool):
+            if self._map_types[mk] is not traffic_type:
+                continue
+            return signal.conn_or_pool
+
+        self.release()
+
+        any_remaining_eligible_object = (
+            next(self._map_types.keys_for(traffic_type).__iter__(), None) is not None
+        )
+
+        if not any_remaining_eligible_object:
+            return None
+
+        return self._find_by(
+            traffic_type=traffic_type,
+            block=block,
+        )
 
     def kill_cursor(self) -> None:
         """In case there is no other way, a conn or pool may be unusable and should be destroyed.
@@ -307,8 +342,10 @@ class TrafficPolice(typing.Generic[T]):
 
             self._map_clear(active_cursor.conn_or_pool)
 
-            if active_cursor.obj_id not in self._registry:
-                raise UnavailableTraffic(  # Defensive: bug-situation-detection
+            if (
+                active_cursor.obj_id not in self._registry
+            ):  # Defensive: bug-situation-detection
+                raise UnavailableTraffic(
                     "Our internal thread safety mechanism seems out of sync. This is likely a bug in urllib3-future. "
                     "You may open a ticket at https://github.com/jawah/urllib3.future for support."
                 )
@@ -513,7 +550,7 @@ class TrafficPolice(typing.Generic[T]):
 
                     if cursor_key not in self._cursor:
                         self._cursor[cursor_key] = ActiveCursor(obj_id, conn_or_pool)
-                    else:
+                    else:  # Defensive: unreachable
                         # this branch SHOULD never be evaluated!
                         self._cursor[cursor_key].depth += 1
 
@@ -699,8 +736,10 @@ class TrafficPolice(typing.Generic[T]):
         if self.parent is not None:
             try:
                 self.parent.forget(traffic_indicator)
-            except UnavailableTraffic:
-                pass  # Defensive:
+            except (
+                UnavailableTraffic
+            ):  # Defensive: unless specific bypasses higher/mock
+                pass
 
     @contextlib.contextmanager
     def locate_or_hold(
@@ -887,31 +926,27 @@ class TrafficPolice(typing.Generic[T]):
 
             if traffic_indicator:
                 if isinstance(traffic_indicator, type):
-                    with self._lock:
-                        conn_or_pool = self._find_by(traffic_indicator)
+                    conn_or_pool = self._find_by(traffic_indicator)
 
-                        if conn_or_pool:
-                            obj_id = id(conn_or_pool)
+                    if conn_or_pool:
+                        obj_id = id(conn_or_pool)
 
-                            if self.busy:
-                                active_cursor = self._cursor[cursor_key]
+                        if self.busy:
+                            active_cursor = self._cursor[cursor_key]
 
-                                if active_cursor.obj_id != obj_id:
-                                    raise AtomicTraffic(
-                                        "Seeking to locate a connection when having another one used, did you forget a call to release?"
-                                    )
-
+                            if active_cursor.obj_id != obj_id:
+                                raise AtomicTraffic(
+                                    "Seeking to locate a connection when having another one used, did you forget a call to release?"
+                                )
+                        else:
                             if not self.concurrency:
                                 del self._container[obj_id]
 
-                            if cursor_key not in self._cursor:
-                                self._cursor[cursor_key] = ActiveCursor(
-                                    obj_id,
-                                    conn_or_pool,
-                                )
-                            else:
-                                self._cursor[cursor_key].depth += 1
-
+                        if cursor_key not in self._cursor:
+                            self._cursor[cursor_key] = ActiveCursor(
+                                obj_id,
+                                conn_or_pool,
+                            )
                 else:
                     conn_or_pool = self.locate(
                         traffic_indicator, block=block, timeout=timeout
@@ -1028,7 +1063,13 @@ class TrafficPolice(typing.Generic[T]):
             with self._lock:
                 return key in self._map
 
-        return self._find_by(traffic_indicator) is not None
+        pre_acquired_conn: bool = self.busy
+
+        try:
+            return self._find_by(traffic_indicator) is not None
+        finally:
+            if not pre_acquired_conn and self.busy:
+                self.release()
 
     def __repr__(self) -> str:
         with self._lock:

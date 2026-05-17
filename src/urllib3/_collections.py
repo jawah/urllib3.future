@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typing
 from collections import OrderedDict
+from collections.abc import Mapping as _Mapping
 from enum import Enum, auto
 from functools import lru_cache
 from threading import RLock
@@ -17,7 +18,11 @@ if typing.TYPE_CHECKING:
         def __getitem__(self, key: str) -> str: ...
 
 
-__all__ = ["RecentlyUsedContainer", "HTTPHeaderDict"]
+__all__ = [
+    "RecentlyUsedContainer",
+    "HTTPHeaderDict",
+    "GroupedDict",
+]
 
 
 # Key type
@@ -438,3 +443,191 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         if header_name in self:
             return potential_value in self._container[_lower_wrapper(header_name)][1:]
         return False
+
+
+_GK = typing.TypeVar("_GK", bound=typing.Hashable)
+_GV = typing.TypeVar("_GV")
+
+
+class ReverseKeysView(typing.KeysView[_GK]):
+    """A read-only ``KeysView`` over the keys mapped to a single value.
+
+    Returned by :meth:`GroupedDict.keys_for`. Backed by reference to an
+    internal bucket so the view is live (mirrors ``dict.keys()`` semantics):
+    subsequent mutations of the parent :class:`GroupedDict` are reflected on
+    next iteration / membership test.
+    """
+
+    __slots__ = ("_bucket",)
+
+    def __init__(self, bucket: typing.Optional[typing.Set[_GK]]) -> None:
+        # We intentionally do NOT call super().__init__: the parent KeysView
+        # expects a Mapping, but we wrap a raw set bucket instead.
+        self._bucket: typing.Optional[typing.Set[_GK]] = bucket
+
+    def __iter__(self) -> typing.Iterator[_GK]:
+        if self._bucket is None:
+            return iter(())
+        return iter(self._bucket)
+
+    def __len__(self) -> int:
+        if self._bucket is None:
+            return 0
+        return len(self._bucket)
+
+    def __contains__(self, key: object) -> bool:
+        if self._bucket is None:
+            return False
+        return key in self._bucket
+
+    def __repr__(self) -> str:
+        return f"ReverseKeysView({set(self) if self._bucket else set()!r})"
+
+
+class GroupedDict(typing.Dict[_GK, _GV]):
+    """A ``dict`` subclass that maintains a reverse "value to keys" index.
+
+    Optimized for the case where many keys share a small number of distinct
+    values. Reverse lookups via :meth:`keys_for` are O(1) average time and
+    return a live :class:`ReverseKeysView`.
+
+    A ``key_fn`` may be supplied to control how values are hashed for the
+    reverse index. By default, the value itself is used (identity over
+    equality). Pass ``key_fn=id`` to index by object identity instead — this
+    is the right choice when values may override ``__eq__`` / ``__hash__``
+    in ways you don't want to collapse buckets on, or when values are not
+    hashable themselves.
+
+    All standard ``dict`` mutation entry points are overridden to keep the
+    reverse index coherent. Empty buckets are pruned eagerly so that
+    long-lived instances do not accumulate stale entries on value churn.
+    """
+
+    __slots__ = ("_index", "_key_fn")
+
+    def __init__(
+        self,
+        *args: typing.Any,
+        key_fn: typing.Callable[[_GV], typing.Hashable] | None = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._key_fn: typing.Callable[[_GV], typing.Hashable] = (
+            key_fn if key_fn is not None else lambda x: x
+        )
+        self._index: dict[typing.Hashable, set[_GK]] = {}
+        for k, v in super().items():
+            self._index.setdefault(self._key_fn(v), set()).add(k)
+
+    def __setitem__(self, key: _GK, value: _GV) -> None:
+        if key in self:
+            old = super().__getitem__(key)
+            old_h = self._key_fn(old)
+            new_h = self._key_fn(value)
+            if old_h == new_h:
+                super().__setitem__(key, value)
+                return
+            bucket = self._index.get(old_h)
+            if bucket is not None:
+                bucket.discard(key)
+                if not bucket:
+                    del self._index[old_h]
+            super().__setitem__(key, value)
+            self._index.setdefault(new_h, set()).add(key)
+            return
+        super().__setitem__(key, value)
+        self._index.setdefault(self._key_fn(value), set()).add(key)
+
+    def __delitem__(self, key: _GK) -> None:
+        old = super().__getitem__(key)
+        super().__delitem__(key)
+        old_h = self._key_fn(old)
+        bucket = self._index.get(old_h)
+        if bucket is not None:
+            bucket.discard(key)
+            if not bucket:
+                del self._index[old_h]
+
+    def pop(self, key: _GK, *args: typing.Any) -> typing.Any:
+        if len(args) > 1:
+            raise TypeError(f"pop expected at most 2 arguments, got {1 + len(args)}")
+        if key not in self:
+            if args:
+                return args[0]
+            raise KeyError(key)
+        value = super().pop(key)
+        h = self._key_fn(value)
+        bucket = self._index.get(h)
+        if bucket is not None:
+            bucket.discard(key)
+            if not bucket:
+                del self._index[h]
+        return value
+
+    def popitem(self) -> tuple[_GK, _GV]:
+        key, value = super().popitem()
+        h = self._key_fn(value)
+        bucket = self._index.get(h)
+        if bucket is not None:
+            bucket.discard(key)
+            if not bucket:
+                del self._index[h]
+        return key, value
+
+    def clear(self) -> None:
+        super().clear()
+        self._index.clear()
+
+    def setdefault(self, key: _GK, default: typing.Any = None) -> typing.Any:
+        if key in self:
+            return super().__getitem__(key)
+        # Route through __setitem__ to keep the reverse index coherent.
+        self[key] = default
+        return default
+
+    def update(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+        if len(args) > 1:
+            raise TypeError(
+                f"update expected at most 1 positional argument, got {len(args)}"
+            )
+        if args:
+            other = args[0]
+            if isinstance(other, _Mapping):
+                for k in other:
+                    self[k] = other[k]
+            elif hasattr(other, "keys"):
+                # Mapping-like protocol (duck-typed).
+                for k in other.keys():
+                    self[k] = other[k]
+            else:
+                for k, v in other:  # iterable of pairs
+                    self[k] = v
+        for k, v in kwargs.items():
+            self[k] = v  # type: ignore[index]
+
+    def keys_for(self, value: _GV) -> ReverseKeysView[_GK]:
+        """Return a live read-only view over all keys mapped to ``value``.
+
+        Lookup is O(1) average time. The returned :class:`ReverseKeysView`
+        reflects the current bucket contents and updates as the parent
+        :class:`GroupedDict` is mutated. Returns an empty view if no key
+        maps to ``value``.
+        """
+        bucket = self._index.get(self._key_fn(value))
+        return ReverseKeysView(bucket)
+
+    def copy(self) -> GroupedDict[_GK, _GV]:
+        # We pass key_fn through so the copy behaves identically.
+        new: GroupedDict[_GK, _GV] = GroupedDict(self, key_fn=self._key_fn)
+        return new
+
+    def __copy__(self) -> GroupedDict[_GK, _GV]:
+        return self.copy()
+
+    @classmethod
+    def fromkeys(  # type: ignore[override]
+        cls,
+        iterable: typing.Iterable[_GK],
+        value: typing.Any = None,
+    ) -> GroupedDict[_GK, typing.Any]:
+        return cls({k: value for k in iterable})

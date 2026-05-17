@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from random import randint
 from test import notMacOS
+from threading import Thread
 from time import sleep, time
 
 import pytest
@@ -307,3 +308,52 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
 
             with pytest.raises(MaxRetryError):
                 pool.get_response(promise=promise)
+
+    def test_multiplexed_concurrent_get_response_drain(self) -> None:
+        """Regression: concurrent ``get_response()`` callers (via threads) on
+        a single multiplexed pool must each receive a distinct response while
+        any promises remain, then ``None`` once the pool is drained.
+
+        Sync mirror of the async test of the same name. Guards against races
+        in ``_find_by`` / ``TrafficPolice`` where two or more threads calling
+        ``get_response()`` simultaneously could otherwise corrupt the shared
+        connection state (e.g. ``ResponseNotReady`` or ``RecursionError``
+        reported under high producer count).
+        """
+        with PoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+        ) as pool:
+            promises = []
+            for _ in range(32):
+                p = pool.urlopen("GET", f"{self.https_url}/get", multiplexed=True)
+                assert isinstance(p, ResponsePromise)
+                promises.append(p)
+
+            assert len(promises) == 32
+
+            for iter_count in range(16):
+                results: list[object] = [None, None, None, None]
+
+                def _worker(idx: int) -> None:
+                    results[idx] = pool.get_response()
+
+                threads = [Thread(target=_worker, args=(i,)) for i in range(4)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+                if iter_count < 8:
+                    assert all(r is not None for r in results), (
+                        f"iter {iter_count}: expected 4 responses, "
+                        f"got {[r is not None for r in results]}"
+                    )
+                    for r in results:
+                        # mypy: r is not None inside this branch
+                        assert getattr(r, "status", None) == 200
+                else:
+                    assert all(r is None for r in results), (
+                        f"iter {iter_count}: expected pool drained, "
+                        f"got {[r is not None for r in results]}"
+                    )
