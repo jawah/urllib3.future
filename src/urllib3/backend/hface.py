@@ -1104,6 +1104,10 @@ class HfaceBackend(BaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
+
+                    self._protocol = None
+                    self.close()
+
                     # A server may end the transmission without error
                     # to mark the end of SSE for example. While it's not ideal
                     # it's not forbidden either.
@@ -1151,8 +1155,6 @@ class HfaceBackend(BaseBackend):
                         )
                         and not any(isinstance(e, HeadersReceived) for e in events)
                     ):
-                        self._protocol = None
-                        self.close()
                         raise ProtocolError(
                             "Remote end closed connection without response"
                         )
