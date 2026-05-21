@@ -1,3 +1,10 @@
+2.20.906 (2026-05-21)
+=====================
+
+- Fixed TLS connection to some server that requires OP_NO_RENEGOTIATION enabled (legacy TLS1.2 server). (https://github.com/jawah/niquests/issues/402)
+- Fixed automatic fallback to single datagram send when GSO is available for UDP I/O but the physical NIC don't support it. (#373)
+- Fixed automatic fallback tls/quic to tls/tcp when the discrete upgrade failed. (#372)
+
 2.20.905 (2026-05-17)
 =====================
 
