@@ -1104,7 +1104,6 @@ class HfaceBackend(BaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
-
                     self._protocol = None
                     self.close()
 
