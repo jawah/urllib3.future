@@ -643,10 +643,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             ConnectionRefusedError,
             ConnectionResetError,
         ) as e:
-            if (
-                isinstance(self._protocol, HTTPOverQUICProtocol)
-                and self.__alt_authority is not None
-            ):
+            if self.__alt_authority is not None:
                 # we want to remove invalid quic cache capability
                 # because the alt-svc was probably bogus...
                 if (

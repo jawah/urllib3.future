@@ -64,6 +64,7 @@ from ..contrib.hface.events import (
     StreamResetReceived,
 )
 from ..contrib.ssa._gro import (
+    GenericSegmentOffloadUnsupported,
     _sock_has_gro,
     _sock_has_gso,
     sync_recv_gro,
@@ -954,6 +955,7 @@ class HfaceBackend(BaseBackend):
         _proto_exc = protocol.exceptions()
 
         def send_pending() -> None:
+            nonlocal gso_enabled
             if gso_enabled:
                 tbs: list[bytes] = []
                 while True:
@@ -962,7 +964,12 @@ class HfaceBackend(BaseBackend):
                         break
                     tbs.append(data_out)
                 if len(tbs) > 1:
-                    sync_sendmsg_gso(sock, tbs)
+                    try:
+                        sync_sendmsg_gso(sock, tbs)
+                    except GenericSegmentOffloadUnsupported:
+                        self._dgram_gso_enabled = gso_enabled = False
+                        for dgram in tbs:
+                            sock.sendall(dgram)
                 elif tbs:
                     sock.sendall(tbs[0])
             else:
@@ -1097,6 +1104,9 @@ class HfaceBackend(BaseBackend):
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
+                    self._protocol = None
+                    self.close()
+
                     # A server may end the transmission without error
                     # to mark the end of SSE for example. While it's not ideal
                     # it's not forbidden either.
@@ -1144,8 +1154,6 @@ class HfaceBackend(BaseBackend):
                         )
                         and not any(isinstance(e, HeadersReceived) for e in events)
                     ):
-                        self._protocol = None
-                        self.close()
                         raise ProtocolError(
                             "Remote end closed connection without response"
                         )
@@ -1465,7 +1473,12 @@ class HfaceBackend(BaseBackend):
                         break
                     tbs.append(buf)
                 if len(tbs) > 1:
-                    sync_sendmsg_gso(self.sock, tbs)
+                    try:
+                        sync_sendmsg_gso(self.sock, tbs)
+                    except GenericSegmentOffloadUnsupported:
+                        self._dgram_gso_enabled = False
+                        for dgram in tbs:
+                            self.sock.sendall(dgram)
                 elif tbs:
                     self.sock.sendall(tbs[0])
             else:
@@ -1913,7 +1926,12 @@ class HfaceBackend(BaseBackend):
                             break
                         tbs.append(data_out)
                     if len(tbs) > 1:
-                        sync_sendmsg_gso(self.sock, tbs)
+                        try:
+                            sync_sendmsg_gso(self.sock, tbs)
+                        except GenericSegmentOffloadUnsupported:
+                            self._dgram_gso_enabled = False
+                            for dgram in tbs:
+                                self.sock.sendall(dgram)
                     elif tbs:
                         self.sock.sendall(tbs[0])
                 else:

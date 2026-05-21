@@ -1142,14 +1142,20 @@ class AsyncTrafficPolice(typing.Generic[T]):
             raise
         finally:
             # do not release back to the pool a broken connection
-            # we need kill_cursor() to take over soon.
+            # we need kill_cursor() to take over.
             # clean_exit=False not necessarily mean conn broken.
             # see https://github.com/jawah/urllib3.future/issues/366
             withhold_conn: bool = not clean_exit and getattr(
                 conn_or_pool, "is_closed", False
             )
 
-            if not withhold_conn and self.release():
+            if withhold_conn:
+                # killing the cursor immediately frees other coroutines waiting
+                # in locate(...) (e.g. WebSocket reconnector calling close())
+                # via UnavailableTraffic instead of letting them hang forever.
+                # see https://github.com/jawah/urllib3.future/issues/371
+                await self.kill_cursor()
+            elif self.release():
                 await asyncio.sleep(0)
 
     def release(self) -> bool:
