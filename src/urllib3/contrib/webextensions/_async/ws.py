@@ -20,6 +20,7 @@ from wsproto.utilities import ProtocolError as WebSocketProtocolError
 
 from ....backend import HttpVersion
 from ....exceptions import ProtocolError
+from ....util.traffic_police import UnavailableTraffic
 from .protocol import AsyncExtensionFromHTTP
 
 
@@ -110,18 +111,29 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
             if self._police_officer is not None:
-                async with self._police_officer.borrow(self._response):
-                    if self._remote_shutdown is False:
-                        try:
-                            data_to_send: bytes = self._protocol.send(
-                                CloseConnection(0)
-                            )
-                        except WebSocketProtocolError:
-                            pass
-                        else:
-                            async with self._write_error_catcher():
+                try:
+                    async with self._police_officer.borrow(self._response):
+                        # close() must be tolerant: when the peer has already
+                        # gone (TCP FIN, half-closed stream, or a protocol
+                        # violation that tore down the underlying HTTP state
+                        # machine), every socket-touching call below can fail.
+                        if self._remote_shutdown is False:
+                            try:
+                                data_to_send: bytes = self._protocol.send(
+                                    CloseConnection(0)
+                                )
                                 await self._dsa.sendall(data_to_send)
-                    await self._dsa.close()
+                            except (WebSocketProtocolError, OSError, AssertionError):
+                                pass
+                        try:
+                            await self._dsa.close()
+                        except (OSError, AssertionError):
+                            pass
+                        self._dsa = None
+                except UnavailableTraffic:
+                    # the underlying connection was already destroyed
+                    # (e.g. via kill_cursor() after a protocol violation).
+                    # nothing to send; just clean up local state.
                     self._dsa = None
             else:
                 self._dsa = None
@@ -143,42 +155,10 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         bytes_buf: list[bytes] = []
 
         async with self._police_officer.borrow(self._response):
-            for event in self._protocol.events():
-                if isinstance(event, TextMessage):
-                    if event.message_finished and not text_buf:
-                        return event.data
-                    text_buf.append(event.data)
-                    if event.message_finished:
-                        return "".join(text_buf)
-                elif isinstance(event, BytesMessage):
-                    if event.message_finished and not bytes_buf:
-                        return event.data
-                    bytes_buf.append(event.data)
-                    if event.message_finished:
-                        return b"".join(bytes_buf)
-                elif isinstance(event, CloseConnection):
-                    self._remote_shutdown = True
-                    await self.close()
-                    return None
-                elif isinstance(event, Ping):
-                    try:
-                        data_to_send: bytes = self._protocol.send(event.response())
-                    except WebSocketProtocolError as e:
-                        await self.close()
-                        raise ProtocolError from e
-
-                    async with self._write_error_catcher():
-                        await self._dsa.sendall(data_to_send)
-
-            while True:
-                async with self._read_error_catcher():
-                    data, eot, _ = await self._dsa.recv_extended(None)
-
-                try:
-                    self._protocol.receive_data(data)
-                except WebSocketProtocolError as e:
-                    raise ProtocolError from e
-
+            # wsproto uses bare ``assert`` statements inside ``events()`` and
+            # the per-message-deflate inbound decompression to validate frame
+            # payloads. We treat such failures as a protocol violation.
+            try:
                 for event in self._protocol.events():
                     if isinstance(event, TextMessage):
                         if event.message_finished and not text_buf:
@@ -197,11 +177,59 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                         await self.close()
                         return None
                     elif isinstance(event, Ping):
-                        data_to_send = self._protocol.send(event.response())
+                        try:
+                            data_to_send: bytes = self._protocol.send(event.response())
+                        except WebSocketProtocolError as e:
+                            await self.close()
+                            raise ProtocolError from e
+
                         async with self._write_error_catcher():
                             await self._dsa.sendall(data_to_send)
-                    elif isinstance(event, Pong):
-                        continue
+            except AssertionError as e:
+                await self.close()
+                raise ProtocolError from e
+
+            while True:
+                async with self._read_error_catcher():
+                    data, eot, _ = await self._dsa.recv_extended(None)
+
+                try:
+                    self._protocol.receive_data(data)
+                except WebSocketProtocolError as e:
+                    await self.close()
+                    raise ProtocolError from e
+
+                try:
+                    for event in self._protocol.events():
+                        if isinstance(event, TextMessage):
+                            if event.message_finished and not text_buf:
+                                return event.data
+                            text_buf.append(event.data)
+                            if event.message_finished:
+                                return "".join(text_buf)
+                        elif isinstance(event, BytesMessage):
+                            if event.message_finished and not bytes_buf:
+                                return event.data
+                            bytes_buf.append(event.data)
+                            if event.message_finished:
+                                return b"".join(bytes_buf)
+                        elif isinstance(event, CloseConnection):
+                            self._remote_shutdown = True
+                            await self.close()
+                            return None
+                        elif isinstance(event, Ping):
+                            try:
+                                data_to_send = self._protocol.send(event.response())
+                            except WebSocketProtocolError as e:
+                                await self.close()
+                                raise ProtocolError from e
+                            async with self._write_error_catcher():
+                                await self._dsa.sendall(data_to_send)
+                        elif isinstance(event, Pong):
+                            continue
+                except AssertionError as e:
+                    await self.close()
+                    raise ProtocolError from e
 
     async def send_payload(self, buf: str | bytes) -> None:
         """Dispatch a buffer to remote."""
@@ -209,12 +237,16 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
             raise OSError("The HTTP extension is closed or uninitialized")
 
         async with self._police_officer.borrow(self._response):
+            # the per-message-deflate outbound path uses a bare ``assert`` to
+            # protect against compressing a CONTINUATION frame; treat such a
+            # failure as a protocol violation.
             try:
                 if isinstance(buf, str):
                     data_to_send: bytes = self._protocol.send(TextMessage(buf))
                 else:
                     data_to_send = self._protocol.send(BytesMessage(buf))
-            except WebSocketProtocolError as e:
+            except (WebSocketProtocolError, AssertionError) as e:
+                await self.close()
                 raise ProtocolError from e
 
             async with self._write_error_catcher():
@@ -228,6 +260,7 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
             try:
                 data_to_send: bytes = self._protocol.send(Ping())
             except WebSocketProtocolError as e:
+                await self.close()
                 raise ProtocolError from e
 
             async with self._write_error_catcher():
