@@ -11,6 +11,7 @@ All other platforms fall back to the standard asyncio DatagramTransport.
 from __future__ import annotations
 
 import asyncio
+import errno
 import socket
 import struct
 import sys
@@ -25,6 +26,7 @@ __all__ = (
     "open_dgram_connection",
     "sync_recv_gro",
     "sync_sendmsg_gso",
+    "GenericSegmentOffloadUnsupported",
     "DatagramReader",
     "DatagramWriter",
 )
@@ -224,8 +226,42 @@ def sync_recv_gro(
     return _split_gro_buffer(data, segment_size)
 
 
+class GenericSegmentOffloadUnsupported(Exception):
+    """Raised when a UDP GSO send is rejected by the kernel/driver
+    because the NIC does not actually support segmentation offload,
+    even though Kernel support it.
+
+    Callers should disable GSO on the affected socket for the rest of
+    the connection and re-send the failing batch without GSO. This
+    mirrors the fallback strategy used by ``quic-go``.
+    """
+
+
+# Errnos returned by the kernel/driver when a UDP segmentation offload
+# request cannot actually be honored by the NIC or routing path.
+_GSO_UNSUPPORTED_ERRNOS: typing.Final = frozenset(
+    e
+    for e in (
+        getattr(errno, "EIO", None),
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
+        getattr(errno, "ENOPROTOOPT", None),
+    )
+    if e is not None
+)
+
+
 def sync_sendmsg_gso(sock: socket.socket, datagrams: list[bytes]) -> None:
-    """Batch-send datagrams using GSO. Falls back to individual sends."""
+    """Batch-send datagrams using GSO. Falls back to individual sends.
+
+    Raises :class:`GenericSegmentOffloadUnsupported` if the kernel/driver
+    rejects the GSO send because the underlying NIC does not actually
+    support UDP segmentation offload (e.g. ``EIO`` from ``sendmsg``).
+    The current group is not sent in that case; callers are expected to
+    disable GSO for the connection and re-send the batch without GSO.
+    Duplicate delivery of any earlier group is harmless for QUIC
+    (the receiver de-duplicates by packet number).
+    """
     for segment_size, group in _group_by_segment_size(datagrams):
         if len(group) == 1:
             sock.send(group[0])
@@ -238,9 +274,11 @@ def sync_sendmsg_gso(sock: socket.socket, datagrams: list[bytes]) -> None:
                 group,
                 [(_SOL_UDP, UDP_LINUX_SEGMENT, _UINT16.pack(segment_size))],
             )
-        except OSError:
-            # Fallback to one-by-one if the kernel rejects this batch
-            # (e.g. interface MTU change, unsupported NIC, etc.).
+        except OSError as exc:
+            if exc.errno in _GSO_UNSUPPORTED_ERRNOS:
+                raise GenericSegmentOffloadUnsupported() from exc
+            # Other transient errors (e.g. interface MTU change): fall
+            # back to one-by-one for this batch but keep GSO enabled.
             for dgram in group:
                 sock.send(dgram)
 
@@ -569,6 +607,11 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                 # GSO send, fall back to per-datagram sends so partial
                 # progress is still possible.
                 if len(group) > 1:
+                    # NIC/driver lies about GSO support: disable it
+                    # permanently for this transport so future batches
+                    # take the plain ``sendto`` path.
+                    if exc.errno in _GSO_UNSUPPORTED_ERRNOS:
+                        self._gso_enabled = False
                     for dgram in group:
                         try:
                             self._raw_send(dgram, addr)

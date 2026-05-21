@@ -27,7 +27,13 @@ from qh3.quic.events import (
 
 from ....util.ssl_ import IS_FIPS, resolve_cert_reqs
 from ....util.sub_timeout import SubTimeout
-from ...ssa._gro import _sock_has_gro, _sock_has_gso, sync_recv_gro, sync_sendmsg_gso
+from ...ssa._gro import (
+    GenericSegmentOffloadUnsupported,
+    _sock_has_gro,
+    _sock_has_gso,
+    sync_recv_gro,
+    sync_sendmsg_gso,
+)
 from ..dou import PlainResolver
 from ..protocols import (
     COMMON_RCODE_LABEL,
@@ -154,7 +160,12 @@ class QUICResolver(PlainResolver):
                         break
 
                     if self._dgram_gso_enabled and len(datagrams) > 1:
-                        sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                        try:
+                            sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                        except GenericSegmentOffloadUnsupported:
+                            self._dgram_gso_enabled = False
+                            for datagram in datagrams:
+                                self._socket.sendall(datagram[0])
                     else:
                         for datagram in datagrams:
                             self._socket.sendall(datagram[0])
@@ -277,7 +288,12 @@ class QUICResolver(PlainResolver):
 
                 datagrams = self._quic.datagrams_to_send(monotonic())
                 if self._dgram_gso_enabled and len(datagrams) > 1:
-                    sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                    try:
+                        sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                    except GenericSegmentOffloadUnsupported:
+                        self._dgram_gso_enabled = False
+                        for dg in datagrams:
+                            self._socket.sendall(dg[0])
                 else:
                     for dg in datagrams:
                         self._socket.sendall(dg[0])
@@ -467,6 +483,7 @@ class QUICResolver(PlainResolver):
         gro_enabled = self._dgram_gro_enabled
 
         def send_pending() -> None:
+            nonlocal gso_enabled
             now = monotonic()
             quic.handle_timer(now)
             while True:
@@ -474,7 +491,12 @@ class QUICResolver(PlainResolver):
                 if not datagrams:
                     break
                 if gso_enabled and len(datagrams) > 1:
-                    sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                    try:
+                        sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                    except GenericSegmentOffloadUnsupported:
+                        self._dgram_gso_enabled = gso_enabled = False
+                        for datagram in datagrams:
+                            sock.sendall(datagram[0])
                 else:
                     for datagram in datagrams:
                         sock.sendall(datagram[0])
@@ -489,7 +511,12 @@ class QUICResolver(PlainResolver):
                         break
 
                     if gso_enabled and len(datagrams) > 1:
-                        sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                        try:
+                            sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                        except GenericSegmentOffloadUnsupported:
+                            self._dgram_gso_enabled = gso_enabled = False
+                            for datagram in datagrams:
+                                sock.sendall(datagram[0])
                     else:
                         for datagram in datagrams:
                             sock.sendall(datagram[0])
@@ -532,7 +559,12 @@ class QUICResolver(PlainResolver):
                             break
 
                         if gso_enabled and len(datagrams) > 1:
-                            sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                            try:
+                                sync_sendmsg_gso(sock, [d[0] for d in datagrams])
+                            except GenericSegmentOffloadUnsupported:
+                                self._dgram_gso_enabled = gso_enabled = False
+                                for datagram in datagrams:
+                                    sock.sendall(datagram[0])
                         else:
                             for datagram in datagrams:
                                 sock.sendall(datagram[0])
