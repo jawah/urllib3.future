@@ -113,6 +113,12 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
 
                 assert resp.status == 200
                 assert conn_info is not None
+
+                if conn_info.tls_version is not None:
+                    # they all should be there (when cert_reqs != 0)
+                    assert conn_info.certificate_der is not None
+                    assert conn_info.certificate_dict is not None
+
                 svn_history.append(resp.version)
 
             assert svn_history[-1] == int(
