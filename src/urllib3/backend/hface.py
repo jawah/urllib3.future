@@ -598,23 +598,33 @@ class HfaceBackend(BaseBackend):
                 if hasattr(self.sock.sslobj, "get_verified_chain"):
                     chain = self.sock.sslobj.get_verified_chain()
 
-                    # When cert_reqs=0 CPython returns an empty dict for the peer cert.
-                    if not self.conn_info.certificate_dict and chain:
-                        self.conn_info.certificate_dict = chain[0].get_info()
+                    cert_in_chain_count: int = len(chain)
+                    parsed_certs: bool = (
+                        all(isinstance(crt, Certificate) for crt in chain)
+                        if Certificate is not None
+                        else False
+                    )
 
-                    if (
-                        len(chain) > 1
-                        and Certificate is not None
-                        and isinstance(chain[1], Certificate)
+                    if parsed_certs:
+                        if not self.conn_info.certificate_dict and cert_in_chain_count:
+                            self.conn_info.certificate_dict = chain[0].get_info()
+
+                        if cert_in_chain_count > 1:
+                            issuer_public_bytes = chain[1].public_bytes()
+                            if isinstance(issuer_public_bytes, bytes):
+                                self.conn_info.issuer_certificate_der = (
+                                    issuer_public_bytes
+                                )
+                            elif hasattr(ssl, "PEM_cert_to_DER_cert"):
+                                self.conn_info.issuer_certificate_der = (
+                                    ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
+                                )
+                            self.conn_info.issuer_certificate_dict = chain[1].get_info()
+                    elif (
+                        cert_in_chain_count > 1
+                        and not self.conn_info.issuer_certificate_der
                     ):
-                        issuer_public_bytes = chain[1].public_bytes()
-                        if isinstance(issuer_public_bytes, bytes):
-                            self.conn_info.issuer_certificate_der = issuer_public_bytes
-                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
-                            self.conn_info.issuer_certificate_der = (
-                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
-                            )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
+                        self.conn_info.issuer_certificate_der = chain[1]
 
             elif hasattr(self.sock, "getpeercert"):
                 self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)

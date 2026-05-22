@@ -1,3 +1,8 @@
+2.20.907 (2026-05-22)
+=====================
+
+- Fixed certs retrieval when using HTTPS proxy (Python 3.10+) in a synchronous context. (#375)
+
 2.20.906 (2026-05-21)
 =====================
 

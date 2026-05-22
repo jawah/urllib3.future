@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from dummyserver.server import DEFAULT_CA
 from urllib3 import ConnectionInfo, HttpVersion, proxy_from_url
+from urllib3.exceptions import InsecureRequestWarning
 from urllib3.util.ssl_ import _SSLContextCache
 
 from . import TraefikWithProxyTestCase
@@ -109,8 +112,42 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
 
                 assert resp.status == 200
                 assert conn_info is not None
+
+                if conn_info.tls_version is not None:
+                    # they all should be there (when cert_reqs != 0)
+                    assert conn_info.certificate_der is not None
+                    assert conn_info.certificate_dict is not None
+
                 svn_history.append(resp.version)
 
             assert svn_history[-1] == int(
                 expected_max_svn.value.split("/")[-1].replace(".", "")
             )
+
+    def test_unverified_proxy_getinfo(self) -> None:
+        with proxy_from_url(
+            self.https_proxy_url,
+            cert_reqs=0,
+            resolver=self.test_resolver,
+        ) as http:
+            conn_info: ConnectionInfo | None = None
+
+            def on_post_connection(o: ConnectionInfo) -> None:
+                nonlocal conn_info
+                conn_info = o
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InsecureRequestWarning)
+                resp = http.urlopen(
+                    "GET",
+                    f"{self.https_url}/get",
+                    retries=False,
+                    on_post_connection=on_post_connection,
+                )
+
+            assert resp.status == 200
+            assert conn_info is not None
+
+            # der leaf cert should be there
+            # no guarantees about dict parsed ones!
+            assert conn_info.certificate_der is not None
