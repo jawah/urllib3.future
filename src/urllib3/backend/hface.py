@@ -2054,3 +2054,5 @@ class HfaceBackend(BaseBackend):
         self._dgram_gro_enabled = False
         self._dgram_gso_enabled = False
         self._ech_config = None
+        self._svn = None
+        self.sock = None
