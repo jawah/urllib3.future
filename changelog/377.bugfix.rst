@@ -1,0 +1,1 @@
+Fixed ``HfaceBackend.close()`` to reset the stale HTTP/3 version flag and socket reference, preventing crashes when pooled connections were reused after closing.
