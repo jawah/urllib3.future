@@ -5,6 +5,11 @@
   streamed responses. (#379)
 - Added support for ``utls`` alternative TLS backend in addition to ``rtls``.
   ``utls`` is based on BoringSSL and have the capability to align with Google Chrome browser capabilities.
+  This new TLS backend is introduced in addition to ``rtls``. urllib3-future tries backend in given order:
+  ``rtls`` -> ``utls`` -> ``ssl``. You may override this by setting ``URLLIB3_FUTURE_SSL_BACKEND`` environment
+  variable. See the documentation to learn more.
+- Fixed handling of unsendable datagram emitted by ``qh3`` MTU discovery probe when the physical NIC can't handle
+  specific >1200 bytes datagrams. (#377)
 
 2.20.907 (2026-05-22)
 =====================
