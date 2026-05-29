@@ -22,6 +22,7 @@ if typing.TYPE_CHECKING:
     # For static type-checkers, expose the stdlib ``ssl`` module. All three
     # backends share the same surface used by urllib3, so this is safe.
     import ssl
+
     stdlib_ssl = ssl
     Certificate: typing.Any = None
     BACKEND: str = "ssl"
