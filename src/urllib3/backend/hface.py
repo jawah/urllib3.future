@@ -555,7 +555,9 @@ class HfaceBackend(BaseBackend):
             cipher_tuple: tuple[str, str, int] | None = None
 
             if hasattr(self.sock, "sslobj") or hasattr(self.sock, "_sslobj"):
-                sslobj = getattr(self.sock, "sslobj", getattr(self.sock, "_sslobj"))
+                sslobj = getattr(
+                    self.sock, "sslobj", getattr(self.sock, "_sslobj", None)
+                )
                 if hasattr(sslobj, "ech_status"):  # Rustls path
                     self.conn_info.tls_ech_accepted = sslobj.ech_status == "accepted"
                 elif hasattr(sslobj, "ech_accepted"):  # BoringSSL path

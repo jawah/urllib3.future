@@ -508,6 +508,18 @@ def create_urllib3_context(
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)
 
+    # utls (BoringSSL) have a way to propose
+    # autoconfiguration of context based
+    # on latest browser specs observed
+    # over the wire.
+    should_use_browser_autoconfig: bool = (
+        hasattr(context, "set_fingerprint")
+        and ssl_minimum_version is None
+        and ssl_maximum_version is None
+        and ciphers is None
+        and options is None
+        and (ssl_version is None or ssl_version in {PROTOCOL_TLS, PROTOCOL_TLS_CLIENT})
+    )
     default_tlsv1_2: bool = False
 
     if SUPPORT_MIN_MAX_TLS_VERSION:
@@ -555,7 +567,10 @@ def create_urllib3_context(
         # if the server is not rotating its ticketing keys properly.
         options |= OP_NO_TICKET
 
-    context.options |= options
+    if should_use_browser_autoconfig:
+        context.set_fingerprint("chrome:stable")  # type: ignore[attr-defined]
+    else:
+        context.options |= options
 
     # Enable post-handshake authentication for TLS 1.3, see GH #1634. PHA is
     # necessary for conditional client cert authentication with TLS 1.3.
@@ -580,10 +595,11 @@ def create_urllib3_context(
         context.check_hostname = False
         context.verify_mode = cert_reqs  # type: ignore[assignment]
 
-    try:
-        context.hostname_checks_common_name = False
-    except AttributeError:
-        pass
+    if not should_use_browser_autoconfig:
+        try:
+            context.hostname_checks_common_name = False
+        except AttributeError:
+            pass
 
     # Enable logging of TLS session keys via defacto standard environment variable
     # 'SSLKEYLOGFILE', if the feature is available (Python 3.8+). Skip empty values.
