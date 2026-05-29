@@ -426,6 +426,21 @@ class AsyncHTTPResponse(HTTPResponse):
         decode_content: bool | None = None,
         cache_content: bool = False,
     ) -> bytes:
+        return await self._read(
+            amt=amt,
+            decode_content=decode_content,
+            cache_content=cache_content,
+        )
+
+    async def _read(  # type: ignore[override]
+        self,
+        amt: int | None = None,
+        decode_content: bool | None = None,
+        cache_content: bool = False,
+        *,
+        partial: bool = False,
+    ) -> bytes:
+        # See ``HTTPResponse._read`` for the meaning of ``partial`` (issue #379).
         try:
             self._init_decoder()
             if decode_content is None:
@@ -535,7 +550,10 @@ class AsyncHTTPResponse(HTTPResponse):
                 )
                 self._decoded_buffer.put(decoded_data)
 
-                while len(self._decoded_buffer) < amt and data:
+                surface_per_frame = partial and hasattr(self._fp, "_eot")
+                while (
+                    len(self._decoded_buffer) < amt and data and not surface_per_frame
+                ):
                     # TODO make sure to initially read enough data to get past the headers
                     # For example, the GZ file header takes 10 bytes, we don't want to read
                     # it one byte at a time
@@ -582,7 +600,9 @@ class AsyncHTTPResponse(HTTPResponse):
             or self._decoded_buffer
             or (self._decoder and self._decoder.has_unconsumed_tail)
         ):
-            data = await self.read(amt=amt, decode_content=decode_content)
+            data = await self._read(
+                amt=amt, decode_content=decode_content, partial=True
+            )
 
             if data:
                 yield data

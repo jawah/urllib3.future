@@ -1278,6 +1278,53 @@ class TestResponse:
 
         assert b"foo\nbar" == data
 
+    @pytest.mark.parametrize(
+        "http_version, headers",
+        [
+            # HTTP/1.1 chunked Transfer-Encoding
+            (11, {"transfer-encoding": "chunked"}),
+            # HTTP/2 framed stream with no declared length (e.g. SSE)
+            (20, {}),
+            # HTTP/3 framed stream with no declared length (e.g. SSE)
+            (30, {}),
+        ],
+    )
+    def test_stream_yields_per_frame_without_blocking(
+        self, http_version: int, headers: dict[str, str]
+    ) -> None:
+        # Regression test for issue #379: stream(amt) must surface each
+        # frame/chunk as it arrives instead of blocking until ``amt`` decoded
+        # bytes accumulate. This is not specific to chunked Transfer-Encoding;
+        # HTTP/2 and HTTP/3 deliver framed bodies the same way.
+        chunks = [b"data: hello\n\n"]
+        idx = 0
+
+        def mock_sock(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+            nonlocal idx
+            if idx >= len(chunks):
+                # Simulate an idle-but-open connection: a second raw read
+                # would block on the socket here. Raising instead lets us
+                # assert that stream() never attempts it before yielding the
+                # already-available frame.
+                raise AssertionError(
+                    "stream() blocked waiting to fill amt instead of "
+                    "yielding the available frame"
+                )
+            d = chunks[idx]
+            idx += 1
+            return d, False, None
+
+        r = LowLevelResponse(
+            "GET", 200, http_version, "OK", HTTPHeaderDict(), mock_sock
+        )
+
+        resp = HTTPResponse(r, preload_content=False, headers=headers)
+
+        gen = resp.stream(10000)
+        assert next(gen) == b"data: hello\n\n"
+
     def test_non_timeout_ssl_error_on_read(self) -> None:
         mac_error = ssl.SSLError(
             "SSL routines", "ssl3_get_record", "decryption failed or bad record mac"
