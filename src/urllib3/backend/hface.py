@@ -49,6 +49,7 @@ from ..contrib.ssa._gro import (
     _sock_has_gro,
     _sock_has_gso,
     sync_recv_gro,
+    sync_send_dgram,
     sync_sendmsg_gso,
 )
 from ..exceptions import (
@@ -959,15 +960,15 @@ class HfaceBackend(BaseBackend):
                     except GenericSegmentOffloadUnsupported:
                         self._dgram_gso_enabled = gso_enabled = False
                         for dgram in tbs:
-                            sock.sendall(dgram)
+                            sync_send_dgram(sock, dgram)
                 elif tbs:
-                    sock.sendall(tbs[0])
+                    sync_send_dgram(sock, tbs[0])
             else:
                 while True:
                     data_out = protocol.bytes_to_send()
                     if not data_out:
                         break
-                    sock.sendall(data_out)
+                    sync_send_dgram(sock, data_out)
 
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
@@ -1473,15 +1474,15 @@ class HfaceBackend(BaseBackend):
                     except GenericSegmentOffloadUnsupported:
                         self._dgram_gso_enabled = False
                         for dgram in tbs:
-                            self.sock.sendall(dgram)
+                            sync_send_dgram(self.sock, dgram)
                 elif tbs:
-                    self.sock.sendall(tbs[0])
+                    sync_send_dgram(self.sock, tbs[0])
             else:
                 while True:
                     buf = self._protocol.bytes_to_send()
                     if not buf:
                         break
-                    self.sock.sendall(buf)
+                    sync_send_dgram(self.sock, buf)
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
@@ -1926,9 +1927,9 @@ class HfaceBackend(BaseBackend):
                         except GenericSegmentOffloadUnsupported:
                             self._dgram_gso_enabled = False
                             for dgram in tbs:
-                                self.sock.sendall(dgram)
+                                sync_send_dgram(self.sock, dgram)
                     elif tbs:
-                        self.sock.sendall(tbs[0])
+                        sync_send_dgram(self.sock, tbs[0])
                 else:
                     while True:
                         data_out = self._protocol.bytes_to_send()
@@ -1936,7 +1937,7 @@ class HfaceBackend(BaseBackend):
                         if not data_out:
                             break
 
-                        self.sock.sendall(data_out)
+                        sync_send_dgram(self.sock, data_out)
             except BrokenPipeError as e:
                 remote_pipe_shutdown = e
 

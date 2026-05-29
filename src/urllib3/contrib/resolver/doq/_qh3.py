@@ -26,6 +26,7 @@ from ...ssa._gro import (
     _sock_has_gro,
     _sock_has_gso,
     sync_recv_gro,
+    sync_send_dgram,
     sync_sendmsg_gso,
 )
 from ..dou import PlainResolver
@@ -159,10 +160,10 @@ class QUICResolver(PlainResolver):
                         except GenericSegmentOffloadUnsupported:
                             self._dgram_gso_enabled = False
                             for datagram in datagrams:
-                                self._socket.sendall(datagram[0])
+                                sync_send_dgram(self._socket, datagram[0])
                     else:
                         for datagram in datagrams:
-                            self._socket.sendall(datagram[0])
+                            sync_send_dgram(self._socket, datagram[0])
 
                 self._socket.close()
                 self._terminated = True
@@ -287,10 +288,10 @@ class QUICResolver(PlainResolver):
                     except GenericSegmentOffloadUnsupported:
                         self._dgram_gso_enabled = False
                         for dg in datagrams:
-                            self._socket.sendall(dg[0])
+                            sync_send_dgram(self._socket, dg[0])
                 else:
                     for dg in datagrams:
-                        self._socket.sendall(dg[0])
+                        sync_send_dgram(self._socket, dg[0])
 
         responses: list[DomainNameServerReturn] = []
 
@@ -490,10 +491,10 @@ class QUICResolver(PlainResolver):
                     except GenericSegmentOffloadUnsupported:
                         self._dgram_gso_enabled = gso_enabled = False
                         for datagram in datagrams:
-                            sock.sendall(datagram[0])
+                            sync_send_dgram(sock, datagram[0])
                 else:
                     for datagram in datagrams:
-                        sock.sendall(datagram[0])
+                        sync_send_dgram(sock, datagram[0])
 
         while True:
             if receive_first is False:
@@ -510,10 +511,10 @@ class QUICResolver(PlainResolver):
                         except GenericSegmentOffloadUnsupported:
                             self._dgram_gso_enabled = gso_enabled = False
                             for datagram in datagrams:
-                                sock.sendall(datagram[0])
+                                sync_send_dgram(sock, datagram[0])
                     else:
                         for datagram in datagrams:
-                            sock.sendall(datagram[0])
+                            sync_send_dgram(sock, datagram[0])
 
             events = []
 
@@ -558,10 +559,10 @@ class QUICResolver(PlainResolver):
                             except GenericSegmentOffloadUnsupported:
                                 self._dgram_gso_enabled = gso_enabled = False
                                 for datagram in datagrams:
-                                    sock.sendall(datagram[0])
+                                    sync_send_dgram(sock, datagram[0])
                         else:
                             for datagram in datagrams:
-                                sock.sendall(datagram[0])
+                                sync_send_dgram(sock, datagram[0])
 
                 for ev in iter(quic.next_event, None):
                     if isinstance(ev, ConnectionTerminated):
