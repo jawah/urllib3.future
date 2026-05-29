@@ -106,17 +106,6 @@ if not BYPASS_SOCKS_LEGACY:
     from ..poolmanager import PoolManager
     from ..util.url import parse_url
 
-    try:
-        if typing.TYPE_CHECKING:
-            import ssl
-        else:
-            try:
-                import rtls as ssl
-            except ImportError:
-                import ssl
-    except ImportError:
-        ssl = None  # type: ignore[assignment]
-
     class SOCKSConnection(HTTPConnection):  # type: ignore[no-redef]
         """
         A plain-text HTTP connection that connects via a SOCKS proxy.

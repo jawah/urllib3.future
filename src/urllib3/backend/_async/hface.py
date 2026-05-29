@@ -7,28 +7,7 @@ from datetime import datetime, timezone
 from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
-try:  # Compiled with SSL?
-    if typing.TYPE_CHECKING:
-        import ssl
-    else:
-        try:
-            import rtls as ssl
-        except ImportError:
-            import ssl
-except (ImportError, AttributeError):
-    ssl = None  # type: ignore[assignment]
-
-
-try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    if typing.TYPE_CHECKING:
-        from _ssl import Certificate
-    else:
-        from rtls import Certificate
-except ImportError:
-    try:
-        from _ssl import Certificate
-    except (ImportError, AttributeError):
-        Certificate = None  # type: ignore[misc,assignment]
+from ...contrib.anytls import ssl, Certificate
 
 from ..._collections import HTTPHeaderDict
 from ..._constant import (

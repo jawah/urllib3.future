@@ -2,20 +2,10 @@ from __future__ import annotations
 
 import io
 import os
-import typing
 import warnings
 from pathlib import Path
 
-if typing.TYPE_CHECKING:
-    import ssl
-else:
-    try:
-        import rtls as ssl
-    except ImportError:
-        try:
-            import ssl
-        except ImportError:
-            ssl = None  # type: ignore[assignment]
+from ...contrib.anytls import ssl, IS_NONSTDLIB
 
 from ...contrib.imcc import load_cert_chain as _ctx_load_cert_chain
 from ...contrib.ssa import AsyncSocket, SSLAsyncSocket
@@ -174,7 +164,7 @@ async def ssl_wrap_socket(
                 else:
                     context.load_cert_chain(certfile, keyfile, key_password)
             elif certdata and keydata:
-                if ssl is not None and "Rustls" in ssl.OPENSSL_VERSION:
+                if IS_NONSTDLIB:
                     context.load_cert_chain(certdata, keydata, key_password)
                 else:
                     try:
@@ -183,7 +173,7 @@ async def ssl_wrap_socket(
                         warnings.warn(
                             "Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform. "
                             f"Reason: {e}. It will be picked out if you upgrade to a QUIC connection or if you install "
-                            "rtls alternative ssl backend.",
+                            "alternative ssl backend (rtls/utls).",
                             UserWarning,
                         )
 

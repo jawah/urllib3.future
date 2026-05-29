@@ -3,13 +3,7 @@ from __future__ import annotations
 import socket
 import typing
 
-if typing.TYPE_CHECKING:
-    import ssl
-else:
-    try:
-        import rtls as ssl
-    except ImportError:
-        import ssl
+from ...anytls import ssl
 from collections import deque
 
 from time import time as monotonic

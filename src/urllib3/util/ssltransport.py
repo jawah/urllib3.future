@@ -4,15 +4,10 @@ import socket
 import sys
 import typing
 
-if typing.TYPE_CHECKING:
-    import ssl
-else:
-    try:
-        import rtls as ssl
-    except ImportError:
-        import ssl
-
-import ssl as _stdlib_ssl  # Always import stdlib ssl for exception compatibility
+from ..contrib.anytls import ssl
+from ..contrib.anytls import (
+    stdlib_ssl as _stdlib_ssl,
+)  # Always import stdlib ssl for exception compatibility
 
 from .._constant import DEFAULT_BLOCKSIZE
 from ..exceptions import ProxySchemeUnsupported
@@ -68,10 +63,11 @@ class SSLTransport:
         self.suppress_ragged_eofs = suppress_ragged_eofs
         self.socket = socket
 
-        # Determine the correct MemoryBIO to use.  When rtls is the default
-        # ``ssl`` but the caller passes a stdlib SSLContext (or vice-versa),
-        # wrap_bio() will reject a foreign MemoryBIO with a TypeError.
-        # Try the default ``ssl`` first, then fall back to ``_stdlib_ssl``.
+        # Determine the correct MemoryBIO to use.  When a non-stdlib backend
+        # (rtls/utls) is the default ``ssl`` but the caller passes a stdlib
+        # SSLContext (or vice-versa), wrap_bio() will reject a foreign
+        # MemoryBIO with a TypeError. Try the default ``ssl`` first, then
+        # fall back to ``_stdlib_ssl``.
         _bio_factories: list[type[ssl.MemoryBIO]] = list(
             dict.fromkeys([ssl.MemoryBIO, _stdlib_ssl.MemoryBIO])
         )

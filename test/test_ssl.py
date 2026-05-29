@@ -152,7 +152,9 @@ class TestSSL:
         ssl_.create_urllib3_context(caller_id=ssl_._KnownCaller.NIQUESTS)
 
         if support_min_max:
-            if "Rustls" in ssl_.ssl.OPENSSL_VERSION:  # type: ignore[attr-defined]
+            from urllib3.contrib.anytls import IS_NONSTDLIB
+
+            if IS_NONSTDLIB:
                 context.set_ciphers.assert_not_called()
             else:
                 context.set_ciphers.assert_called_once_with(MOZ_INTERMEDIATE_CIPHERS)

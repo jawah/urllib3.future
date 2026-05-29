@@ -9,31 +9,12 @@ from functools import lru_cache
 from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
-try:  # Compiled with SSL?
-    if typing.TYPE_CHECKING:
-        import ssl
-    else:
-        try:
-            import rtls as ssl
-        except ImportError:
-            import ssl
+from ..contrib.anytls import ssl, Certificate
 
+if ssl is not None:
     from ..util.ssltransport import SSLTransport
-except (ImportError, AttributeError):
-    ssl = None  # type: ignore[assignment]
+else:
     SSLTransport = None  # type: ignore
-
-
-try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    if typing.TYPE_CHECKING:
-        from _ssl import Certificate
-    else:
-        from rtls import Certificate
-except ImportError:
-    try:
-        from _ssl import Certificate
-    except (ImportError, AttributeError):
-        Certificate = None  # type: ignore[misc,assignment]
 
 from .._collections import HTTPHeaderDict
 from .._constant import (
@@ -661,7 +642,7 @@ class HfaceBackend(BaseBackend):
                             self.conn_info.issuer_certificate_der = (
                                 ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
                             )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
+                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
 
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]
