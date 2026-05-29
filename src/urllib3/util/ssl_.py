@@ -762,10 +762,17 @@ def ssl_wrap_socket(
                     raise SSLError(e) from e
 
             elif hasattr(context, "load_default_certs"):
-                store_stats = context.cert_store_stats()
-                # try to load OS default certs; works well on Windows.
-                if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
-                    context.load_default_certs()
+                try:
+                    store_stats = context.cert_store_stats()
+
+                    # try to load OS default certs; works well on Windows.
+                    if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
+                        context.load_default_certs()
+                except (
+                    AttributeError,
+                    NotImplementedError,
+                ):  # Defensive: 3rd party like truststore(...)
+                    pass
 
             # Attempt to detect if we get the goofy behavior of the
             # keyfile being encrypted and OpenSSL asking for the
