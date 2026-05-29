@@ -814,11 +814,11 @@ class HfaceBackend(BaseBackend):
         self._stream_id = self._protocol.get_available_stream_id()
 
         req_context = [
+            (b":method", b"CONNECT"),
             (
                 b":authority",
                 f"{self._tunnel_host}:{self._tunnel_port}".encode("ascii"),
             ),
-            (b":method", b"CONNECT"),
         ]
 
         for header, value in self._tunnel_headers.items():
@@ -1297,11 +1297,6 @@ class HfaceBackend(BaseBackend):
 
         self.__headers = [
             (b":method", method.encode("ascii")),
-            (
-                b":scheme",
-                self.scheme.encode("ascii"),
-            ),
-            (b":path", url.encode("ascii")),
         ]
 
         if not skip_host:
@@ -1315,6 +1310,16 @@ class HfaceBackend(BaseBackend):
                 ),
             )
             self.__authority_bit_set = True
+
+        self.__headers.extend(
+            [
+                (
+                    b":scheme",
+                    self.scheme.encode("ascii"),
+                ),
+                (b":path", url.encode("ascii")),
+            ]
+        )
 
         if not skip_accept_encoding:
             self.__headers.append(
