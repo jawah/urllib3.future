@@ -553,19 +553,18 @@ class HfaceBackend(BaseBackend):
         if self._svn is not HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
 
-            if hasattr(self.sock, "sslobj"):
-                if hasattr(self.sock.sslobj, "ech_status"):
-                    self.conn_info.tls_ech_accepted = (
-                        self.sock.sslobj.ech_status == "accepted"
-                    )
+            if hasattr(self.sock, "sslobj") or hasattr(self.sock, "_sslobj"):
+                sslobj = getattr(self.sock, "sslobj", getattr(self.sock, "_sslobj"))
+                if hasattr(sslobj, "ech_status"):  # Rustls path
+                    self.conn_info.tls_ech_accepted = sslobj.ech_status == "accepted"
+                elif hasattr(sslobj, "ech_accepted"):  # BoringSSL path
+                    self.conn_info.tls_ech_accepted = sslobj.ech_accepted()
                 else:
                     self.conn_info.tls_ech_accepted = False
 
-                self.conn_info.certificate_der = self.sock.sslobj.getpeercert(
-                    binary_form=True
-                )
+                self.conn_info.certificate_der = sslobj.getpeercert(binary_form=True)
                 try:
-                    self.conn_info.certificate_dict = self.sock.sslobj.getpeercert(
+                    self.conn_info.certificate_dict = sslobj.getpeercert(
                         binary_form=False
                     )
                 except ValueError:
@@ -573,11 +572,11 @@ class HfaceBackend(BaseBackend):
                     self.conn_info.certificate_dict = None
 
                 self.conn_info.destination_address = None
-                cipher_tuple = self.sock.sslobj.cipher()
+                cipher_tuple = sslobj.cipher()
 
                 # Python 3.10+
-                if hasattr(self.sock.sslobj, "get_verified_chain"):
-                    chain = self.sock.sslobj.get_verified_chain()
+                if hasattr(sslobj, "get_verified_chain"):
+                    chain = sslobj.get_verified_chain()
 
                     cert_in_chain_count: int = len(chain)
                     parsed_certs: bool = (

@@ -509,10 +509,12 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             cipher_tuple: tuple[str, str, int] | None = None
 
             if hasattr(self.sock, "sslobj"):
-                if hasattr(self.sock.sslobj, "ech_status"):
+                if hasattr(self.sock.sslobj, "ech_status"):  # Rustls path
                     self.conn_info.tls_ech_accepted = (
                         self.sock.sslobj.ech_status == "accepted"
                     )
+                elif hasattr(self.sock.sslobj, "ech_accepted"):  # BoringSSL path
+                    self.conn_info.tls_ech_accepted = self.sock.sslobj.ech_accepted()
                 else:
                     self.conn_info.tls_ech_accepted = False
 
