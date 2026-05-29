@@ -10,6 +10,7 @@
   variable. See the documentation to learn more.
 - Fixed handling of unsendable datagram emitted by ``qh3`` MTU discovery probe when the physical NIC can't handle
   specific >1200 bytes datagrams. (#377)
+- Fixed support for the ``truststore`` 3rd party library direct alternative to ``wassima``.
 
 2.20.907 (2026-05-22)
 =====================
