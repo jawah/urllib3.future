@@ -1,3 +1,11 @@
+2.21.900 (2026-05-29)
+=====================
+
+- Fixed ``HTTPResponse.stream(amt)`` (and the async equivalent) no longer yielding per-frame for
+  streamed responses. (#379)
+- Added support for ``utls`` alternative TLS backend in addition to ``rtls``.
+  ``utls`` is based on BoringSSL and have the capability to align with Google Chrome browser capabilities.
+
 2.20.907 (2026-05-22)
 =====================
 
