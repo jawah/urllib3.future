@@ -944,6 +944,8 @@ class HfaceBackend(BaseBackend):
         gso_enabled = self._dgram_gso_enabled
         gro_enabled = self._dgram_gro_enabled
         blocksize = self.blocksize
+        is_quic = self._svn is HttpVersion.h3
+
         _has_next_timer = hasattr(protocol, "next_timer")
         _proto_exc = protocol.exceptions()
 
@@ -970,7 +972,10 @@ class HfaceBackend(BaseBackend):
                     data_out = protocol.bytes_to_send()
                     if not data_out:
                         break
-                    sync_send_dgram(sock, data_out)
+                    if is_quic:
+                        sync_send_dgram(sock, data_out)
+                    else:
+                        sock.sendall(data_out)
 
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
@@ -1480,11 +1485,15 @@ class HfaceBackend(BaseBackend):
                 elif tbs:
                     sync_send_dgram(self.sock, tbs[0])
             else:
+                is_quic = self._svn is HttpVersion.h3
                 while True:
                     buf = self._protocol.bytes_to_send()
                     if not buf:
                         break
-                    sync_send_dgram(self.sock, buf)
+                    if is_quic:
+                        sync_send_dgram(self.sock, buf)
+                    else:
+                        self.sock.sendall(buf)
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
@@ -1939,13 +1948,18 @@ class HfaceBackend(BaseBackend):
                     elif tbs:
                         sync_send_dgram(self.sock, tbs[0])
                 else:
+                    is_quic = self._svn is HttpVersion.h3
+
                     while True:
                         data_out = self._protocol.bytes_to_send()
 
                         if not data_out:
                             break
 
-                        sync_send_dgram(self.sock, data_out)
+                        if is_quic:
+                            sync_send_dgram(self.sock, data_out)
+                        else:
+                            self.sock.sendall(data_out)
             except BrokenPipeError as e:
                 remote_pipe_shutdown = e
 
