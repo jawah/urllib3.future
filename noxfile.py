@@ -223,15 +223,12 @@ def tests_impl(
         session.run("python", "--version")
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
 
-        if "rtls" in extras or "utls" in extras:
-            session.run(
-                "python",
-                "-c",
-                "from urllib3.contrib.anytls import ssl, BACKEND; "
-                "print(BACKEND, ssl.OPENSSL_VERSION)",
-            )
-        else:
-            session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
+        session.run(
+            "python",
+            "-c",
+            "from urllib3.contrib.anytls import ssl, BACKEND; "
+            "print(BACKEND, ssl.OPENSSL_VERSION)",
+        )
 
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step
