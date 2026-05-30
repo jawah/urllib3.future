@@ -49,10 +49,10 @@ def _make_async_fp(
 
     async def _body_reader(
         amt: int | None, _stream_id: int | None
-    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+    ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
         chunk = buffer.read(amt) if amt else buffer.read()
         eot = len(chunk) == 0 or buffer.tell() >= len(data)
-        return chunk, eot, None
+        return [chunk], eot, None
 
     resp_headers = HTTPHeaderDict(headers or {})
     if chunked:
@@ -1054,8 +1054,8 @@ class TestAsyncResponse:
     async def test_chunked_head_response(self) -> None:
         async def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
-            return b"", True, None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            return [], True, None
 
         r = AsyncLowLevelResponse("HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
         resp = AsyncHTTPResponse(
@@ -1094,7 +1094,7 @@ class TestAsyncResponse:
 
         async def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
             nonlocal idx
             if idx >= len(chunks):
                 raise AssertionError(
@@ -1103,7 +1103,7 @@ class TestAsyncResponse:
                 )
             d = chunks[idx]
             idx += 1
-            return d, False, None
+            return [d], False, None
 
         r = AsyncLowLevelResponse(
             "GET", 200, http_version, "OK", HTTPHeaderDict(), mock_sock
@@ -1206,13 +1206,13 @@ class TestAsyncResponse:
 
         async def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
             nonlocal chunks, idx
             if idx >= len(chunks):
-                return b"", True, None
+                return [], True, None
             d = chunks[idx]
             idx += 1
-            return d, False, None
+            return [d], False, None
 
         r = AsyncLowLevelResponse("GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
 

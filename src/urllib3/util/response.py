@@ -76,6 +76,13 @@ class BytesQueueBuffer:
         self.buffer.append(data)
         self._size += len(data)
 
+    def put_many(self, chunks: typing.Iterable[bytes | memoryview[bytes]]) -> None:
+        """Append several chunks at once, skipping empty ones."""
+        for data in chunks:
+            if data:
+                self.buffer.append(data)
+                self._size += len(data)
+
     def get(self, n: int) -> bytes:
         if n == 0:
             return b""

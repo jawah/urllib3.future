@@ -1464,8 +1464,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         __stream_id: int | None,
         __respect_end_signal: bool = True,
         __dummy_operation: bool = False,
-    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
-        """Allows us to defer the body loading after constructing the response object."""
+    ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+        """Allows us to defer the body loading after constructing the response object.
+
+        Returns the body as a list of per-frame chunks (not concatenated):
+        the caller feeds them straight into its ``BytesQueueBuffer`` so
+        contiguity is produced lazily and, for frame-aligned reads,
+        zero-copy. Joining here would defeat that buffer.
+        """
 
         # we may want to just remove the response as "pending"
         # e.g. HTTP Extension; making reads on sub protocol close may
@@ -1480,7 +1486,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 # remote can refuse future inquiries, so no need to go further with this conn.
                 if self._protocol.is_idle() and self._protocol.has_expired():
                     await self.close()
-            return b"", True, None
+            return [], True, None
 
         eot = False
 
@@ -1542,10 +1548,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 events.pop(idx)
 
                 if not events:
-                    return b"", True, trailers
+                    return [], True, trailers
 
         return (
-            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,  # type: ignore[union-attr]
+            [e.data for e in events],  # type: ignore[union-attr]
             eot,
             trailers,
         )

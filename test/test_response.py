@@ -1160,8 +1160,8 @@ class TestResponse:
     def test_chunked_head_response(self) -> None:
         def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
-            return b"", True, None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            return [], True, None
 
         r = LowLevelResponse("HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
         resp = HTTPResponse(
@@ -1259,13 +1259,13 @@ class TestResponse:
 
         def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
             nonlocal chunks, idx
             if idx >= len(chunks):
-                return b"", True, None
+                return [], True, None
             d = chunks[idx]
             idx += 1
-            return d, False, None
+            return [d], False, None
 
         r = LowLevelResponse("GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
 
@@ -1301,7 +1301,7 @@ class TestResponse:
 
         def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
             nonlocal idx
             if idx >= len(chunks):
                 # Simulate an idle-but-open connection: a second raw read
@@ -1314,7 +1314,7 @@ class TestResponse:
                 )
             d = chunks[idx]
             idx += 1
-            return d, False, None
+            return [d], False, None
 
         r = LowLevelResponse(
             "GET", 200, http_version, "OK", HTTPHeaderDict(), mock_sock
