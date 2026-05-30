@@ -1659,3 +1659,80 @@ Wonder no more! starting from urllib3-future 2.12.913+ you can have a proper rep
 .. warning:: Both ``PoolManager`` and ``ConnectionPool`` have a ``TrafficPolice`` inside them.
 
 .. danger:: Calling ``repr`` here is highly discouraged at a high frequency. Do it for debug purposes only.
+
+Alternative TLS backends (``anytls``)
+-------------------------------------
+
+urllib3-future can transparently use one of three TLS backends:
+
+* ``rtls`` - Rustls with AWS-LC (`PyPI <https://pypi.org/project/rtls/>`_)
+* ``utls`` - BoringSSL (`PyPI <https://pypi.org/project/utls/>`_)
+* ``ssl``  - the Python standard library (commonly OpenSSL or LibreSSL)
+
+At import time, urllib3-future picks the best available backend, following the
+default priority order:
+
+::
+
+    rtls  ->  utls  ->  ssl
+
+You don't have to do anything to enable this. Just install the optional
+extra you want and urllib3-future will pick it up automatically:
+
+.. code-block:: bash
+
+    # Use Rustls + AWS-LC
+    pip install urllib3-future[rtls]
+
+    # Use BoringSSL
+    pip install urllib3-future[utls]
+
+Forcing a specific backend
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set the ``URLLIB3_FUTURE_SSL_BACKEND`` environment variable to force a given
+backend. Accepted values (case-insensitive, whitespace trimmed):
+
+============================================  ===============================
+Value                                         Backend
+============================================  ===============================
+``rtls``, ``rustls``, ``aws-lc``, ``awslc``   Rustls + AWS-LC
+``utls``, ``boringssl``                       BoringSSL
+``ssl``, ``stdlib``                           Standard-library ``ssl``
+============================================  ===============================
+
+If the requested backend isn't installed, urllib3-future silently falls
+through the remaining default order. Unknown values emit a warning and use the
+default order.
+
+.. code-block:: bash
+
+    URLLIB3_FUTURE_SSL_BACKEND=ssl python my_script.py
+
+The ``anytls`` module
+~~~~~~~~~~~~~~~~~~~~~
+
+The selection logic lives in :mod:`urllib3.contrib.anytls`. The module is
+public and can be used to inspect the active backend or to perform
+backend-agnostic ``except`` clauses:
+
+.. code-block:: python
+
+    from urllib3.contrib.anytls import (
+        ssl,             # the active backend module
+        stdlib_ssl,      # always the real stdlib ``ssl`` (or None)
+        BACKEND,         # "rtls" | "utls" | "ssl" | "none"
+        HAS_SSL,         # bool - True if any ssl backend is available
+        IS_NONSTDLIB,    # bool - True for rtls or utls
+        Certificate,     # peer certificate class
+    )
+
+    print(f"using {BACKEND} TLS backend ({ssl.OPENSSL_VERSION})")
+
+Cross-backend ``SSLError``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Both ``rtls.SSLError`` and ``utls.SSLError`` subclass ``ssl.SSLError`` from
+the standard library, so ``except ssl.SSLError`` (and
+``urllib3.exceptions.BaseSSLError``) keeps working unchanged regardless of
+which backend is active.
