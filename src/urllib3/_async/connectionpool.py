@@ -1371,8 +1371,13 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
             if ssl_ctx is not None and hasattr(ssl_ctx, "http_header_for_fingerprint"):
                 try:
-                    prefixed_headers = ssl_ctx.http_header_for_fingerprint()
-                    prefixed_headers.update(headers)
+                    prefixed_headers = HTTPHeaderDict(
+                        ssl_ctx.http_header_for_fingerprint()
+                    )
+
+                    # user specified headers always win.
+                    for k, v in headers.items():
+                        prefixed_headers[k] = v
 
                     headers = prefixed_headers
                 except ValueError:  # We can forbid it entirely
