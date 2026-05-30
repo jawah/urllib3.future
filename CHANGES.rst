@@ -3,6 +3,9 @@
 
 - Fixed ``HTTPResponse.stream(amt)`` (and the async equivalent) no longer yielding per-frame for
   streamed responses. (#379)
+- Improved memory usage and throughput when reading response bodies by removing a redundant body
+  concatenation in the stream read path. Received frames are now buffered directly and served with
+  a zero-copy fast path for frame-aligned reads (e.g. per-frame streaming, WebSocket and SSE).
 - Added support for ``utls`` alternative TLS backend in addition to ``rtls``.
   ``utls`` is based on BoringSSL and have the capability to align with Google Chrome browser capabilities.
   This new TLS backend is introduced in addition to ``rtls``. urllib3-future tries backend in given order:
