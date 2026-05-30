@@ -565,9 +565,9 @@ class HfaceBackend(BaseBackend):
                 else:
                     self.conn_info.tls_ech_accepted = False
 
-                self.conn_info.certificate_der = sslobj.getpeercert(binary_form=True)
+                self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
                 try:
-                    self.conn_info.certificate_dict = sslobj.getpeercert(
+                    self.conn_info.certificate_dict = self.sock.getpeercert(
                         binary_form=False
                     )
                 except ValueError:
