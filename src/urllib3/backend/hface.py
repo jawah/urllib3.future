@@ -559,15 +559,15 @@ class HfaceBackend(BaseBackend):
                     self.sock, "sslobj", getattr(self.sock, "_sslobj", None)
                 )
                 if hasattr(sslobj, "ech_status"):  # Rustls path
-                    self.conn_info.tls_ech_accepted = sslobj.ech_status == "accepted"
+                    self.conn_info.tls_ech_accepted = sslobj.ech_status == "accepted"  # type: ignore[union-attr]
                 elif hasattr(sslobj, "ech_accepted"):  # BoringSSL path
-                    self.conn_info.tls_ech_accepted = sslobj.ech_accepted()
+                    self.conn_info.tls_ech_accepted = sslobj.ech_accepted()  # type: ignore[union-attr]
                 else:
                     self.conn_info.tls_ech_accepted = False
 
-                self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
+                self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)  # type: ignore[attr-defined]
                 try:
-                    self.conn_info.certificate_dict = self.sock.getpeercert(
+                    self.conn_info.certificate_dict = self.sock.getpeercert(  # type: ignore[attr-defined]
                         binary_form=False
                     )
                 except ValueError:
@@ -575,11 +575,11 @@ class HfaceBackend(BaseBackend):
                     self.conn_info.certificate_dict = None
 
                 self.conn_info.destination_address = None
-                cipher_tuple = sslobj.cipher()
+                cipher_tuple = sslobj.cipher()  # type: ignore[union-attr]
 
                 # Python 3.10+
                 if hasattr(sslobj, "get_verified_chain"):
-                    chain = sslobj.get_verified_chain()
+                    chain = sslobj.get_verified_chain()  # type: ignore[union-attr]
 
                     cert_in_chain_count: int = len(chain)
                     parsed_certs: bool = (

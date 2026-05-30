@@ -1375,9 +1375,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                         ssl_ctx.http_header_for_fingerprint()
                     )
 
-                    # user specified headers always win.
-                    for k, v in headers.items():
-                        prefixed_headers[k] = v
+                    if headers is not None:
+                        # user specified headers always win.
+                        for k, v in headers.items():
+                            prefixed_headers[k] = v
 
                     headers = prefixed_headers
                 except ValueError:  # We can forbid it entirely
