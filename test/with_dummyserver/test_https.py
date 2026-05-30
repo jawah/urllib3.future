@@ -45,7 +45,8 @@ from urllib3.util.ssl_match_hostname import CertificateError
 from urllib3.util.timeout import Timeout
 
 
-from urllib3.util.ssl_ import _SSLContextCache, OPENSSL_VERSION
+from urllib3.util.ssl_ import _SSLContextCache
+from urllib3.contrib.anytls import IS_NONSTDLIB
 from urllib3.contrib.imcc._ctypes import load_cert_chain as _ctypes_load_cert_chain
 from urllib3.contrib.imcc._shm import load_cert_chain as _shm_load_cert_chain
 from urllib3.contrib.imcc._fifo import load_cert_chain as _fifo_load_cert_chain
@@ -263,7 +264,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         strict=False,
     )
     @pytest.mark.skipif(
-        "Rustls" in OPENSSL_VERSION, reason="rtls already have native support for imcc"
+        IS_NONSTDLIB, reason="rtls/utls already have native support for imcc"
     )
     def test_in_memory_client_key_password_ctypes_only(
         self, monkeypatch: pytest.MonkeyPatch
@@ -314,7 +315,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         strict=False,
     )
     @pytest.mark.skipif(
-        "Rustls" in OPENSSL_VERSION, reason="rtls already have native support for imcc"
+        IS_NONSTDLIB, reason="rtls/utls already have native support for imcc"
     )
     def test_in_memory_client_key_password_shm_only(
         self, monkeypatch: pytest.MonkeyPatch
@@ -367,7 +368,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         strict=False,
     )
     @pytest.mark.skipif(
-        "Rustls" in OPENSSL_VERSION, reason="rtls already have native support for imcc"
+        IS_NONSTDLIB, reason="rtls/utls already have native support for imcc"
     )
     def test_in_memory_client_key_password_fifo_only(
         self, monkeypatch: pytest.MonkeyPatch
@@ -526,6 +527,7 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 or "certificate verify failed" in str(e.value.reason)
                 or "invalid peer certificate: certificate not valid for name"
                 in str(e.value.reason)
+                or "certificate verification failed" in str(e.value.reason)
             )
 
     def test_verified_with_bad_ca_certs(self) -> None:
@@ -551,6 +553,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 or "self signed certificate in certificate chain" in str(e.value.reason)
                 # Rustls specific
                 or "invalid peer certificate:" in str(e.value.reason)
+                # BoringSSL specific
+                or "self-signed certificate" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
     def test_wrap_socket_failure_resource_leak(self) -> None:
@@ -592,6 +596,8 @@ class TestHTTPS(HTTPSDummyServerTestCase):
                 or "invalid certificate chain" in str(e.value.reason)
                 # Rustls specific
                 or "invalid peer certificate:" in str(e.value.reason)
+                # BoringSSL specific
+                or "self-signed certificate" in str(e.value.reason)
             ), (
                 "Expected 'No root certificates specified',  "
                 "'certificate verify failed', or "
@@ -1204,10 +1210,9 @@ class TestHTTPS(HTTPSDummyServerTestCase):
         reason="Python built against restricted ssl library with one protocol supported",
     )
     def test_default_ssl_context_ssl_min_max_versions(self) -> None:
-        try:
-            import rtls as alt_ssl
-        except ImportError:
-            alt_ssl = None  # type: ignore[assignment]
+        from urllib3.contrib.anytls import ssl as anytls_ssl, IS_NONSTDLIB
+
+        alt_ssl = anytls_ssl if IS_NONSTDLIB else None
 
         ctx = urllib3.util.ssl_.create_urllib3_context()
 
@@ -1218,11 +1223,11 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             ).maximum_version
             assert ctx.maximum_version == expected_maximum_version
         else:
-            assert ctx.minimum_version == alt_ssl.TLSVersion.TLSv1_2  # type: ignore[comparison-overlap]
+            assert ctx.minimum_version == alt_ssl.TLSVersion.TLSv1_2
             expected_maximum_version = alt_ssl.SSLContext(
                 alt_ssl.PROTOCOL_TLS_CLIENT
             ).maximum_version
-            assert ctx.maximum_version == expected_maximum_version  # type: ignore[comparison-overlap]
+            assert ctx.maximum_version == expected_maximum_version
 
     @pytest.mark.skipif(
         urllib3.util.ssl_.SUPPORT_MIN_MAX_TLS_VERSION is False,
@@ -1396,6 +1401,8 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
                 or "no appropriate subjectAltName" in str(e.value)
                 or "certificate is not valid for any names (according to its subjectAltName extension"
                 in str(e.value)
+                or "hostname mismatch" in str(e.value)
+                or "certificate verification failed" in str(e.value)
             )
 
     def test_common_name_without_san_with_different_common_name(
@@ -1416,9 +1423,11 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
         ) as https_pool:
             with pytest.raises(MaxRetryError) as e:
                 https_pool.request("GET", "/")
-            assert "mismatch, certificate is not valid for 'localhost'" in str(
-                e.value
-            ) or "hostname 'localhost' doesn't match 'example.com'" in str(e.value)
+            assert (
+                "mismatch, certificate is not valid for 'localhost'" in str(e.value)
+                or "hostname 'localhost' doesn't match 'example.com'" in str(e.value)
+                or "hostname mismatch" in str(e.value)
+            )
 
     @pytest.mark.parametrize("use_assert_hostname", [True, False])
     def test_hostname_checks_common_name_respected(

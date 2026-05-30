@@ -31,10 +31,10 @@ def test_sync_ech_accepted(happy_eyeballs: bool, http_version: int) -> None:
     if http_version == 30 and not _SYNC_HAS_HTTP3_SUPPORT():
         pytest.skip("Test requires HTTP/3 support")
     if http_version != 30:
-        try:
-            import rtls  # noqa
-        except ImportError:
-            pytest.skip("Test requires rtls for ECH at TCP level")
+        from urllib3.contrib.anytls import IS_NONSTDLIB
+
+        if not IS_NONSTDLIB:
+            pytest.skip("Test requires rtls/utls for ECH at TCP level")
 
     disabled_svn: set[HttpVersion] = set()
 
@@ -88,10 +88,10 @@ async def test_async_ech_accepted(happy_eyeballs: bool, http_version: int) -> No
     if http_version == 30 and not _ASYNC_HAS_HTTP3_SUPPORT():
         pytest.skip("Test requires HTTP/3 support")
     if http_version != 30:
-        try:
-            import rtls  # noqa
-        except ImportError:
-            pytest.skip("Test requires rtls for ECH at TCP level")
+        from urllib3.contrib.anytls import IS_NONSTDLIB
+
+        if not IS_NONSTDLIB:
+            pytest.skip("Test requires rtls/utls for ECH at TCP level")
 
     disabled_svn: set[HttpVersion] = set()
 

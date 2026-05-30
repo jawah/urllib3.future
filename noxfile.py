@@ -223,10 +223,12 @@ def tests_impl(
         session.run("python", "--version")
         session.run("python", "-c", "import struct; print(struct.calcsize('P') * 8)")
 
-        if "rtls" not in extras:
-            session.run("python", "-c", "import ssl; print(ssl.OPENSSL_VERSION)")
-        else:
-            session.run("python", "-c", "import rtls; print(rtls.OPENSSL_VERSION)")
+        session.run(
+            "python",
+            "-c",
+            "from urllib3.contrib.anytls import ssl, BACKEND; "
+            "print(BACKEND, ssl.OPENSSL_VERSION)",
+        )
 
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step
@@ -299,6 +301,24 @@ def test(session: nox.Session) -> None:
 )
 def test_rtls(session: nox.Session) -> None:
     tests_impl(session, extras="socks,brotli,zstd,ws,rtls")
+
+
+@nox.session(
+    python=[
+        "3.7",
+        "3.8",
+        "3.9",
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.13t",
+        "3.14",
+        "3.14t",
+    ]
+)
+def test_utls(session: nox.Session) -> None:
+    tests_impl(session, extras="socks,brotli,zstd,ws,utls")
 
 
 @nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"])
@@ -584,6 +604,9 @@ def downstream_sphinx(session: nox.Session) -> None:
     session.install(".", "--group", "test", silent=False)
     # docutils 0.22 break two unit test of sphinx
     session.install("docutils==0.21")
+    # snowballstemmer failure due to stemWord("international")
+    # change in 3.x (nothing to do with us)
+    session.install("snowballstemmer<3")
 
     session.cd(root)
     session.install(".", silent=False)

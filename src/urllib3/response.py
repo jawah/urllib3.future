@@ -1046,6 +1046,22 @@ class HTTPResponse(io.IOBase):
             after having ``.read()`` the file object. (Overridden if ``amt`` is
             set.)
         """
+        return self._read(
+            amt=amt,
+            decode_content=decode_content,
+            cache_content=cache_content,
+        )
+
+    def _read(
+        self,
+        amt: int | None = None,
+        decode_content: bool | None = None,
+        cache_content: bool = False,
+        *,
+        partial: bool = False,
+    ) -> bytes:
+        """We need this private method to restore BC with urllib3 fast-path for streaming/chunks.
+        see https://github.com/jawah/urllib3.future/issues/379"""
         try:
             self._init_decoder()
             if decode_content is None:
@@ -1155,7 +1171,10 @@ class HTTPResponse(io.IOBase):
                 )
                 self._decoded_buffer.put(decoded_data)
 
-                while len(self._decoded_buffer) < amt and data:
+                surface_per_frame = partial and hasattr(self._fp, "_eot")
+                while (
+                    len(self._decoded_buffer) < amt and data and not surface_per_frame
+                ):
                     # TODO make sure to initially read enough data to get past the headers
                     # For example, the GZ file header takes 10 bytes, we don't want to read
                     # it one byte at a time
@@ -1218,7 +1237,7 @@ class HTTPResponse(io.IOBase):
             or len(self._decoded_buffer) > 0
             or (self._decoder and self._decoder.has_unconsumed_tail)
         ):
-            data = self.read(amt=amt, decode_content=decode_content)
+            data = self._read(amt=amt, decode_content=decode_content, partial=True)
 
             if data:
                 yield data

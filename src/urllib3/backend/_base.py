@@ -99,7 +99,7 @@ class DirectStreamAccess:
         stream_id: int,
         read: typing.Callable[
             [int | None, int | None, bool, bool],
-            tuple[bytes, bool, HTTPHeaderDict | None],
+            tuple[list[bytes], bool, HTTPHeaderDict | None],
         ]
         | None = None,
         write: typing.Callable[[bytes, int, bool], None] | None = None,
@@ -109,12 +109,18 @@ class DirectStreamAccess:
         if read is not None:
             self._read: (
                 typing.Callable[
-                    [int | None, bool], tuple[bytes, bool, HTTPHeaderDict | None]
+                    [int | None, bool], tuple[list[bytes], bool, HTTPHeaderDict | None]
                 ]
                 | None
             ) = lambda amt, fo: read(amt, self._stream_id, amt is not None, fo)
         else:
             self._read = None
+
+        # Per-frame chunks are buffered here so a frame-aligned ``recv``
+        # returns the protocol's original bytes object zero-copy (instead
+        # of eagerly concatenating every frame on each call).
+        self._buffer: BytesQueueBuffer = BytesQueueBuffer()
+        self._eot: bool = False
 
         if write is not None:
             self._write: typing.Callable[[bytes, bool], None] | None = lambda buf, eot: (
@@ -164,7 +170,27 @@ class DirectStreamAccess:
         if self._read is None:
             raise OSError("stream closed error")
 
-        data, eot, trailers = self._read(__bufsize, False)
+        trailers = None
+
+        # Only hit the wire when we have nothing buffered to satisfy the
+        # caller; otherwise serve leftover frames first.
+        if not self._eot and len(self._buffer) == 0:
+            chunks, self._eot, trailers = self._read(__bufsize, False)
+            self._buffer.put_many(chunks)
+
+        if len(self._buffer):
+            data = self._buffer.get(
+                __bufsize
+                if __bufsize is not None and __bufsize > 0
+                else len(self._buffer)
+            )
+        else:
+            data = b""
+
+        # Only signal end-of-transmission once every buffered frame has
+        # been handed out, otherwise a bounded recv() at eot would make
+        # the caller drop still-buffered bytes.
+        eot = self._eot and len(self._buffer) == 0
 
         if eot:
             self._read = None
@@ -212,7 +238,7 @@ class LowLevelResponse:
         reason: str,
         headers: HTTPHeaderDict,
         body: typing.Callable[
-            [int | None, int | None], tuple[bytes, bool, HTTPHeaderDict | None]
+            [int | None, int | None], tuple[list[bytes], bool, HTTPHeaderDict | None]
         ]
         | None,
         *,
@@ -330,15 +356,19 @@ class LowLevelResponse:
         )
 
         if self._eot is False and not data_ready_to_go:
-            data, self._eot, self.trailers = self.__internal_read_st(
+            chunks, self._eot, self.trailers = self.__internal_read_st(
                 __size, self._stream_id
             )
 
-            self.__buffer_excess.put(data)
+            self.__buffer_excess.put_many(chunks)
             buf_capacity = len(self.__buffer_excess)
 
-        data = self.__buffer_excess.get(
-            __size if __size is not None and __size > 0 else buf_capacity
+        data = (
+            self.__buffer_excess.get(
+                __size if __size is not None and __size > 0 else buf_capacity
+            )
+            if buf_capacity
+            else b""
         )
 
         size_in = len(data)

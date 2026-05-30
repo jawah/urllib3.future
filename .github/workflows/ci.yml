@@ -99,6 +99,26 @@ jobs:
             python-version: "3.11"
             os: windows-2025
             experimental: false
+          - traefik-server: true
+            nox-session: test_utls-3.13
+            python-version: "3.13"
+            os: ubuntu-24.04
+            experimental: false
+          - traefik-server: true
+            nox-session: test_utls-3.12
+            python-version: "3.12"
+            os: ubuntu-24.04
+            experimental: false
+          - traefik-server: true
+            nox-session: test_utls-3.11
+            python-version: "3.11"
+            os: ubuntu-24.04
+            experimental: false
+          - traefik-server: true
+            nox-session: test_utls-3.11
+            python-version: "3.11"
+            os: windows-2025
+            experimental: false
           - python-version: "pypy-3.7"
             os: ubuntu-24.04
             experimental: false

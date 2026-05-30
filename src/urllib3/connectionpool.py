@@ -1359,6 +1359,26 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         else:
             extension = None
 
+        # utls -- BoringSSL have predefined headers
+        # that we automatically insert.
+        if conn_info is not None and conn_info.tls_version is not None:
+            ssl_ctx: ssl.SSLContext | None = getattr(conn.sock, "context", None)
+
+            if ssl_ctx is not None and hasattr(ssl_ctx, "http_header_for_fingerprint"):
+                try:
+                    prefixed_headers = HTTPHeaderDict(
+                        ssl_ctx.http_header_for_fingerprint()
+                    )
+
+                    if headers is not None:
+                        # user specified headers always win.
+                        for k, v in headers.items():
+                            prefixed_headers[k] = v
+
+                    headers = prefixed_headers
+                except ValueError:  # We can forbid it entirely
+                    pass
+
         try:
             rp = conn.request(
                 method,

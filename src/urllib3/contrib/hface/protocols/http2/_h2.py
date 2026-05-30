@@ -27,6 +27,8 @@ import jh2.events  # type: ignore
 import jh2.exceptions  # type: ignore
 import jh2.settings  # type: ignore
 
+from jh2 import __version__ as jh2_version
+
 from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
 from ...events import (
@@ -40,6 +42,15 @@ from ...events import (
     StreamResetReceived,
 )
 from .._protocols import HTTP2Protocol
+
+
+# h2 state machine had a couple of issues
+# we were locked in on some settings and
+# attempting to change them resulted in weird
+# issues. see https://github.com/jawah/h2/releases/tag/v5.0.12
+JH2_NOT_RFC_COMPLIANT_SETTINGS: bool = tuple(
+    int(p) for p in jh2_version.split(".", maxsplit=3)[:3]
+) <= (5, 0, 11)
 
 
 class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
@@ -56,13 +67,21 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
         super().__init__(config=config)
         # by default CONNECT is disabled
         # we need it to support natively WebSocket over HTTP/2 for example.
-        self.local_settings = jh2.settings.Settings(
-            client=True,
-            initial_values={
+        if not JH2_NOT_RFC_COMPLIANT_SETTINGS:
+            initial_settings = {
+                jh2.settings.SettingCodes.HEADER_TABLE_SIZE: 65536,
+                jh2.settings.SettingCodes.ENABLE_PUSH: 0,  # we don't support it anyway for now.
+                jh2.settings.SettingCodes.INITIAL_WINDOW_SIZE: 6291456,
+                jh2.settings.SettingCodes.MAX_HEADER_LIST_SIZE: 262144,
+            }
+        else:
+            initial_settings = {
                 jh2.settings.SettingCodes.MAX_CONCURRENT_STREAMS: 100,
                 jh2.settings.SettingCodes.MAX_HEADER_LIST_SIZE: self.DEFAULT_MAX_HEADER_LIST_SIZE,
-                jh2.settings.SettingCodes.ENABLE_CONNECT_PROTOCOL: 1,
-            },
+            }
+        self.local_settings = jh2.settings.Settings(
+            client=True,
+            initial_values=initial_settings,
         )
         self._observable_impl = observable_impl
 
@@ -143,7 +162,10 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
         self._open_stream_count: int = 0
         self._connection.initiate_connection()
-        self._connection.increment_flow_control_window(2**24)
+        if JH2_NOT_RFC_COMPLIANT_SETTINGS:
+            self._connection.increment_flow_control_window(2**24)
+        else:
+            self._connection.increment_flow_control_window(15663105)
         self._events: StreamMatrix = StreamMatrix()
         self._terminated: bool = False
         self._goaway_to_honor: bool = False
@@ -193,7 +215,6 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
         self._connection.send_headers(stream_id, headers, end_stream)
-        self._connection.increment_flow_control_window(2**24, stream_id=stream_id)
         self._open_stream_count += 1
 
     def submit_data(

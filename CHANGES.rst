@@ -1,3 +1,23 @@
+2.21.900 (2026-05-30)
+=====================
+
+- Fixed ``HTTPResponse.stream(amt)`` (and the async equivalent) no longer yielding per-frame for
+  streamed responses. (#379)
+- Improved memory usage and throughput when reading response bodies by removing a redundant body
+  concatenation in the stream read path. Received frames are now buffered directly and served with
+  a zero-copy fast path for frame-aligned reads (e.g. per-frame streaming, WebSocket and SSE).
+- Added support for ``utls`` alternative TLS backend in addition to ``rtls``.
+  ``utls`` is based on BoringSSL and have the capability to align with Google Chrome browser capabilities.
+  This new TLS backend is introduced in addition to ``rtls``. urllib3-future tries backend in given order:
+  ``rtls`` -> ``utls`` -> ``ssl``. You may override this by setting ``URLLIB3_FUTURE_SSL_BACKEND`` environment
+  variable. See the documentation to learn more. You can also pass a custom ``SSLContext`` from any
+  of those backends. We can handle multiple TLS backend at the same time within a single ``PoolManager`` instance.
+- Fixed handling of unsendable datagram emitted by ``qh3`` MTU discovery probe when the physical NIC can't handle
+  specific >1200 bytes datagrams. (#377)
+- Fixed support for the ``truststore`` 3rd party library direct alternative to ``wassima``.
+  We still recommend ``wassima`` as the "OS truststore" library. It is fixed for strict BC
+  promise we made by being a "urllib3" inplace replacement.
+
 2.20.907 (2026-05-22)
 =====================
 

@@ -9,31 +9,12 @@ from functools import lru_cache
 from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
-try:  # Compiled with SSL?
-    if typing.TYPE_CHECKING:
-        import ssl
-    else:
-        try:
-            import rtls as ssl
-        except ImportError:
-            import ssl
+from ..contrib.anytls import ssl, Certificate
 
+if ssl is not None:
     from ..util.ssltransport import SSLTransport
-except (ImportError, AttributeError):
-    ssl = None  # type: ignore[assignment]
+else:
     SSLTransport = None  # type: ignore
-
-
-try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    if typing.TYPE_CHECKING:
-        from _ssl import Certificate
-    else:
-        from rtls import Certificate
-except ImportError:
-    try:
-        from _ssl import Certificate
-    except (ImportError, AttributeError):
-        Certificate = None  # type: ignore[misc,assignment]
 
 from .._collections import HTTPHeaderDict
 from .._constant import (
@@ -68,6 +49,7 @@ from ..contrib.ssa._gro import (
     _sock_has_gro,
     _sock_has_gso,
     sync_recv_gro,
+    sync_send_dgram,
     sync_sendmsg_gso,
 )
 from ..exceptions import (
@@ -572,19 +554,20 @@ class HfaceBackend(BaseBackend):
         if self._svn is not HttpVersion.h3:
             cipher_tuple: tuple[str, str, int] | None = None
 
-            if hasattr(self.sock, "sslobj"):
-                if hasattr(self.sock.sslobj, "ech_status"):
-                    self.conn_info.tls_ech_accepted = (
-                        self.sock.sslobj.ech_status == "accepted"
-                    )
+            if hasattr(self.sock, "sslobj") or hasattr(self.sock, "_sslobj"):
+                sslobj = getattr(
+                    self.sock, "sslobj", getattr(self.sock, "_sslobj", None)
+                )
+                if hasattr(sslobj, "ech_status"):  # Rustls path
+                    self.conn_info.tls_ech_accepted = sslobj.ech_status == "accepted"  # type: ignore[union-attr]
+                elif hasattr(sslobj, "ech_accepted"):  # BoringSSL path
+                    self.conn_info.tls_ech_accepted = sslobj.ech_accepted()  # type: ignore[union-attr]
                 else:
                     self.conn_info.tls_ech_accepted = False
 
-                self.conn_info.certificate_der = self.sock.sslobj.getpeercert(
-                    binary_form=True
-                )
+                self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)  # type: ignore[attr-defined]
                 try:
-                    self.conn_info.certificate_dict = self.sock.sslobj.getpeercert(
+                    self.conn_info.certificate_dict = self.sock.getpeercert(  # type: ignore[attr-defined]
                         binary_form=False
                     )
                 except ValueError:
@@ -592,11 +575,11 @@ class HfaceBackend(BaseBackend):
                     self.conn_info.certificate_dict = None
 
                 self.conn_info.destination_address = None
-                cipher_tuple = self.sock.sslobj.cipher()
+                cipher_tuple = sslobj.cipher()  # type: ignore[union-attr]
 
                 # Python 3.10+
-                if hasattr(self.sock.sslobj, "get_verified_chain"):
-                    chain = self.sock.sslobj.get_verified_chain()
+                if hasattr(sslobj, "get_verified_chain"):
+                    chain = sslobj.get_verified_chain()  # type: ignore[union-attr]
 
                     cert_in_chain_count: int = len(chain)
                     parsed_certs: bool = (
@@ -661,7 +644,7 @@ class HfaceBackend(BaseBackend):
                             self.conn_info.issuer_certificate_der = (
                                 ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
                             )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()  # type: ignore[assignment]
+                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
 
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]
@@ -833,11 +816,11 @@ class HfaceBackend(BaseBackend):
         self._stream_id = self._protocol.get_available_stream_id()
 
         req_context = [
+            (b":method", b"CONNECT"),
             (
                 b":authority",
                 f"{self._tunnel_host}:{self._tunnel_port}".encode("ascii"),
             ),
-            (b":method", b"CONNECT"),
         ]
 
         for header, value in self._tunnel_headers.items():
@@ -961,6 +944,8 @@ class HfaceBackend(BaseBackend):
         gso_enabled = self._dgram_gso_enabled
         gro_enabled = self._dgram_gro_enabled
         blocksize = self.blocksize
+        is_quic = self._svn is HttpVersion.h3
+
         _has_next_timer = hasattr(protocol, "next_timer")
         _proto_exc = protocol.exceptions()
 
@@ -979,15 +964,18 @@ class HfaceBackend(BaseBackend):
                     except GenericSegmentOffloadUnsupported:
                         self._dgram_gso_enabled = gso_enabled = False
                         for dgram in tbs:
-                            sock.sendall(dgram)
+                            sync_send_dgram(sock, dgram)
                 elif tbs:
-                    sock.sendall(tbs[0])
+                    sync_send_dgram(sock, tbs[0])
             else:
                 while True:
                     data_out = protocol.bytes_to_send()
                     if not data_out:
                         break
-                    sock.sendall(data_out)
+                    if is_quic:
+                        sync_send_dgram(sock, data_out)
+                    else:
+                        sock.sendall(data_out)
 
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
@@ -1316,11 +1304,6 @@ class HfaceBackend(BaseBackend):
 
         self.__headers = [
             (b":method", method.encode("ascii")),
-            (
-                b":scheme",
-                self.scheme.encode("ascii"),
-            ),
-            (b":path", url.encode("ascii")),
         ]
 
         if not skip_host:
@@ -1334,6 +1317,16 @@ class HfaceBackend(BaseBackend):
                 ),
             )
             self.__authority_bit_set = True
+
+        self.__headers.extend(
+            [
+                (
+                    b":scheme",
+                    self.scheme.encode("ascii"),
+                ),
+                (b":path", url.encode("ascii")),
+            ]
+        )
 
         if not skip_accept_encoding:
             self.__headers.append(
@@ -1488,15 +1481,19 @@ class HfaceBackend(BaseBackend):
                     except GenericSegmentOffloadUnsupported:
                         self._dgram_gso_enabled = False
                         for dgram in tbs:
-                            self.sock.sendall(dgram)
+                            sync_send_dgram(self.sock, dgram)
                 elif tbs:
-                    self.sock.sendall(tbs[0])
+                    sync_send_dgram(self.sock, tbs[0])
             else:
+                is_quic = self._svn is HttpVersion.h3
                 while True:
                     buf = self._protocol.bytes_to_send()
                     if not buf:
                         break
-                    self.sock.sendall(buf)
+                    if is_quic:
+                        sync_send_dgram(self.sock, buf)
+                    else:
+                        self.sock.sendall(buf)
         except BrokenPipeError as e:
             rp = ResponsePromise(self, self._stream_id, self.__headers)
             self._promises[rp.uid] = rp
@@ -1606,8 +1603,14 @@ class HfaceBackend(BaseBackend):
         __stream_id: int | None,
         __respect_end_signal: bool = True,
         __dummy_operation: bool = False,
-    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
-        """Allows us to defer the body loading after constructing the response object."""
+    ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+        """Allows us to defer the body loading after constructing the response object.
+
+        Returns the body as a list of per-frame chunks (not concatenated):
+        the caller feeds them straight into its ``BytesQueueBuffer`` so
+        contiguity is produced lazily and, for frame-aligned reads,
+        zero-copy. Joining here would defeat that buffer.
+        """
 
         # we may want to just remove the response as "pending"
         # e.g. HTTP Extension; making reads on sub protocol close may
@@ -1622,7 +1625,7 @@ class HfaceBackend(BaseBackend):
                 # remote can refuse future inquiries, so no need to go further with this conn.
                 if self._protocol.is_idle() and self._protocol.has_expired():
                     self.close()
-            return b"", True, None
+            return [], True, None
 
         eot = False
 
@@ -1681,10 +1684,10 @@ class HfaceBackend(BaseBackend):
                 events.pop(idx)
 
                 if not events:
-                    return b"", True, trailers
+                    return [], True, trailers
 
         return (
-            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,  # type: ignore[union-attr]
+            [e.data for e in events],  # type: ignore[union-attr]
             eot,
             trailers,
         )
@@ -1941,17 +1944,22 @@ class HfaceBackend(BaseBackend):
                         except GenericSegmentOffloadUnsupported:
                             self._dgram_gso_enabled = False
                             for dgram in tbs:
-                                self.sock.sendall(dgram)
+                                sync_send_dgram(self.sock, dgram)
                     elif tbs:
-                        self.sock.sendall(tbs[0])
+                        sync_send_dgram(self.sock, tbs[0])
                 else:
+                    is_quic = self._svn is HttpVersion.h3
+
                     while True:
                         data_out = self._protocol.bytes_to_send()
 
                         if not data_out:
                             break
 
-                        self.sock.sendall(data_out)
+                        if is_quic:
+                            sync_send_dgram(self.sock, data_out)
+                        else:
+                            self.sock.sendall(data_out)
             except BrokenPipeError as e:
                 remote_pipe_shutdown = e
 

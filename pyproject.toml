@@ -67,7 +67,14 @@ ws = [
   "wsproto>=1.2,<2",
 ]
 rtls = [
-    "rtls; platform_python_implementation == 'CPython'"
+  "rtls; platform_python_implementation == 'CPython'",
+]
+utls = [
+  "utls; platform_python_implementation == 'CPython'",
+  # force zstd, and br to be part of utls group
+  # we need them as we force "Accept-Encoding: br, zstd, gzip,...)
+  "zstandard>=0.18.0; python_version < '3.14'",
+  "brotli>=1.0.9; platform_python_implementation == 'CPython'",
 ]
 
 [dependency-groups]
@@ -102,7 +109,7 @@ mypy = [
   "qh3==1.8.1",
   "h11==0.14.0; python_version == '3.7'",
   "h11>=0.16.0,<1; python_version >= '3.8'",
-  "jh2==5.0.11",
+  "jh2==5.0.13",
   "wsproto==1.2.0; python_version >= '3.7' and python_version <= '3.9'",
   "wsproto>=1.3.2,<2; python_version >= '3.10'",
   "zstandard==0.21.0; python_version == '3.7'",
@@ -111,6 +118,7 @@ mypy = [
   "types-PySocks==1.7.1.20251001; python_version == '3.9'",
   "types-PySocks>=1.7.1.20260408; python_version >= '3.10'",
   "rtls==2026.4.24",
+  "utls==2026.5.28",
 ]
 dev = [
   {include-group = "common"},

@@ -32,17 +32,7 @@ from .response import HTTPResponse
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.util import to_str
 
-try:  # Compiled with SSL?
-    if typing.TYPE_CHECKING:
-        import ssl
-    else:
-        try:
-            import rtls as ssl
-        except ImportError:
-            import ssl
-
-except (ImportError, AttributeError):
-    ssl = None  # type: ignore[assignment]
+from .contrib.anytls import ssl
 
 from ._version import __version__
 from .backend import HfaceBackend, HttpVersion, QuicPreemptiveCacheType, ResponsePromise
@@ -58,7 +48,10 @@ from .exceptions import (
 )
 from .util import SKIP_HEADER, SKIPPABLE_HEADERS
 from .util.request import body_to_chunks
-from .util.ssl_ import assert_fingerprint as _assert_fingerprint, convert_ssl_ctx_rtls
+from .util.ssl_ import (
+    assert_fingerprint as _assert_fingerprint,
+    convert_ssl_ctx_nonstdlib,
+)
 from .util.ssl_ import (
     is_capable_for_quic,
     is_ipaddress,
@@ -731,7 +724,7 @@ class HTTPSConnection(HTTPConnection):
         ciphers: str | None = None,
     ) -> None:
         if ssl_context is not None:
-            ssl_context = convert_ssl_ctx_rtls(ssl_context)
+            ssl_context = convert_ssl_ctx_nonstdlib(ssl_context)
 
         if not is_capable_for_quic(ssl_context, ssl_maximum_version):
             if disabled_svn is None:

@@ -26,6 +26,7 @@ __all__ = (
     "open_dgram_connection",
     "sync_recv_gro",
     "sync_sendmsg_gso",
+    "sync_send_dgram",
     "GenericSegmentOffloadUnsupported",
     "DatagramReader",
     "DatagramWriter",
@@ -251,6 +252,50 @@ _GSO_UNSUPPORTED_ERRNOS: typing.Final = frozenset(
 )
 
 
+# Errnos returned when a datagram is larger than the path/link MTU allows
+# and cannot be fragmented. qh3 performs Datagram Packetization Layer Path
+# MTU Discovery (DPLPMTUD) by emitting PING probe datagrams of increasing
+# size; an oversized probe is expected to bounce with ``EMSGSIZE``.
+_MSG_TOO_BIG_ERRNOS: typing.Final = frozenset(
+    e
+    for e in (
+        getattr(errno, "EMSGSIZE", None),
+        getattr(errno, "WSAEMSGSIZE", None),
+    )
+    if e is not None
+)
+
+# Windows surfaces "message too long" as WSAEMSGSIZE (10040) through the
+# ``winerror`` attribute as well, so account for it explicitly.
+_WSAEMSGSIZE_WINERROR: typing.Final = 10040
+
+
+def _is_msg_too_big(exc: OSError) -> bool:
+    """Return True when *exc* means the datagram exceeded the path MTU."""
+    if exc.errno in _MSG_TOO_BIG_ERRNOS:
+        return True
+    return getattr(exc, "winerror", None) == _WSAEMSGSIZE_WINERROR
+
+
+def sync_send_dgram(sock: socket.socket, data: bytes) -> None:
+    """Send a single datagram, dropping it if it is oversized.
+
+    A datagram the kernel rejects with ``EMSGSIZE`` is silently dropped:
+    it is an over-large qh3 DPLPMTUD probe that is meant to fail, not a
+    fatal connection error (see issue #377). Any other error propagates.
+
+    ``send`` (not ``sendall``) is used deliberately: a UDP datagram is
+    sent atomically, so the stream-oriented retry loop of ``sendall``
+    would be meaningless here (and would re-send a leftover tail as a
+    corrupt second datagram if it ever triggered).
+    """
+    try:
+        sock.send(data)
+    except OSError as exc:
+        if not _is_msg_too_big(exc):
+            raise
+
+
 def sync_sendmsg_gso(sock: socket.socket, datagrams: list[bytes]) -> None:
     """Batch-send datagrams using GSO. Falls back to individual sends.
 
@@ -264,7 +309,12 @@ def sync_sendmsg_gso(sock: socket.socket, datagrams: list[bytes]) -> None:
     """
     for segment_size, group in _group_by_segment_size(datagrams):
         if len(group) == 1:
-            sock.send(group[0])
+            try:
+                sock.send(group[0])
+            except OSError as exc:
+                # Oversized DPLPMTUD probe -- drop it (issue #377).
+                if not _is_msg_too_big(exc):
+                    raise
             continue
         try:
             # Passing the iov as multiple buffers lets the kernel
@@ -277,10 +327,18 @@ def sync_sendmsg_gso(sock: socket.socket, datagrams: list[bytes]) -> None:
         except OSError as exc:
             if exc.errno in _GSO_UNSUPPORTED_ERRNOS:
                 raise GenericSegmentOffloadUnsupported() from exc
-            # Other transient errors (e.g. interface MTU change): fall
-            # back to one-by-one for this batch but keep GSO enabled.
+            # The batch was rejected. This can be a transient error (e.g.
+            # interface MTU change) or an oversized DPLPMTUD probe segment
+            # (EMSGSIZE). Fall back to one-by-one for this batch -- keeping
+            # GSO enabled -- so that only the genuinely oversized datagram
+            # is dropped and any legal (e.g. short trailing) segment in the
+            # same group is still delivered (issue #377).
             for dgram in group:
-                sock.send(dgram)
+                try:
+                    sock.send(dgram)
+                except OSError as inner:
+                    if not _is_msg_too_big(inner):
+                        raise
 
 
 # qh3 ships a Rust-native, quinn-udp backed optimized UDP I/O
@@ -514,10 +572,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
             except BlockingIOError:
                 pass
             except OSError as exc:
-                self._protocol.error_received(exc)
+                if not _is_msg_too_big(exc):
+                    self._protocol.error_received(exc)
                 return
         except OSError as exc:
-            self._protocol.error_received(exc)
+            if not _is_msg_too_big(exc):
+                self._protocol.error_received(exc)
             return
 
         # Fell through with EAGAIN -- queue and arm the writer.
@@ -628,10 +688,17 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                                     self._queue_write(d, addr)
                             return
                         except OSError as inner:
+                            # Oversized DPLPMTUD probe: drop just this
+                            # datagram and keep going (issue #377).
+                            if _is_msg_too_big(inner):
+                                continue
                             self._protocol.error_received(inner)
                             if self._closing or self._closed:
                                 return
                 else:
+                    # Oversized probe -- drop this group (issue #377).
+                    if _is_msg_too_big(exc):
+                        continue
                     self._protocol.error_received(exc)
                     if self._closing or self._closed:
                         return
@@ -679,12 +746,15 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                 queue.popleft()
                 self._buffer_size -= len(data)
                 self._maybe_resume_protocol()
-                try:
-                    self._protocol.error_received(exc)
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except BaseException:  # noqa: BLE001
-                    pass
+                # Oversized DPLPMTUD probe -- drop it without surfacing an
+                # error to the protocol (issue #377).
+                if not _is_msg_too_big(exc):
+                    try:
+                        self._protocol.error_received(exc)
+                    except (KeyboardInterrupt, SystemExit):
+                        raise
+                    except BaseException:  # noqa: BLE001
+                        pass
                 if self._closing or self._closed:
                     break
                 continue

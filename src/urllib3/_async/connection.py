@@ -33,17 +33,7 @@ from .._constant import (
 from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
 from ..util.util import to_str
 
-try:  # Compiled with SSL?
-    if typing.TYPE_CHECKING:
-        import ssl
-    else:
-        try:
-            import rtls as ssl
-        except ImportError:
-            import ssl
-
-except (ImportError, AttributeError):
-    ssl = None  # type: ignore[assignment]
+from ..contrib.anytls import ssl
 
 
 from ..backend import HttpVersion, QuicPreemptiveCacheType, ResponsePromise
@@ -67,7 +57,10 @@ from ..exceptions import (  # noqa: F401
 from ..util import SKIP_HEADER, SKIPPABLE_HEADERS
 from ..util._async.ssl_ import ssl_wrap_socket
 from ..util.request import body_to_chunks
-from ..util.ssl_ import assert_fingerprint as _assert_fingerprint, convert_ssl_ctx_rtls
+from ..util.ssl_ import (
+    assert_fingerprint as _assert_fingerprint,
+    convert_ssl_ctx_nonstdlib,
+)
 from ..util.ssl_ import (
     is_capable_for_quic,
     is_ipaddress,
@@ -762,7 +755,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
         ciphers: str | None = None,
     ) -> None:
         if ssl_context is not None:
-            ssl_context = convert_ssl_ctx_rtls(ssl_context)
+            ssl_context = convert_ssl_ctx_nonstdlib(ssl_context)
 
         if not is_capable_for_quic(ssl_context, ssl_maximum_version):
             if disabled_svn is None:

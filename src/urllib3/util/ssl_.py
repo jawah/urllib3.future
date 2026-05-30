@@ -20,6 +20,15 @@ from ..contrib.imcc import load_cert_chain as _ctx_load_cert_chain
 from ..exceptions import ProxySchemeUnsupported, SSLError
 from .url import _BRACELESS_IPV6_ADDRZ_RE, _IPV4_RE
 
+from ..contrib.anytls import ssl, IS_NONSTDLIB
+
+if typing.TYPE_CHECKING:
+    from ssl import VerifyMode
+
+    from typing_extensions import Literal
+
+    from .ssltransport import SSLTransport as SSLTransportType
+
 SSLContext = None
 SSLTransport = None
 HAS_NEVER_CHECK_COMMON_NAME = False
@@ -226,24 +235,6 @@ def _is_has_never_check_common_name_reliable(
         is_openssl_issue_14579_fixed
         or _is_bpo_43522_fixed(implementation_name, version_info)
     )
-
-
-if typing.TYPE_CHECKING:
-    import ssl
-
-    from ssl import VerifyMode
-
-    from typing_extensions import Literal
-
-    from .ssltransport import SSLTransport as SSLTransportType
-else:
-    try:
-        import rtls as ssl
-    except ImportError:
-        try:
-            import ssl
-        except ImportError:
-            ssl = None
 
 
 # Mapping from 'ssl.PROTOCOL_TLSX' to 'TLSVersion.X'
@@ -517,6 +508,18 @@ def create_urllib3_context(
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
     context = SSLContext(PROTOCOL_TLS_CLIENT)
 
+    # utls (BoringSSL) have a way to propose
+    # autoconfiguration of context based
+    # on latest browser specs observed
+    # over the wire.
+    should_use_browser_autoconfig: bool = (
+        hasattr(context, "set_fingerprint")
+        and ssl_minimum_version is None
+        and ssl_maximum_version is None
+        and ciphers is None
+        and options is None
+        and (ssl_version is None or ssl_version in {PROTOCOL_TLS, PROTOCOL_TLS_CLIENT})
+    )
     default_tlsv1_2: bool = False
 
     if SUPPORT_MIN_MAX_TLS_VERSION:
@@ -540,7 +543,7 @@ def create_urllib3_context(
             # avoid relying on cpython default cipher list
             # and instead retrieve OpenSSL own default. This should make
             # urllib3.future less flagged by basic firewall anti-bot rules.
-            if "Rustls" not in ssl.OPENSSL_VERSION:
+            if not IS_NONSTDLIB:
                 # the cipher list only contain entries for TLS 1.2
                 # because CPython stdlib enforce TLS 1.3 ciphers automatically
                 # when it's enabled.
@@ -564,7 +567,10 @@ def create_urllib3_context(
         # if the server is not rotating its ticketing keys properly.
         options |= OP_NO_TICKET
 
-    context.options |= options
+    if should_use_browser_autoconfig:
+        context.set_fingerprint("chrome:stable")  # type: ignore[attr-defined]
+    else:
+        context.options |= options
 
     # Enable post-handshake authentication for TLS 1.3, see GH #1634. PHA is
     # necessary for conditional client cert authentication with TLS 1.3.
@@ -589,10 +595,11 @@ def create_urllib3_context(
         context.check_hostname = False
         context.verify_mode = cert_reqs  # type: ignore[assignment]
 
-    try:
-        context.hostname_checks_common_name = False
-    except AttributeError:
-        pass
+    if not should_use_browser_autoconfig:
+        try:
+            context.hostname_checks_common_name = False
+        except AttributeError:
+            pass
 
     # Enable logging of TLS session keys via defacto standard environment variable
     # 'SSLKEYLOGFILE', if the feature is available (Python 3.8+). Skip empty values.
@@ -762,10 +769,17 @@ def ssl_wrap_socket(
                     raise SSLError(e) from e
 
             elif hasattr(context, "load_default_certs"):
-                store_stats = context.cert_store_stats()
-                # try to load OS default certs; works well on Windows.
-                if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
-                    context.load_default_certs()
+                try:
+                    store_stats = context.cert_store_stats()
+
+                    # try to load OS default certs; works well on Windows.
+                    if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
+                        context.load_default_certs()
+                except (
+                    AttributeError,
+                    NotImplementedError,
+                ):  # Defensive: 3rd party like truststore(...)
+                    pass
 
             # Attempt to detect if we get the goofy behavior of the
             # keyfile being encrypted and OpenSSL asking for the
@@ -779,7 +793,7 @@ def ssl_wrap_socket(
                 else:
                     context.load_cert_chain(certfile, keyfile, key_password)
             elif certdata and keydata:
-                if "Rustls" in ssl.OPENSSL_VERSION:
+                if IS_NONSTDLIB:
                     context.load_cert_chain(certdata, keydata, key_password)
                 else:
                     try:
@@ -788,7 +802,7 @@ def ssl_wrap_socket(
                         warnings.warn(
                             "Passing in-memory client/intermediary certificate for mTLS is unsupported on your platform. "
                             f"Reason: {e}. It will be picked out if you upgrade to a QUIC connection or if you install "
-                            "rtls alternative ssl backend.",
+                            "alternative ssl backend (rtls/utls).",
                             UserWarning,
                         )
 
@@ -887,12 +901,19 @@ def is_capable_for_quic(
     return not quic_disable
 
 
-def convert_ssl_ctx_rtls(ctx: ssl.SSLContext) -> ssl.SSLContext:
-    """Attempt to convert stdlib SSLContext to rtls SSLContext. Best effort only."""
-    if "Rustls" not in ssl.OPENSSL_VERSION:
+def convert_ssl_ctx_nonstdlib(ctx: ssl.SSLContext) -> ssl.SSLContext:
+    """Attempt to convert stdlib SSLContext to the active non-stdlib backend
+    (rtls or utls) SSLContext. Best effort only.
+
+    If the active backend is the stdlib ssl, the context is returned as-is.
+    If the passed context is already a non-stdlib context (detected via the
+    ``set_ech_configs`` attribute, exposed by both rtls and utls), it is
+    likewise returned as-is.
+    """
+    if not IS_NONSTDLIB:
         return ctx
 
-    if hasattr(ctx, "set_ech_configs"):  # already rtls context, exit early.
+    if hasattr(ctx, "set_ech_configs"):  # already a non-stdlib context, exit early.
         return ctx
 
     import ssl as stdlib_ssl
@@ -911,22 +932,22 @@ def convert_ssl_ctx_rtls(ctx: ssl.SSLContext) -> ssl.SSLContext:
                 stdlib_ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
             )
 
-    rtls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    rtls_ctx.verify_mode = ssl.VerifyMode(int(ctx.verify_mode))
+    new_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    new_ctx.verify_mode = ssl.VerifyMode(int(ctx.verify_mode))
 
     if ca_cert_data:
-        rtls_ctx.load_verify_locations(cadata=ca_cert_data)
+        new_ctx.load_verify_locations(cadata=ca_cert_data)
     else:
-        rtls_ctx.load_default_certs()
+        new_ctx.load_default_certs()
 
     opt_match_no_tls: bool = False
 
     try:
         if stdlib_ssl.OP_NO_TLSv1_3 in ctx.options:
-            rtls_ctx.options |= ssl.OP_NO_TLSv1_3
+            new_ctx.options |= ssl.OP_NO_TLSv1_3
             opt_match_no_tls = True
         if stdlib_ssl.OP_NO_TLSv1_2 in ctx.options:
-            rtls_ctx.options |= ssl.OP_NO_TLSv1_2
+            new_ctx.options |= ssl.OP_NO_TLSv1_2
             opt_match_no_tls = True
     except TypeError:
         # TODO: Investigate this weird edge case.
@@ -946,17 +967,21 @@ def convert_ssl_ctx_rtls(ctx: ssl.SSLContext) -> ssl.SSLContext:
         options = ssl.Options(ctx.options)
 
         if ssl.OP_NO_TLSv1_3 in options:
-            rtls_ctx.options |= ssl.OP_NO_TLSv1_3
+            new_ctx.options |= ssl.OP_NO_TLSv1_3
             opt_match_no_tls = True
         if ssl.OP_NO_TLSv1_2 in options:
-            rtls_ctx.options |= ssl.OP_NO_TLSv1_2
+            new_ctx.options |= ssl.OP_NO_TLSv1_2
             opt_match_no_tls = True
 
     if not opt_match_no_tls:
-        rtls_ctx.minimum_version = ssl.TLSVersion(int(ctx.minimum_version))
-        rtls_ctx.maximum_version = ssl.TLSVersion(int(ctx.maximum_version))
+        new_ctx.minimum_version = ssl.TLSVersion(int(ctx.minimum_version))
+        new_ctx.maximum_version = ssl.TLSVersion(int(ctx.maximum_version))
 
     if hasattr(ctx, "check_hostname") and ctx.check_hostname is False:
-        rtls_ctx.check_hostname = False
+        new_ctx.check_hostname = False
 
-    return rtls_ctx
+    return new_ctx
+
+
+# Backwards-compatibility alias (deprecated name).
+convert_ssl_ctx_rtls = convert_ssl_ctx_nonstdlib

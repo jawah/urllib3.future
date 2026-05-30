@@ -1414,7 +1414,7 @@ class TestSSL(SocketDummyServerTestCase):
         with HTTPSConnectionPool(self.host, self.port, ca_certs=DEFAULT_CA) as pool:
             with pytest.raises(
                 SSLError,
-                match=r"(wrong version number|record overflow|record layer failure|received corrupt message)",
+                match=r"(wrong version number|record overflow|record layer failure|received corrupt message|SSL operation: error)",
             ):
                 pool.request("GET", "/", retries=False)
 
@@ -1611,13 +1611,16 @@ class TestSSL(SocketDummyServerTestCase):
         finally:
             _SSLContextCache.clear()
 
-    def test_ssl_ctx_need_convert_rtls(self, monkeypatch) -> None:  # type: ignore
+    def test_ssl_ctx_need_convert_nonstdlib(self, monkeypatch) -> None:  # type: ignore
         def forbidden(ctx, *a, **kw):  # type: ignore
             raise AssertionError(
                 "load_default_certs must not be called in this test run"
             )
 
-        alt_ssl = pytest.importorskip("rtls")
+        from urllib3.contrib.anytls import ssl as alt_ssl, IS_NONSTDLIB
+
+        if not IS_NONSTDLIB:
+            pytest.skip("Test requires a non-stdlib ssl backend (rtls/utls)")
 
         monkeypatch.setattr(ssl.SSLContext, "load_default_certs", forbidden)
         monkeypatch.setattr(alt_ssl.SSLContext, "load_default_certs", forbidden)
@@ -1673,10 +1676,9 @@ class TestSSL(SocketDummyServerTestCase):
                 "load_default_certs must not be called in this test run"
             )
 
-        try:
-            import rtls as alt_ssl
-        except ImportError:
-            alt_ssl = None  # type: ignore[assignment]
+        from urllib3.contrib.anytls import ssl as anytls_ssl, IS_NONSTDLIB
+
+        alt_ssl = anytls_ssl if IS_NONSTDLIB else None
 
         if alt_ssl is None:
             monkeypatch.setattr(ssl.SSLContext, "load_default_certs", forbidden)
@@ -1729,7 +1731,7 @@ class TestSSL(SocketDummyServerTestCase):
 
             self._start_server(socket_handler)
 
-            with HTTPSConnectionPool(  # type: ignore[arg-type]
+            with HTTPSConnectionPool(
                 self.host, self.port, retries=False, **kwargs
             ) as pool:
                 r = pool.request("GET", "/", timeout=LONG_TIMEOUT)

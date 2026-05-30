@@ -7,28 +7,7 @@ from datetime import datetime, timezone
 from socket import SOCK_DGRAM, SOCK_STREAM
 from socket import timeout as SocketTimeout
 
-try:  # Compiled with SSL?
-    if typing.TYPE_CHECKING:
-        import ssl
-    else:
-        try:
-            import rtls as ssl
-        except ImportError:
-            import ssl
-except (ImportError, AttributeError):
-    ssl = None  # type: ignore[assignment]
-
-
-try:  # We shouldn't do this, it is private. Only for chain extraction check. We should find another way.
-    if typing.TYPE_CHECKING:
-        from _ssl import Certificate
-    else:
-        from rtls import Certificate
-except ImportError:
-    try:
-        from _ssl import Certificate
-    except (ImportError, AttributeError):
-        Certificate = None  # type: ignore[misc,assignment]
+from ...contrib.anytls import ssl, Certificate
 
 from ..._collections import HTTPHeaderDict
 from ..._constant import (
@@ -530,10 +509,12 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             cipher_tuple: tuple[str, str, int] | None = None
 
             if hasattr(self.sock, "sslobj"):
-                if hasattr(self.sock.sslobj, "ech_status"):
+                if hasattr(self.sock.sslobj, "ech_status"):  # Rustls path
                     self.conn_info.tls_ech_accepted = (
                         self.sock.sslobj.ech_status == "accepted"
                     )
+                elif hasattr(self.sock.sslobj, "ech_accepted"):  # BoringSSL path
+                    self.conn_info.tls_ech_accepted = self.sock.sslobj.ech_accepted()
                 else:
                     self.conn_info.tls_ech_accepted = False
 
@@ -751,11 +732,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._stream_id = self._protocol.get_available_stream_id()
 
         req_context = [
+            (b":method", b"CONNECT"),
             (
                 b":authority",
                 f"{self._tunnel_host}:{self._tunnel_port}".encode("ascii"),
             ),
-            (b":method", b"CONNECT"),
         ]
 
         for header, value in self._tunnel_headers.items():
@@ -1199,11 +1180,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         self.__headers = [
             (b":method", method.encode("ascii")),
-            (
-                b":scheme",
-                self.scheme.encode("ascii"),
-            ),
-            (b":path", url.encode("ascii")),
         ]
 
         if not skip_host:
@@ -1218,6 +1194,16 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 ),
             )
             self.__authority_bit_set = True
+
+        self.__headers.extend(
+            [
+                (
+                    b":scheme",
+                    self.scheme.encode("ascii"),
+                ),
+                (b":path", url.encode("ascii")),
+            ]
+        )
 
         if not skip_accept_encoding:
             self.__headers.append(
@@ -1478,8 +1464,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         __stream_id: int | None,
         __respect_end_signal: bool = True,
         __dummy_operation: bool = False,
-    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
-        """Allows us to defer the body loading after constructing the response object."""
+    ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+        """Allows us to defer the body loading after constructing the response object.
+
+        Returns the body as a list of per-frame chunks (not concatenated):
+        the caller feeds them straight into its ``BytesQueueBuffer`` so
+        contiguity is produced lazily and, for frame-aligned reads,
+        zero-copy. Joining here would defeat that buffer.
+        """
 
         # we may want to just remove the response as "pending"
         # e.g. HTTP Extension; making reads on sub protocol close may
@@ -1494,7 +1486,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 # remote can refuse future inquiries, so no need to go further with this conn.
                 if self._protocol.is_idle() and self._protocol.has_expired():
                     await self.close()
-            return b"", True, None
+            return [], True, None
 
         eot = False
 
@@ -1556,10 +1548,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 events.pop(idx)
 
                 if not events:
-                    return b"", True, trailers
+                    return [], True, trailers
 
         return (
-            b"".join(e.data for e in events) if len(events) > 1 else events[0].data,  # type: ignore[union-attr]
+            [e.data for e in events],  # type: ignore[union-attr]
             eot,
             trailers,
         )

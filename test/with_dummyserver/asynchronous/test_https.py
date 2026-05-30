@@ -384,6 +384,7 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 or "certificate verify failed" in str(e.value.reason)
                 or "invalid peer certificate: certificate not valid for name"
                 in str(e.value.reason)
+                or "certificate verification failed" in str(e.value.reason)
             )
 
     @pytest.mark.asyncio
@@ -410,6 +411,8 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 or "self signed certificate in certificate chain" in str(e.value.reason)
                 # Rustls specific
                 or "invalid peer certificate:" in str(e.value.reason)
+                # BoringSSL specific
+                or "self-signed certificate" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
     @pytest.mark.asyncio
@@ -453,6 +456,8 @@ class TestAsyncHTTPS(HTTPSDummyServerTestCase):
                 or "invalid certificate chain" in str(e.value.reason)
                 # Rustls specific
                 or "invalid peer certificate:" in str(e.value.reason)
+                # BoringSSL specific
+                or "self-signed certificate" in str(e.value.reason)
             ), (
                 "Expected 'No root certificates specified',  "
                 "'certificate verify failed', or "
@@ -1224,6 +1229,8 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
                 or "no appropriate subjectAltName" in str(e.value)
                 or "certificate is not valid for any names (according to its subjectAltName extension"
                 in str(e.value)
+                or "hostname mismatch" in str(e.value)
+                or "certificate verification failed" in str(e.value)
             )
 
     async def test_common_name_without_san_with_different_common_name(
@@ -1244,9 +1251,11 @@ eu6FSqdQgPCnXEqULl8FmTxSQeDNtGPPAUO6nIPcj2A781q0tHuu2guQOHXvgR1m
         ) as https_pool:
             with pytest.raises(MaxRetryError) as e:
                 await https_pool.request("GET", "/")
-            assert "mismatch, certificate is not valid for 'localhost'" in str(
-                e.value
-            ) or "hostname 'localhost' doesn't match 'example.com'" in str(e.value)
+            assert (
+                "mismatch, certificate is not valid for 'localhost'" in str(e.value)
+                or "hostname 'localhost' doesn't match 'example.com'" in str(e.value)
+                or "hostname mismatch" in str(e.value)
+            )
 
     @pytest.mark.parametrize("use_assert_hostname", [True, False])
     async def test_hostname_checks_common_name_respected(

@@ -202,6 +202,8 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
                 or "self signed certificate in certificate chain" in str(e.value.reason)
                 # Rustls specific
                 or "invalid peer certificate:" in str(e.value.reason)
+                # BoringSSL specific
+                or "self-signed certificate" in str(e.value.reason)
             ), f"Expected 'certificate verify failed', instead got: {e.value.reason!r}"
 
             http = proxy_from_url(
@@ -224,7 +226,7 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
 
             with pytest.raises(
                 MaxRetryError,
-                match="doesn't match|IP address mismatch|certificate not valid for name",
+                match=r"doesn't match|IP address mismatch|certificate not valid for name|certificate verification failed",
             ) as e:
                 https_fail_pool.request("GET", "/", retries=0)
             assert isinstance(e.value.reason, SSLError)
@@ -679,10 +681,9 @@ class TestHTTPProxyManager(HTTPDummyProxyTestCase):
         if proxy_scheme == "https" and use_forwarding_for_https:
             pytest.skip("Test is expected to fail due to urllib3/urllib3#2577")
 
-        try:
-            import rtls as alt_ssl
-        except ImportError:
-            alt_ssl = None  # type: ignore[assignment]
+        from urllib3.contrib.anytls import ssl as anytls_ssl, IS_NONSTDLIB
+
+        alt_ssl = anytls_ssl if IS_NONSTDLIB else None
 
         proxy_url = self.https_proxy_url if proxy_scheme == "https" else self.proxy_url
         if alt_ssl is None:
@@ -864,6 +865,7 @@ class TestHTTPSProxyVerification:
                 or "Hostname mismatch" in str(ssl_error)
                 or "invalid peer certificate: certificate not valid for name"
                 in str(ssl_error)
+                or "hostname mismatch" in str(ssl_error)
             )
 
             with pytest.raises(MaxRetryError) as e:
@@ -877,6 +879,7 @@ class TestHTTPSProxyVerification:
                 or "Hostname mismatch" in str(ssl_error)
                 or "invalid peer certificate: certificate not valid for name"
                 in str(ssl_error)
+                or "hostname mismatch" in str(ssl_error)
             )
 
     def test_https_proxy_ipv4_san(
@@ -923,6 +926,7 @@ class TestHTTPSProxyVerification:
                 in str(ssl_error)
                 or "invalid peer certificate: certificate not valid for name"
                 in str(ssl_error)
+                or "hostname mismatch" in str(ssl_error)
             )
 
     def test_https_proxy_no_san_hostname_checks_common_name(

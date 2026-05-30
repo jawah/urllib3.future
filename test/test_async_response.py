@@ -49,10 +49,10 @@ def _make_async_fp(
 
     async def _body_reader(
         amt: int | None, _stream_id: int | None
-    ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+    ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
         chunk = buffer.read(amt) if amt else buffer.read()
         eot = len(chunk) == 0 or buffer.tell() >= len(data)
-        return chunk, eot, None
+        return [chunk], eot, None
 
     resp_headers = HTTPHeaderDict(headers or {})
     if chunked:
@@ -611,10 +611,14 @@ class TestAsyncResponse:
         )
         stream = resp.stream(2)
 
-        assert await stream.__anext__() == b"fo"
-        assert await stream.__anext__() == b"o"
-        with pytest.raises(StopAsyncIteration):
-            await stream.__anext__()
+        # ``_make_async_fp`` is a framed backend (``AsyncLowLevelResponse``
+        # exposes ``_eot``), so ``stream()`` surfaces each frame as soon as it
+        # decodes rather than filling ``amt`` (issue #379). The first frame
+        # carries the gzip header + a partial body, decoding to a single byte;
+        # the remainder follows. The joined output is unchanged.
+        chunks = [c async for c in stream]
+        assert chunks == [b"f", b"oo"]
+        assert b"".join(chunks) == b"foo"
 
     async def test_gzipped_streaming_amt_negative_one_does_not_hang(self) -> None:
         # Async mirror of the regression test for issue #364.
@@ -770,10 +774,11 @@ class TestAsyncResponse:
         )
         stream = resp.stream(2)
 
-        assert await stream.__anext__() == b"fo"
-        assert await stream.__anext__() == b"o"
-        with pytest.raises(StopAsyncIteration):
-            await stream.__anext__()
+        # Framed backend: per-frame delivery (issue #379), see
+        # ``test_gzipped_streaming``. Joined output is unchanged.
+        chunks = [c async for c in stream]
+        assert chunks == [b"f", b"oo"]
+        assert b"".join(chunks) == b"foo"
 
     async def test_deflate2_streaming(self) -> None:
         compress = zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS)
@@ -788,10 +793,11 @@ class TestAsyncResponse:
         )
         stream = resp.stream(2)
 
-        assert await stream.__anext__() == b"fo"
-        assert await stream.__anext__() == b"o"
-        with pytest.raises(StopAsyncIteration):
-            await stream.__anext__()
+        # Framed backend: per-frame delivery (issue #379), see
+        # ``test_gzipped_streaming``. Joined output is unchanged.
+        chunks = [c async for c in stream]
+        assert chunks == [b"f", b"oo"]
+        assert b"".join(chunks) == b"foo"
 
     async def test_empty_stream(self) -> None:
         fp = _make_async_fp(b"")
@@ -1048,8 +1054,8 @@ class TestAsyncResponse:
     async def test_chunked_head_response(self) -> None:
         async def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
-            return b"", True, None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            return [], True, None
 
         r = AsyncLowLevelResponse("HEAD", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
         resp = AsyncHTTPResponse(
@@ -1064,6 +1070,53 @@ class TestAsyncResponse:
         async for _ in resp.stream():
             continue
         resp.release_conn.assert_called_once_with()  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize(
+        "http_version, headers",
+        [
+            # HTTP/1.1 chunked Transfer-Encoding
+            (11, {"transfer-encoding": "chunked"}),
+            # HTTP/2 framed stream with no declared length (e.g. SSE)
+            (20, {}),
+            # HTTP/3 framed stream with no declared length (e.g. SSE)
+            (30, {}),
+        ],
+    )
+    async def test_stream_yields_per_frame_without_blocking(
+        self, http_version: int, headers: dict[str, str]
+    ) -> None:
+        # Regression test for issue #379 (async): stream(amt) must surface
+        # each frame/chunk as it arrives instead of blocking until ``amt``
+        # decoded bytes accumulate. Not specific to chunked Transfer-Encoding;
+        # HTTP/2 and HTTP/3 deliver framed bodies the same way.
+        chunks = [b"data: hello\n\n"]
+        idx = 0
+
+        async def mock_sock(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            nonlocal idx
+            if idx >= len(chunks):
+                raise AssertionError(
+                    "stream() blocked waiting to fill amt instead of "
+                    "yielding the available frame"
+                )
+            d = chunks[idx]
+            idx += 1
+            return [d], False, None
+
+        r = AsyncLowLevelResponse(
+            "GET", 200, http_version, "OK", HTTPHeaderDict(), mock_sock
+        )
+        resp = AsyncHTTPResponse(
+            r,
+            preload_content=False,
+            headers=headers,
+            original_response=r,
+        )
+
+        gen = resp.stream(10000)
+        assert await gen.__anext__() == b"data: hello\n\n"
 
     async def test_get_case_insensitive_headers(self) -> None:
         headers = {"host": "example.com"}
@@ -1153,13 +1206,13 @@ class TestAsyncResponse:
 
         async def mock_sock(
             amt: int | None, stream_id: int | None
-        ) -> tuple[bytes, bool, HTTPHeaderDict | None]:
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
             nonlocal chunks, idx
             if idx >= len(chunks):
-                return b"", True, None
+                return [], True, None
             d = chunks[idx]
             idx += 1
-            return d, False, None
+            return [d], False, None
 
         r = AsyncLowLevelResponse("GET", 200, 11, "OK", HTTPHeaderDict(), mock_sock)
 
