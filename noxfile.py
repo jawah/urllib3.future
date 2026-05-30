@@ -604,6 +604,9 @@ def downstream_sphinx(session: nox.Session) -> None:
     session.install(".", "--group", "test", silent=False)
     # docutils 0.22 break two unit test of sphinx
     session.install("docutils==0.21")
+    # snowballstemmer failure due to stemWord("international")
+    # change in 3.x (nothing to do with us)
+    session.install("snowballstemmer<3")
 
     session.cd(root)
     session.install(".", silent=False)
