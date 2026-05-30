@@ -71,6 +71,10 @@ rtls = [
 ]
 utls = [
   "utls; platform_python_implementation == 'CPython'",
+  # force zstd, and br to be part of utls group
+  # we need them as we force "Accept-Encoding: br, zstd, gzip,...)
+  "zstandard>=0.18.0; python_version < '3.14'",
+  "brotli>=1.0.9; platform_python_implementation == 'CPython'",
 ]
 
 [dependency-groups]
