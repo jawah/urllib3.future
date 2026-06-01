@@ -1,3 +1,10 @@
+2.21.901 (2026-06-01)
+=====================
+
+- Fixed http3 ``assert_hostname`` not forwarded when passing a custom ``SSLContext`` that disable it in async.
+- Fixed edge case failure in http3 upgrade when ``ssl`` is monkeypatched by a 3rd party library.
+- Changed default http3 settings to match decision made for http2 recently.
+
 2.21.900 (2026-05-30)
 =====================
 

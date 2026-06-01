@@ -324,12 +324,20 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
             allow_insecure = True
 
-        cert_stats = ssl_context.cert_store_stats() if ssl_context is not None else None
-        ssl_ctx_have_certs: bool = (
-            cert_stats is not None
-            and "x509_ca" in cert_stats
-            and cert_stats["x509_ca"] > 0
-        )
+        try:
+            cert_stats = (
+                ssl_context.cert_store_stats() if ssl_context is not None else None
+            )
+            ssl_ctx_have_certs: bool = (
+                cert_stats is not None
+                and "x509_ca" in cert_stats
+                and cert_stats["x509_ca"] > 0
+            )
+        except (
+            AttributeError,
+            NotImplementedError,
+        ):  # Defensive: in case of ssl monkeypatch
+            ssl_ctx_have_certs = False
 
         if (
             not allow_insecure
@@ -354,12 +362,38 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 allow_insecure = True
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
-                ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                try:
+                    ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                except (
+                    AttributeError,
+                    NotImplementedError,
+                ):  # Defensive: in case of ssl monkeypatch
+                    ctx_root_certificates = []
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(
                         ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
                     )
+
+            if (
+                assert_hostname is None
+                and hasattr(ssl_context, "check_hostname")
+                and ssl_context.check_hostname is False
+            ):
+                assert_hostname = False
+
+            # BoringSSL case ctx.
+            if hasattr(ssl_context, "set_fingerprint"):
+                try:
+                    ssl_context.http_header_for_fingerprint()  # type: ignore[attr-defined]
+                except ValueError:
+                    ssl_context.set_fingerprint("chrome:stable")
+                except AttributeError:  # Defensive: should be unreachable
+                    pass
+
+            # so that http headers would be made available
+            # via connectionpool "BoringSSL have predefined headers"
+            setattr(self.sock, "context", ssl_context)
 
         self.__custom_tls_settings = QuicTLSConfig(
             insecure=allow_insecure,
