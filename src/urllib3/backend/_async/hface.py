@@ -382,6 +382,19 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             ):
                 assert_hostname = False
 
+            # BoringSSL case ctx.
+            if hasattr(ssl_context, "set_fingerprint"):
+                try:
+                    ssl_context.http_header_for_fingerprint()  # type: ignore[attr-defined]
+                except ValueError:
+                    ssl_context.set_fingerprint("chrome:stable")
+                except AttributeError:  # Defensive: should be unreachable
+                    pass
+
+            # so that http headers would be made available
+            # via connectionpool "BoringSSL have predefined headers"
+            setattr(self.sock, "context", ssl_context)
+
         self.__custom_tls_settings = QuicTLSConfig(
             insecure=allow_insecure,
             cafile=ca_certs,
