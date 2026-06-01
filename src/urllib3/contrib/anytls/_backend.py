@@ -86,10 +86,20 @@ def _load_certificate(backend: str) -> object | None:
             return getattr(mod, "Certificate", None)
         except ImportError:
             return None
+    # CPython stdlib
     try:
         _ssl = importlib.import_module("_ssl")
-        return getattr(_ssl, "Certificate", None)
-    except (ImportError, AttributeError):
+        cert = getattr(_ssl, "Certificate", None)
+        if cert is not None:
+            return cert
+    except ImportError:
+        pass
+    # PyPy: same type lives here instead of on _ssl
+    try:
+        from _cffi_ssl._stdssl.certificate import Certificate
+
+        return Certificate
+    except ImportError:
         return None
 
 
