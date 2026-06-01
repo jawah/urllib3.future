@@ -1,3 +1,9 @@
+2.21.902 (2026-06-01)
+=====================
+
+- Fixed PyPy certificate extraction within exposed ``ConnectionInfo``. Unintentional regression caused by our ``anytls``
+  contrib module.
+
 2.21.901 (2026-06-01)
 =====================
 
