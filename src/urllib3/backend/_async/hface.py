@@ -375,6 +375,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         ssl.DER_cert_to_PEM_cert(cert) for cert in ctx_root_certificates
                     )
 
+            if (
+                assert_hostname is None
+                and hasattr(ssl_context, "check_hostname")
+                and ssl_context.check_hostname is False
+            ):
+                assert_hostname = False
+
         self.__custom_tls_settings = QuicTLSConfig(
             insecure=allow_insecure,
             cafile=ca_certs,
