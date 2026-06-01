@@ -75,7 +75,7 @@ def _try_import(name: str) -> ModuleType | None:
         return None
 
 
-def _load_certificate(backend: str) -> object | None:
+def _load_certificate(backend: str) -> type | None:
     """Best-effort import of the Certificate type used for peer-cert chain
     extraction. rtls/utls expose it directly; for stdlib ssl, fall back to the
     private ``_ssl.Certificate`` (used by ``backend/hface.py``).
@@ -91,14 +91,14 @@ def _load_certificate(backend: str) -> object | None:
         _ssl = importlib.import_module("_ssl")
         cert = getattr(_ssl, "Certificate", None)
         if cert is not None:
-            return cert
+            return cert  # type: ignore[no-any-return]
     except ImportError:
         pass
     # PyPy: same type lives here instead of on _ssl
     try:
-        from _cffi_ssl._stdssl.certificate import Certificate
+        from _cffi_ssl._stdssl.certificate import Certificate  # type: ignore[import-not-found]
 
-        return Certificate
+        return Certificate  # type: ignore[no-any-return]
     except ImportError:
         return None
 
