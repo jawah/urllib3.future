@@ -355,8 +355,16 @@ class HfaceBackend(BaseBackend):
 
         ssl_ctx_have_certs: bool = False
         if ssl_context is not None:
-            cert_stats = ssl_context.cert_store_stats()
-            ssl_ctx_have_certs = "x509_ca" in cert_stats and cert_stats["x509_ca"] > 0
+            try:
+                cert_stats = ssl_context.cert_store_stats()
+                ssl_ctx_have_certs = (
+                    "x509_ca" in cert_stats and cert_stats["x509_ca"] > 0
+                )
+            except (
+                AttributeError,
+                NotImplementedError,
+            ):  # Defensive: in case of ssl monkeypatch
+                ssl_ctx_have_certs = False
 
         if (
             not allow_insecure
@@ -381,7 +389,13 @@ class HfaceBackend(BaseBackend):
                 allow_insecure = True
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
-                ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                try:
+                    ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                except (
+                    AttributeError,
+                    NotImplementedError,
+                ):  # Defensive: in case of ssl monkeypatch
+                    ctx_root_certificates = []
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(

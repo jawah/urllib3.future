@@ -324,12 +324,20 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if not allow_insecure and resolve_cert_reqs(cert_reqs) == ssl.CERT_NONE:
             allow_insecure = True
 
-        cert_stats = ssl_context.cert_store_stats() if ssl_context is not None else None
-        ssl_ctx_have_certs: bool = (
-            cert_stats is not None
-            and "x509_ca" in cert_stats
-            and cert_stats["x509_ca"] > 0
-        )
+        try:
+            cert_stats = (
+                ssl_context.cert_store_stats() if ssl_context is not None else None
+            )
+            ssl_ctx_have_certs: bool = (
+                cert_stats is not None
+                and "x509_ca" in cert_stats
+                and cert_stats["x509_ca"] > 0
+            )
+        except (
+            AttributeError,
+            NotImplementedError,
+        ):  # Defensive: in case of ssl monkeypatch
+            ssl_ctx_have_certs = False
 
         if (
             not allow_insecure
@@ -354,7 +362,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 allow_insecure = True
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
-                ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                try:
+                    ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                except (
+                    AttributeError,
+                    NotImplementedError,
+                ):  # Defensive: in case of ssl monkeypatch
+                    ctx_root_certificates = []
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(
