@@ -1,3 +1,11 @@
+2.22.900 (2026-06-26)
+=====================
+
+- Added pool level TLS backend selection. You can dynamically use ``rtls`` or ``utls`` or ``ssl`` via programmatic kwargs ``ssl_backend``.
+  E.g. ``PoolManager(ssl_backend="utls")`` to instantiate a PoolManager with BoringSSL backend. Supported values are ``utls``, ``rtls``, ``ssl``
+  or ``None`` (default).
+- Fixed unconsummated tail with the Brotli decoder using amt=-1. (#385)
+
 2.21.902 (2026-06-01)
 =====================
 
