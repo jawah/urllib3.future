@@ -2138,6 +2138,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         ssl_version: int | str | None = None,
         ssl_minimum_version: ssl.TLSVersion | None = None,
         ssl_maximum_version: ssl.TLSVersion | None = None,
+        ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
         assert_hostname: str | Literal[False] | None = None,
         assert_fingerprint: str | None = None,
         ca_cert_dir: str | None = None,
@@ -2172,6 +2173,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         self.ssl_version = ssl_version
         self.ssl_minimum_version = ssl_minimum_version
         self.ssl_maximum_version = ssl_maximum_version
+        self.ssl_backend = ssl_backend
         self.assert_hostname = assert_hostname
         self.assert_fingerprint = assert_fingerprint
         self.ciphers = ciphers
@@ -2390,6 +2392,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                                 ssl_version=self.ssl_version,
                                 ssl_minimum_version=self.ssl_minimum_version,
                                 ssl_maximum_version=self.ssl_maximum_version,
+                                ssl_backend=self.ssl_backend,
                                 cert_data=self.cert_data,
                                 key_data=self.key_data,
                                 ciphers=self.ciphers,
@@ -2477,6 +2480,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                     ssl_version=self.ssl_version,
                     ssl_minimum_version=self.ssl_minimum_version,
                     ssl_maximum_version=self.ssl_maximum_version,
+                    ssl_backend=self.ssl_backend,
                     cert_data=self.cert_data,
                     key_data=self.key_data,
                     ciphers=self.ciphers,

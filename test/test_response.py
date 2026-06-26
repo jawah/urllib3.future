@@ -345,16 +345,13 @@ class TestResponse:
         # issue #385: google brotli truncated stream(amt=-1) on large bodies.
         # Payload must exceed the decoder's ~32 KiB internal buffer.
         uncompressed = b"".join(
-            f'{{"id": {i}, "name": "row-{i}-padding"}}\n'.encode()
-            for i in range(50000)
+            f'{{"id": {i}, "name": "row-{i}-padding"}}\n'.encode() for i in range(50000)
         )
         assert len(uncompressed) > 1_000_000
         data = brotli.compress(uncompressed)
 
         fp = BytesIO(data)
-        r = HTTPResponse(
-            fp, headers={"content-encoding": "br"}, preload_content=False
-        )
+        r = HTTPResponse(fp, headers={"content-encoding": "br"}, preload_content=False)
 
         chunks = list(r.stream(amt=-1))
         assert b"".join(chunks) == uncompressed

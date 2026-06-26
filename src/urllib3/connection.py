@@ -680,6 +680,7 @@ class HTTPSConnection(HTTPConnection):
     ssl_version: int | str | None = None
     ssl_minimum_version: int | None = None
     ssl_maximum_version: int | None = None
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = None
     assert_fingerprint: str | None = None
     cert_file: str | None = None
     key_file: str | None = None
@@ -716,6 +717,7 @@ class HTTPSConnection(HTTPConnection):
         ssl_minimum_version: int | None = None,
         ssl_maximum_version: int | None = None,
         ssl_version: int | str | None = None,
+        ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
         cert_file: str | None = None,
         key_file: str | None = None,
         key_password: str | None = None,
@@ -760,6 +762,7 @@ class HTTPSConnection(HTTPConnection):
         self.ssl_version = ssl_version
         self.ssl_minimum_version = ssl_minimum_version
         self.ssl_maximum_version = ssl_maximum_version
+        self.ssl_backend = ssl_backend
         self.ca_certs = ca_certs and os.path.expanduser(ca_certs)
         self.ca_cert_dir = ca_cert_dir and os.path.expanduser(ca_cert_dir)
         self.ca_cert_data = ca_cert_data
@@ -841,6 +844,7 @@ class HTTPSConnection(HTTPConnection):
                 ssl_version=self.ssl_version,
                 ssl_minimum_version=self.ssl_minimum_version,
                 ssl_maximum_version=self.ssl_maximum_version,
+                ssl_backend=self.ssl_backend,
                 ca_certs=self.ca_certs,
                 ca_cert_dir=self.ca_cert_dir,
                 ca_cert_data=self.ca_cert_data,
@@ -908,6 +912,7 @@ class HTTPSConnection(HTTPConnection):
             ssl_version=self.ssl_version,
             ssl_minimum_version=self.ssl_minimum_version,
             ssl_maximum_version=self.ssl_maximum_version,
+            ssl_backend=self.ssl_backend,
             ca_certs=self.ca_certs,
             ca_cert_dir=self.ca_cert_dir,
             ca_cert_data=self.ca_cert_data,
@@ -946,6 +951,7 @@ def _ssl_wrap_socket_and_match_hostname(
     ssl_version: None | str | int,
     ssl_minimum_version: int | None,
     ssl_maximum_version: int | None,
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
     cert_file: str | None,
     key_file: str | None,
     key_password: str | None,
@@ -1019,6 +1025,7 @@ def _ssl_wrap_socket_and_match_hostname(
         ssl_version=resolve_ssl_version(ssl_version, mitigate_tls_version=True),
         ssl_minimum_version=ssl_minimum_version,
         ssl_maximum_version=ssl_maximum_version,
+        ssl_backend=ssl_backend,
         ech_config_list=ech_config_list,
     )
 

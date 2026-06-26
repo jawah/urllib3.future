@@ -58,6 +58,7 @@ SSL_KEYWORDS = (
     "ssl_version",
     "ssl_minimum_version",
     "ssl_maximum_version",
+    "ssl_backend",
     "ca_cert_dir",
     "ca_cert_data",
     "ssl_context",
@@ -95,6 +96,7 @@ class PoolKey(typing.NamedTuple):
     key_ssl_version: int | str | None
     key_ssl_minimum_version: ssl.TLSVersion | None
     key_ssl_maximum_version: ssl.TLSVersion | None
+    key_ssl_backend: str | None
     key_ca_cert_dir: str | None
     key_ca_cert_data: str | bytes | None
     key_ssl_context: ssl.SSLContext | None

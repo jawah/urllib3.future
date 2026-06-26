@@ -446,6 +446,7 @@ def create_urllib3_context(
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
     caller_id: _KnownCaller | None = None,
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
 ) -> ssl.SSLContext:
     """Creates and configures an :class:`ssl.SSLContext` instance for use with urllib3.
 
@@ -469,6 +470,12 @@ def create_urllib3_context(
     :param ciphers:
         Which cipher suites to allow the server to select. Defaults to either system configured
         ciphers if OpenSSL 1.1.1+, otherwise uses a secure default set of ciphers.
+    :param ssl_backend:
+        Force the TLS implementation used to build the context, one of
+        ``"rtls"``, ``"utls"`` or ``"ssl"`` (stdlib). Defaults to ``None``,
+        which uses the backend resolved by :mod:`urllib3.contrib.anytls`.
+        Raises :class:`~urllib3.exceptions.SSLError` if the requested backend
+        is not available.
     :returns:
         Constructed SSLContext object with specified options
     :rtype: SSLContext
@@ -476,13 +483,50 @@ def create_urllib3_context(
     if SSLContext is None:
         raise TypeError("Can't create an SSLContext object without an ssl module")
 
+    if ssl_backend is not None:
+        from ..contrib import anytls
+
+        active_ssl = (
+            anytls.stdlib_ssl if ssl_backend == "ssl" else getattr(anytls, ssl_backend)
+        )
+        if active_ssl is None:
+            raise SSLError(
+                f"The requested TLS backend {ssl_backend!r} is not available."
+            )
+        active_is_nonstdlib = ssl_backend in ("rtls", "utls")
+        ssl_context_class = active_ssl.SSLContext
+        protocol_tls = active_ssl.PROTOCOL_TLS
+        protocol_tls_client = active_ssl.PROTOCOL_TLS_CLIENT
+        tls_version = active_ssl.TLSVersion
+        cert_required = active_ssl.CERT_REQUIRED
+        # Option bit flags are library-specific; use the active backend's
+        # values (falling back to the resolved-default constants when absent).
+        op_no_sslv2 = getattr(active_ssl, "OP_NO_SSLv2", OP_NO_SSLv2)
+        op_no_sslv3 = getattr(active_ssl, "OP_NO_SSLv3", OP_NO_SSLv3)
+        op_no_compression = getattr(active_ssl, "OP_NO_COMPRESSION", OP_NO_COMPRESSION)
+        op_no_ticket = getattr(active_ssl, "OP_NO_TICKET", OP_NO_TICKET)
+    else:
+        # Default path: keep using the module-level globals (resolved by
+        # anytls at import time, and patchable in tests).
+        active_ssl = ssl
+        active_is_nonstdlib = IS_NONSTDLIB
+        ssl_context_class = SSLContext
+        protocol_tls = PROTOCOL_TLS
+        protocol_tls_client = PROTOCOL_TLS_CLIENT
+        tls_version = TLSVersion
+        cert_required = CERT_REQUIRED
+        op_no_sslv2 = OP_NO_SSLv2
+        op_no_sslv3 = OP_NO_SSLv3
+        op_no_compression = OP_NO_COMPRESSION
+        op_no_ticket = OP_NO_TICKET
+
     if caller_id is None:
         # a version of Requests attempted the ssl_ctx caching from globals in adapters.py
         # calling this function directly... Requests regretted that change.
         caller_id = _caller_id()
 
     # This means 'ssl_version' was specified as an exact value.
-    if ssl_version not in (None, PROTOCOL_TLS, PROTOCOL_TLS_CLIENT):
+    if ssl_version not in (None, protocol_tls, protocol_tls_client):
         # Disallow setting 'ssl_version' and 'ssl_minimum|maximum_version'
         # to avoid conflicts.
         if ssl_minimum_version is not None or ssl_maximum_version is not None:
@@ -492,21 +536,23 @@ def create_urllib3_context(
             )
 
         else:
-            if hasattr(ssl, "TLSVersion") and isinstance(ssl_version, ssl.TLSVersion):
+            if hasattr(active_ssl, "TLSVersion") and isinstance(
+                ssl_version, tls_version
+            ):
                 ssl_minimum_version = ssl_version
                 ssl_maximum_version = ssl_version
             else:
                 # Use 'ssl_minimum_version' and 'ssl_maximum_version' instead.
                 assert ssl_version is not None  # guarded by `not in (None, ...)`
                 ssl_minimum_version = _SSL_VERSION_TO_TLS_VERSION.get(
-                    ssl_version, TLSVersion.MINIMUM_SUPPORTED
+                    ssl_version, tls_version.MINIMUM_SUPPORTED
                 )
                 ssl_maximum_version = _SSL_VERSION_TO_TLS_VERSION.get(
-                    ssl_version, TLSVersion.MAXIMUM_SUPPORTED
+                    ssl_version, tls_version.MAXIMUM_SUPPORTED
                 )
 
     # PROTOCOL_TLS is deprecated in Python 3.10 so we always use PROTOCOL_TLS_CLIENT
-    context = SSLContext(PROTOCOL_TLS_CLIENT)
+    context: ssl.SSLContext = ssl_context_class(protocol_tls_client)
 
     # utls (BoringSSL) have a way to propose
     # autoconfiguration of context based
@@ -518,7 +564,7 @@ def create_urllib3_context(
         and ssl_maximum_version is None
         and ciphers is None
         and options is None
-        and (ssl_version is None or ssl_version in {PROTOCOL_TLS, PROTOCOL_TLS_CLIENT})
+        and (ssl_version is None or ssl_version in {protocol_tls, protocol_tls_client})
     )
     default_tlsv1_2: bool = False
 
@@ -526,7 +572,7 @@ def create_urllib3_context(
         if ssl_minimum_version is not None:
             context.minimum_version = ssl_minimum_version  # type: ignore[assignment]
         else:  # Python <3.10 defaults to 'MINIMUM_SUPPORTED' so explicitly set TLSv1.2 here
-            context.minimum_version = TLSVersion.TLSv1_2
+            context.minimum_version = tls_version.TLSv1_2
             default_tlsv1_2 = True
 
         if ssl_maximum_version is not None:
@@ -543,29 +589,29 @@ def create_urllib3_context(
             # avoid relying on cpython default cipher list
             # and instead retrieve OpenSSL own default. This should make
             # urllib3.future less flagged by basic firewall anti-bot rules.
-            if not IS_NONSTDLIB:
+            if not active_is_nonstdlib:
                 # the cipher list only contain entries for TLS 1.2
                 # because CPython stdlib enforce TLS 1.3 ciphers automatically
                 # when it's enabled.
                 context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
 
     # Setting the default here, as we may have no ssl module on import
-    cert_reqs = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
+    cert_reqs = cert_required if cert_reqs is None else cert_reqs
 
     if options is None:
         options = 0
         # SSLv2 is easily broken and is considered harmful and dangerous
-        options |= OP_NO_SSLv2
+        options |= op_no_sslv2
         # SSLv3 has several problems and is now dangerous
-        options |= OP_NO_SSLv3
+        options |= op_no_sslv3
         # Disable compression to prevent CRIME attacks for OpenSSL 1.0+
         # (issue #309)
-        options |= OP_NO_COMPRESSION
+        options |= op_no_compression
         # TLSv1.2 only. Unless set explicitly, do not request tickets.
         # This may save some bandwidth on wire, and although the ticket is encrypted,
         # there is a risk associated with it being on wire,
         # if the server is not rotating its ticketing keys properly.
-        options |= OP_NO_TICKET
+        options |= op_no_ticket
 
     if should_use_browser_autoconfig:
         context.set_fingerprint("chrome:stable")  # type: ignore[attr-defined]
@@ -578,7 +624,7 @@ def create_urllib3_context(
     # versions of Python.  We only enable on Python 3.7.4+ or if certificate
     # verification is enabled to work around Python issue #37428
     # See: https://bugs.python.org/issue37428
-    if (cert_reqs == ssl.CERT_REQUIRED or sys.version_info >= (3, 7, 4)) and getattr(
+    if (cert_reqs == cert_required or sys.version_info >= (3, 7, 4)) and getattr(
         context, "post_handshake_auth", None
     ) is not None:
         context.post_handshake_auth = True
@@ -588,7 +634,7 @@ def create_urllib3_context(
     # check_hostname=True, verify_mode=NONE/OPTIONAL.
     # We always set 'check_hostname=False' for pyOpenSSL so we rely on our own
     # 'ssl.match_hostname()' implementation.
-    if cert_reqs == ssl.CERT_REQUIRED:
+    if cert_reqs == cert_required:
         context.verify_mode = cert_reqs  # type: ignore[assignment]
         context.check_hostname = True
     else:
@@ -637,6 +683,7 @@ def ssl_wrap_socket(
     ssl_minimum_version: int | None = ...,
     ssl_maximum_version: int | None = ...,
     ech_config_list: bytes | None = ...,
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = ...,
 ) -> ssl.SSLSocket: ...
 
 
@@ -662,6 +709,7 @@ def ssl_wrap_socket(
     ssl_minimum_version: int | None = ...,
     ssl_maximum_version: int | None = ...,
     ech_config_list: bytes | None = ...,
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = ...,
 ) -> ssl.SSLSocket | SSLTransportType: ...
 
 
@@ -686,6 +734,7 @@ def ssl_wrap_socket(
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
     ech_config_list: bytes | None = None,
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -715,6 +764,9 @@ def ssl_wrap_socket(
         Specify an in-memory client intermediary certificate for mTLS.
     :param keydata:
         Specify an in-memory client intermediary key for mTLS.
+    :param ssl_backend:
+        Force the TLS implementation (``"rtls"``, ``"utls"`` or ``"ssl"``)
+        used to build the context. Ignored when ``ssl_context`` is provided.
     """
     context = ssl_context
     cache_disabled: bool = context is not None
@@ -736,6 +788,7 @@ def ssl_wrap_socket(
         ssl_minimum_version,
         ssl_maximum_version,
         check_hostname,
+        ssl_backend,
     ):
         cached_ctx = _SSLContextCache.get() if not cache_disabled else None
 
@@ -750,6 +803,7 @@ def ssl_wrap_socket(
                     caller_id=_caller_id(),
                     ssl_minimum_version=ssl_minimum_version,
                     ssl_maximum_version=ssl_maximum_version,
+                    ssl_backend=ssl_backend,
                 )
 
             if cert_reqs is not None:
