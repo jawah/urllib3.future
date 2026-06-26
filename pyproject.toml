@@ -214,7 +214,7 @@ filterwarnings = [
     '''ignore:RecentlyUsedContainer is deprecated and scheduled for removal:DeprecationWarning''',
     '''ignore:The event_loop fixture provided by:DeprecationWarning''',
     '''ignore:A plugin raised an exception during''',
-    '''ignore:Exception ignored in:pytest.PytestUnraisableExceptionWarning''',
+    '''ignore:Exception ignored:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning''',
     '''ignore:function _SSLProtocolTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
     '''ignore:function _SelectorTransport\.__del__:pytest.PytestUnraisableExceptionWarning''',
