@@ -216,3 +216,45 @@ class TestSSL:
             ssl_.assert_fingerprint(
                 cert=None, fingerprint="55:39:BF:70:05:12:43:FA:1F:D1:BF:4E:E8:1B:07:1D"
             )
+
+    def test_create_urllib3_context_force_stdlib_backend(self) -> None:
+        ctx = ssl_.create_urllib3_context(ssl_backend="ssl")
+        # The stdlib backend must always produce a stdlib ``ssl.SSLContext``.
+        assert type(ctx).__module__ == "ssl"
+
+    @pytest.mark.parametrize("backend", ["rtls", "utls"])
+    def test_create_urllib3_context_force_nonstdlib_backend(self, backend: str) -> None:
+        from urllib3.contrib import anytls
+
+        module = getattr(anytls, backend)
+        if module is None:
+            pytest.skip(f"{backend} backend is not installed")
+
+        ctx = ssl_.create_urllib3_context(ssl_backend=backend)  # type: ignore[arg-type]
+        assert type(ctx).__module__.split(".")[0] == backend
+
+    def test_create_urllib3_context_force_unavailable_backend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3.contrib import anytls
+
+        monkeypatch.setattr(anytls, "utls", None, raising=False)
+        with pytest.raises(SSLError, match="utls.* is not available"):
+            ssl_.create_urllib3_context(ssl_backend="utls")
+
+    def test_ssl_backend_changes_ssl_context_cache_key(self) -> None:
+        # Forcing different backends must not collide in the SSLContext cache.
+        from urllib3.util.ssl_ import _SSLContextCache
+
+        keys = []
+        for backend in ("ssl", "rtls", "utls", None):
+            args = [None] * 16 + [backend]
+            with _SSLContextCache.lock(*args):
+                keys.append(_SSLContextCache._cursor)
+        assert len(set(keys)) == len(keys)
+
+    def test_anytls_getattr_unknown_attribute(self) -> None:
+        from urllib3.contrib import anytls
+
+        with pytest.raises(AttributeError):
+            anytls.does_not_exist

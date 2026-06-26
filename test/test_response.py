@@ -340,6 +340,22 @@ class TestResponse:
         with pytest.raises(DecodeError):
             HTTPResponse(fp, headers={"content-encoding": "br"})
 
+    @onlyBrotli()
+    def test_brotli_stream_amt_negative_one_not_truncated(self) -> None:
+        # issue #385: google brotli truncated stream(amt=-1) on large bodies.
+        # Payload must exceed the decoder's ~32 KiB internal buffer.
+        uncompressed = b"".join(
+            f'{{"id": {i}, "name": "row-{i}-padding"}}\n'.encode() for i in range(50000)
+        )
+        assert len(uncompressed) > 1_000_000
+        data = brotli.compress(uncompressed)
+
+        fp = BytesIO(data)
+        r = HTTPResponse(fp, headers={"content-encoding": "br"}, preload_content=False)
+
+        chunks = list(r.stream(amt=-1))
+        assert b"".join(chunks) == uncompressed
+
     @onlyZstd()
     def test_decode_zstd(self) -> None:
         data = zstd.compress(b"foo")

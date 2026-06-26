@@ -11,11 +11,6 @@ from socket import timeout as SocketTimeout
 
 from ..contrib.anytls import ssl, Certificate
 
-if ssl is not None:
-    from ..util.ssltransport import SSLTransport
-else:
-    SSLTransport = None  # type: ignore
-
 from .._collections import HTTPHeaderDict
 from .._constant import (
     DEFAULT_BLOCKSIZE,
@@ -490,55 +485,40 @@ class HfaceBackend(BaseBackend):
 
         # first request was not made yet // need to infer what protocol to use.
         if self._svn is None:
-            # if we are on a TLS connection, inspect ALPN.
-            is_tcp_tls_conn = isinstance(self.sock, (ssl.SSLSocket, SSLTransport))
+            # Inspect ALPN when on a TLS connection. SSLSocket (any backend)
+            # and SSLTransport both expose ``selected_alpn_protocol``, so this
+            # structural check stays backend-agnostic (the socket may come from
+            # a forced backend, see ssl_backend=...). We only trust a ``str``
+            # result so unrealistic/mocked sockets fall back gracefully.
+            alpn: str | None = None
+            if hasattr(self.sock, "selected_alpn_protocol"):
+                negotiated = self.sock.selected_alpn_protocol()
+                if isinstance(negotiated, str):
+                    alpn = negotiated
 
-            if is_tcp_tls_conn:
-                alpn: str | None = (
-                    self.sock.selected_alpn_protocol()
-                    if isinstance(self.sock, ssl.SSLSocket)
-                    else self.sock.sslobj.selected_alpn_protocol()  # type: ignore[attr-defined]
+            if alpn == "h2":
+                self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h2
+            elif alpn == "http/1.1":
+                self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h11
+            elif alpn is not None:
+                raise ProtocolError(  # Defensive: ALPN is explicit higher in the stack.
+                    f"Unsupported ALPN '{alpn}' during handshake. Did you try to reach a non-HTTP server ?"
                 )
-
-                if alpn is not None:
-                    if alpn == "h2":
-                        self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
-                        self._svn = HttpVersion.h2
-                    elif alpn == "http/1.1":
-                        self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
-                        self._svn = HttpVersion.h11
-                    else:
-                        raise ProtocolError(  # Defensive: This should be unreachable as ALPN is explicit higher in the stack.
-                            f"Unsupported ALPN '{alpn}' during handshake. Did you try to reach a non-HTTP server ?"
-                        )
-                else:
-                    # no-alpn, let's decide between H2 or H11
-                    # by default, try HTTP/1.1
-                    if HttpVersion.h11 not in self._disabled_svn:
-                        self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
-                        self._svn = HttpVersion.h11
-                    elif HttpVersion.h2 not in self._disabled_svn:
-                        self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
-                        self._svn = HttpVersion.h2
-                    else:
-                        raise RuntimeError(
-                            "No compatible protocol are enabled to emit request. You currently are connected using "
-                            "TCP TLS and must have HTTP/1.1 or/and HTTP/2 enabled to pursue."
-                        )
+            # No ALPN negotiated (plain connection or no agreement): fall back
+            # to a default between HTTP/1.1 and HTTP/2.
+            elif HttpVersion.h11 not in self._disabled_svn:
+                self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h11
+            elif HttpVersion.h2 not in self._disabled_svn:
+                self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
+                self._svn = HttpVersion.h2
             else:
-                # no-TLS, let's decide between H2 or H11
-                # by default, try HTTP/1.1
-                if HttpVersion.h11 not in self._disabled_svn:
-                    self._protocol = HTTPProtocolFactory.new(HTTP1Protocol)  # type: ignore[type-abstract]
-                    self._svn = HttpVersion.h11
-                elif HttpVersion.h2 not in self._disabled_svn:
-                    self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
-                    self._svn = HttpVersion.h2
-                else:
-                    raise RuntimeError(
-                        "No compatible protocol are enabled to emit request. You currently are connected using "
-                        "TCP Unencrypted and must have HTTP/1.1 or/and HTTP/2 enabled to pursue."
-                    )
+                raise RuntimeError(
+                    "No compatible protocol are enabled to emit request. You must "
+                    "have HTTP/1.1 or/and HTTP/2 enabled to pursue."
+                )
         else:  # we or someone manually set the SVN / http version, so load the protocol regardless of what we know.
             if self._svn == HttpVersion.h2:
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]

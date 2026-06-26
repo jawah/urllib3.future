@@ -1030,6 +1030,7 @@ class TestUtilSSL:
             caller_id=_KnownCaller.OTHER,
             ssl_minimum_version=None,
             ssl_maximum_version=None,
+            ssl_backend=None,
         )
 
     def test_ssl_wrap_socket_loads_verify_locations(self) -> None:

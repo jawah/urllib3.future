@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import io
 import os
+import typing
 import warnings
 from pathlib import Path
+
+if typing.TYPE_CHECKING:
+    from typing_extensions import Literal
 
 from ...contrib.anytls import ssl, IS_NONSTDLIB
 
@@ -59,6 +63,7 @@ async def ssl_wrap_socket(
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
     ech_config_list: bytes | None = None,
+    ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
 ) -> SSLAsyncSocket:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -88,6 +93,9 @@ async def ssl_wrap_socket(
         Specify an in-memory client intermediary certificate for mTLS.
     :param keydata:
         Specify an in-memory client intermediary key for mTLS.
+    :param ssl_backend:
+        Force the TLS implementation (``"rtls"``, ``"utls"`` or ``"ssl"``)
+        used to build the context. Ignored when ``ssl_context`` is provided.
     """
     context = ssl_context
 
@@ -110,6 +118,7 @@ async def ssl_wrap_socket(
         ssl_minimum_version,
         ssl_maximum_version,
         check_hostname,
+        ssl_backend,
     ):
         cached_ctx = _SSLContextCache.get() if not cache_disabled else None
 
@@ -122,6 +131,7 @@ async def ssl_wrap_socket(
                     caller_id=_KnownCaller.NIQUESTS,
                     ssl_minimum_version=ssl_minimum_version,
                     ssl_maximum_version=ssl_maximum_version,
+                    ssl_backend=ssl_backend,
                 )
 
             if cert_reqs is not None:
