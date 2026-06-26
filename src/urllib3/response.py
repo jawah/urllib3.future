@@ -225,10 +225,18 @@ if brotli is not None:
         # are for 'brotlipy' and bottom branches for 'Brotli'
         def __init__(self) -> None:
             self._obj = brotli.Decompressor()
+            # brotlicffi honors output_buffer_limit, so can_accept_more_data
+            # is trustworthy. google brotli/brotlipy only expose process(),
+            # ignore the limit and report can_accept_more_data=True while
+            # output is still pending. Track pending output ourselves there
+            # (issue #385).
             if hasattr(self._obj, "decompress"):
                 setattr(self, "_decompress", self._obj.decompress)
+                self._lack_output_buffer_limit = False
             else:
                 setattr(self, "_decompress", self._obj.process)
+                self._lack_output_buffer_limit = True
+            self._pending_output = False
 
         # Requires Brotli >= 1.2.0 for `output_buffer_limit`.
         def _decompress(self, data: bytes, output_buffer_limit: int = -1) -> bytes:
@@ -237,9 +245,11 @@ if brotli is not None:
         def decompress(self, data: bytes, max_length: int = -1) -> bytes:
             try:
                 if max_length > 0:
-                    return self._decompress(data, output_buffer_limit=max_length)
+                    decompressed = self._decompress(
+                        data, output_buffer_limit=max_length
+                    )
                 else:
-                    return self._decompress(data)
+                    decompressed = self._decompress(data)
             except TypeError:
                 # Fallback for Brotli/brotlicffi/brotlipy versions without
                 # the `output_buffer_limit` parameter.
@@ -247,10 +257,15 @@ if brotli is not None:
                     "Brotli >= 1.2.0 is required to prevent decompression bombs.",
                     DependencyWarning,
                 )
-                return self._decompress(data)
+                decompressed = self._decompress(data)
+            # non-empty output means more may remain; drives has_unconsumed_tail.
+            self._pending_output = bool(decompressed)
+            return decompressed
 
         @property
         def has_unconsumed_tail(self) -> bool:
+            if self._lack_output_buffer_limit:
+                return self._pending_output
             try:
                 return not self._obj.can_accept_more_data()
             except AttributeError:
