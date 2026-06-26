@@ -1709,6 +1709,16 @@ default order.
 
     URLLIB3_FUTURE_SSL_BACKEND=ssl python my_script.py
 
+.. versionadded:: 2.22.900
+
+You can also use the ``ssl_backend`` kwargs into your Pool constructor and specify one of:
+
+- ``rtls``
+- ``utls``
+- ``ssl``
+
+This will overrule any default configuration and force a specific TLS backend.
+
 The ``anytls`` module
 ~~~~~~~~~~~~~~~~~~~~~
 
