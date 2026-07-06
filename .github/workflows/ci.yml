@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
@@ -173,7 +173,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
@@ -263,7 +263,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
@@ -286,7 +286,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
@@ -309,7 +309,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
@@ -332,7 +332,7 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
@@ -354,7 +354,7 @@ jobs:
     needs: [test, dead-libressl, dead-openssl, edge-static-openssl, fips-openssl]
     steps:
       - name: "Checkout repository"
-        uses: "actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+        uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
         with:
           persist-credentials: false
 
