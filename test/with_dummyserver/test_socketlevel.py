@@ -2322,6 +2322,67 @@ class TestStream(SocketDummyServerTestCase):
 
             done_event.set()
 
+    @pytest.mark.parametrize("amt", [4096, 10000])
+    def test_stream_amt_serves_available_data_without_blocking(self, amt: int) -> None:
+        # Regression test for https://github.com/jawah/urllib3.future/issues/379
+        # SSE-like response: the server sends one 5479 bytes burst, then keeps
+        # the connection open (more data may come much later). ``stream(amt)``
+        # must serve available data instead of blocking until ``amt`` bytes
+        # accumulate. Both traps are exercised here:
+        #   amt=10000: burst < amt, the first read used to block on the socket
+        #   amt=4096: the buffered 1383 bytes remainder < amt, serving it used
+        #             to trigger a blocking socket read
+        payload = b"event:put\ndata:" + b"x" * 5462 + b"\n\n"
+        assert len(payload) == 5479
+
+        done_event = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            buf = b""
+            while not buf.endswith(b"\r\n\r\n"):
+                buf += sock.recv(65536)
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n"
+                b"\r\n" + (b"%x\r\n" % len(payload)) + payload + b"\r\n"
+            )
+
+            done_event.wait(LONG_TIMEOUT * 10)
+            sock.sendall(b"0\r\n\r\n")
+            sock.close()
+
+        self._start_server(socket_handler)
+
+        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            resp = pool.request(
+                "GET",
+                "/",
+                timeout=util.Timeout(connect=LONG_TIMEOUT, read=2),
+                preload_content=False,
+            )
+
+            stream = resp.stream(amt)
+
+            received = 0
+
+            while received < len(payload):
+                # pre-fix: ReadTimeoutError, the client blocked on the socket
+                # even though data was available (or already buffered).
+                chunk = next(stream)
+                assert 0 < len(chunk) <= amt
+                received += len(chunk)
+
+            assert received == len(payload)
+
+            done_event.set()
+
+            # consume the end of stream cleanly.
+            assert b"".join(stream) == b""
+
     def test_large_compressed_stream(self) -> None:
         done_event = Event()
         expected_total_length = 296085

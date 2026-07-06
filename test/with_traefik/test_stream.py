@@ -6,7 +6,7 @@ from json import JSONDecodeError, loads
 
 import pytest
 
-from urllib3 import HTTPSConnectionPool
+from urllib3 import HTTPSConnectionPool, HttpVersion
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 
 from . import TraefikTestCase
@@ -102,6 +102,46 @@ class TestStreamResponse(TraefikTestCase):
                     f"did not yield decodable JSON: {e}"
                 )
             assert payload.get("gzipped") is True
+
+    @pytest.mark.parametrize("target_http", [11, 20, 30])
+    def test_sse_stream_amt_yields_per_event(self, target_http: int) -> None:
+        # Regression test for https://github.com/jawah/urllib3.future/issues/379
+        # ``stream(amt)`` against a live stream (here SSE) must yield data as
+        # it arrives, even when fewer than ``amt`` bytes are available, instead
+        # of blocking until ``amt`` bytes accumulate or the stream ends.
+        if target_http == 30 and _HAS_HTTP3_SUPPORT() is False:
+            pytest.skip("Test requires http3 support")
+
+        disabled_svn = {
+            11: {HttpVersion.h2, HttpVersion.h3},
+            20: {HttpVersion.h11, HttpVersion.h3},
+            30: {HttpVersion.h11, HttpVersion.h2},
+        }[target_http]
+
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=[self.test_resolver_raw],
+            disabled_svn=disabled_svn,
+            retries=False,
+        ) as p:
+            resp = p.request("GET", "/sse?delay=1s&count=5", preload_content=False)
+
+            assert resp.status == 200
+            assert resp.version == target_http
+
+            chunks = list(resp.stream(2**16))
+
+            payload = b"".join(chunks)
+            assert payload.count(b"event:") == 5
+
+            # the whole stream is far smaller than ``amt``: the broken
+            # behavior was a single monolithic yield delivered only once
+            # the server closed the stream. Per-arrival delivery must give
+            # us the first event alone in the first yield.
+            assert chunks[0].count(b"event:") == 1
+            assert len(chunks) >= 5
 
     def test_read_zero(self) -> None:
         with HTTPSConnectionPool(
