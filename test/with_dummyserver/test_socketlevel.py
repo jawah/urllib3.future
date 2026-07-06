@@ -2460,11 +2460,15 @@ class TestBadContentLength(SocketDummyServerTestCase):
                 "GET", url="/", preload_content=False, enforce_content_length=True
             )
             data = get_response.stream(100)
+            # the available 12 bytes are yielded as they arrive; the
+            # content-length violation surfaces when reaching the premature
+            # end of stream.
+            assert next(data) == b"hello, world"
+            done_event.set()
             with pytest.raises(
                 IncompleteRead, match=r"12 bytes read\, 10 more expected"
             ):
                 next(data)
-            done_event.set()
 
     def test_enforce_content_length_no_body(self) -> None:
         done_event = Event()
