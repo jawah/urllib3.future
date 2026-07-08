@@ -351,9 +351,11 @@ class LowLevelResponse:
             return b""  # Defensive: This is unreachable, this case is already covered higher in the stack.
 
         buf_capacity = len(self.__buffer_excess)
-        data_ready_to_go = (
-            __size is not None and buf_capacity > 0 and buf_capacity >= __size
-        )
+        # any buffered data must be served first, even if smaller than
+        # __size: reaching for the socket while holding deliverable bytes
+        # can block forever on a live stream (e.g. SSE).
+        # see https://github.com/jawah/urllib3.future/issues/379
+        data_ready_to_go = __size is not None and buf_capacity > 0
 
         if self._eot is False and not data_ready_to_go:
             chunks, self._eot, self.trailers = self.__internal_read_st(

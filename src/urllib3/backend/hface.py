@@ -1254,6 +1254,18 @@ class HfaceBackend(BaseBackend):
                             if reshelve_events:
                                 protocol.reshelve(*reshelve_events)
                             return events
+
+                        # serving a sized body read (maximal_data_in_read is set)
+                        # and some data has been collected already: return it now
+                        # instead of blocking on the socket until the cap is
+                        # reached. A live stream (e.g. SSE) may leave the
+                        # connection idle long after sending a partial payload.
+                        # see https://github.com/jawah/urllib3.future/issues/379
+                        if maximal_data_in_read is not None and data_in_len > 0:
+                            if reshelve_events:
+                                protocol.reshelve(*reshelve_events)
+                            return events
+
                         continue
 
                     if reshelve_events:
