@@ -1,3 +1,15 @@
+2.22.901 (2026-07-09)
+=====================
+
+- Fixed ``HTTPResponse.stream(amt)`` and ``HTTPResponse.read(amt)`` (and the async equivalents) blocking on
+  the socket until ``amt`` bytes accumulated instead of serving data as it arrived. On live streams that send
+  a burst of data then go idle (e.g. Server-Sent Events), the initial payload was withheld indefinitely when
+  smaller than ``amt``, and an in-process buffered remainder smaller than ``amt`` triggered a blocking socket
+  read instead of being served. The previous fix for (#379) only exercised a mocked backend and did not cover
+  real connections; this applies to all protocols (HTTP/1.1, HTTP/2 and HTTP/3). (#379)
+- Fixed ``AsyncHTTPConnectionPool.get_response`` and ``AsyncPoolManager.get_response`` return ``None``
+  (no promise left to resolve) without ever yielding control to the event loop. (#384)
+
 2.22.900 (2026-06-26)
 =====================
 
