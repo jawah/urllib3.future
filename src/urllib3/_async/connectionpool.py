@@ -889,6 +889,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     self._raise_timeout(err=e, url=url, timeout_value=conn.timeout)
                     raise
         except UnavailableTraffic:
+            # force a cooperative checkpoint to keep the event loop running
+            # see https://github.com/jawah/urllib3.future/issues/384
+            await asyncio.sleep(0)
             return None
         except (
             TimeoutError,
