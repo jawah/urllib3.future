@@ -6,7 +6,14 @@ from io import UnsupportedOperation
 if typing.TYPE_CHECKING:
     import ssl
 
-from ._ctypes import load_cert_chain as _ctypes_load_cert_chain
+try:
+    from ._ctypes import load_cert_chain as _ctypes_load_cert_chain
+except ImportError:  # Defensive: Python not built with ctype extension.
+
+    def _ctypes_load_cert_chain(*args, **kwargs):  # type: ignore[no-untyped-def,misc]
+        raise UnsupportedOperation("ctypes not available")
+
+
 from ._shm import load_cert_chain as _shm_load_cert_chain
 from ._fifo import load_cert_chain as _fifo_load_cert_chain
 

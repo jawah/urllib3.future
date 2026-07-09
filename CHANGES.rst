@@ -9,6 +9,7 @@
   real connections; this applies to all protocols (HTTP/1.1, HTTP/2 and HTTP/3). (#379)
 - Fixed ``AsyncHTTPConnectionPool.get_response`` and ``AsyncPoolManager.get_response`` return ``None``
   (no promise left to resolve) without ever yielding control to the event loop. (#384)
+- Fixed abrupt exception when ``ctypes`` isn't available in interpreter (imcc).
 
 2.22.900 (2026-06-26)
 =====================
