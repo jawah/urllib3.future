@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import typing
 import warnings
@@ -478,6 +479,9 @@ class AsyncPoolManager(AsyncRequestMethods):
             ) as pool:
                 response = await pool.get_response(promise=promise)
         except UnavailableTraffic:
+            # force a cooperative checkpoint to keep the event loop running
+            # see https://github.com/jawah/urllib3.future/issues/384
+            await asyncio.sleep(0)
             return None
 
         if promise is not None and response is None:
