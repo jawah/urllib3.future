@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import socket
+import secrets
 import typing
-from collections import deque
 
 from ...ssa._gro import _sock_has_gro, sync_recv_gro
+from .._cache import (
+    ResolutionResult,
+    ResolverCache,
+    cache_resolution,
+    calculate_effective_ttl,
+)
 from ..protocols import (
     COMMON_RCODE_LABEL,
     BaseResolver,
     DomainNameServerQuery,
+    DomainNameServerParseException,
     DomainNameServerReturn,
     ProtocolResolver,
     SupportedQueryType,
@@ -43,6 +50,10 @@ class PlainResolver(BaseResolver):
         **kwargs: typing.Any,
     ) -> None:
         super().__init__(server, port, *patterns, **kwargs)
+        self._resolver_cache = ResolverCache(
+            int(kwargs.pop("cache_maxsize", 1024)),
+            int(kwargs.pop("cache_max_ttl", 60)),
+        )
 
         if not hasattr(self, "_socket"):
             if "timeout" in kwargs and isinstance(
@@ -64,9 +75,11 @@ class PlainResolver(BaseResolver):
             self._socket = SystemResolver().create_connection(
                 (server, port or 53),
                 timeout=timeout,
-                source_address=(bind_ip, int(bind_port))
-                if bind_ip != "0.0.0.0" or bind_port != "0"
-                else None,
+                source_address=(
+                    (bind_ip, int(bind_port))
+                    if bind_ip != "0.0.0.0" or bind_port != "0"
+                    else None
+                ),
                 socket_options=None,
                 socket_kind=socket.SOCK_DGRAM,
             )
@@ -76,8 +89,8 @@ class PlainResolver(BaseResolver):
 
         self._gro_enabled: bool = _sock_has_gro(self._socket)
 
-        self._unconsumed: deque[DomainNameServerReturn] = deque()
-        self._pending: deque[DomainNameServerQuery] = deque()
+        self._pending: dict[int, DomainNameServerQuery] = {}
+        self._completed: dict[int, DomainNameServerReturn] = {}
 
         self._terminated: bool = False
 
@@ -92,6 +105,34 @@ class PlainResolver(BaseResolver):
     def is_available(self) -> bool:
         return not self._terminated
 
+    def _reserve_queries(
+        self, host: str, query_types: list[SupportedQueryType]
+    ) -> list[DomainNameServerQuery]:
+        with self._lock:
+            if len(query_types) > 0x10000 - len(self._pending):
+                raise socket.gaierror("DNS transaction ID space exhausted")
+
+            queries = []
+            for query_type in query_types:
+                start = secrets.randbits(16)
+                for offset in range(0x10000):
+                    query_id = (start + offset) & 0xFFFF
+                    if query_id not in self._pending:
+                        query = DomainNameServerQuery(host, query_type, query_id)
+                        self._pending[query_id] = query
+                        queries.append(query)
+                        break
+                else:  # pragma: no cover - guarded by the capacity check
+                    raise socket.gaierror("DNS transaction ID space exhausted")
+            return queries
+
+    def _release_queries(self, queries: list[DomainNameServerQuery]) -> None:
+        with self._lock:
+            for query in queries:
+                self._pending.pop(query.id, None)
+                self._completed.pop(query.id, None)
+
+    @cache_resolution
     def getaddrinfo(
         self,
         host: bytes | str | None,
@@ -183,99 +224,85 @@ class PlainResolver(BaseResolver):
 
         tbq.append(SupportedQueryType.HTTPS)
 
-        queries = DomainNameServerQuery.bulk(host, *tbq)
-
-        with self._lock:
-            for q in queries:
-                payload = bytes(q)
-                self._pending.append(q)
-
-                if self._rfc1035_prefix_mandated is True:
-                    payload = rfc1035_pack(payload)
-
-                self._socket.sendall(payload)
-
+        queries = self._reserve_queries(host, tbq)
         responses: list[DomainNameServerReturn] = []
-
-        while len(responses) < len(tbq):
+        response_ids: set[int] = set()
+        try:
             with self._lock:
-                #: There we want to verify if another thread got a response that belong to this thread.
-                if self._unconsumed:
-                    dns_resp = None
+                for query in queries:
+                    payload = bytes(query)
+                    if self._rfc1035_prefix_mandated is True:
+                        payload = rfc1035_pack(payload)
+                    self._socket.sendall(payload)
 
+            while len(responses) < len(tbq):
+                with self._lock:
                     for query in queries:
-                        for unconsumed in self._unconsumed:
-                            if unconsumed.id == query.id:
-                                dns_resp = unconsumed
-                                responses.append(dns_resp)
-                                break
-                        if dns_resp:
-                            break
-
-                    if dns_resp:
-                        self._pending.remove(query)
-                        self._unconsumed.remove(dns_resp)
+                        dns_resp = self._completed.get(query.id)
+                        if dns_resp is not None and query.id not in response_ids:
+                            responses.append(dns_resp)
+                            response_ids.add(query.id)
+                    if len(responses) == len(tbq):
                         continue
 
-                try:
-                    if self._gro_enabled:
-                        data_in_or_segments = sync_recv_gro(self._socket, 65535)
-                    else:
-                        data_in_or_segments = self._socket.recv(1500)
-
-                    if isinstance(data_in_or_segments, list):
-                        payloads = data_in_or_segments
-                    elif data_in_or_segments:
-                        payloads = [data_in_or_segments]
-                    else:
-                        payloads = []
-
-                    if self._rfc1035_prefix_mandated is True and payloads:
-                        payload = b"".join(payloads)
-                        while rfc1035_should_read(payload):
-                            extra = self._socket.recv(1500)
-                            if isinstance(extra, list):
-                                payload += b"".join(extra)
-                            else:
-                                payload += extra
-                        payloads = [payload]
-                except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
-                    raise socket.gaierror(
-                        "Got unexpectedly disconnected while waiting for name resolution"
-                    ) from e
-
-                if not payloads:
-                    self._terminated = True
-                    raise socket.gaierror(
-                        "Got unexpectedly disconnected while waiting for name resolution"
-                    )
-
-                for payload in payloads:
-                    #: DoT (rfc1035) may carry multiple DNS messages in a single
-                    #: length-prefixed stream segment. UDP always delivers one
-                    #: datagram = one DNS message (GRO already splits for us).
-                    if self._rfc1035_prefix_mandated is True:
-                        fragments = rfc1035_unpack(payload)
-                    else:
-                        fragments = (payload,)
-
-                    for fragment in fragments:
-                        dns_resp = DomainNameServerReturn(fragment)
-
-                        if any(dns_resp.id == _.id for _ in queries):
-                            responses.append(dns_resp)
-
-                            query_tbr: DomainNameServerQuery | None = None
-
-                            for pending_q in self._pending:
-                                if pending_q.id == dns_resp.id:
-                                    query_tbr = pending_q
-                                    break
-
-                            if query_tbr is not None:
-                                self._pending.remove(query_tbr)
+                    try:
+                        if self._gro_enabled:
+                            data_in_or_segments = sync_recv_gro(self._socket, 65535)
                         else:
-                            self._unconsumed.append(dns_resp)
+                            data_in_or_segments = self._socket.recv(1500)
+
+                        if isinstance(data_in_or_segments, list):
+                            payloads = data_in_or_segments
+                        elif data_in_or_segments:
+                            payloads = [data_in_or_segments]
+                        else:
+                            payloads = []
+
+                        if self._rfc1035_prefix_mandated is True and payloads:
+                            payload = b"".join(payloads)
+                            while rfc1035_should_read(payload):
+                                extra = self._socket.recv(1500)
+                                if isinstance(extra, list):
+                                    payload += b"".join(extra)
+                                else:
+                                    payload += extra
+                            payloads = [payload]
+                    except (
+                        TimeoutError,
+                        OSError,
+                        socket.timeout,
+                        ConnectionError,
+                    ) as e:
+                        raise socket.gaierror(
+                            "Got unexpectedly disconnected while waiting for name resolution"
+                        ) from e
+
+                    if not payloads:
+                        self._terminated = True
+                        raise socket.gaierror(
+                            "Got unexpectedly disconnected while waiting for name resolution"
+                        )
+
+                    for payload in payloads:
+                        if self._rfc1035_prefix_mandated is True:
+                            fragments = rfc1035_unpack(payload)
+                        else:
+                            fragments = (payload,)
+
+                        for fragment in fragments:
+                            try:
+                                dns_resp = DomainNameServerReturn(fragment)
+                            except DomainNameServerParseException:
+                                continue
+                            pending_query = self._pending.get(dns_resp.id)
+                            if (
+                                pending_query is not None
+                                and dns_resp.matches(pending_query)
+                                and dns_resp.id not in self._completed
+                            ):
+                                self._completed[dns_resp.id] = dns_resp
+        finally:
+            self._release_queries(queries)
 
         results: list[
             tuple[
@@ -371,7 +398,13 @@ class PlainResolver(BaseResolver):
         if not results and not quic_results:
             raise socket.gaierror(f"Name or service not known: '{host}'")
 
-        return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
+        ttl = calculate_effective_ttl(
+            ttl for response in responses for ttl in response.answer_ttls
+        )
+        return ResolutionResult(
+            sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True),
+            ttl,
+        )
 
 
 class CloudflareResolver(

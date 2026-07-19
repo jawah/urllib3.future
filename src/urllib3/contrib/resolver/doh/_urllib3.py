@@ -9,6 +9,12 @@ from ....backend import ConnectionInfo, HttpVersion, ResponsePromise
 from ....connectionpool import HTTPSConnectionPool
 from ....response import HTTPResponse
 from ....util.url import parse_url
+from .._cache import (
+    ResolutionResult,
+    ResolverCache,
+    cache_resolution,
+    calculate_effective_ttl,
+)
 from ..protocols import (
     BaseResolver,
     DomainNameServerQuery,
@@ -40,6 +46,10 @@ class HTTPSResolver(BaseResolver):
         **kwargs: typing.Any,
     ) -> None:
         super().__init__(server, port or 443, *patterns, **kwargs)
+        self._resolver_cache = ResolverCache(
+            int(kwargs.pop("cache_maxsize", 1024)),
+            int(kwargs.pop("cache_max_ttl", 60)),
+        )
 
         self._path: str = "/resolve"
 
@@ -142,6 +152,7 @@ class HTTPSResolver(BaseResolver):
     def is_available(self) -> bool:
         return self._pool.pool is not None
 
+    @cache_resolution
     def getaddrinfo(
         self,
         host: bytes | str | None,
@@ -216,6 +227,7 @@ class HTTPSResolver(BaseResolver):
         promises: list[HTTPResponse | ResponsePromise] = []
         remote_preemptive_quic_rr = False
         ech_config_list: bytes | None = None
+        ttl_values: list[object] = []
 
         if quic_upgrade_via_dns_rr and type == socket.SOCK_DGRAM:
             quic_upgrade_via_dns_rr = False
@@ -360,6 +372,8 @@ class HTTPSResolver(BaseResolver):
                 assert isinstance(payload["Answer"], list)
 
                 for answer in payload["Answer"]:
+                    ttl_values.append(answer.get("TTL"))
+
                     if answer["type"] not in [1, 28, 65]:
                         continue
 
@@ -534,6 +548,8 @@ class HTTPSResolver(BaseResolver):
                         )
                     )
 
+                ttl_values.extend(dns_resp.answer_ttls)
+
         quic_results: list[
             tuple[
                 socket.AddressFamily,
@@ -568,7 +584,10 @@ class HTTPSResolver(BaseResolver):
         if not results and not quic_results:
             raise socket.gaierror(f"Name or service not known: '{host}'")
 
-        return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
+        return ResolutionResult(
+            sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True),
+            calculate_effective_ttl(ttl_values),
+        )
 
 
 class GoogleResolver(
