@@ -42,73 +42,80 @@ SOCKET_CLOSED_ERRNOS: frozenset[int] = frozenset(
 # through getsockopt, why make it simple when a
 # hard way exist? Let's contact the winapi directly.
 if IS_NT:
-    import ctypes
-    import ctypes.wintypes
-
-    class WindowsTcpInfo(ctypes.Structure):
-        """
-        WindowsTcpInfo structure (https://learn.microsoft.com/en-us/windows/desktop/api/mstcpip/ns-mstcpip-tcp_info_v0)
-
-        Minimum supported client: (Windows 10, version 1703 // Windows Server 2016)
-        """
-
-        _fields_ = [
-            ("State", ctypes.c_int),
-            ("Mss", ctypes.wintypes.ULONG),
-            ("ConnectionTimeMs", ctypes.c_uint64),
-            ("TimestampsEnabled", ctypes.wintypes.BOOLEAN),
-            ("RttUs", ctypes.wintypes.ULONG),
-            ("MinRttUs", ctypes.wintypes.ULONG),
-            ("BytesInFlight", ctypes.wintypes.ULONG),
-            ("Cwnd", ctypes.wintypes.ULONG),
-            ("SndWnd", ctypes.wintypes.ULONG),
-            ("RcvWnd", ctypes.wintypes.ULONG),
-            ("RcvBuf", ctypes.wintypes.ULONG),
-            ("BytesOut", ctypes.c_uint64),
-            ("BytesIn", ctypes.c_uint64),
-            ("BytesReordered", ctypes.wintypes.ULONG),
-            ("BytesRetrans", ctypes.wintypes.ULONG),
-            ("FastRetrans", ctypes.wintypes.ULONG),
-            ("DupAcksIn", ctypes.wintypes.ULONG),
-            ("TimeoutEpisodes", ctypes.wintypes.ULONG),
-            ("SynRetrans", ctypes.c_uint8),
-        ]
-
     try:
-        WSAIoctl_Fn = ctypes.windll.ws2_32.WSAIoctl  # type: ignore[attr-defined]
-
-        WSAIoctl_Fn.argtypes = [
-            ctypes.c_void_p,  # [in]  SOCKET  s
-            ctypes.wintypes.DWORD,  # [in]  DWORD   SIO_TCP_INFO
-            ctypes.c_void_p,  # [in]  LPVOID  lpvInBuffer
-            ctypes.wintypes.DWORD,  # [in]  DWORD   cbInBuffer
-            ctypes.c_void_p,  # [out] LPVOID  lpvOutBuffer
-            ctypes.wintypes.DWORD,  # [in]  DWORD   cbOutBuffer
-            ctypes.POINTER(ctypes.wintypes.DWORD),  # [out] LPWORD  lpcbBytesReturned
-            ctypes.c_void_p,  # [in]  LPWSAOVERLAPPED lpOverlapped
-            ctypes.c_void_p,  # [in]  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
-        ]
-        WSAIoctl_Fn.restype = ctypes.c_int  # int
-    except AttributeError:  # Defensive: very old Windows distribution
+        import ctypes
+        import ctypes.wintypes
+    except ImportError:
         WSAIoctl_Fn = None
-
-    try:
-        WSAGetLastError_Fn = ctypes.windll.ws2_32.WSAGetLastError  # type: ignore[attr-defined]
-        WSAGetLastError_Fn.argtypes = []
-        WSAGetLastError_Fn.restype = ctypes.c_int
-    except AttributeError:  # Defensive: very old Windows distribution
         WSAGetLastError_Fn = None
+    else:
 
-    SIO_TCP_INFO = ctypes.wintypes.DWORD(
-        1 << 31  # IOC_IN
-        | 1 << 30  # IOC_OUT
-        | 3 << 27  # IOC_VENDOR
-        | 39
-    )
+        class WindowsTcpInfo(ctypes.Structure):
+            """
+            WindowsTcpInfo structure (https://learn.microsoft.com/en-us/windows/desktop/api/mstcpip/ns-mstcpip-tcp_info_v0)
 
-    WSAENOTSOCK = 10038
-    WSAEINVAL = 10022
-    WSA_OPERATION_ABORTED = 995
+            Minimum supported client: (Windows 10, version 1703 // Windows Server 2016)
+            """
+
+            _fields_ = [
+                ("State", ctypes.c_int),
+                ("Mss", ctypes.wintypes.ULONG),
+                ("ConnectionTimeMs", ctypes.c_uint64),
+                ("TimestampsEnabled", ctypes.wintypes.BOOLEAN),
+                ("RttUs", ctypes.wintypes.ULONG),
+                ("MinRttUs", ctypes.wintypes.ULONG),
+                ("BytesInFlight", ctypes.wintypes.ULONG),
+                ("Cwnd", ctypes.wintypes.ULONG),
+                ("SndWnd", ctypes.wintypes.ULONG),
+                ("RcvWnd", ctypes.wintypes.ULONG),
+                ("RcvBuf", ctypes.wintypes.ULONG),
+                ("BytesOut", ctypes.c_uint64),
+                ("BytesIn", ctypes.c_uint64),
+                ("BytesReordered", ctypes.wintypes.ULONG),
+                ("BytesRetrans", ctypes.wintypes.ULONG),
+                ("FastRetrans", ctypes.wintypes.ULONG),
+                ("DupAcksIn", ctypes.wintypes.ULONG),
+                ("TimeoutEpisodes", ctypes.wintypes.ULONG),
+                ("SynRetrans", ctypes.c_uint8),
+            ]
+
+        try:
+            WSAIoctl_Fn = ctypes.windll.ws2_32.WSAIoctl  # type: ignore[attr-defined]
+
+            WSAIoctl_Fn.argtypes = [
+                ctypes.c_void_p,  # [in]  SOCKET  s
+                ctypes.wintypes.DWORD,  # [in]  DWORD   SIO_TCP_INFO
+                ctypes.c_void_p,  # [in]  LPVOID  lpvInBuffer
+                ctypes.wintypes.DWORD,  # [in]  DWORD   cbInBuffer
+                ctypes.c_void_p,  # [out] LPVOID  lpvOutBuffer
+                ctypes.wintypes.DWORD,  # [in]  DWORD   cbOutBuffer
+                ctypes.POINTER(
+                    ctypes.wintypes.DWORD
+                ),  # [out] LPWORD  lpcbBytesReturned
+                ctypes.c_void_p,  # [in]  LPWSAOVERLAPPED lpOverlapped
+                ctypes.c_void_p,  # [in]  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+            ]
+            WSAIoctl_Fn.restype = ctypes.c_int  # int
+        except AttributeError:  # Defensive: very old Windows distribution
+            WSAIoctl_Fn = None
+
+        try:
+            WSAGetLastError_Fn = ctypes.windll.ws2_32.WSAGetLastError  # type: ignore[attr-defined]
+            WSAGetLastError_Fn.argtypes = []
+            WSAGetLastError_Fn.restype = ctypes.c_int
+        except AttributeError:  # Defensive: very old Windows distribution
+            WSAGetLastError_Fn = None
+
+        SIO_TCP_INFO = ctypes.wintypes.DWORD(
+            1 << 31  # IOC_IN
+            | 1 << 30  # IOC_OUT
+            | 3 << 27  # IOC_VENDOR
+            | 39
+        )
+
+        WSAENOTSOCK = 10038
+        WSAEINVAL = 10022
+        WSA_OPERATION_ABORTED = 995
 
 
 def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
