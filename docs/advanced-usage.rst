@@ -924,6 +924,47 @@ for each protocols.
 
 .. attention:: Only DNS over HTTPS support built-in support for proxies for now. We will support it in a future version.
 
+DNS caching
+~~~~~~~~~~~
+
+The built-in network resolvers cache successful DNS resolutions in memory. This applies to DNS over UDP, TLS, HTTPS,
+and QUIC. The system, null, and manual in-memory resolvers do not use this cache.
+
+Each resolver instance owns an independent cache. Entries are retained for the shortest valid TTL found in the DNS
+answer, capped by ``cache_max_ttl``. The default maximum TTL is 60 seconds. Answers with a zero, missing, malformed,
+or otherwise unusable TTL are returned to the current caller but are not cached. Resolution failures and negative
+answers are not cached, so a later call can retry immediately.
+
+The cache is bounded and uses least-recently-used eviction. ``cache_maxsize`` controls the maximum number of resolution
+entries retained by one resolver and defaults to 1024. Destination ports are not part of the cache identity: requests
+for ``example.com:80`` and ``example.com:443`` can share one DNS resolution while each caller still receives its own
+requested port.
+
+Concurrent identical lookups are also coalesced. One thread or task performs the DNS exchange while the other callers
+wait for the same success or failure. This single-flight coordination remains active when persistent caching is disabled.
+
+Both options can be passed in a resolver URL::
+
+    from urllib3 import PoolManager
+
+    with PoolManager(
+        resolver="doh+cloudflare://?cache_maxsize=256&cache_max_ttl=30"
+    ) as pm:
+        pm.urlopen(...)
+
+They can also be passed as resolver constructor arguments::
+
+    from urllib3.contrib.resolver.doh import HTTPSResolver
+
+    resolver = HTTPSResolver(
+        "cloudflare-dns.com",
+        cache_maxsize=256,
+        cache_max_ttl=30,
+    )
+
+Set ``cache_maxsize=0`` or ``cache_max_ttl=0`` to disable persistent caching for that resolver. These options discard
+answers earlier than their authoritative TTL; they never extend an authoritative TTL.
+
 DNS over UDP (Insecure)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -940,6 +981,10 @@ You can pass the following options to the DNS url:
    - ``dou://1.1.1.1/?timeout=1.2``
 - source_address
    - ``dou://1.1.1.1/?source_address=10.12.0.1:1111``
+- cache_maxsize
+   - Maximum number of cached resolution entries. Defaults to 1024.
+- cache_max_ttl
+   - Maximum cache lifetime in seconds. Defaults to 60.
 
 .. warning:: DNS over UDP is generally to be avoided unless you are in a trusted networking environment.
 
@@ -969,6 +1014,8 @@ You can pass the following options to the DNS url:
 - ca_cert_data
 - cert_data
 - key_data
+- cache_maxsize
+- cache_max_ttl
 
 DNS over QUIC
 ~~~~~~~~~~~~~
@@ -993,6 +1040,8 @@ You can pass the following options to the DNS url:
 - ca_cert_data
 - cert_data
 - key_data
+- cache_maxsize
+- cache_max_ttl
 
 DNS over HTTPS
 ~~~~~~~~~~~~~~
@@ -1032,6 +1081,8 @@ You can pass the following options to the DNS url:
 - proxy_headers
 - keepalive_delay
 - keepalive_idle_window
+- cache_maxsize
+- cache_max_ttl
 
 .. warning:: DNS over HTTPS support HTTP/1.1, HTTP/2 and HTTP/3. By default it tries to negotiate HTTP/2, then if available negotiate HTTP/3. The server must provide a valid ``Alt-Svc`` in responses.
 
@@ -1262,6 +1313,8 @@ You can pass almost all supported keyword arguments that come with ``urllib3.fut
 - assert_hostname
 - ssl_minimum_version
 - ssl_maximum_version
+- cache_maxsize
+- cache_max_ttl
 
 .. note:: Beware that we automatically forward ``ca_cert_data``, `ca_cert_dir`, and ``ca_certs`` (if specified) for convenience if not specified in DNS parameters.
 
