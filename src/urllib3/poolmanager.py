@@ -64,6 +64,8 @@ SSL_KEYWORDS = (
     "ssl_context",
     "key_password",
     "server_hostname",
+    "assert_hostname",
+    "assert_fingerprint",
     "cert_data",
     "key_data",
     "ciphers",
