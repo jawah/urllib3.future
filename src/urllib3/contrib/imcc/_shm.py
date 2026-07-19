@@ -46,7 +46,20 @@ def load_cert_chain(
         fd = os.memfd_create(unique_name, os.MFD_CLOEXEC)
     else:
         # this branch patch is for CPython <3.8 and PyPy 3.7+
-        from ctypes import c_int, c_ushort, cdll, create_string_buffer, get_errno, util
+        try:
+            from ctypes import (
+                c_int,
+                c_ushort,
+                cdll,
+                create_string_buffer,
+                get_errno,
+                util,
+            )
+        except ImportError as e:
+            raise UnsupportedOperation(
+                "Unable to provide support for in-memory client certificate: "
+                "ctypes is not available."
+            ) from e
 
         loc = util.find_library("rt") or util.find_library("c")
 
