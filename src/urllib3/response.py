@@ -7,9 +7,13 @@ import re
 import sys
 import typing
 import warnings
-import zlib
 from contextlib import contextmanager
 from socket import timeout as SocketTimeout
+
+try:
+    import zlib
+except ImportError:
+    zlib = None  # type: ignore[assignment]
 
 try:
     try:
@@ -410,7 +414,7 @@ def _get_decoder(mode: str) -> ContentDecoder:
     if "," in mode:
         return MultiDecoder(mode)
 
-    if mode == "gzip":
+    if zlib is not None and mode == "gzip":
         return GzipDecoder()
 
     if brotli is not None and mode == "br":
@@ -419,7 +423,12 @@ def _get_decoder(mode: str) -> ContentDecoder:
     if zstd is not None and mode == "zstd":
         return ZstdDecoder()
 
-    return DeflateDecoder()
+    # Preserve the historical fallback to deflate for unknown modes. Callers
+    # only pass advertised/supported modes here.
+    if zlib is not None:
+        return DeflateDecoder()
+
+    raise DecodeError(f"Unsupported content encoding: {mode}")
 
 
 class HTTPResponse(io.IOBase):
@@ -455,14 +464,18 @@ class HTTPResponse(io.IOBase):
         value of Content-Length header, if present. Otherwise, raise error.
     """
 
-    CONTENT_DECODERS = ["gzip", "deflate"]
+    CONTENT_DECODERS = []
+    if zlib is not None:
+        CONTENT_DECODERS += ["gzip", "deflate"]
     if brotli is not None:
         CONTENT_DECODERS += ["br"]
     if zstd is not None:
         CONTENT_DECODERS += ["zstd"]
     REDIRECT_STATUSES = [301, 302, 303, 307, 308]
 
-    DECODER_ERROR_CLASSES: tuple[type[Exception], ...] = (IOError, zlib.error)
+    DECODER_ERROR_CLASSES: tuple[type[Exception], ...] = (IOError,)
+    if zlib is not None:
+        DECODER_ERROR_CLASSES += (zlib.error,)
     if brotli is not None:
         DECODER_ERROR_CLASSES += (brotli.error,)
 
@@ -661,12 +674,8 @@ class HTTPResponse(io.IOBase):
             if content_encoding in self.CONTENT_DECODERS:
                 self._decoder = _get_decoder(content_encoding)
             elif "," in content_encoding:
-                encodings = [
-                    e.strip()
-                    for e in content_encoding.split(",")
-                    if e.strip() in self.CONTENT_DECODERS
-                ]
-                if encodings:
+                encodings = [e.strip() for e in content_encoding.split(",")]
+                if encodings and all(e in self.CONTENT_DECODERS for e in encodings):
                     self._decoder = _get_decoder(content_encoding)
 
     def _decode(

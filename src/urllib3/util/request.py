@@ -32,7 +32,13 @@ NOT_FORWARDABLE_HEADERS = frozenset(
     ]
 )
 
-ACCEPT_ENCODING = "gzip,deflate"
+_ACCEPT_ENCODING: list[str] = []
+try:
+    import zlib as _unused_module_zlib  # noqa: F401
+except ImportError:
+    pass
+else:
+    _ACCEPT_ENCODING += ["gzip", "deflate"]
 try:
     try:
         import brotlicffi as _unused_module_brotli  # type: ignore[import-not-found] # noqa: F401
@@ -41,13 +47,15 @@ try:
 except ImportError:
     pass
 else:
-    ACCEPT_ENCODING += ",br"
+    _ACCEPT_ENCODING += ["br"]
 try:
     import zstandard as _unused_module_zstd  # noqa: F401
 except ImportError:
     pass
 else:
-    ACCEPT_ENCODING += ",zstd"
+    _ACCEPT_ENCODING += ["zstd"]
+
+ACCEPT_ENCODING = ",".join(_ACCEPT_ENCODING) or "identity"
 
 
 class _TYPE_FAILEDTELL(Enum):
@@ -81,8 +89,10 @@ def make_headers(
 
     :param accept_encoding:
         Can be a boolean, list, or string.
-        ``True`` translates to 'gzip,deflate'.  If either the ``brotli`` or
-        ``brotlicffi`` package is installed 'gzip,deflate,br' is used instead.
+        ``True`` advertises every content encoding supported by the runtime.
+        This normally includes 'gzip,deflate', and may include 'br' and
+        'zstd' when their respective dependencies are installed. If none are
+        available, 'identity' is used.
         List will get joined by comma.
         String will be used as provided.
 
