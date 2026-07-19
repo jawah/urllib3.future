@@ -158,22 +158,49 @@ def read_name(data: bytes, offset: int) -> tuple[str, int]:
     Returns (name, new_offset).
     """
     labels = []
+    visited = set()
+    next_offset = None
+    pointer_jumps = 0
+    wire_length = 1
+
     while True:
+        if offset < 0 or offset >= len(data):
+            raise ValueError("DNS name is truncated")
+
         length = data[offset]
-        # compression pointer?
-        if length & 0xC0 == 0xC0:
+        marker = length & 0xC0
+        if marker == 0xC0:
+            if offset + 1 >= len(data):
+                raise ValueError("DNS compression pointer is truncated")
             pointer = struct.unpack_from("!H", data, offset)[0] & 0x3FFF
-            subname, _ = read_name(data, pointer)
-            labels.append(subname)
-            offset += 2
-            break
+            if pointer >= len(data):
+                raise ValueError("DNS compression pointer is out of range")
+            if pointer in visited:
+                raise ValueError("DNS compression pointer cycle detected")
+            visited.add(pointer)
+            pointer_jumps += 1
+            if pointer_jumps > 128:
+                raise ValueError("DNS name has too many compression pointers")
+            if next_offset is None:
+                next_offset = offset + 2
+            offset = pointer
+            continue
+        if marker:
+            raise ValueError("DNS label has invalid marker bits")
         if length == 0:
             offset += 1
             break
+        if length > 63:
+            raise ValueError("DNS label exceeds 63 octets")
+        if offset + 1 + length > len(data):
+            raise ValueError("DNS label is truncated")
+        wire_length += length + 1
+        if wire_length > 255:
+            raise ValueError("Expanded DNS name exceeds 255 wire octets")
         offset += 1
-        labels.append(data[offset : offset + length].decode())
+        labels.append(data[offset : offset + length].decode("ascii"))
         offset += length
-    return ".".join(labels), offset
+    return ".".join(labels), next_offset if next_offset is not None else offset
 
 
 def parse_https_rdata(rdata: bytes) -> HttpsRecord:

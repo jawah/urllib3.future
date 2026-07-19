@@ -10,6 +10,12 @@ from ....._async.response import AsyncHTTPResponse
 from ....._collections import HTTPHeaderDict
 from .....backend import ConnectionInfo, HttpVersion
 from .....util.url import parse_url
+from ..._cache import (
+    AsyncResolverCache,
+    ResolutionResult,
+    async_cache_resolution,
+    calculate_effective_ttl,
+)
 from ...protocols import (
     DomainNameServerQuery,
     DomainNameServerReturn,
@@ -41,6 +47,10 @@ class HTTPSResolver(AsyncBaseResolver):
         **kwargs: typing.Any,
     ) -> None:
         super().__init__(server, port or 443, *patterns, **kwargs)
+        self._resolver_cache = AsyncResolverCache(
+            int(kwargs.pop("cache_maxsize", 1024)),
+            int(kwargs.pop("cache_max_ttl", 60)),
+        )
 
         self._path: str = "/resolve"
 
@@ -143,6 +153,7 @@ class HTTPSResolver(AsyncBaseResolver):
     def is_available(self) -> bool:
         return self._pool.pool is not None
 
+    @async_cache_resolution
     async def getaddrinfo(  # type: ignore[override]
         self,
         host: bytes | str | None,
@@ -221,6 +232,7 @@ class HTTPSResolver(AsyncBaseResolver):
         promises = []
         remote_preemptive_quic_rr = False
         ech_config_list: bytes | None = None
+        ttl_values: list[object] = []
 
         if quic_upgrade_via_dns_rr and type == socket.SOCK_DGRAM:
             quic_upgrade_via_dns_rr = False
@@ -371,6 +383,8 @@ class HTTPSResolver(AsyncBaseResolver):
                 assert isinstance(payload["Answer"], list)
 
                 for answer in payload["Answer"]:
+                    ttl_values.append(answer.get("TTL"))
+
                     if answer["type"] not in [1, 28, 65]:
                         continue
 
@@ -549,6 +563,8 @@ class HTTPSResolver(AsyncBaseResolver):
                         )
                     )
 
+                ttl_values.extend(dns_resp.answer_ttls)
+
         quic_results: list[
             tuple[
                 socket.AddressFamily,
@@ -583,7 +599,10 @@ class HTTPSResolver(AsyncBaseResolver):
         if not results and not quic_results:
             raise socket.gaierror(f"Name or service not known: '{host}'")
 
-        return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
+        return ResolutionResult(
+            sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True),
+            calculate_effective_ttl(ttl_values),
+        )
 
 
 class GoogleResolver(

@@ -1,3 +1,12 @@
+2.23.900 (2026-07-19)
+=====================
+
+- Added DNS caching to our custom resolvers.
+  By default we will have a 60s conservative value for max TTL as we don't currently resolve intermediary steps CNAMEs.
+  This resolve a major performance bottleneck when using our custom resolver at scale.
+- Fixed using the library when zlib isn't available at runtime.
+- Backported "Add assert_hostname and assert_fingerprint to SSL_KEYWORDS" from upstream https://github.com/urllib3/urllib3/pull/5102
+
 2.22.901 (2026-07-09)
 =====================
 

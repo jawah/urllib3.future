@@ -4,8 +4,6 @@ import socket
 import typing
 
 from ...anytls import ssl
-from collections import deque
-
 from time import time as monotonic
 
 from qh3.quic.configuration import QuicConfiguration
@@ -29,10 +27,12 @@ from ...ssa._gro import (
     sync_send_dgram,
     sync_sendmsg_gso,
 )
+from .._cache import ResolutionResult, cache_resolution, calculate_effective_ttl
 from ..dou import PlainResolver
 from ..protocols import (
     COMMON_RCODE_LABEL,
     DomainNameServerQuery,
+    DomainNameServerParseException,
     DomainNameServerReturn,
     ProtocolResolver,
     SupportedQueryType,
@@ -41,8 +41,6 @@ from ..utils import (
     is_ipv4,
     is_ipv6,
     rfc1035_pack,
-    rfc1035_should_read,
-    rfc1035_unpack,
     validate_length_of,
 )
 
@@ -100,15 +98,19 @@ class QUICResolver(PlainResolver):
         configuration = QuicConfiguration(
             is_client=True,
             alpn_protocols=["doq"],
-            server_name=self._server
-            if "server_hostname" not in kwargs
-            else kwargs["server_hostname"],
-            verify_mode=resolve_cert_reqs(kwargs["cert_reqs"])
-            if "cert_reqs" in kwargs
-            else ssl.CERT_REQUIRED,
-            cadata=kwargs["ca_cert_data"].encode()
-            if "ca_cert_data" in kwargs
-            else None,
+            server_name=(
+                self._server
+                if "server_hostname" not in kwargs
+                else kwargs["server_hostname"]
+            ),
+            verify_mode=(
+                resolve_cert_reqs(kwargs["cert_reqs"])
+                if "cert_reqs" in kwargs
+                else ssl.CERT_REQUIRED
+            ),
+            cadata=(
+                kwargs["ca_cert_data"].encode() if "ca_cert_data" in kwargs else None
+            ),
             cafile=kwargs["ca_certs"] if "ca_certs" in kwargs else None,
             idle_timeout=300.0,
         )
@@ -140,8 +142,11 @@ class QUICResolver(PlainResolver):
         # DNS over QUIC mandate the size-prefix (unsigned int, 2b)
         self._rfc1035_prefix_mandated = True
 
-        self._unconsumed: deque[DomainNameServerReturn] = deque()
-        self._pending: deque[DomainNameServerQuery] = deque()
+        # DoQ transactions are correlated by QUIC stream, never by DNS ID.
+        self._pending: dict[int, DomainNameServerQuery] = {}
+        self._completed: dict[int, DomainNameServerReturn] = {}
+        self._response_buffers: dict[int, bytes] = {}
+        self._stream_failures: dict[int, str] = {}
 
     def close(self) -> None:
         if not self._terminated:
@@ -174,6 +179,7 @@ class QUICResolver(PlainResolver):
             self._terminated = True
         return not self._terminated
 
+    @cache_resolution
     def getaddrinfo(
         self,
         host: bytes | str | None,
@@ -264,107 +270,139 @@ class QUICResolver(PlainResolver):
 
         tbq.append(SupportedQueryType.HTTPS)
 
-        queries = DomainNameServerQuery.bulk(host, *tbq)
-        open_streams = []
+        queries = [DomainNameServerQuery(host, query_type, 0) for query_type in tbq]
+        owned_streams: set[int] = set()
+        responses: list[DomainNameServerReturn] = []
+        try:
+            with self._lock:
+                for query in queries:
+                    payload = rfc1035_pack(bytes(query))
+                    stream_id = self._quic.get_next_available_stream_id()
+                    self._pending[stream_id] = query
+                    self._response_buffers[stream_id] = b""
+                    owned_streams.add(stream_id)
+                    self._quic.send_stream_data(stream_id, payload, True)
 
-        with self._lock:
-            for q in queries:
-                payload = bytes(q)
-
-                self._pending.append(q)
-
-                if self._rfc1035_prefix_mandated is True:
-                    payload = rfc1035_pack(payload)
-
-                stream_id = self._quic.get_next_available_stream_id()
-                self._quic.send_stream_data(stream_id, payload, True)
-
-                open_streams.append(stream_id)
-
-                datagrams = self._quic.datagrams_to_send(monotonic())
-                if self._dgram_gso_enabled and len(datagrams) > 1:
-                    try:
-                        sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
-                    except GenericSegmentOffloadUnsupported:
-                        self._dgram_gso_enabled = False
+                    datagrams = self._quic.datagrams_to_send(monotonic())
+                    if self._dgram_gso_enabled and len(datagrams) > 1:
+                        try:
+                            sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
+                        except GenericSegmentOffloadUnsupported:
+                            self._dgram_gso_enabled = False
+                            for dg in datagrams:
+                                sync_send_dgram(self._socket, dg[0])
+                    else:
                         for dg in datagrams:
                             sync_send_dgram(self._socket, dg[0])
-                else:
-                    for dg in datagrams:
-                        sync_send_dgram(self._socket, dg[0])
 
-        responses: list[DomainNameServerReturn] = []
-
-        while len(responses) < len(tbq):
-            with self._lock:
-                if self._unconsumed:
-                    dns_resp = None
-                    for query in queries:
-                        for unconsumed in self._unconsumed:
-                            if unconsumed.id == query.id:
-                                dns_resp = unconsumed
-                                responses.append(dns_resp)
-                                break
-                        if dns_resp:
-                            break
-                    if dns_resp:
-                        self._unconsumed.remove(dns_resp)
-                        self._pending.remove(query)
+            while len(responses) < len(tbq):
+                with self._lock:
+                    responses = [
+                        self._completed[stream_id]
+                        for stream_id in owned_streams
+                        if stream_id in self._completed
+                    ]
+                    failures = [
+                        self._stream_failures[stream_id]
+                        for stream_id in owned_streams
+                        if stream_id in self._stream_failures
+                    ]
+                    if failures:
+                        raise socket.gaierror(failures[0])
+                    if len(responses) == len(tbq):
                         continue
 
-                try:
-                    events: list[StreamDataReceived] = self.__exchange_until(  # type: ignore[assignment]
-                        StreamDataReceived,
-                        receive_first=True,
-                        event_type_collectable=(StreamDataReceived,),
-                        respect_end_stream_signal=False,
-                    )
-
-                    payload = b"".join([e.data for e in events])
-
-                    while rfc1035_should_read(payload):
-                        events.extend(
-                            self.__exchange_until(  # type: ignore[arg-type]
-                                StreamDataReceived,
-                                receive_first=True,
-                                event_type_collectable=(StreamDataReceived,),
-                                respect_end_stream_signal=False,
-                            )
+                    try:
+                        events: list[StreamDataReceived] = self.__exchange_until(  # type: ignore[assignment]
+                            StreamDataReceived,
+                            receive_first=True,
+                            event_type_collectable=(StreamDataReceived,),
+                            respect_end_stream_signal=False,
                         )
-                        payload = b"".join([e.data for e in events])
-                except (TimeoutError, OSError, socket.timeout, ConnectionError) as e:
-                    raise socket.gaierror(
-                        "Got unexpectedly disconnected while waiting for name resolution"
-                    ) from e
+                    except (
+                        TimeoutError,
+                        OSError,
+                        socket.timeout,
+                        ConnectionError,
+                    ) as e:
+                        raise socket.gaierror(
+                            "Got unexpectedly disconnected while waiting for name resolution"
+                        ) from e
 
-                if not payload:
-                    continue
+                    for event in events:
+                        stream_id = event.stream_id
+                        pending_query = self._pending.get(stream_id)
+                        if pending_query is None or stream_id in self._completed:
+                            continue
 
-                #: We can receive two responses at once (or more, concatenated). Let's unwrap them.
-                fragments = rfc1035_unpack(payload)
+                        payload = (
+                            self._response_buffers.get(stream_id, b"") + event.data
+                        )
+                        if len(payload) < 2:
+                            if event.end_stream:
+                                self._pending.pop(stream_id, None)
+                                self._response_buffers.pop(stream_id, None)
+                                self._stream_failures[stream_id] = (
+                                    "DoQ stream ended before its response length was received"
+                                )
+                            else:
+                                self._response_buffers[stream_id] = payload
+                            continue
 
-                for fragment in fragments:
-                    dns_resp = DomainNameServerReturn(fragment)
+                        message_size = int.from_bytes(payload[:2], "big")
+                        if len(payload) < message_size + 2:
+                            if event.end_stream:
+                                self._pending.pop(stream_id, None)
+                                self._response_buffers.pop(stream_id, None)
+                                self._stream_failures[stream_id] = (
+                                    "DoQ stream ended with an incomplete DNS response"
+                                )
+                            else:
+                                self._response_buffers[stream_id] = payload
+                            continue
 
-                    if any(dns_resp.id == _.id for _ in queries):
-                        responses.append(dns_resp)
+                        # RFC 9250 permits exactly one DNS message per stream.
+                        self._response_buffers.pop(stream_id, None)
+                        if len(payload) != message_size + 2:
+                            self._pending.pop(stream_id, None)
+                            self._stream_failures[stream_id] = (
+                                "DoQ stream contained more than one DNS response"
+                            )
+                            continue
+                        try:
+                            dns_resp = DomainNameServerReturn(
+                                payload[2 : message_size + 2]
+                            )
+                        except DomainNameServerParseException:
+                            self._pending.pop(stream_id, None)
+                            self._stream_failures[stream_id] = (
+                                "DoQ stream contained a malformed DNS response"
+                            )
+                            continue
 
-                        query_tbr: DomainNameServerQuery | None = None
-
-                        for pending_q in self._pending:
-                            if pending_q.id == dns_resp.id:
-                                query_tbr = pending_q
-                                break
-                        if query_tbr is not None:
-                            self._pending.remove(query_tbr)
-                    else:
-                        self._unconsumed.append(dns_resp)
+                        if (
+                            dns_resp.id == 0
+                            and dns_resp.matches(pending_query)
+                            and stream_id not in self._completed
+                        ):
+                            self._completed[stream_id] = dns_resp
+                        else:
+                            self._pending.pop(stream_id, None)
+                            self._stream_failures[stream_id] = (
+                                "DoQ response did not match its query"
+                            )
+        finally:
+            with self._lock:
+                for stream_id in owned_streams:
+                    self._pending.pop(stream_id, None)
+                    self._completed.pop(stream_id, None)
+                    self._response_buffers.pop(stream_id, None)
+                    self._stream_failures.pop(stream_id, None)
 
         if self._should_disconnect:
-            with self._lock:
-                self.close()
-                self._should_disconnect = False
-                self._terminated = True
+            self.close()
+            self._should_disconnect = False
+            self._terminated = True
 
         results: list[
             tuple[
@@ -460,16 +498,22 @@ class QUICResolver(PlainResolver):
         if not results and not quic_results:
             raise socket.gaierror(f"Name or service not known: '{host}'")
 
-        return sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True)
+        ttl = calculate_effective_ttl(
+            ttl for response in responses for ttl in response.answer_ttls
+        )
+        return ResolutionResult(
+            sorted(quic_results + results, key=lambda _: _[0] + _[1], reverse=True),
+            ttl,
+        )
 
     def __exchange_until(
         self,
         event_type: type[QuicEvent] | tuple[type[QuicEvent], ...],
         *,
         receive_first: bool = False,
-        event_type_collectable: type[QuicEvent]
-        | tuple[type[QuicEvent], ...]
-        | None = None,
+        event_type_collectable: (
+            type[QuicEvent] | tuple[type[QuicEvent], ...] | None
+        ) = None,
         respect_end_stream_signal: bool = True,
     ) -> list[QuicEvent]:
         quic = self._quic

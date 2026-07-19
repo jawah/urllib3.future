@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import secrets
 import socket
 import struct
 import sys
@@ -10,7 +11,6 @@ from abc import ABCMeta, abstractmethod
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from random import randint
 
 from ..._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
 from ..._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
@@ -178,8 +178,9 @@ class BaseResolver(metaclass=ABCMeta):
         socket_kind: socket.SocketKind = socket.SOCK_STREAM,
         *,
         quic_upgrade_via_dns_rr: bool = False,
-        timing_hook: typing.Callable[[tuple[timedelta, timedelta, datetime]], None]
-        | None = None,
+        timing_hook: (
+            typing.Callable[[tuple[timedelta, timedelta, datetime]], None] | None
+        ) = None,
         default_socket_family: socket.AddressFamily = socket.AF_UNSPEC,
     ) -> socket.socket:
         """Connect to *address* and return the socket object.
@@ -502,10 +503,12 @@ class DomainNameServerQuery:
         self, host: str, query_type: SupportedQueryType, override_id: int | None = None
     ) -> None:
         self._id = struct.pack(
-            "!H", randint(0x0000, 0xFFFF) if override_id is None else override_id
+            "!H", secrets.randbits(16) if override_id is None else override_id
         )
-        self._host = host
+        self._host = host.rstrip(".")
+        self._normalized_host = self._host.lower()
         self._query = query_type
+        self._query_class = 1
         self._flags = struct.pack("!H", 0x0100)
         self._qd_count = struct.pack("!H", 1)
 
@@ -518,6 +521,18 @@ class DomainNameServerQuery:
     @property
     def raw_id(self) -> bytes:
         return self._id
+
+    @property
+    def normalized_host(self) -> str:
+        return self._normalized_host
+
+    @property
+    def query_type(self) -> SupportedQueryType:
+        return self._query
+
+    @property
+    def query_class(self) -> int:
+        return self._query_class
 
     def __repr__(self) -> str:
         return f"<Query '{self._host}' IN {self._query.name}>"
@@ -541,7 +556,7 @@ class DomainNameServerQuery:
 
         payload += b"\x00"
         payload += struct.pack("!H", self._query.value)
-        payload += struct.pack("!H", 0x0001)
+        payload += struct.pack("!H", self._query_class)
 
         self._cached = payload
 
@@ -586,18 +601,28 @@ class DomainNameServerReturn:
             self._qd_count = up[2]
             self._an_count = up[3]
 
+            self._qr = (self._flags >> 15) & 0x01
+            self._opcode = (self._flags >> 11) & 0x0F
+
             self._rcode = payload[3] & 0x0F
+
+            if self._qd_count != 1:
+                raise ValueError("DNS response must contain exactly one question")
 
             # Parse QNAME using read_name which handles compression pointers (0xC0xx)
             self._hostname, idx = read_name(payload, 12)
+            self._normalized_hostname = self._hostname.rstrip(".").lower()
+            self._query_type, self._query_class = struct.unpack(
+                "!HH", payload[idx : idx + 4]
+            )
+            idx += 4
 
             self._records: list[tuple[SupportedQueryType, int, str | HttpsRecord]] = []
+            self._answer_ttls: list[int] = []
 
             if self._an_count:
-                # Skip QTYPE (2 bytes) and QCLASS (2 bytes) after QNAME
-                idx += 4
-
-                while idx < len(payload):
+                answers_read = 0
+                while idx < len(payload) and answers_read < self._an_count:
                     # Parse the answer NAME field (may be a compression pointer or full label)
                     _, idx = read_name(payload, idx)
 
@@ -605,7 +630,12 @@ class DomainNameServerReturn:
                     rr_type, rr_class, rr_ttl = struct.unpack(
                         "!HHI", payload[idx : idx + 8]
                     )
+                    self._answer_ttls.append(rr_ttl)
+                    answers_read += 1
                     entry_size = struct.unpack("!H", payload[idx + 8 : idx + 10])[0]
+
+                    if idx + 10 + entry_size > len(payload):
+                        raise ValueError("DNS resource record is truncated")
 
                     data = payload[idx + 10 : idx + 10 + entry_size]
 
@@ -631,6 +661,8 @@ class DomainNameServerReturn:
                         continue
 
                     self._records.append((query_type, rr_ttl, decoded_data))
+                if answers_read != self._an_count:
+                    raise ValueError("DNS answer section is truncated")
         except (struct.error, IndexError, ValueError, UnicodeDecodeError) as e:
             raise DomainNameServerParseException(
                 "A protocol error occurred while parsing the DNS response payload: "
@@ -646,8 +678,47 @@ class DomainNameServerReturn:
         return self._hostname
 
     @property
+    def normalized_hostname(self) -> str:
+        return self._normalized_hostname
+
+    @property
+    def qr(self) -> int:
+        return self._qr  # type: ignore[no-any-return]
+
+    @property
+    def opcode(self) -> int:
+        return self._opcode  # type: ignore[no-any-return]
+
+    @property
+    def qd_count(self) -> int:
+        return self._qd_count  # type: ignore[no-any-return]
+
+    @property
+    def query_type(self) -> int:
+        return self._query_type  # type: ignore[no-any-return]
+
+    @property
+    def query_class(self) -> int:
+        return self._query_class  # type: ignore[no-any-return]
+
+    def matches(self, query: DomainNameServerQuery) -> bool:
+        return (
+            self._id == query.id
+            and self._qr == 1
+            and self._opcode == 0
+            and self._qd_count == 1
+            and self._normalized_hostname == query.normalized_host
+            and self._query_type == query.query_type.value
+            and self._query_class == query.query_class
+        )
+
+    @property
     def records(self) -> list[tuple[SupportedQueryType, int, str | HttpsRecord]]:
         return self._records
+
+    @property
+    def answer_ttls(self) -> list[int]:
+        return self._answer_ttls
 
     @property
     def is_found(self) -> bool:

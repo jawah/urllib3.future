@@ -33,83 +33,43 @@ class TLSResolver(PlainResolver):
         # DNS over TLS mandate the size-prefix (unsigned int, 2 bytes)
         self._rfc1035_prefix_mandated = True
 
-    async def getaddrinfo(  # type: ignore[override]
-        self,
-        host: bytes | str | None,
-        port: str | int | None,
-        family: socket.AddressFamily,
-        type: socket.SocketKind,
-        proto: int = 0,
-        flags: int = 0,
-        *,
-        quic_upgrade_via_dns_rr: bool = False,
-    ) -> list[
-        tuple[
-            socket.AddressFamily,
-            socket.SocketKind,
-            int,
-            str | bytes,
-            tuple[str, int] | tuple[str, int, int, int],
-        ]
-    ]:
-        if self._socket is None and self._connect_attempt.is_set() is False:
-            assert self.server is not None
-            self._connect_attempt.set()
-            self._socket = await SystemResolver().create_connection(
-                (self.server, self.port or 853),
-                timeout=self._timeout,
-                source_address=self._source_address,
-                socket_options=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp"),),
-                socket_kind=self._socket_type,
-            )
-            self._socket = await ssl_wrap_socket(
-                self._socket,
-                server_hostname=self.server
-                if "server_hostname" not in self._kwargs
-                else self._kwargs["server_hostname"],
-                keyfile=self._kwargs["key_file"]
-                if "key_file" in self._kwargs
-                else None,
-                certfile=self._kwargs["cert_file"]
-                if "cert_file" in self._kwargs
-                else None,
-                cert_reqs=resolve_cert_reqs(self._kwargs["cert_reqs"])
-                if "cert_reqs" in self._kwargs
-                else None,
-                ca_certs=self._kwargs["ca_certs"]
-                if "ca_certs" in self._kwargs
-                else None,
-                ssl_version=self._kwargs["ssl_version"]
-                if "ssl_version" in self._kwargs
-                else None,
-                ciphers=self._kwargs["ciphers"] if "ciphers" in self._kwargs else None,
-                ca_cert_dir=self._kwargs["ca_cert_dir"]
-                if "ca_cert_dir" in self._kwargs
-                else None,
-                key_password=self._kwargs["key_password"]
-                if "key_password" in self._kwargs
-                else None,
-                ca_cert_data=self._kwargs["ca_cert_data"]
-                if "ca_cert_data" in self._kwargs
-                else None,
-                certdata=self._kwargs["cert_data"]
-                if "cert_data" in self._kwargs
-                else None,
-                keydata=self._kwargs["key_data"]
-                if "key_data" in self._kwargs
-                else None,
-            )
-            self._connect_finalized.set()
-
-        return await super().getaddrinfo(
-            host,
-            port,
-            family=family,
-            type=type,
-            proto=proto,
-            flags=flags,
-            quic_upgrade_via_dns_rr=quic_upgrade_via_dns_rr,
+    async def _connect(self) -> None:
+        assert self.server is not None
+        raw_socket = await SystemResolver().create_connection(
+            (self.server, self.port or 853),
+            timeout=self._timeout,
+            source_address=self._source_address,
+            socket_options=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp"),),
+            socket_kind=self._socket_type,
         )
+        try:
+            self._socket = await ssl_wrap_socket(
+                raw_socket,
+                server_hostname=(
+                    self.server
+                    if "server_hostname" not in self._kwargs
+                    else self._kwargs["server_hostname"]
+                ),
+                keyfile=self._kwargs.get("key_file"),
+                certfile=self._kwargs.get("cert_file"),
+                cert_reqs=(
+                    resolve_cert_reqs(self._kwargs["cert_reqs"])
+                    if "cert_reqs" in self._kwargs
+                    else None
+                ),
+                ca_certs=self._kwargs.get("ca_certs"),
+                ssl_version=self._kwargs.get("ssl_version"),
+                ciphers=self._kwargs.get("ciphers"),
+                ca_cert_dir=self._kwargs.get("ca_cert_dir"),
+                key_password=self._kwargs.get("key_password"),
+                ca_cert_data=self._kwargs.get("ca_cert_data"),
+                certdata=self._kwargs.get("cert_data"),
+                keydata=self._kwargs.get("key_data"),
+            )
+        except BaseException:
+            raw_socket.close()
+            await raw_socket.wait_for_close()
+            raise
 
 
 class GoogleResolver(
