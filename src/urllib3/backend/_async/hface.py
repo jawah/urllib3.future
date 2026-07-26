@@ -652,11 +652,18 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if self._max_tolerable_delay_for_upgrade is not None:
             self.sock.settimeout(self._max_tolerable_delay_for_upgrade)
 
+        handshake_timeout = self.sock.gettimeout()
+        handshake_deadline = (
+            None
+            if handshake_timeout is None
+            else time.monotonic() + handshake_timeout
+        )
         # it may be required to send some initial data, aka. magic header (PRI * HTTP/2..)
         try:
             await self.__exchange_until(
                 HandshakeCompleted,
                 receive_first=False,
+                deadline=handshake_deadline,
             )
         except (
             ProtocolError,
@@ -690,6 +697,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
                     ) from e
             raise
+        finally:
+            self.sock.settimeout(handshake_timeout)
 
         self._connected_at = time.monotonic()
 
@@ -881,6 +890,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         maximal_data_in_read: int | None = None,
         data_in_len_from: typing.Callable[[Event], int] | None = None,
         stream_id: int | None = None,
+        deadline: float | None = None,
     ) -> list[Event]:
         """This method simplify socket exchange in/out based on what the protocol state machine orders.
         Can be used for the initial handshake for instance."""
@@ -931,6 +941,12 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             if not protocol.has_pending_event(stream_id=stream_id):
                 if not receive_first:
                     await send_pending()
+
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise SocketTimeout("timed out")
+                    sock.settimeout(remaining)
 
                 next_timer = protocol.next_timer() if _has_next_timer else None  # type: ignore[union-attr]
                 sub = AsyncSubTimeout(sock, next_timer, send_pending)
