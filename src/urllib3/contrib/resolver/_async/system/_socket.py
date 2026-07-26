@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import sys
 import typing
 
 from ...protocols import ProtocolResolver
 from ..protocols import AsyncBaseResolver
+
+if sys.platform == "wasi":
+    try:
+        from ....wasi._async.socket import getaddrinfo as wasi_getaddrinfo
+    except ImportError:
+        wasi_getaddrinfo = None
+else:
+    wasi_getaddrinfo = None
 
 
 class SystemResolver(AsyncBaseResolver):
@@ -56,6 +65,16 @@ class SystemResolver(AsyncBaseResolver):
             tuple[str, int] | tuple[str, int, int, int],
         ]
     ]:
+        if wasi_getaddrinfo is not None:
+            return await wasi_getaddrinfo(
+                host=host,
+                port=port,
+                family=family,
+                type=type,
+                proto=proto,
+                flags=flags,
+            )
+
         return await asyncio.get_running_loop().getaddrinfo(
             host=host,
             port=port,

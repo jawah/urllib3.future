@@ -1,5 +1,6 @@
 .*
 !/.github/
+!/.dockerignore
 *.py[co]
 *.egg
 *.egg-info

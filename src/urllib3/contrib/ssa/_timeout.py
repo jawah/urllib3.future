@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import sys
 from asyncio import CancelledError, events, tasks
 from types import TracebackType
 
@@ -138,5 +139,8 @@ def timeout(delay: float | None) -> Timeout:
     the top-most affected timeout() context manager converts CancelledError
     into TimeoutError.
     """
+    if sys.platform == "wasi":
+        return Timeout(None)
+
     loop = events.get_running_loop()
     return Timeout(loop.time() + delay if delay is not None else None)

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import socket
+import sys
 import typing
+
+if sys.platform == "wasi":
+    try:
+        from ..contrib.wasi import socket
+    except ImportError:
+        pass
 
 if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
@@ -115,4 +122,4 @@ def _has_ipv6() -> bool:
     return has_ipv6
 
 
-HAS_IPV6 = _has_ipv6()
+HAS_IPV6 = socket.has_ipv6 if sys.platform == "wasi" else _has_ipv6()

@@ -6,8 +6,6 @@ import time
 import typing
 from datetime import datetime, timezone
 from functools import lru_cache
-from socket import SOCK_DGRAM, SOCK_STREAM
-from socket import timeout as SocketTimeout
 
 from ..contrib.anytls import ssl, Certificate
 
@@ -69,6 +67,16 @@ from ._base import (
     ResponsePromise,
 )
 
+if sys.platform == "wasi":
+    try:
+        from ..contrib.wasi import socket
+    except ImportError:
+        pass
+
+SOCK_DGRAM = socket.SOCK_DGRAM
+SOCK_STREAM = socket.SOCK_STREAM
+SocketTimeout = socket.timeout
+
 if typing.TYPE_CHECKING:
     from .._typing import _TYPE_SOCKET_OPTIONS
 
@@ -77,6 +85,9 @@ _HAS_SYS_AUDIT = hasattr(sys, "audit")
 
 @lru_cache(maxsize=1)
 def _HAS_HTTP3_SUPPORT() -> bool:
+    if sys.platform == "wasi":
+        return False
+
     from ..util.ssl_ import IS_FIPS
 
     if IS_FIPS:

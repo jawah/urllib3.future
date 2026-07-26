@@ -9,3 +9,4 @@ or that require optional third-party dependencies.
    socks
    resolver
    ssa
+   anytls

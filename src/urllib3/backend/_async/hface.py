@@ -59,6 +59,12 @@ from .._base import (
 from ..hface import _HAS_HTTP3_SUPPORT, _HAS_SYS_AUDIT
 from ._base import AsyncBaseBackend, AsyncDirectStreamAccess, AsyncLowLevelResponse
 
+if sys.platform == "wasi":
+    try:
+        from ...contrib.wasi._async.socket import AsyncSocket, SSLAsyncSocket
+    except ImportError:
+        pass
+
 if typing.TYPE_CHECKING:
     from ..._typing import _TYPE_SOCKET_OPTIONS
 

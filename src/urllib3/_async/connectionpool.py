@@ -89,6 +89,10 @@ from .connection import (
 from .connection import port_by_scheme as port_by_scheme  # type: ignore[attr-defined]
 from .response import AsyncHTTPResponse
 
+if sys.platform == "wasi":
+    # wasi don't support lazy import.
+    from ..contrib.webextensions._async import load_extension as load_extension  # noqa: F401
+
 if typing.TYPE_CHECKING:
     import ssl
 

@@ -1,0 +1,11 @@
+package urllib3:wasi-tests;
+
+world dual-command {
+  include wasi:cli/command@0.3.0;
+
+  import wasi:sockets/network@0.2.0;
+  import wasi:sockets/instance-network@0.2.0;
+  import wasi:sockets/ip-name-lookup@0.2.0;
+  import wasi:sockets/tcp@0.2.0;
+  import wasi:sockets/tcp-create-socket@0.2.0;
+}

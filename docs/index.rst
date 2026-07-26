@@ -7,6 +7,7 @@ urllib3.future
 
    v2-migration-guide
    user-guide
+   wasi
    async
    advanced-usage
    reference/index
@@ -44,6 +45,7 @@ urllib3.future
 - Trailer Headers.
 - Amazingly Fast.
 - WebSocket.
+- WASI.
 
 urllib3 is powerful and easy to use:
 

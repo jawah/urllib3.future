@@ -6,10 +6,16 @@ from __future__ import annotations
 
 # Set default logging handler to avoid "No handler found" warnings.
 import logging
+import sys
 import typing
 import warnings
 from logging import NullHandler
 from os import environ
+
+if sys.platform == "wasi":
+    # we have to eager import it, otherwise p1
+    # socket fallback will crash.
+    import encodings.idna as _idna  # noqa: F401
 
 from . import exceptions
 from ._async.connectionpool import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool

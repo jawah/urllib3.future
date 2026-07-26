@@ -41,6 +41,7 @@
 - Trailer Headers.
 - Amazingly Fast.
 - WebSocket.
+- WASI.
 
 urllib3.future is powerful and easy to use:
 

@@ -18,6 +18,16 @@ from ...ssa import AsyncSocket
 from ...ssa._timeout import timeout as timeout_
 from ..protocols import BaseResolver
 
+_HAS_WASI_SOCKET_BINDINGS = sys.platform != "wasi"
+
+if sys.platform == "wasi":
+    try:
+        from ...wasi._async.socket import AsyncSocket
+    except ImportError:
+        pass
+    else:
+        _HAS_WASI_SOCKET_BINDINGS = True
+
 
 class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
     def recycle(self) -> AsyncBaseResolver:
@@ -79,6 +89,15 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
         for the socket to bind as a source address before making the connection.
         An host of '' or port 0 tells the OS to use the default.
         """
+
+        if not _HAS_WASI_SOCKET_BINDINGS:
+            raise RuntimeError(
+                "Async networking on WASI requires the Preview 3 socket "
+                "interfaces. Componentize with "
+                "'-w wasi:cli/command@0.3.0', or import "
+                "'wasi:sockets/types@0.3.0' and "
+                "'wasi:sockets/ip-name-lookup@0.3.0' in the component world."
+            )
 
         host, port = address
         if host.startswith("["):
