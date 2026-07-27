@@ -1,4 +1,4 @@
-2.24.900 (2026-07-26)
+2.24.900 (2026-07-27)
 =====================
 
 - Added initial support for WASI. Most of our feature set is working in WASI.
