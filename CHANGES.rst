@@ -11,6 +11,7 @@
   can instantaneously gain support for WASI.
   Please read the instructions to gain specific knowledge about WASI in the
   documentation for more.
+- Fixed HTTP/3 preemptive upgrade (via cache) that could not downgrade in between two pools creation.
 
 2.23.900 (2026-07-19)
 =====================

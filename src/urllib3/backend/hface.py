@@ -214,6 +214,7 @@ class HfaceBackend(BaseBackend):
                     (self.host, self.port or 443)
                 ]
                 if self.__alt_authority:
+                    self._max_tolerable_delay_for_upgrade = 1.0
                     self._svn = HttpVersion.h3
                     # we ignore alt-host as we do not trust cache security
                     self.port: int = self.__alt_authority[1]
