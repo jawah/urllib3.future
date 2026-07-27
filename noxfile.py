@@ -23,7 +23,7 @@ _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is 
 
 @contextlib.contextmanager
 def traefik_boot(
-    session: nox.Session, *args: str
+    session: nox.Session, *args: str, stop_on_exit: bool = True
 ) -> typing.Generator[None, None, None]:
     """
     Start a server to reliably test HTTP/1.1, HTTP/2 and HTTP/3 over QUIC.
@@ -191,9 +191,17 @@ def traefik_boot(
 
     yield
 
-    if external_stack_started:
+    if external_stack_started and stop_on_exit:
         dc_process = subprocess.Popen(dc_cmd[:-2] + ["stop"])
         dc_process.wait()
+
+
+@nox.session(name="wasi_traefik", python="3.14")
+def wasi_traefik(session: nox.Session) -> None:
+    """Start and health-check the Compose Traefik stack for WASI tests."""
+    session.install("trustme==1.2.1")
+    with traefik_boot(session, stop_on_exit=False):
+        pass
 
 
 def tests_impl(

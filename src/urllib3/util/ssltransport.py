@@ -68,9 +68,10 @@ class SSLTransport:
         # SSLContext (or vice-versa), wrap_bio() will reject a foreign
         # MemoryBIO with a TypeError. Try the default ``ssl`` first, then
         # fall back to ``_stdlib_ssl``.
-        _bio_factories: list[type[ssl.MemoryBIO]] = list(
-            dict.fromkeys([ssl.MemoryBIO, _stdlib_ssl.MemoryBIO])
-        )
+        _bio_factories: list[type[ssl.MemoryBIO]] = [ssl.MemoryBIO]
+        if _stdlib_ssl is not None:
+            _bio_factories.append(_stdlib_ssl.MemoryBIO)
+        _bio_factories = list(dict.fromkeys(_bio_factories))
         for _MemoryBIO in _bio_factories:
             self.incoming: ssl.MemoryBIO = _MemoryBIO()
             self.outgoing: ssl.MemoryBIO = _MemoryBIO()
@@ -78,6 +79,7 @@ class SSLTransport:
                 self.sslobj: ssl.SSLObject = ssl_context.wrap_bio(
                     self.incoming, self.outgoing, server_hostname=server_hostname
                 )
+                self._ssl_module = ssl if _MemoryBIO is ssl.MemoryBIO else _stdlib_ssl
                 break
             except TypeError:
                 continue
@@ -246,7 +248,9 @@ class SSLTransport:
         ret = None
 
         while should_loop:
-            errno = None
+            ssl_module = self._ssl_module
+            assert ssl_module is not None
+            want_read: bool | None = None
             try:
                 if arg1 is None and arg2 is None:
                     ret = func()
@@ -254,21 +258,17 @@ class SSLTransport:
                     ret = func(arg1)
                 else:
                     ret = func(arg1, arg2)
-            except _stdlib_ssl.SSLError as e:
-                if e.errno not in (
-                    _stdlib_ssl.SSL_ERROR_WANT_READ,
-                    _stdlib_ssl.SSL_ERROR_WANT_WRITE,
-                ):
-                    # WANT_READ, and WANT_WRITE are expected, others are not.
-                    raise e
-                errno = e.errno
+            except ssl_module.SSLWantReadError:
+                want_read = True
+            except ssl_module.SSLWantWriteError:
+                want_read = False
 
             buf = self.outgoing.read()
             self.socket.sendall(buf)
 
-            if errno is None:
+            if want_read is None:
                 should_loop = False
-            elif errno == _stdlib_ssl.SSL_ERROR_WANT_READ:
+            elif want_read:
                 buf = self.socket.recv(DEFAULT_BLOCKSIZE)
                 if buf:
                     self.incoming.write(buf)

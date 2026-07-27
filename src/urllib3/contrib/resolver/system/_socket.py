@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import socket
+import sys
 import typing
+
+if sys.platform == "wasi":
+    try:
+        from ...wasi import socket
+    except ImportError:
+        pass
 
 from ..protocols import BaseResolver, ProtocolResolver
 

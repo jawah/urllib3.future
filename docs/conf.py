@@ -82,12 +82,6 @@ html_favicon = "images/favicon.png"
 
 html_static_path = ["_static"]
 html_theme_options = {
-    "announcement": """
-        <a style=\"text-decoration: none; color: white;\" 
-           href=\"https://github.com/sponsors/Ousret\">
-           <img src=\"/en/latest/_static/favicon.png\"/> Support urllib3.future on GitHub Sponsors
-        </a>
-    """,
     "sidebar_hide_name": True,
     "light_logo": "logo.png",
     "dark_logo": "logo.png",
@@ -157,6 +151,9 @@ nitpick_ignore = [
     ("py:class", "AsyncTrafficPolice"),
     ("py:attr", "HTTPResponse.data"),
     ("py:class", "_TYPE_PEER_CERT_RET_DICT"),
+    ("py:class", "_TYPE_PEER_CERT_RET"),
+    ("py:class", "_KnownCaller"),
+    ("py:class", "urllib3.util._async.traffic_police.AsyncTrafficPolice"),
     ("py:class", "_TYPE_ASYNC_BODY"),
     ("py:class", "ExtensionFromHTTP"),
     ("py:class", "AsyncExtensionFromHTTP"),

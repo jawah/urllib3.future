@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import typing
+import sys
 import warnings
 from types import TracebackType
 from urllib.parse import urljoin
@@ -34,6 +35,10 @@ from ..util.traffic_police import UnavailableTraffic
 from ..util.url import Url, parse_extension, parse_url
 from .connectionpool import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
 from .response import AsyncHTTPResponse
+
+if sys.platform == "wasi":
+    # wasi don't support lazy import.
+    from ..contrib.webextensions._async import load_extension as load_extension  # noqa: F401
 
 if typing.TYPE_CHECKING:
     import ssl

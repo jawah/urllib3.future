@@ -73,6 +73,10 @@ from .util.url import _normalize_host as normalize_host
 from .util.url import parse_url
 from .util.util import to_str
 
+if sys.platform == "wasi":
+    # wasi don't support lazy import.
+    from .contrib.webextensions import load_extension as load_extension  # noqa: F401
+
 if typing.TYPE_CHECKING:
     import ssl
 
@@ -435,6 +439,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if (
             background_watch_delay is not None
             and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
+            and sys.platform != "wasi"
         ):
             # forbid any keepalive idle window <1s
             if (

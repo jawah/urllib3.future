@@ -59,6 +59,12 @@ from .._base import (
 from ..hface import _HAS_HTTP3_SUPPORT, _HAS_SYS_AUDIT
 from ._base import AsyncBaseBackend, AsyncDirectStreamAccess, AsyncLowLevelResponse
 
+if sys.platform == "wasi":
+    try:
+        from ...contrib.wasi._async.socket import AsyncSocket, SSLAsyncSocket
+    except ImportError:
+        pass
+
 if typing.TYPE_CHECKING:
     from ..._typing import _TYPE_SOCKET_OPTIONS
 
@@ -179,6 +185,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     (self.host, self.port or 443)
                 ]
                 if self.__alt_authority:
+                    self._max_tolerable_delay_for_upgrade = 1.0
                     self._svn = HttpVersion.h3
                     # we ignore alt-host as we do not trust cache security
                     self.port: int = self.__alt_authority[1]

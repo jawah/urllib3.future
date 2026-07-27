@@ -16,6 +16,20 @@
 
 from __future__ import annotations
 
+import sys
+
+# WASI platform doesn't support lazy imports.
+if sys.platform == "wasi":
+    try:
+        from .protocols import http1 as _http1  # noqa: F401
+    except ImportError:
+        pass
+
+    try:
+        from .protocols import http2 as _http2  # noqa: F401
+    except ImportError:
+        pass
+
 from ._configuration import QuicTLSConfig
 from .protocols import (
     HTTP1Protocol,

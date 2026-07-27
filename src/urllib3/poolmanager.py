@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import logging
 import socket
+import sys
 import typing
 import warnings
 from types import TracebackType
@@ -39,6 +40,10 @@ from .util.retry import Retry
 from .util.timeout import Timeout
 from .util.traffic_police import TrafficPolice, UnavailableTraffic
 from .util.url import Url, parse_extension, parse_url
+
+if sys.platform == "wasi":
+    # wasi don't support lazy import.
+    from .contrib.webextensions import load_extension as load_extension  # noqa: F401
 
 if typing.TYPE_CHECKING:
     import ssl

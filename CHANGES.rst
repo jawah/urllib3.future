@@ -1,3 +1,18 @@
+2.24.900 (2026-07-27)
+=====================
+
+- Added initial support for WASI. Most of our feature set is working in WASI.
+  We only officially support componentize-py. Tested our solution against wasmtime
+  version 47 runtime. Support for sync and async is kept. Both HTTP/1.1 and HTTP/2
+  are supported out of the box with Websocket / SSE.
+  As CPython can't provide ``ssl`` we don't by default, so only plain ``http://``
+  will work unless you explicitly install ``rtls`` extra. With ``rtls`` you will be
+  able to request ``https://``. Any code that depends on either urllib3 or urllib3-future
+  can instantaneously gain support for WASI.
+  Please read the instructions to gain specific knowledge about WASI in the
+  documentation for more.
+- Fixed HTTP/3 preemptive upgrade (via cache) that could not downgrade in between two pools creation.
+
 2.23.900 (2026-07-19)
 =====================
 
