@@ -487,7 +487,7 @@ class TestAsyncResponse:
         # chain validation happens on first read(), not at construction.
         resp = AsyncHTTPResponse(
             fp,
-            headers={"content-encoding": "gzip, deflate, br, zstd, gzip, deflate"},
+            headers={"content-encoding": "gzip, deflate, gzip, deflate, gzip, deflate"},
             preload_content=False,
         )
         with pytest.raises(
