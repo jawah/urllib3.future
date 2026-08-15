@@ -63,10 +63,10 @@ class SystemResolver(BaseResolver):
     ]:
         # the | tuple[int, bytes] is silently ignored, can't happen with our cases.
         return socket.getaddrinfo(  # type: ignore[return-value]
-            host=host,
-            port=port,
-            family=family,
-            type=type,
-            proto=proto,
-            flags=flags,
+            host,
+            port,
+            family,
+            type,
+            proto,
+            flags,
         )

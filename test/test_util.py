@@ -913,7 +913,7 @@ class TestUtil:
         ]
         with_attr_sock.return_value = fake_sock = MagicMock()
         resolver.create_connection(("a::b%iface", 80))
-        assert getaddrinfo.call_args[1]["host"] == "a::b%iface"
+        assert getaddrinfo.call_args[0][0] == "a::b%iface"
         fake_sock.connect.assert_called_once_with(fake_scoped_sa6)
 
     @pytest.mark.parametrize(
