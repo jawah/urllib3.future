@@ -944,7 +944,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         if not clean_exit:
             log.warning(
-                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+                "Retrying (%r) after connection broken by '%r': %s",
+                retries,
+                err,
+                url,
+                extra={"__urllib3-retry-warning": {"host": self.host}},
             )
 
             return await self.get_response(promise=promise)
@@ -1982,7 +1986,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         if not conn:
             # Try again
             log.warning(
-                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+                "Retrying (%r) after connection broken by '%r': %s",
+                retries,
+                err,
+                url,
+                extra={"__urllib3-retry-warning": {"host": self.host}},
             )
             return await self.urlopen(  # type: ignore[no-any-return,call-overload,misc]
                 method,

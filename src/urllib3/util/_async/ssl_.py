@@ -19,7 +19,6 @@ from ..ssl_ import (
     _CacheableSSLContext,
     _is_key_file_encrypted,
     create_urllib3_context,
-    _KnownCaller,
 )
 
 
@@ -128,7 +127,6 @@ async def ssl_wrap_socket(
                     ssl_version,
                     cert_reqs,
                     ciphers=ciphers,
-                    caller_id=_KnownCaller.NIQUESTS,
                     ssl_minimum_version=ssl_minimum_version,
                     ssl_maximum_version=ssl_maximum_version,
                     ssl_backend=ssl_backend,

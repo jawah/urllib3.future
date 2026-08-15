@@ -10,8 +10,6 @@ import sys
 import threading
 import typing
 import warnings
-import enum
-import traceback
 from binascii import unhexlify
 from pathlib import Path
 
@@ -48,25 +46,6 @@ HASHFUNC_MAP = {
         (64, "sha256"),
     )
 }
-
-
-class _KnownCaller(enum.Enum):
-    REQUESTS = "Requests"
-    NIQUESTS = "Niquests"
-    OTHER = "Other"
-
-
-def _caller_id() -> _KnownCaller:
-    for frame in traceback.extract_stack():
-        module_path = frame.filename
-
-        if frame.filename.endswith("adapters.py"):
-            if "requests" in module_path:
-                return _KnownCaller.REQUESTS
-            elif "niquests" in module_path:
-                return _KnownCaller.NIQUESTS
-
-    return _KnownCaller.OTHER
 
 
 def _compute_key_ctx_build(
@@ -445,8 +424,8 @@ def create_urllib3_context(
     ciphers: str | None = None,
     ssl_minimum_version: int | None = None,
     ssl_maximum_version: int | None = None,
-    caller_id: _KnownCaller | None = None,
     ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
+    use_recommended_ciphers: bool = True,
 ) -> ssl.SSLContext:
     """Creates and configures an :class:`ssl.SSLContext` instance for use with urllib3.
 
@@ -476,6 +455,9 @@ def create_urllib3_context(
         which uses the backend resolved by :mod:`urllib3.contrib.anytls`.
         Raises :class:`~urllib3.exceptions.SSLError` if the requested backend
         is not available.
+    :param use_recommended_ciphers:
+        Apply urllib3-future's recommended cipher list when no cipher list or
+        explicit TLS version bounds were provided.
     :returns:
         Constructed SSLContext object with specified options
     :rtype: SSLContext
@@ -520,11 +502,6 @@ def create_urllib3_context(
         op_no_compression = OP_NO_COMPRESSION
         op_no_ticket = OP_NO_TICKET
 
-    if caller_id is None:
-        # a version of Requests attempted the ssl_ctx caching from globals in adapters.py
-        # calling this function directly... Requests regretted that change.
-        caller_id = _caller_id()
-
     # This means 'ssl_version' was specified as an exact value.
     if ssl_version not in (None, protocol_tls, protocol_tls_client):
         # Disallow setting 'ssl_version' and 'ssl_minimum|maximum_version'
@@ -566,8 +543,7 @@ def create_urllib3_context(
         and options is None
         and (ssl_version is None or ssl_version in {protocol_tls, protocol_tls_client})
     )
-    default_tlsv1_2: bool = False
-
+    default_tlsv1_2 = False
     if SUPPORT_MIN_MAX_TLS_VERSION:
         if ssl_minimum_version is not None:
             context.minimum_version = ssl_minimum_version  # type: ignore[assignment]
@@ -582,18 +558,8 @@ def create_urllib3_context(
     # the case of OpenSSL 1.1.1+ or use our own secure default ciphers.
     if ciphers:
         context.set_ciphers(ciphers)
-    elif default_tlsv1_2:  # we should not set recommended ciphers if not TLS1.2 min!
-        # Only apply if Niquests or direct urllib3-future usage
-        # Don't bother other or Requests.
-        if caller_id is None or caller_id is _KnownCaller.NIQUESTS:
-            # avoid relying on cpython default cipher list
-            # and instead retrieve OpenSSL own default. This should make
-            # urllib3.future less flagged by basic firewall anti-bot rules.
-            if not active_is_nonstdlib:
-                # the cipher list only contain entries for TLS 1.2
-                # because CPython stdlib enforce TLS 1.3 ciphers automatically
-                # when it's enabled.
-                context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
+    elif use_recommended_ciphers and default_tlsv1_2 and not active_is_nonstdlib:
+        context.set_ciphers(MOZ_INTERMEDIATE_CIPHERS)
 
     # Setting the default here, as we may have no ssl module on import
     cert_reqs = cert_required if cert_reqs is None else cert_reqs
@@ -684,6 +650,7 @@ def ssl_wrap_socket(
     ssl_maximum_version: int | None = ...,
     ech_config_list: bytes | None = ...,
     ssl_backend: Literal["rtls", "utls", "ssl"] | None = ...,
+    use_recommended_ciphers: bool = ...,
 ) -> ssl.SSLSocket: ...
 
 
@@ -710,6 +677,7 @@ def ssl_wrap_socket(
     ssl_maximum_version: int | None = ...,
     ech_config_list: bytes | None = ...,
     ssl_backend: Literal["rtls", "utls", "ssl"] | None = ...,
+    use_recommended_ciphers: bool = ...,
 ) -> ssl.SSLSocket | SSLTransportType: ...
 
 
@@ -735,6 +703,7 @@ def ssl_wrap_socket(
     ssl_maximum_version: int | None = None,
     ech_config_list: bytes | None = None,
     ssl_backend: Literal["rtls", "utls", "ssl"] | None = None,
+    use_recommended_ciphers: bool = False,
 ) -> ssl.SSLSocket | SSLTransportType:
     """
     All arguments except for server_hostname, ssl_context, and ca_cert_dir have
@@ -770,6 +739,8 @@ def ssl_wrap_socket(
     """
     context = ssl_context
     cache_disabled: bool = context is not None
+    if context is None and use_recommended_ciphers and ciphers is None:
+        ciphers = MOZ_INTERMEDIATE_CIPHERS
 
     with _SSLContextCache.lock(
         keyfile,
@@ -800,10 +771,10 @@ def ssl_wrap_socket(
                     ssl_version,
                     cert_reqs,
                     ciphers=ciphers,
-                    caller_id=_caller_id(),
                     ssl_minimum_version=ssl_minimum_version,
                     ssl_maximum_version=ssl_maximum_version,
                     ssl_backend=ssl_backend,
+                    use_recommended_ciphers=False,
                 )
 
             if cert_reqs is not None:

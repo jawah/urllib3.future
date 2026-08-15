@@ -77,12 +77,14 @@ class TestSSL:
     def test_wrap_socket_given_context_no_load_default_certs(self) -> None:
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
+        context.set_ciphers = mock.Mock()
         context.cert_store_stats = mock.Mock(return_value={"x509_ca": 5})
 
         sock = mock.Mock()
-        ssl_.ssl_wrap_socket(sock, ssl_context=context)
+        ssl_.ssl_wrap_socket(sock, ssl_context=context, use_recommended_ciphers=True)
 
         context.load_default_certs.assert_not_called()
+        context.set_ciphers.assert_not_called()
 
     def test_wrap_socket_given_ca_certs_no_load_default_certs(
         self, monkeypatch: pytest.MonkeyPatch
@@ -141,25 +143,23 @@ class TestSSL:
     def test_create_urllib3_context_default_ciphers(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        support_min_max = hasattr(ssl_.SSLContext, "minimum_version")
-
         context = mock.create_autospec(ssl_.SSLContext)
         context.set_ciphers = mock.Mock()
         context.options = 0
 
         monkeypatch.setattr(ssl_, "SSLContext", lambda *_, **__: context)
+        monkeypatch.setattr(ssl_, "IS_NONSTDLIB", False)
 
-        ssl_.create_urllib3_context(caller_id=ssl_._KnownCaller.NIQUESTS)
+        ssl_.create_urllib3_context()
 
-        if support_min_max:
-            from urllib3.contrib.anytls import IS_NONSTDLIB
-
-            if IS_NONSTDLIB:
-                context.set_ciphers.assert_not_called()
-            else:
-                context.set_ciphers.assert_called_once_with(MOZ_INTERMEDIATE_CIPHERS)
+        if ssl_.SUPPORT_MIN_MAX_TLS_VERSION:
+            context.set_ciphers.assert_called_once_with(MOZ_INTERMEDIATE_CIPHERS)
         else:
             context.set_ciphers.assert_not_called()
+
+        context.set_ciphers.reset_mock()
+        ssl_.create_urllib3_context(use_recommended_ciphers=False)
+        context.set_ciphers.assert_not_called()
 
     @pytest.mark.parametrize(
         "kwargs",

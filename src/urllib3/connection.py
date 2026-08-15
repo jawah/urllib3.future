@@ -154,6 +154,7 @@ class HTTPConnection(HfaceBackend):
         )
         self.proxy = proxy
         self.proxy_config = proxy_config
+        self._use_recommended_ciphers = False
 
         self._has_connected_to_proxy = False
 
@@ -860,6 +861,7 @@ class HTTPSConnection(HTTPConnection):
                 cert_data=self.cert_data,
                 key_data=self.key_data,
                 ciphers=self.ciphers,
+                use_recommended_ciphers=self._use_recommended_ciphers,
                 ech_config_list=self._ech_config,
             )
 
@@ -921,6 +923,7 @@ class HTTPSConnection(HTTPConnection):
             assert_hostname=proxy_config.assert_hostname,
             assert_fingerprint=proxy_config.assert_fingerprint,
             ciphers=self.ciphers,
+            use_recommended_ciphers=self._use_recommended_ciphers,
             # Features that aren't implemented for proxies yet:
             cert_file=None,
             key_file=None,
@@ -967,6 +970,7 @@ def _ssl_wrap_socket_and_match_hostname(
     cert_data: str | bytes | None = None,
     key_data: str | bytes | None = None,
     ciphers: str | None = None,
+    use_recommended_ciphers: bool = False,
     ech_config_list: bytes | None = None,
 ) -> _WrappedAndVerifiedSocket:
     """Logic for constructing an SSLContext from all TLS parameters, passing
@@ -1020,6 +1024,7 @@ def _ssl_wrap_socket_and_match_hostname(
         certdata=cert_data,
         keydata=key_data,
         ciphers=ciphers,
+        use_recommended_ciphers=use_recommended_ciphers,
         cert_reqs=resolve_cert_reqs(cert_reqs),
         check_hostname=check_hostname,
         ssl_version=resolve_ssl_version(ssl_version, mitigate_tls_version=True),

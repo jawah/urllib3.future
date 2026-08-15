@@ -1117,6 +1117,13 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert "User-Agent" in request_headers
             assert request_headers["User-Agent"] == "test header"
 
+    def test_header_value_surrounding_whitespace(self) -> None:
+        with HTTPConnectionPool(self.host, self.port) as pool:
+            r = pool.request(
+                "GET", "/headers", headers={"X-Metadata": " \t a   b   c \t "}
+            )
+            assert r.json()["X-Metadata"] == "a   b   c"
+
     @pytest.mark.parametrize(
         "user_agent, should_encode",
         [("Schönefeld/1.18.0", False), ("Schönefeld/1.18.0", True)],

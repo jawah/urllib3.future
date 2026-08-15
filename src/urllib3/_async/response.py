@@ -19,10 +19,12 @@ from .._constant import (
 from ..backend._async import AsyncLowLevelResponse
 from ..exceptions import (
     BaseSSLError,
+    BodyNotHttplibCompatible,
     HTTPError,
     IncompleteRead,
     ProtocolError,
     ReadTimeoutError,
+    ResponseNotChunked,
     ResponseNotReady,
     SSLError,
     MustRedialError,
@@ -368,7 +370,8 @@ class AsyncHTTPResponse(HTTPResponse):
                 # no harm in redundantly calling close.
                 self._fp.close()
                 if (
-                    self.enforce_content_length
+                    not is_foreign_fp_unclosed
+                    and self.enforce_content_length
                     and self.length_remaining is not None
                     and self.length_remaining != 0
                 ):
@@ -606,6 +609,56 @@ class AsyncHTTPResponse(HTTPResponse):
 
             if data:
                 yield data
+
+    async def _handle_chunk(  # type: ignore[override]
+        self, amt: int | None, decode_content: bool | None = None
+    ) -> bytes:
+        """Read one transfer-decoded body segment from the protocol backend."""
+        return await self._read(
+            amt=-1 if amt is None else amt,
+            decode_content=decode_content,
+            partial=True,
+        )
+
+    async def read_chunked(  # type: ignore[override]
+        self, amt: int | None = None, decode_content: bool | None = None
+    ) -> typing.AsyncGenerator[bytes, None]:
+        """Read an HTTP/1.1 chunked response as transfer-decoded segments."""
+        self._init_decoder()
+        if not self.chunked:
+            raise ResponseNotChunked(
+                "Response is not chunked. "
+                "Header 'transfer-encoding: chunked' is missing."
+            )
+        if not self.supports_chunked_reads():
+            raise BodyNotHttplibCompatible(
+                "Body should be http.client.HTTPResponse like. "
+                "It should have an fp attribute which returns raw chunks."
+            )
+        if decode_content is None:
+            decode_content = self.decode_content
+        if amt == 0:
+            return
+        if amt is not None and amt < 0:
+            amt = None
+
+        async with self._error_catcher():
+            while self._fp is not None and (
+                not is_fp_closed(self._fp)
+                or len(self._decoded_buffer) > 0
+                or (self._decoder and self._decoder.has_unconsumed_tail)
+            ):
+                data = await self._handle_chunk(amt, decode_content)
+                if data:
+                    yield data
+
+            if decode_content:
+                data = self._flush_decoder()
+                if data:
+                    yield data
+
+    def supports_chunked_reads(self) -> bool:
+        return isinstance(self._fp, AsyncLowLevelResponse) or hasattr(self._fp, "fp")
 
     async def close(self) -> None:  # type: ignore[override]
         if self.extension is not None and not self.extension.closed:

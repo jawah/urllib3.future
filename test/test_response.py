@@ -22,6 +22,8 @@ from urllib3.exceptions import (
     IncompleteRead,
     InvalidHeader,
     ProtocolError,
+    ReadTimeoutError,
+    ResponseNotChunked,
     SSLError,
 )
 from urllib3.response import (  # type: ignore[attr-defined]
@@ -1174,6 +1176,71 @@ class TestResponse:
         assert isinstance(ctx.value, IncompleteRead)
         assert ctx.value.partial == 0
         assert ctx.value.expected == content_length
+
+    def test_foreign_fp_unbounded_read_ignores_stale_content_length(self) -> None:
+        # CacheControl, Betamax, and VCR.py replay materialized bodies while
+        # retaining the original wire headers. An unbounded replay read must
+        # not reinterpret stale Content-Length metadata as network truncation.
+        fp = BytesIO(b"abc")
+        resp = HTTPResponse(
+            fp,
+            headers={"content-length": "5"},
+            preload_content=False,
+            enforce_content_length=True,
+        )
+
+        assert resp.read() == b"abc"
+        assert resp.length_remaining == 2
+        assert fp.closed
+
+    def test_read_chunked_uses_protocol_segments(self) -> None:
+        chunks = [b"foo", b"bar"]
+
+        def mock_sock(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            chunk = chunks.pop(0)
+            return [chunk], not chunks, None
+
+        headers = HTTPHeaderDict({"transfer-encoding": "chunked"})
+        raw = LowLevelResponse("GET", 200, 11, "OK", headers, mock_sock)
+        resp = HTTPResponse(raw, headers=headers, preload_content=False)
+
+        with mock.patch.object(
+            resp, "_handle_chunk", wraps=resp._handle_chunk
+        ) as handle_chunk:
+            assert list(resp.read_chunked()) == [b"foo", b"bar"]
+        assert handle_chunk.call_count == 2
+
+        with pytest.raises(ResponseNotChunked):
+            list(HTTPResponse(BytesIO(b"foo")).read_chunked())
+
+        chunks.append(b"foo")
+        raw = LowLevelResponse("GET", 200, 11, "OK", headers, mock_sock)
+        resp = HTTPResponse(raw, headers=headers, preload_content=False)
+        with mock.patch.object(resp, "_handle_chunk", side_effect=socket.timeout):
+            with pytest.raises(ReadTimeoutError):
+                list(resp.read_chunked())
+
+    def test_read_chunked_drains_decoder_tail(self) -> None:
+        payload = b"foo bar baz" * 100
+        encoded = gzip.compress(payload)
+        chunks = [encoded[:5], encoded[5:]]
+
+        def mock_sock(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            chunk = chunks.pop(0)
+            return [chunk], not chunks, None
+
+        headers = HTTPHeaderDict(
+            {"transfer-encoding": "chunked", "content-encoding": "gzip"}
+        )
+        raw = LowLevelResponse("GET", 200, 11, "OK", headers, mock_sock)
+        resp = HTTPResponse(raw, headers=headers, preload_content=False)
+
+        assert list(resp.read_chunked(0)) == []
+        assert b"".join(resp.read_chunked(7)) == payload
 
     def test_chunked_head_response(self) -> None:
         def mock_sock(

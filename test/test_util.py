@@ -32,7 +32,6 @@ from urllib3.util.ssl_ import (
     resolve_cert_reqs,
     resolve_ssl_version,
     ssl_wrap_socket,
-    _KnownCaller,
 )
 from urllib3.util.timeout import _DEFAULT_TIMEOUT, Timeout
 from urllib3.util.url import Url, _encode_invalid_chars, parse_url
@@ -913,7 +912,7 @@ class TestUtil:
         ]
         with_attr_sock.return_value = fake_sock = MagicMock()
         resolver.create_connection(("a::b%iface", 80))
-        assert getaddrinfo.call_args[1]["host"] == "a::b%iface"
+        assert getaddrinfo.call_args[0][0] == "a::b%iface"
         fake_sock.connect.assert_called_once_with(fake_scoped_sa6)
 
     @pytest.mark.parametrize(
@@ -1026,10 +1025,10 @@ class TestUtilSSL:
             None,
             2,
             ciphers=None,
-            caller_id=_KnownCaller.OTHER,
             ssl_minimum_version=None,
             ssl_maximum_version=None,
             ssl_backend=None,
+            use_recommended_ciphers=False,
         )
 
     def test_ssl_wrap_socket_loads_verify_locations(self) -> None:

@@ -89,6 +89,17 @@ log = logging.getLogger(__name__)
 _SelfT = typing.TypeVar("_SelfT")
 
 
+def _has_niquests_callbacks(
+    *callbacks: typing.Callable[..., typing.Any] | None,
+) -> bool:
+    """Verify that Niquests is just behind us."""
+    return all(
+        callback is not None
+        and getattr(callback, "__module__", "").startswith("niquests.")
+        for callback in callbacks
+    )
+
+
 # Pool objects
 class ConnectionPool:
     """
@@ -944,7 +955,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         if not clean_exit:
             log.warning(
-                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+                "Retrying (%r) after connection broken by '%r': %s",
+                retries,
+                err,
+                url,
+                extra={"__urllib3-retry-warning": {"host": self.host}},
             )
 
             return self.get_response(promise=promise)
@@ -1279,6 +1294,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         timeout_obj = self._get_timeout(timeout)
         timeout_obj.start_connect()
         conn.timeout = Timeout.resolve_default_timeout(timeout_obj.connect_timeout)
+        conn._use_recommended_ciphers = _has_niquests_callbacks(
+            on_post_connection,
+            on_upload_body,
+            on_early_response,
+        )
 
         try:
             # Trigger any extra validation we need to do.
@@ -1953,7 +1973,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if not conn:
             # Try again
             log.warning(
-                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+                "Retrying (%r) after connection broken by '%r': %s",
+                retries,
+                err,
+                url,
+                extra={"__urllib3-retry-warning": {"host": self.host}},
             )
             return self.urlopen(  # type: ignore[no-any-return,call-overload,misc]
                 method,

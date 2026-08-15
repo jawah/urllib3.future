@@ -152,7 +152,6 @@ nitpick_ignore = [
     ("py:attr", "HTTPResponse.data"),
     ("py:class", "_TYPE_PEER_CERT_RET_DICT"),
     ("py:class", "_TYPE_PEER_CERT_RET"),
-    ("py:class", "_KnownCaller"),
     ("py:class", "urllib3.util._async.traffic_police.AsyncTrafficPolice"),
     ("py:class", "_TYPE_ASYNC_BODY"),
     ("py:class", "ExtensionFromHTTP"),

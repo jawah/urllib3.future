@@ -17,6 +17,7 @@ from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import (
     HTTPConnectionPool,
     HTTPSConnectionPool,
+    _has_niquests_callbacks,
     _url_from_pool,
     connection_from_url,
 )
@@ -586,6 +587,17 @@ class TestConnectionPool:
                 timeout = Timeout(1, 1, 1)
                 with pytest.raises(ReadTimeoutError):
                     pool._make_request(conn, "", "", timeout=timeout)
+
+    def test_detect_niquests_callbacks(self) -> None:
+        def callback(*args: typing.Any) -> None:
+            pass
+
+        callback.__module__ = "niquests.sessions"
+        assert _has_niquests_callbacks(callback, callback, callback)
+        assert not _has_niquests_callbacks(callback, callback, None)
+
+        callback.__module__ = "requests.sessions"
+        assert not _has_niquests_callbacks(callback, callback, callback)
 
     def test_legacy_queue_cls_emits_deprecation_warning(self) -> None:
         # Covers connectionpool.py: warns + auto-fallback to TrafficPolice when
