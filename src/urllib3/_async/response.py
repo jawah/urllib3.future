@@ -368,7 +368,8 @@ class AsyncHTTPResponse(HTTPResponse):
                 # no harm in redundantly calling close.
                 self._fp.close()
                 if (
-                    self.enforce_content_length
+                    not is_foreign_fp_unclosed
+                    and self.enforce_content_length
                     and self.length_remaining is not None
                     and self.length_remaining != 0
                 ):
