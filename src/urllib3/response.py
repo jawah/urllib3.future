@@ -1324,6 +1324,13 @@ class HTTPResponse(io.IOBase):
         """
         return False
 
+    def _update_chunk_length(self) -> None:
+        """Compatibility hook for consumers of urllib3's private chunk parser.
+
+        urllib3-future removes transfer framing in the protocol backend, before
+        bytes reach ``HTTPResponse``. There is no chunk length to update here.
+        """
+
     @property
     def url(self) -> str | None:
         """
