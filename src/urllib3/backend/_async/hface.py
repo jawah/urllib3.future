@@ -1309,6 +1309,12 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             else:  # best effort branch
                 encoded_value = str(value).encode("iso-8859-1")
 
+            # legacy urllib3 accepts SP/Tab, forwarded as-is
+            # to http.client. We need to sanitize this a bit.
+            # those aren't RFC accepted anyway, and http2+ just
+            # would crash.
+            encoded_value = encoded_value.strip(b" \t")
+
             if encoded_header.startswith(b":"):
                 if encoded_header == b":protocol":
                     self.__protocol_bit_set = True
