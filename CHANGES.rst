@@ -7,6 +7,8 @@
   The IncompleteRead error was justified in practice but most users don't expect it in tests.
 - Backport "Add an unique extra attribute to retrying warning" from upstream https://github.com/urllib3/urllib3/pull/5140
 - Fixed a backward compatibility subtle setting with Requests when both Niquests and Requests initiate a TLS connection.
+- Fixed missing ``read_chunked`` method in HTTPResponse. This method is to be deprecated, kept for pure BC.
+  Prefer ``stream`` at all cost. This method is merely a remnant of the http.client era.
 
 2.24.900 (2026-07-27)
 =====================
