@@ -6,6 +6,7 @@
 - Fixed not raising IncompleteRead in faking test scenarii when the fp is a mere BytesIO. Aligning with upstream.
   The IncompleteRead error was justified in practice but most users don't expect it in tests.
 - Backport "Add an unique extra attribute to retrying warning" from upstream https://github.com/urllib3/urllib3/pull/5140
+- Fixed a backward compatibility subtle setting with Requests when both Niquests and Requests initiate a TLS connection.
 
 2.24.900 (2026-07-27)
 =====================

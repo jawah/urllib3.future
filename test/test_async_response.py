@@ -1086,7 +1086,7 @@ class TestAsyncResponse:
             resp, "_handle_chunk", wraps=resp._handle_chunk
         ) as handle_chunk:
             assert [chunk async for chunk in resp.read_chunked()] == [b"foo", b"bar"]
-        assert handle_chunk.await_count == 2
+        assert handle_chunk.call_count == 2
 
         with pytest.raises(ResponseNotChunked):
             _ = [

@@ -32,7 +32,6 @@ from urllib3.util.ssl_ import (
     resolve_cert_reqs,
     resolve_ssl_version,
     ssl_wrap_socket,
-    _KnownCaller,
 )
 from urllib3.util.timeout import _DEFAULT_TIMEOUT, Timeout
 from urllib3.util.url import Url, _encode_invalid_chars, parse_url
@@ -1026,10 +1025,10 @@ class TestUtilSSL:
             None,
             2,
             ciphers=None,
-            caller_id=_KnownCaller.OTHER,
             ssl_minimum_version=None,
             ssl_maximum_version=None,
             ssl_backend=None,
+            use_recommended_ciphers=False,
         )
 
     def test_ssl_wrap_socket_loads_verify_locations(self) -> None:
