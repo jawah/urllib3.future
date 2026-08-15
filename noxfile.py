@@ -11,6 +11,7 @@ import subprocess
 import time
 import typing
 from http.client import RemoteDisconnected
+from pathlib import Path
 from socket import timeout as SocketTimeout
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -471,22 +472,21 @@ def downstream_niquests(session: nox.Session) -> None:
     session.chdir("niquests")
 
     session.run("git", "rev-parse", "HEAD", external=True)
-    session.install(".[socks]", silent=False)
-    session.install("-r", "requirements-dev.txt", silent=False)
+    session.install("nox")
 
-    session.cd(root)
-    session.install(".", silent=False)
-    session.cd(f"{tmp_dir}/niquests")
-
-    session.run("python", "-c", "import urllib3; print(urllib3.__version__)")
+    constraint = Path(root) / tmp_dir / "urllib3-future-constraint.txt"
+    constraint.write_text(
+        f"urllib3-future @ {Path(root).resolve().as_uri()}\n", encoding="utf-8"
+    )
+    nested_session = f"test-{sys.version_info.major}.{sys.version_info.minor}"
     session.run(
-        "python",
-        "-m",
-        "pytest",
-        "-v",
-        f"--color={'yes' if 'GITHUB_ACTIONS' in os.environ else 'auto'}",
-        *(session.posargs or ("tests/",)),
-        env={"NIQUESTS_STRICT_OCSP": "1"},
+        "nox",
+        "-s",
+        nested_session,
+        *(("--", *session.posargs) if session.posargs else ()),
+        env={
+            "PIP_CONSTRAINT": str(constraint),
+        },
     )
 
 
