@@ -944,7 +944,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         if not clean_exit:
             log.warning(
-                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+                "Retrying (%r) after connection broken by '%r': %s",
+                retries,
+                err,
+                url,
+                extra={"__urllib3-retry-warning": {"host": self.host}},
             )
 
             return self.get_response(promise=promise)
@@ -1953,7 +1957,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if not conn:
             # Try again
             log.warning(
-                "Retrying (%r) after connection broken by '%r': %s", retries, err, url
+                "Retrying (%r) after connection broken by '%r': %s",
+                retries,
+                err,
+                url,
+                extra={"__urllib3-retry-warning": {"host": self.host}},
             )
             return self.urlopen(  # type: ignore[no-any-return,call-overload,misc]
                 method,
