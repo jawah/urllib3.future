@@ -908,7 +908,7 @@ class HTTPResponse(io.IOBase):
             if self._original_response and self._original_response.isclosed():
                 self.release_conn()
 
-    def _fp_read(self, amt: int | None = None) -> bytes:
+    def _fp_read(self, amt: int | None = None, *, read1: bool = False) -> bytes:
         """
         Read a response with the thought that reading the number of bytes
         larger than can fit in a 32-bit int at a time via SSL in some
@@ -923,10 +923,17 @@ class HTTPResponse(io.IOBase):
           * CPython < 3.10 only when `amt` does not fit 32-bit int.
         """
         assert self._fp
-        if (
+        requires_safe_read = (
             (amt and amt > C_INT_MAX)
             or (self.length_remaining and self.length_remaining > C_INT_MAX)
-        ) and sys.version_info < (3, 10):
+        ) and sys.version_info < (3, 10)
+        if read1 and isinstance(self._fp, LowLevelResponse):
+            if requires_safe_read:
+                amt = (
+                    CHUNK_AMT_MAX if amt is None or amt < 0 else min(amt, CHUNK_AMT_MAX)
+                )
+            return self._fp.read1(amt)
+        if requires_safe_read:
             buffer = io.BytesIO()
             # Besides `max_chunk_amt` being a maximum chunk size, it
             # affects memory overhead of reading a response by this
@@ -956,6 +963,8 @@ class HTTPResponse(io.IOBase):
     def _raw_read(
         self,
         amt: int | None = None,
+        *,
+        read1: bool = False,
     ) -> bytes:
         """
         Reads `amt` of bytes from the socket.
@@ -967,7 +976,11 @@ class HTTPResponse(io.IOBase):
         fp_upgraded = getattr(self._fp, "_dsa", None) is not None
 
         with self._error_catcher():
-            data = self._fp_read(amt) if not fp_closed and not fp_upgraded else b""
+            data = (
+                self._fp_read(amt, read1=read1)
+                if not fp_closed and not fp_upgraded
+                else b""
+            )
 
             # Mocking library often use io.BytesIO
             # which does not auto-close when reading data
@@ -1035,13 +1048,14 @@ class HTTPResponse(io.IOBase):
             'content-encoding' header.
         """
 
-        data = self.read(
+        data = self._read(
             amt=amt or -1,
             decode_content=decode_content,
+            read1=True,
         )
         self._uncached_read_occurred = True
 
-        if amt is not None and len(data) > amt:
+        if amt is not None and amt >= 0 and len(data) > amt:
             self._decoded_buffer.put(data)
             return self._decoded_buffer.get(amt)
 
@@ -1085,7 +1099,7 @@ class HTTPResponse(io.IOBase):
         decode_content: bool | None = None,
         cache_content: bool = False,
         *,
-        partial: bool = False,
+        read1: bool = False,
     ) -> bytes:
         """We need this private method to restore BC with urllib3 fast-path for streaming/chunks.
         see https://github.com/jawah/urllib3.future/issues/379"""
@@ -1153,9 +1167,9 @@ class HTTPResponse(io.IOBase):
 
             if self._police_officer is not None:
                 with self._police_officer.borrow(self):
-                    data = self._raw_read(amt)
+                    data = self._raw_read(amt, read1=read1)
             else:
-                data = self._raw_read(amt)
+                data = self._raw_read(amt, read1=read1)
 
             if not cache_content:
                 self._uncached_read_occurred = True
@@ -1198,10 +1212,8 @@ class HTTPResponse(io.IOBase):
                 )
                 self._decoded_buffer.put(decoded_data)
 
-                surface_per_frame = partial and hasattr(self._fp, "_eot")
-                while (
-                    len(self._decoded_buffer) < amt and data and not surface_per_frame
-                ):
+                single_exchange = read1 and hasattr(self._fp, "_eot")
+                while len(self._decoded_buffer) < amt and data and not single_exchange:
                     # TODO make sure to initially read enough data to get past the headers
                     # For example, the GZ file header takes 10 bytes, we don't want to read
                     # it one byte at a time
@@ -1264,7 +1276,7 @@ class HTTPResponse(io.IOBase):
             or len(self._decoded_buffer) > 0
             or (self._decoder and self._decoder.has_unconsumed_tail)
         ):
-            data = self._read(amt=amt, decode_content=decode_content, partial=True)
+            data = self.read1(amt=amt, decode_content=decode_content)
 
             if data:
                 yield data
@@ -1273,10 +1285,9 @@ class HTTPResponse(io.IOBase):
         self, amt: int | None, decode_content: bool | None = None
     ) -> bytes:
         """Read one transfer-decoded body segment from the protocol backend."""
-        return self._read(
+        return self.read1(
             amt=-1 if amt is None else amt,
             decode_content=decode_content,
-            partial=True,
         )
 
     def read_chunked(

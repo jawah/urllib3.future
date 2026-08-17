@@ -1549,7 +1549,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 HeadersReceived,
             ),
             maximal_data_in_read=__amt,
-            data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
+            # Unbounded reads have no byte target to track.
+            data_in_len_from=(
+                (lambda x: len(x.data)) if __amt is not None else None  # type: ignore[attr-defined]
+            ),
             stream_id=__stream_id,
             respect_end_stream_signal=__respect_end_signal,
         )

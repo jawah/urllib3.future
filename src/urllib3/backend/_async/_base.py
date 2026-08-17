@@ -233,6 +233,12 @@ class AsyncLowLevelResponse:
         return self.closed
 
     async def read(self, __size: int | None = None) -> bytes:
+        return await self._read(__size, read1=False)
+
+    async def read1(self, __size: int | None = None) -> bytes:
+        return await self._read(__size, read1=True)
+
+    async def _read(self, __size: int | None, *, read1: bool) -> bytes:
         if self.closed is True or self.__internal_read_st is None:
             # overly protective, just in case.
             raise ValueError(
@@ -256,6 +262,16 @@ class AsyncLowLevelResponse:
 
             self.__buffer_excess.put_many(chunks)
             buf_capacity = len(self.__buffer_excess)
+
+        if not read1 and __size is not None and __size > 0:
+            while self._eot is False and buf_capacity < __size:
+                chunks, self._eot, self.trailers = await self.__internal_read_st(
+                    __size - buf_capacity, self._stream_id
+                )
+                self.__buffer_excess.put_many(chunks)
+                buf_capacity = len(self.__buffer_excess)
+                if not chunks:
+                    break
 
         data = (
             self.__buffer_excess.get(

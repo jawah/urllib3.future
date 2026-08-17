@@ -280,7 +280,9 @@ class AsyncHTTPResponse(HTTPResponse):
 
         return None  # type: ignore[return-value]
 
-    async def _fp_read(self, amt: int | None = None) -> bytes:  # type: ignore[override]
+    async def _fp_read(  # type: ignore[override]
+        self, amt: int | None = None, *, read1: bool = False
+    ) -> bytes:
         """
         Read a response with the thought that reading the number of bytes
         larger than can fit in a 32-bit int at a time via SSL in some
@@ -295,10 +297,17 @@ class AsyncHTTPResponse(HTTPResponse):
           * CPython < 3.10 only when `amt` does not fit 32-bit int.
         """
         assert self._fp
-        if (
+        requires_safe_read = (
             (amt and amt > C_INT_MAX)
             or (self.length_remaining and self.length_remaining > C_INT_MAX)
-        ) and sys.version_info < (3, 10):
+        ) and sys.version_info < (3, 10)
+        if read1 and isinstance(self._fp, AsyncLowLevelResponse):
+            if requires_safe_read:
+                amt = (
+                    CHUNK_AMT_MAX if amt is None or amt < 0 else min(amt, CHUNK_AMT_MAX)
+                )
+            return await self._fp.read1(amt)
+        if requires_safe_read:
             buffer = io.BytesIO()
             # Besides `max_chunk_amt` being a maximum chunk size, it
             # affects memory overhead of reading a response by this
@@ -317,7 +326,7 @@ class AsyncHTTPResponse(HTTPResponse):
                     if is_async_ll:
                         data = await self._fp.read(chunk_amt)
                     else:
-                        data = self._fp.read(chunk_amt)  # type: ignore[attr-defined]
+                        data = self._fp.read(chunk_amt)
                 except ValueError:  # Defensive: overly protective
                     break  # Defensive: can also be an indicator that read ended, should not happen.
                 if not data:
@@ -334,6 +343,8 @@ class AsyncHTTPResponse(HTTPResponse):
     async def _raw_read(  # type: ignore[override]
         self,
         amt: int | None = None,
+        *,
+        read1: bool = False,
     ) -> bytes:
         """
         Reads `amt` of bytes from the socket.
@@ -344,7 +355,7 @@ class AsyncHTTPResponse(HTTPResponse):
         fp_closed = getattr(self._fp, "closed", False)
 
         async with self._error_catcher():
-            data = (await self._fp_read(amt)) if not fp_closed else b""
+            data = (await self._fp_read(amt, read1=read1)) if not fp_closed else b""
 
             # Mocking library often use io.BytesIO
             # which does not auto-close when reading data
@@ -411,13 +422,14 @@ class AsyncHTTPResponse(HTTPResponse):
             'content-encoding' header.
         """
 
-        data = await self.read(
+        data = await self._read(
             amt=amt or -1,
             decode_content=decode_content,
+            read1=True,
         )
         self._uncached_read_occurred = True
 
-        if amt is not None and len(data) > amt:
+        if amt is not None and amt >= 0 and len(data) > amt:
             self._decoded_buffer.put(data)
             return self._decoded_buffer.get(amt)
 
@@ -441,9 +453,8 @@ class AsyncHTTPResponse(HTTPResponse):
         decode_content: bool | None = None,
         cache_content: bool = False,
         *,
-        partial: bool = False,
+        read1: bool = False,
     ) -> bytes:
-        # See ``HTTPResponse._read`` for the meaning of ``partial`` (issue #379).
         try:
             self._init_decoder()
             if decode_content is None:
@@ -508,9 +519,9 @@ class AsyncHTTPResponse(HTTPResponse):
 
             if self._police_officer is not None:
                 async with self._police_officer.borrow(self):
-                    data = await self._raw_read(amt)
+                    data = await self._raw_read(amt, read1=read1)
             else:
-                data = await self._raw_read(amt)
+                data = await self._raw_read(amt, read1=read1)
 
             if not cache_content:
                 self._uncached_read_occurred = True
@@ -553,10 +564,8 @@ class AsyncHTTPResponse(HTTPResponse):
                 )
                 self._decoded_buffer.put(decoded_data)
 
-                surface_per_frame = partial and hasattr(self._fp, "_eot")
-                while (
-                    len(self._decoded_buffer) < amt and data and not surface_per_frame
-                ):
+                single_exchange = read1 and hasattr(self._fp, "_eot")
+                while len(self._decoded_buffer) < amt and data and not single_exchange:
                     # TODO make sure to initially read enough data to get past the headers
                     # For example, the GZ file header takes 10 bytes, we don't want to read
                     # it one byte at a time
@@ -603,9 +612,7 @@ class AsyncHTTPResponse(HTTPResponse):
             or self._decoded_buffer
             or (self._decoder and self._decoder.has_unconsumed_tail)
         ):
-            data = await self._read(
-                amt=amt, decode_content=decode_content, partial=True
-            )
+            data = await self.read1(amt=amt, decode_content=decode_content)
 
             if data:
                 yield data
@@ -614,10 +621,9 @@ class AsyncHTTPResponse(HTTPResponse):
         self, amt: int | None, decode_content: bool | None = None
     ) -> bytes:
         """Read one transfer-decoded body segment from the protocol backend."""
-        return await self._read(
+        return await self.read1(
             amt=-1 if amt is None else amt,
             decode_content=decode_content,
-            partial=True,
         )
 
     async def read_chunked(  # type: ignore[override]
