@@ -782,14 +782,14 @@ class TestUtil:
 
     def test_has_ipv6_enabled_but_fails(self) -> None:
         with patch("socket.has_ipv6", True):
-            with patch("urllib3.util.connection._with_attr_sock") as mock:
+            with patch("socket.socket") as mock:
                 instance = mock.return_value
                 instance.bind = Mock(side_effect=Exception("No IPv6 here!"))
                 assert not _has_ipv6()
 
     def test_has_ipv6_enabled_and_working(self) -> None:
         with patch("socket.has_ipv6", True):
-            with patch("urllib3.util.connection._with_attr_sock") as mock:
+            with patch("socket.socket") as mock:
                 instance = mock.return_value
                 instance.bind.return_value = True
                 assert _has_ipv6()
@@ -857,12 +857,12 @@ class TestUtil:
         ],
     )
     @patch("socket.getaddrinfo")
-    @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
+    @patch("socket.socket")
     def test_create_connection_with_valid_idna_labels(
-        self, with_attr_sock: MagicMock, getaddrinfo: MagicMock, host: str
+        self, socket_cls: MagicMock, getaddrinfo: MagicMock, host: str
     ) -> None:
         getaddrinfo.return_value = [(None, None, None, None, None)]
-        with_attr_sock.return_value = Mock()
+        socket_cls.return_value = Mock()
         ResolverDescription.from_url("system://").new().create_connection((host, 80))
 
     @patch("socket.getaddrinfo")
@@ -892,9 +892,9 @@ class TestUtil:
             )
 
     @patch("socket.getaddrinfo")
-    @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
+    @patch("socket.socket")
     def test_create_connection_with_scoped_ipv6(
-        self, with_attr_sock: MagicMock, getaddrinfo: MagicMock
+        self, socket_cls: MagicMock, getaddrinfo: MagicMock
     ) -> None:
         # Check that providing create_connection with a scoped IPv6 address
         # properly propagates the scope to getaddrinfo, and that the returned
@@ -910,10 +910,57 @@ class TestUtil:
                 fake_scoped_sa6,
             )
         ]
-        with_attr_sock.return_value = fake_sock = MagicMock()
+        socket_cls.return_value = fake_sock = MagicMock()
         resolver.create_connection(("a::b%iface", 80))
         assert getaddrinfo.call_args[0][0] == "a::b%iface"
         fake_sock.connect.assert_called_once_with(fake_scoped_sa6)
+
+    @patch("socket.getaddrinfo")
+    @patch("socket.socket")
+    def test_create_connection_reports_ech_config(
+        self, socket_cls: MagicMock, getaddrinfo: MagicMock
+    ) -> None:
+        ech_config = b"ech-config"
+        getaddrinfo.return_value = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                ech_config,
+                ("127.0.0.1", 443),
+            )
+        ]
+        socket_cls.return_value = MagicMock()
+        ech_config_hook = Mock()
+
+        ResolverDescription.from_url("system://").new().create_connection(
+            ("example.com", 443), ech_config_hook=ech_config_hook
+        )
+
+        ech_config_hook.assert_called_once_with(ech_config)
+
+    @patch("socket.getaddrinfo")
+    @patch("urllib3.contrib.resolver.protocols._with_attr_sock")
+    def test_create_connection_legacy_socket_patch(
+        self, socket_cls: MagicMock, getaddrinfo: MagicMock
+    ) -> None:
+        getaddrinfo.return_value = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("127.0.0.1", 80),
+            )
+        ]
+
+        ResolverDescription.from_url("system://").new().create_connection(
+            ("example.com", 80)
+        )
+
+        socket_cls.assert_called_once_with(
+            socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP
+        )
 
     @pytest.mark.parametrize(
         "input,params,expected",

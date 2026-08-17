@@ -14,6 +14,7 @@ from urllib3.connection import (  # type: ignore[attr-defined]
     _url_from_connection,
     _wrap_proxy_error,
 )
+from urllib3._async.connection import AsyncHTTPConnection
 from urllib3.exceptions import HTTPError, ProxyError, ResponseNotReady, SSLError
 from urllib3.util import ssl_
 from urllib3.util.ssl_match_hostname import (
@@ -29,6 +30,37 @@ class TestConnection:
     """
     Tests in this suite should not make any network requests or connections.
     """
+
+    def test_new_conn_receives_ech_config(self) -> None:
+        ech_config = b"ech-config"
+        sock = mock.MagicMock(type=socket.SOCK_STREAM)
+        resolver = mock.MagicMock()
+
+        def create_connection(*args: typing.Any, **kwargs: typing.Any) -> object:
+            kwargs["ech_config_hook"](ech_config)
+            return sock
+
+        resolver.create_connection.side_effect = create_connection
+        conn = HTTPConnection("example.com", resolver=resolver)
+
+        assert conn._new_conn() is sock
+        assert conn._ech_config == ech_config
+
+    @pytest.mark.asyncio
+    async def test_async_new_conn_receives_ech_config(self) -> None:
+        ech_config = b"ech-config"
+        sock = mock.MagicMock(type=socket.SOCK_STREAM)
+        resolver = mock.MagicMock()
+
+        async def create_connection(*args: typing.Any, **kwargs: typing.Any) -> object:
+            kwargs["ech_config_hook"](ech_config)
+            return sock
+
+        resolver.create_connection.side_effect = create_connection
+        conn = AsyncHTTPConnection("example.com", resolver=resolver)
+
+        assert await conn._new_conn() is sock
+        assert conn._ech_config == ech_config
 
     def test_match_hostname_no_cert(self) -> None:
         cert = None

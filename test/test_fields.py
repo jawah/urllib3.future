@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 from urllib3.fields import (
     RequestField,
+    format_header_param,
+    format_header_param_html5,
     format_header_param_rfc2231,
     format_multipart_header_param,
     guess_content_type,
@@ -92,6 +96,17 @@ class TestRequestField:
     ) -> None:
         param = format_multipart_header_param("filename", value)
         assert param == f'filename="{expect}"'
+
+    @pytest.mark.parametrize(
+        "formatter",
+        [format_header_param, format_header_param_html5],
+    )
+    def test_deprecated_header_param_aliases(
+        self,
+        formatter: typing.Callable[[str, str], str],
+    ) -> None:
+        with pytest.warns(FutureWarning, match="format_multipart_header_param"):
+            assert formatter("filename", "näme") == 'filename="näme"'
 
     def test_from_tuples(self) -> None:
         field = RequestField.from_tuples("file", ("スキー旅行.txt", "data"))
