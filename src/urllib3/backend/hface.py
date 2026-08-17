@@ -387,6 +387,8 @@ class HfaceBackend(BaseBackend):
             else:
                 ssl_context = None
 
+        self._custom_tls_context = ssl_context
+
         if ssl_context:
             cert_use_common_name = (
                 getattr(ssl_context, "hostname_checks_common_name", False) or False
@@ -424,10 +426,6 @@ class HfaceBackend(BaseBackend):
                     ssl_context.set_fingerprint("chrome:stable")
                 except AttributeError:  # Defensive: should be unreachable
                     pass
-
-            # so that http headers would be made available
-            # via connectionpool "BoringSSL have predefined headers"
-            setattr(self.sock, "context", ssl_context)
 
         self.__custom_tls_settings = QuicTLSConfig(
             insecure=allow_insecure,
@@ -2102,3 +2100,4 @@ class HfaceBackend(BaseBackend):
         self._dgram_gro_enabled = False
         self._dgram_gso_enabled = False
         self._ech_config = None
+        self._custom_tls_context = None

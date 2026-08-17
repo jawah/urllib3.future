@@ -76,6 +76,7 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
         quic_upgrade_via_dns_rr: bool = False,
         timing_hook: typing.Callable[[tuple[timedelta, timedelta, datetime]], None]
         | None = None,
+        ech_config_hook: typing.Callable[[bytes], None] | None = None,
         default_socket_family: socket.AddressFamily = socket.AF_UNSPEC,
     ) -> AsyncSocket:
         """Connect to *address* and return the socket object.
@@ -226,7 +227,8 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                     )
 
                 if isinstance(canonname, bytes) and canonname:
-                    sock._ech_config = canonname
+                    if ech_config_hook is not None:
+                        ech_config_hook(canonname)
 
                 return sock
             except (OSError, OverflowError) as _:

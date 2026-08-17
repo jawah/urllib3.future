@@ -12,10 +12,17 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
+if sys.platform == "wasi":
+    try:
+        from ..wasi import socket
+    except ImportError:
+        pass
+
 from ..._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
 from ..._typing import _TYPE_SOCKET_OPTIONS, _TYPE_TIMEOUT_INTERNAL
 from ...exceptions import LocationParseError
 from ...util.connection import (
+    _ORIGINAL_SOCKET,
     _set_socket_options,
     _with_attr_sock,
     allowed_gai_family,
@@ -181,6 +188,7 @@ class BaseResolver(metaclass=ABCMeta):
         timing_hook: (
             typing.Callable[[tuple[timedelta, timedelta, datetime]], None] | None
         ) = None,
+        ech_config_hook: typing.Callable[[bytes], None] | None = None,
         default_socket_family: socket.AddressFamily = socket.AF_UNSPEC,
     ) -> socket.socket:
         """Connect to *address* and return the socket object.
@@ -236,7 +244,12 @@ class BaseResolver(metaclass=ABCMeta):
             af, socktype, proto, canonname, sa = res
             sock = None
             try:
-                sock = _with_attr_sock(af, socktype, proto)
+                socket_cls = (
+                    socket.socket
+                    if _with_attr_sock is _ORIGINAL_SOCKET
+                    else _with_attr_sock
+                )
+                sock = socket_cls(af, socktype, proto)
 
                 # we need to add this or reusing the same origin port will likely fail within
                 # short period of time. kernel put port on wait shut.
@@ -306,7 +319,8 @@ class BaseResolver(metaclass=ABCMeta):
                     )
 
                 if isinstance(canonname, bytes) and canonname:
-                    setattr(sock, "_ech_config", canonname)
+                    if ech_config_hook is not None:
+                        ech_config_hook(canonname)
 
                 return sock
             except (OSError, OverflowError) as _:

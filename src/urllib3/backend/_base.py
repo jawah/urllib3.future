@@ -569,6 +569,7 @@ class BaseBackend:
 
         self._recv_size_ema: float = 0.0
         self._ech_config: bytes | None = None
+        self._custom_tls_context: SSLContext | None = None
 
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises
