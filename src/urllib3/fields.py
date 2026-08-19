@@ -100,6 +100,19 @@ def format_multipart_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
     return f'{name}="{value}"'
 
 
+def format_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
+    """Deprecated alias for :func:`format_multipart_header_param`."""
+    import warnings
+
+    warnings.warn(
+        "'format_header_param' has been renamed to "
+        "'format_multipart_header_param' and will be removed in urllib3 v3.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return format_multipart_header_param(name, value)
+
+
 class RequestField:
     """
     A data container for request body parameters.

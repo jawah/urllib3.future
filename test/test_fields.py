@@ -4,6 +4,7 @@ import pytest
 
 from urllib3.fields import (
     RequestField,
+    format_header_param,
     format_header_param_rfc2231,
     format_multipart_header_param,
     guess_content_type,
@@ -73,6 +74,12 @@ class TestRequestField:
         param = format_header_param_rfc2231("filename", value)
 
         assert param == expect
+
+    def test_format_header_param_deprecated(self) -> None:
+        with pytest.deprecated_call(match=r"removed in urllib3 v3\.0\.0"):
+            param = format_header_param("filename", "na\nme")
+
+        assert param == 'filename="na%0Ame"'
 
     @pytest.mark.parametrize(
         ("value", "expect"),
