@@ -5,6 +5,8 @@
   initial stream or connection flow-control window. Bytes-like bodies and sync/async iterable bodies
   are now consistently split according to the effective HTTP/2 maximum data chunk size.
 - Fixed Linux UDP GSO fallback when a kernel or NIC driver rejects segmentation with ``EINVAL``.
+- Fixed ``ZstdDecoder.flush()`` raising ``AttributeError`` with Python 3.14's stdlib
+  ``compression.zstd`` implementation. Incomplete Zstandard data is still rejected. (#404)
 - Improved throughput for fixed amount response reads in both sync and async.
 - Fixed ECH configuration propagation from custom resolvers without relying on arbitrary attributes
   being writable on socket objects.

@@ -348,6 +348,11 @@ if zstd is not None:
             ) or bool(self._obj.unused_data)
 
         def flush(self) -> bytes:
+            if _zstd_native:
+                if not self._obj.eof:
+                    raise DecodeError("Zstandard data is incomplete")
+                return b""
+
             ret = self._obj.flush()
             if not self._obj.eof:
                 raise DecodeError("Zstandard data is incomplete")
