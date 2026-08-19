@@ -360,6 +360,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             else:
                 ssl_context = None
 
+        self._custom_tls_context = ssl_context
+
         if ssl_context:
             cert_use_common_name = (
                 getattr(ssl_context, "hostname_checks_common_name", False) or False
@@ -397,10 +399,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     ssl_context.set_fingerprint("chrome:stable")
                 except AttributeError:  # Defensive: should be unreachable
                     pass
-
-            # so that http headers would be made available
-            # via connectionpool "BoringSSL have predefined headers"
-            setattr(self.sock, "context", ssl_context)
 
         self.__custom_tls_settings = QuicTLSConfig(
             insecure=allow_insecure,
@@ -1551,7 +1549,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 HeadersReceived,
             ),
             maximal_data_in_read=__amt,
-            data_in_len_from=lambda x: len(x.data),  # type: ignore[attr-defined]
+            # Unbounded reads have no byte target to track.
+            data_in_len_from=(
+                (lambda x: len(x.data)) if __amt is not None else None  # type: ignore[attr-defined]
+            ),
             stream_id=__stream_id,
             respect_end_stream_signal=__respect_end_signal,
         )
@@ -1946,3 +1947,4 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._last_used_at = time.monotonic()
         self._recv_size_ema = 0.0
         self._ech_config = None
+        self._custom_tls_context = None

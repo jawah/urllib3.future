@@ -51,6 +51,7 @@ from .._protocols import HTTP2Protocol
 JH2_NOT_RFC_COMPLIANT_SETTINGS: bool = tuple(
     int(p) for p in jh2_version.split(".", maxsplit=3)[:3]
 ) <= (5, 0, 11)
+HTTP2_INITIAL_CONNECTION_WINDOW_SIZE = 2**16 - 1
 
 
 class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
@@ -177,7 +178,17 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._pending_ping_ack: deque[bytes] = deque()
 
     def max_frame_size(self) -> int:
-        return self._max_frame_size
+        initial_window_size: int = self._connection.remote_settings.initial_window_size
+        if initial_window_size == 0:
+            # body_to_chunks() requires a positive block size. Flow control
+            # still prevents this byte from being sent before WINDOW_UPDATE.
+            return 1
+
+        return min(
+            self._max_frame_size,
+            initial_window_size,
+            HTTP2_INITIAL_CONNECTION_WINDOW_SIZE,
+        )
 
     @staticmethod
     def exceptions() -> tuple[type[BaseException], ...]:

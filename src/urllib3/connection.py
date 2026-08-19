@@ -232,6 +232,7 @@ class HTTPConnection(HfaceBackend):
                 and HttpVersion.h3 not in self._disabled_svn
                 and self.socket_kind != socket.SOCK_DGRAM,
                 timing_hook=lambda _: setattr(self, "_connect_timings", _),
+                ech_config_hook=lambda _: setattr(self, "_ech_config", _),
                 default_socket_family=self._socket_family,
             )
         except socket.gaierror as e:
@@ -253,9 +254,6 @@ class HTTPConnection(HfaceBackend):
         if sock.type == socket.SOCK_DGRAM and self.socket_kind == socket.SOCK_STREAM:
             self.socket_kind = socket.SOCK_DGRAM
             self._svn = HttpVersion.h3
-
-        if hasattr(sock, "_ech_config"):
-            self._ech_config = sock._ech_config
 
         return sock
 

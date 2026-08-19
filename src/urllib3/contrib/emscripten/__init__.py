@@ -13,13 +13,13 @@ import warnings
 def inject_into_urllib3() -> None:
     warnings.warn(
         (
-            "urllib3-future does not support WASM / Emscripten platform. "
-            "Please reinstall legacy urllib3 in the meantime. "
-            "Run `pip uninstall -y urllib3 urllib3-future` then "
-            "`pip install urllib3-future`, finally `pip install urllib3`. "
-            "Sorry for the inconvenience."
+            "urllib3-future does not currently support Emscripten Pyodide. "
+            "Use upstream urllib3 on these platforms. See the cohabitation "
+            "instructions at "
+            "https://niquests.readthedocs.io/en/latest/community/faq.html#cohabitation"
         ),
-        DeprecationWarning,
+        FutureWarning,
+        stacklevel=2,
     )
 
 

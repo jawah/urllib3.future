@@ -341,6 +341,12 @@ class LowLevelResponse:
         return self.closed
 
     def read(self, __size: int | None = None) -> bytes:
+        return self._read(__size, read1=False)
+
+    def read1(self, __size: int | None = None) -> bytes:
+        return self._read(__size, read1=True)
+
+    def _read(self, __size: int | None, *, read1: bool) -> bytes:
         if self.closed is True or self.__internal_read_st is None:
             # overly protective, just in case.
             raise ValueError(
@@ -364,6 +370,16 @@ class LowLevelResponse:
 
             self.__buffer_excess.put_many(chunks)
             buf_capacity = len(self.__buffer_excess)
+
+        if not read1 and __size is not None and __size > 0:
+            while self._eot is False and buf_capacity < __size:
+                chunks, self._eot, self.trailers = self.__internal_read_st(
+                    __size - buf_capacity, self._stream_id
+                )
+                self.__buffer_excess.put_many(chunks)
+                buf_capacity = len(self.__buffer_excess)
+                if not chunks:
+                    break
 
         data = (
             self.__buffer_excess.get(
@@ -569,6 +585,7 @@ class BaseBackend:
 
         self._recv_size_ema: float = 0.0
         self._ech_config: bytes | None = None
+        self._custom_tls_context: SSLContext | None = None
 
     def __contains__(self, item: ResponsePromise) -> bool:
         return item.uid in self._promises

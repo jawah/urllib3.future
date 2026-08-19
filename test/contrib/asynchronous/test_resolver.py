@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from test import requires_network
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -28,6 +29,55 @@ from urllib3.contrib.resolver._async.in_memory import InMemoryResolver  # noqa: 
 from urllib3.contrib.resolver._async.null import NullResolver  # noqa: E402
 from urllib3.contrib.resolver._async.system import SystemResolver  # noqa: E402
 from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_create_connection_reports_ech_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib3.contrib.resolver._async import protocols
+
+    ech_config = b"ech-config"
+    resolver = SystemResolver()
+
+    async def getaddrinfo(
+        *args: object, **kwargs: object
+    ) -> list[
+        tuple[
+            socket.AddressFamily,
+            socket.SocketKind,
+            int,
+            bytes,
+            tuple[str, int],
+        ]
+    ]:
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                ech_config,
+                ("127.0.0.1", 443),
+            )
+        ]
+
+    async def connect(address: tuple[str, int]) -> None:
+        pass
+
+    sock = MagicMock()
+    sock.connect = connect
+    monkeypatch.setattr(resolver, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(protocols, "AsyncSocket", Mock(return_value=sock))
+    ech_config_hook = Mock()
+
+    assert (
+        await resolver.create_connection(
+            ("example.com", 443), ech_config_hook=ech_config_hook
+        )
+        is sock
+    )
+    ech_config_hook.assert_called_once_with(ech_config)
+
 
 _DOQ_PARAM = pytest.param(
     "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",

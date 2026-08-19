@@ -7,16 +7,9 @@
 
 from __future__ import annotations
 
-import warnings
-
 
 def inject_into_urllib3() -> None:
-    warnings.warn(
-        "urllib3-future do not propose the http2 module as it is useless to us. "
-        "enjoy HTTP/1.1, HTTP/2, and HTTP/3 without hacks. urllib3-future just works out "
-        "of the box with all protocols. No hassles.",
-        UserWarning,
-    )
+    pass
 
 
 def extract_from_urllib3() -> None:

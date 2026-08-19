@@ -366,6 +366,27 @@ class TestResponse:
         r = HTTPResponse(fp, headers={"content-encoding": "zstd"})
         assert r.data == b"foo"
 
+    def test_decode_zstd_with_stdlib_decompressor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stdlib_zstd = pytest.importorskip("compression.zstd")
+        from urllib3 import response
+
+        monkeypatch.setattr(response, "_zstd_native", True)
+
+        decoder = response.ZstdDecoder()
+        decoder._obj = stdlib_zstd.ZstdDecompressor()
+
+        assert decoder.decompress(stdlib_zstd.compress(b"foo")) == b"foo"
+        assert decoder.flush() == b""
+
+        decoder = response.ZstdDecoder()
+        decoder._obj = stdlib_zstd.ZstdDecompressor()
+        decoder.decompress(stdlib_zstd.compress(b"foo")[:-1])
+
+        with pytest.raises(DecodeError, match="Zstandard data is incomplete"):
+            decoder.flush()
+
     @onlyZstd()
     def test_decode_multiframe_zstd(self) -> None:
         data = (

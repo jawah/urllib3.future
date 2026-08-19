@@ -90,7 +90,7 @@ def format_multipart_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
     .. versionchanged:: 2.0.0
         Renamed from ``format_header_param_html5`` and
         ``format_header_param``. The old names will be removed in
-        urllib3 v2.1.0.
+        urllib3 v3.0.
     """
     if isinstance(value, bytes):
         value = value.decode("utf-8")
@@ -98,6 +98,42 @@ def format_multipart_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
     # percent encode \n \r "
     value = value.translate({10: "%0A", 13: "%0D", 34: "%22"})
     return f'{name}="{value}"'
+
+
+def format_header_param_html5(name: str, value: _TYPE_FIELD_VALUE) -> str:
+    """
+    .. deprecated:: 2.0.0
+        Renamed to :func:`format_multipart_header_param`. Will be
+        removed in urllib3 v3.0.
+    """
+    import warnings
+
+    warnings.warn(
+        "'format_header_param_html5' has been renamed to "
+        "'format_multipart_header_param'. The old name will be "
+        "removed in urllib3 v3.0.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return format_multipart_header_param(name, value)
+
+
+def format_header_param(name: str, value: _TYPE_FIELD_VALUE) -> str:
+    """
+    .. deprecated:: 2.0.0
+        Renamed to :func:`format_multipart_header_param`. Will be
+        removed in urllib3 v3.0.
+    """
+    import warnings
+
+    warnings.warn(
+        "'format_header_param' has been renamed to "
+        "'format_multipart_header_param'. The old name will be "
+        "removed in urllib3 v3.0.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return format_multipart_header_param(name, value)
 
 
 class RequestField:

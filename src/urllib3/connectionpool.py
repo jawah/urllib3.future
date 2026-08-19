@@ -1387,7 +1387,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # utls -- BoringSSL have predefined headers
         # that we automatically insert.
         if conn_info is not None and conn_info.tls_version is not None:
-            ssl_ctx: ssl.SSLContext | None = getattr(conn.sock, "context", None)
+            ssl_ctx: ssl.SSLContext | None = getattr(
+                conn, "_custom_tls_context", None
+            ) or getattr(conn.sock, "context", None)
 
             if ssl_ctx is not None and hasattr(ssl_ctx, "http_header_for_fingerprint"):
                 try:

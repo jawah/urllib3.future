@@ -91,12 +91,8 @@ def allowed_gai_family() -> socket.AddressFamily:
     return family
 
 
-class _with_attr_sock(socket.socket):
-    """socket.socket subclass that carries extra protocol metadata."""
-
-    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        self._ech_config: bytes | None = None
-        super().__init__(*args, **kwargs)
+_ORIGINAL_SOCKET = socket.socket
+_with_attr_sock = socket.socket
 
 
 def _has_ipv6() -> bool:
@@ -111,7 +107,12 @@ def _has_ipv6() -> bool:
         # https://github.com/urllib3/urllib3/pull/611
         # https://bugs.python.org/issue658327
         try:
-            sock = _with_attr_sock(socket.AF_INET6)
+            socket_cls = (
+                socket.socket
+                if _with_attr_sock is _ORIGINAL_SOCKET
+                else _with_attr_sock
+            )
+            sock = socket_cls(socket.AF_INET6)
             sock.bind(("::1", 0))
             has_ipv6 = True
         except Exception:
