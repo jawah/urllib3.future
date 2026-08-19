@@ -327,11 +327,38 @@ def body_to_chunks(
             async for block in body:
                 if encode is None:
                     encode = isinstance(block, str)
-                queue.put(block.encode("utf-8") if encode else block)
-                yield queue.get(blocksize)
+                if block:
+                    queue.put(block.encode("utf-8") if encode else block)
+                    yield queue.get(blocksize)
 
             while queue:
                 yield queue.get(blocksize)
+
+    def chunk_iterable(
+        iterable: typing.Iterable[bytes | bytearray | str | memoryview],
+    ) -> typing.Iterable[bytes]:
+        queue = BytesQueueBuffer()
+
+        for block in iterable:
+            if isinstance(block, str):
+                block = block.encode("utf-8")
+            elif isinstance(block, bytearray):
+                block = memoryview(block)
+            if block:
+                queue.put(block)
+                yield queue.get(blocksize)
+
+        while queue:
+            yield queue.get(blocksize)
+
+    def chunk_buffer(view: memoryview) -> typing.Iterable[bytes]:
+        try:
+            byte_view = view.cast("B")
+        except TypeError:
+            byte_view = memoryview(view.tobytes())
+
+        for offset in range(0, byte_view.nbytes, blocksize):
+            yield bytes(byte_view[offset : offset + blocksize])
 
     # Bytes or strings become bytes
     if isinstance(body, (str, bytes)):
@@ -359,7 +386,8 @@ def body_to_chunks(
         except TypeError:
             try:
                 # Check if the body is an iterable
-                chunks = iter(body)
+                iterable = iter(body)
+                chunks = chunk_iterable(iterable) if force else iterable
                 content_length = None
             except TypeError:
                 raise TypeError(
@@ -368,7 +396,7 @@ def body_to_chunks(
                 ) from None
         else:
             # Since it implements the buffer API can be passed directly to socket.sendall()
-            chunks = (body,)
+            chunks = chunk_buffer(mv) if force and mv.nbytes > blocksize else (body,)
             content_length = mv.nbytes
 
     return ChunksAndContentLength(
