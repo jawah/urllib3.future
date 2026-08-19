@@ -244,6 +244,7 @@ _GSO_UNSUPPORTED_ERRNOS: typing.Final = frozenset(
     e
     for e in (
         getattr(errno, "EIO", None),
+        getattr(errno, "EINVAL", None),
         getattr(errno, "ENOTSUP", None),
         getattr(errno, "EOPNOTSUPP", None),
         getattr(errno, "ENOPROTOOPT", None),
