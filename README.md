@@ -400,6 +400,54 @@ HTTP/3 availability depends on a supported platform and the semi-optional qh3
 dependency. ECH and post-quantum capabilities depend on the selected TLS
 backend and its configuration.
 
+### Is there precedent or prior art for in-place replacement?
+
+Yes. A Python distribution name and an import namespace are not the same
+concept, and Python does not grant a distribution exclusive ownership of an
+import name. Several established projects have provided an existing import
+interface through an alternative distribution.
+
+Notable examples include:
+
+- [Pillow](https://python-pillow.org/) succeeded PIL while preserving the
+  established `PIL` import namespace.
+- [PyCryptodome](https://www.pycryptodome.org/) can act as a drop-in replacement
+  for PyCrypto through the `Crypto` namespace, while PyCryptodomex provides an
+  isolated `Cryptodome` namespace.
+- [mysqlclient](https://github.com/PyMySQL/mysqlclient) continued the
+  MySQL-python interface through the existing `MySQLdb` namespace.
+- [pillow-simd](https://github.com/uploadcare/pillow-simd) provides an
+  alternative Pillow implementation through the same `PIL` namespace.
+- [setuptools](https://github.com/pypa/setuptools) uses
+  `distutils-precedence.pth` and `_distutils_hack` to select its bundled
+  implementation of `distutils` before application imports.
+
+Related replacement mechanisms are also common outside PyPI. Operating-system
+package managers support concepts such as `Provides`, `Conflicts`, and
+`Replaces`, and distributors routinely patch or redirect implementations while
+preserving their established interfaces. For example, some distributions make
+`certifi` use the system certificate store without changing the public
+`certifi` import API.
+
+These precedents are not identical to urllib3.future. Most replaced an
+unmaintained project, provided alternate builds of the same project, or relied
+on an explicit operating-system package manager. urllib3.future is unusual
+because it independently implements the interface of a widely deployed and
+actively maintained project, while supporting both drop-in replacement and
+strict namespace separation.
+
+The novelty is therefore not the idea that an interface can have more than one
+implementation. The difficult part is sustaining compatibility with urllib3's
+documented API, historical behavior, downstream integrations, object identity,
+and frequently used internal interfaces while continuing to evolve the
+transport architecture.
+
+Anyone may implement the urllib3 interface in principle. In practice, doing so
+requires accepting its accumulated compatibility constraints as release
+requirements. urllib3.future treats that obligation as measurable engineering
+work through the inherited urllib3 suite, downstream project suites, and
+independent protocol integration tests.
+
 ## Known compatibility differences
 
 The following intentional differences may affect applications that rely on representation details inherited from HTTP/1
