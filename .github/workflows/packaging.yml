@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ "3.7", "3.13" ]
+        python-version: [ "3.7", "3.13", "pypy3.11" ]
         os:
           - macos-15
           - windows-2022
@@ -28,6 +28,10 @@ jobs:
         exclude:
           - python-version: "3.7"
             os: macos-15
+          - python-version: "pypy3.11"
+            os: macos-15
+          - python-version: "pypy3.11"
+            os: windows-2022
 
     steps:
       - name: "Checkout repository"
@@ -38,7 +42,7 @@ jobs:
       - name: "Setup Python"
         uses: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
         with:
-          python-version: "3.x"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: "Install legacy urllib3"
@@ -47,11 +51,40 @@ jobs:
       - name: "Install newer package"
         run: pip install .
 
+      - name: "Test concurrent first startup"
+        run: >-
+          python -S -c 'import subprocess, sys; processes = [subprocess.Popen([sys.executable, "-c", "import urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__; assert urllib3.__path__[0].endswith(\"urllib3\")"]) for _ in range(32)]; assert all(process.wait() == 0 for process in processes)'
+
+      - name: "Install legacy urllib3 last"
+        run: pip install --force-reinstall --no-deps urllib3
+
+      - name: "Test concurrent repair"
+        run: >-
+          python -S -c 'import subprocess, sys; processes = [subprocess.Popen([sys.executable, "-c", "import urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__; assert urllib3.__path__[0].endswith(\"urllib3\")"]) for _ in range(32)]; assert all(process.wait() == 0 for process in processes)'
+
+      - name: "Test repair with constrained file descriptors"
+        if: matrix.python-version == 'pypy3.11'
+        run: |
+          pip install --force-reinstall --no-deps urllib3
+          ulimit -n 64
+          python -S -c 'import subprocess, sys; processes = [subprocess.Popen([sys.executable, "-c", "import urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__"]) for _ in range(16)]; assert all(process.wait() == 0 for process in processes)'
+
       - name: "Test execution"
         run: python -c "import urllib3; urllib3.PoolManager().urlopen('GET', 'https://httpbingo.org/get')"
 
       - name: "Assert clean install"
         run: python -c "import urllib3; assert not hasattr(urllib3, '_base_connection.py'); assert hasattr(urllib3, 'backend')"
+
+      - name: "Install both packages in the user site"
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        run: |
+          pip install --user --force-reinstall --no-deps .
+          pip install --user --force-reinstall --no-deps urllib3
+
+      - name: "Test concurrent user-site repair"
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        run: >-
+          python -S -c 'import subprocess, sys; processes = [subprocess.Popen([sys.executable, "-c", "import site, urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__; assert urllib3.__path__[0].startswith(site.getusersitepackages())"]) for _ in range(32)]; assert all(process.wait() == 0 for process in processes)'
 
 
   mixed-env-bypass:
@@ -80,7 +113,7 @@ jobs:
       - name: "Setup Python"
         uses: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
         with:
-          python-version: "3.x"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: "Install newer package"
