@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -155,6 +156,7 @@ def verify() -> None:
     assert (destination / ".u3f_sync").read_bytes() == (
         source / "_version.py"
     ).read_bytes()
+    assert (destination / ".u3f_sync.lock").is_file() == (os.name == "nt")
     assert not list(destination.rglob("*.tmp"))
 
     mismatches = []
