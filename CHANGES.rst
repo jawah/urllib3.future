@@ -2,6 +2,7 @@
 =====================
 
 - Fixed rare in-place replacement failures during concurrent interpreter startup, interrupted operations, and user-site installations.
+- Improved response read performance when no content decoder is active by eliminating a redundant buffering step.
 
 2.24.902 (2026-08-19)
 =====================

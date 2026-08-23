@@ -535,12 +535,18 @@ class AsyncHTTPResponse(HTTPResponse):
             elif amt != 0 and not data:
                 flush_decoder = True
 
-            if (
-                not data
-                and len(self._decoded_buffer) == 0
-                and not (self._decoder and self._decoder.has_unconsumed_tail)
-            ):
-                return data
+            decoder = self._decoder
+            if not self._decoded_buffer:
+                if (
+                    decoder is None
+                    and amt is not None
+                    and decode_content
+                    and isinstance(self._fp, AsyncLowLevelResponse)
+                ):
+                    return data
+
+                if not data and (decoder is None or not decoder.has_unconsumed_tail):
+                    return data
 
             if amt is None:
                 data = self._decode(data, decode_content, flush_decoder)
