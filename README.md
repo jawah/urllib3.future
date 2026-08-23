@@ -421,6 +421,29 @@ Notable examples include:
 - [setuptools](https://github.com/pypa/setuptools) uses
   `distutils-precedence.pth` and `_distutils_hack` to select its bundled
   implementation of `distutils` before application imports.
+- [gevent](https://www.gevent.org/api/gevent.monkey.html) and
+  [Eventlet](https://eventlet.readthedocs.io/en/latest/patching.html) provide
+  transparent runtime replacement of standard-library networking, threading,
+  and queue behavior. Existing applications continue using familiar standard
+  interfaces while cooperative implementations operate underneath. This is
+  environment-wide interface substitution within a process rather than a
+  physical package replacement, and its behavior can depend on patch timing
+  and import order.
+- urllib3's own
+  [`inject_into_urllib3()`](https://urllib3.readthedocs.io/en/stable/reference/contrib/pyopenssl.html#urllib3.contrib.pyopenssl.inject_into_urllib3)
+  integration historically replaces its standard-library TLS implementation
+  with a PyOpenSSL-backed implementation while preserving the urllib3-facing
+  API. This is a narrower, runtime-scoped replacement, but it establishes a
+  direct precedent within urllib3 for transparently substituting a core
+  transport implementation.
+- The official
+  [OpenCV Python distributions](https://github.com/opencv/opencv-python#installation-and-usage)
+  provide four separately named packages: `opencv-python`,
+  `opencv-contrib-python`, `opencv-python-headless`, and
+  `opencv-contrib-python-headless`. Their documentation explicitly states that
+  all four provide the same `cv2` namespace and instructs users to install
+  exactly one because there is no plugin architecture and overlapping
+  installations conflict.
 
 Related replacement mechanisms are also common outside PyPI. Operating-system
 package managers support concepts such as `Provides`, `Conflicts`, and
