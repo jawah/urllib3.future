@@ -45,22 +45,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      - name: "Install legacy urllib3"
-        run: pip install urllib3
-
-      - name: "Install newer package"
-        run: pip install .
-
-      - name: "Test concurrent first startup"
+      - name: "Test repeated concurrent installation and repair"
         run: >-
-          python -S -c 'import subprocess, sys; processes = [subprocess.Popen([sys.executable, "-c", "import urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__; assert urllib3.__path__[0].endswith(\"urllib3\")"]) for _ in range(32)]; assert all(process.wait() == 0 for process in processes)'
-
-      - name: "Install legacy urllib3 last"
-        run: pip install --force-reinstall --no-deps urllib3
-
-      - name: "Test concurrent repair"
-        run: >-
-          python -S -c 'import subprocess, sys; processes = [subprocess.Popen([sys.executable, "-c", "import urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__; assert urllib3.__path__[0].endswith(\"urllib3\")"]) for _ in range(32)]; assert all(process.wait() == 0 for process in processes)'
+          python -S ci/test_pth_concurrency.py
+          --rounds ${{ runner.os == 'Windows' && 10 || 3 }}
+          --workers 32
+          --timeout 30
 
       - name: "Test repair with constrained file descriptors"
         if: matrix.python-version == 'pypy3.11'
@@ -72,8 +62,8 @@ jobs:
       - name: "Test execution"
         run: python -c "import urllib3; urllib3.PoolManager().urlopen('GET', 'https://httpbingo.org/get')"
 
-      - name: "Assert clean install"
-        run: python -c "import urllib3; assert not hasattr(urllib3, '_base_connection.py'); assert hasattr(urllib3, 'backend')"
+      - name: "Assert selected implementation"
+        run: python -c "import urllib3, urllib3_future; assert urllib3.__version__ == urllib3_future.__version__; assert hasattr(urllib3, 'backend')"
 
       - name: "Install both packages in the user site"
         if: runner.os == 'Linux' && matrix.python-version == '3.13'
