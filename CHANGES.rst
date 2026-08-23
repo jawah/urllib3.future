@@ -1,4 +1,4 @@
-2.24.903 (2026-08-22)
+2.24.903 (2026-08-23)
 =====================
 
 - Fixed rare in-place replacement failures during concurrent interpreter startup, interrupted operations, and user-site installations.
