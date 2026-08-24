@@ -1,3 +1,9 @@
+2.24.904 (2026-08-24)
+=====================
+
+- Fixed HTTP/2 stream reset procedure raising unattended exception when the remote closed it before you (e.g. SSE extension). (#406)
+- Fixed HTTP/2 connection status when disposing of many SSE extension streams (i.e. could remain marked saturated when the client initiated the SSE close).
+
 2.24.903 (2026-08-23)
 =====================
 
