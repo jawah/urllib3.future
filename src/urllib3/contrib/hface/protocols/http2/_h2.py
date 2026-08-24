@@ -234,7 +234,14 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._connection.send_data(stream_id, data, end_stream)
 
     def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
-        self._connection.reset_stream(stream_id, error_code)
+        try:
+            self._connection.reset_stream(stream_id, error_code)
+        except jh2.exceptions.StreamClosedError:
+            # The peer may have closed the stream after the caller decided to
+            # abort it but before the reset reached the HTTP/2 state machine.
+            pass
+        else:
+            self._open_stream_count -= 1
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id=stream_id)
