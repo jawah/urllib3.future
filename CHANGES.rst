@@ -1,3 +1,8 @@
+2.24.905 (2026-08-28)
+=====================
+
+- Improves performance by up to 10% in typical workloads, with the largest gains seen in concurrent connections and large response transfers.
+
 2.24.904 (2026-08-24)
 =====================
 

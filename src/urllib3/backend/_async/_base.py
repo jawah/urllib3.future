@@ -5,7 +5,11 @@ import typing
 from ..._collections import HTTPHeaderDict
 from ...contrib.ssa import AsyncSocket, SSLAsyncSocket
 from .._base import BaseBackend, ResponsePromise
-from ...util.response import BytesQueueBuffer
+
+try:
+    from jh2._hazmat import _BytesQueueBuffer as BytesQueueBuffer  # type: ignore[import-untyped]
+except ImportError:
+    from ...util.response import BytesQueueBuffer
 
 
 class AsyncDirectStreamAccess:

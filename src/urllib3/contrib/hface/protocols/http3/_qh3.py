@@ -22,7 +22,7 @@ import typing
 from collections import deque
 from os import environ
 from time import time as monotonic
-from typing import Any, Iterable
+from typing import Any
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -198,7 +198,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
                 }:
                     self._terminated = True
                 if getattr(self._quic, "_close_event", None) is not None:
-                    self._events.extend(self._map_quic_event(self._quic._close_event))  # type: ignore[arg-type]
+                    qe = self._map_quic_event(self._quic._close_event)  # type: ignore[arg-type]
+                    assert qe is not None
+                    self._events.append(qe)
                     self._terminated = True
         return (
             self._terminated or self._goaway_to_honor
@@ -299,62 +301,94 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         assert self._http is not None
 
         for quic_event in iter(self._quic.next_event, None):
-            self._events.extend(self._map_quic_event(quic_event))
+            qe = self._map_quic_event(quic_event)
+
+            if qe is not None:
+                self._events.append(qe)
+
             for h3_event in self._http.handle_event(quic_event):
-                self._events.extend(self._map_h3_event(h3_event))
+                he = self._map_h3_event(h3_event)
+
+                if he is not None:
+                    self._events.append(he)
 
         if getattr(self._quic, "_close_event", None) is not None:
-            self._events.extend(self._map_quic_event(self._quic._close_event))  # type: ignore[arg-type]
+            qe = self._map_quic_event(self._quic._close_event)  # type: ignore[arg-type]
+            assert qe is not None
+            self._events.append(qe)
 
-    def _map_quic_event(self, quic_event: quic_events.QuicEvent) -> Iterable[Event]:
-        ev_type = quic_event.__class__
+    def _map_quic_event(
+        self,
+        quic_event: quic_events.QuicEvent,
+    ) -> Event | None:
+        event_type = quic_event.__class__
 
         # fastest path execution, most of the time we don't have those
         # 3 event types.
-        if ev_type not in QUIC_RELEVANT_EVENT_TYPES:
-            return
+        if event_type not in QUIC_RELEVANT_EVENT_TYPES:
+            return None
 
-        if ev_type is quic_events.HandshakeCompleted:
-            yield _HandshakeCompleted(quic_event.alpn_protocol)  # type: ignore[attr-defined]
-        elif ev_type is quic_events.ConnectionTerminated:
+        if event_type is quic_events.HandshakeCompleted:
+            return _HandshakeCompleted(quic_event.alpn_protocol)  # type: ignore[attr-defined]
+
+        if event_type is quic_events.ConnectionTerminated:
             self._terminated = True
-            yield ConnectionTerminated(
+            return ConnectionTerminated(
                 quic_event.error_code,  # type: ignore[attr-defined]
                 quic_event.reason_phrase  # type: ignore[attr-defined]
                 or "Remote end closed connection (not gracefully)",
             )
-        elif ev_type is quic_events.StreamReset:
+
+        if event_type is quic_events.StreamReset:
             self._open_stream_count -= 1
-            yield StreamResetReceived(quic_event.stream_id, quic_event.error_code)  # type: ignore[attr-defined]
-        elif ev_type is quic_events.PingAcknowledged:
-            if quic_event.uid in self._pending_ping_ack:  # type: ignore[attr-defined]
+            return StreamResetReceived(
+                quic_event.stream_id,  # type: ignore[attr-defined]
+                quic_event.error_code,  # type: ignore[attr-defined]
+            )
+
+        if event_type is quic_events.PingAcknowledged:
+            try:
                 self._pending_ping_ack.remove(quic_event.uid)  # type: ignore[attr-defined]
+            except ValueError:
+                pass
 
-    def _map_h3_event(self, h3_event: h3_events.H3Event) -> Iterable[Event]:
-        ev_type = h3_event.__class__
+        return None
 
-        if ev_type is h3_events.HeadersReceived:
+    def _map_h3_event(
+        self,
+        h3_event: h3_events.H3Event,
+    ) -> Event | None:
+        event_type = h3_event.__class__
+
+        if event_type is h3_events.HeadersReceived:
             if h3_event.stream_ended:  # type: ignore[attr-defined]
                 self._open_stream_count -= 1
-            yield HeadersReceived(
+            return HeadersReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.headers,  # type: ignore[attr-defined]
                 h3_event.stream_ended,  # type: ignore[attr-defined]
             )
-        elif ev_type is h3_events.DataReceived:
+
+        if event_type is h3_events.DataReceived:
             if h3_event.stream_ended:  # type: ignore[attr-defined]
                 self._open_stream_count -= 1
-            yield DataReceived(h3_event.stream_id, h3_event.data, h3_event.stream_ended)  # type: ignore[attr-defined]
-        elif ev_type is h3_events.InformationalHeadersReceived:
-            yield EarlyHeadersReceived(
+            return DataReceived(
+                h3_event.stream_id,  # type: ignore[attr-defined]
+                h3_event.data,  # type: ignore[attr-defined]
+                h3_event.stream_ended,  # type: ignore[attr-defined]
+            )
+
+        if event_type is h3_events.InformationalHeadersReceived:
+            return EarlyHeadersReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.headers,  # type: ignore[attr-defined]
             )
-        elif _QH3_H3_HAVE_GA_EV and ev_type is h3_events.GoawayReceived:
+
+        if _QH3_H3_HAVE_GA_EV and event_type is h3_events.GoawayReceived:
             self._goaway_to_honor = True
-            yield GoawayReceived(
-                h3_event.stream_id,  # type: ignore[attr-defined]
-            )
+            return GoawayReceived(h3_event.stream_id)  # type: ignore[attr-defined]
+
+        return None
 
     def should_wait_remote_flow_control(
         self, stream_id: int, amt: int | None = None
