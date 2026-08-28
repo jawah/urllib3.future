@@ -520,8 +520,8 @@ class GroupedDict(typing.Dict[_GK, _GV]):
             self._index.setdefault(self._key_fn(v), set()).add(k)
 
     def __setitem__(self, key: _GK, value: _GV) -> None:
-        if key in self:
-            old = super().__getitem__(key)
+        old = super().get(key, _Sentinel.not_passed)
+        if old is not _Sentinel.not_passed:
             old_h = self._key_fn(old)
             new_h = self._key_fn(value)
             if old_h == new_h:
@@ -539,8 +539,7 @@ class GroupedDict(typing.Dict[_GK, _GV]):
         self._index.setdefault(self._key_fn(value), set()).add(key)
 
     def __delitem__(self, key: _GK) -> None:
-        old = super().__getitem__(key)
-        super().__delitem__(key)
+        old = super().pop(key)
         old_h = self._key_fn(old)
         bucket = self._index.get(old_h)
         if bucket is not None:
