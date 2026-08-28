@@ -7,7 +7,11 @@ from enum import Enum
 
 from ..exceptions import UnrewindableBodyError
 from .util import to_bytes, iscoroutinefunction
-from .response import BytesQueueBuffer
+
+try:
+    from jh2._hazmat import _BytesQueueBuffer as BytesQueueBuffer  # type: ignore[import-untyped]
+except ImportError:
+    from .response import BytesQueueBuffer
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Final

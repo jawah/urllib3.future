@@ -30,9 +30,14 @@ from ..exceptions import (
     MustRedialError,
 )
 from ..response import ContentDecoder, HTTPResponse
-from ..util.response import is_fp_closed, BytesQueueBuffer
+from ..util.response import is_fp_closed
 from ..util.retry import Retry
 from .connection import AsyncHTTPConnection
+
+try:
+    from jh2._hazmat import _BytesQueueBuffer as BytesQueueBuffer  # type: ignore[import-untyped]
+except ImportError:
+    from ..util.response import BytesQueueBuffer
 
 if typing.TYPE_CHECKING:
     from email.message import Message
@@ -431,7 +436,7 @@ class AsyncHTTPResponse(HTTPResponse):
 
         if amt is not None and amt >= 0 and len(data) > amt:
             self._decoded_buffer.put(data)
-            return self._decoded_buffer.get(amt)
+            return self._decoded_buffer.get(amt)  # type: ignore[no-any-return]
 
         return data
 
@@ -493,7 +498,7 @@ class AsyncHTTPResponse(HTTPResponse):
                             self._decoded_buffer.put(decoded_data)
 
                     if len(self._decoded_buffer):
-                        return self._decoded_buffer.get(len(self._decoded_buffer))
+                        return self._decoded_buffer.get(len(self._decoded_buffer))  # type: ignore[no-any-return]
 
                 if amt > 0:
                     # Drain any pending data already buffered inside the
@@ -515,7 +520,7 @@ class AsyncHTTPResponse(HTTPResponse):
                         self._decoded_buffer.put(decoded_data)
 
                     if amt <= len(self._decoded_buffer):
-                        return self._decoded_buffer.get(amt)
+                        return self._decoded_buffer.get(amt)  # type: ignore[no-any-return]
 
             if self._police_officer is not None:
                 async with self._police_officer.borrow(self):

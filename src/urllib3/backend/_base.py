@@ -20,7 +20,11 @@ from .._constant import (
     DEFAULT_BACKGROUND_WATCH_WINDOW,
     DEFAULT_KEEPALIVE_IDLE_WINDOW,
 )
-from ..util.response import BytesQueueBuffer
+
+try:
+    from jh2._hazmat import _BytesQueueBuffer as BytesQueueBuffer  # type: ignore[import-untyped]
+except ImportError:
+    from ..util.response import BytesQueueBuffer
 
 
 class HttpVersion(str, enum.Enum):
