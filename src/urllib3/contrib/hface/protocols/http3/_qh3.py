@@ -415,25 +415,30 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         # accessing our QUIC loss detector
         # yes, we now, it's private, and we
         # also maintain qh3, so we're aware.
-        loss = self._quic._loss
+        if hasattr(self._quic, "_loss"):
+            loss = self._quic._loss
 
-        # At least 2 ack-eliciting packets outstanding.
-        # RFC 9000 section 13.2.1
-        # - ACK after the peer receives <= 2 ack-eliciting packets.
-        # - ACK within the peer's negotiated max_ack_delay (<= 25 ms by default).
-        n_outstanding = sum(s.ack_eliciting_in_flight for s in loss.spaces)
+            # At least 2 ack-eliciting packets outstanding.
+            # RFC 9000 section 13.2.1
+            # - ACK after the peer receives <= 2 ack-eliciting packets.
+            # - ACK within the peer's negotiated max_ack_delay (<= 25 ms by default).
+            n_outstanding = sum(s.ack_eliciting_in_flight for s in loss.spaces)
 
-        if n_outstanding >= 2:
-            return True
-
-        now = monotonic()
-
-        # Or max_ack_delay elapsed since the last ack-eliciting send.
-        # Yes, we know, it's approximative, borderline heuristic
-        if n_outstanding >= 1:
-            deadline = loss._time_of_last_sent_ack_eliciting_packet + loss.max_ack_delay
-            if now >= deadline:
+            if n_outstanding >= 2:
                 return True
+
+            now = monotonic()
+
+            # Or max_ack_delay elapsed since the last ack-eliciting send.
+            # Yes, we know, it's approximative, borderline heuristic
+            if n_outstanding >= 1:
+                deadline = (
+                    loss._time_of_last_sent_ack_eliciting_packet + loss.max_ack_delay
+                )
+                if now >= deadline:
+                    return True
+        elif hasattr(self._quic, "should_wait_for_ack"):
+            return self._quic.should_wait_for_ack(monotonic())
 
         return False
 
