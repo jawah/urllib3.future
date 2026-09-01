@@ -178,10 +178,8 @@ class AsyncSignals(typing.Generic[T]):
         )
 
         if target_conn_or_pool is not None:
-            signal.target_obj_id = id(target_conn_or_pool)
-
-        if target_conn_or_pool is not None:
             obj_id = id(target_conn_or_pool)
+            signal.target_obj_id = obj_id
 
             if obj_id not in self._saturated_signals:
                 self._saturated_signals[obj_id] = asyncio.Event()
