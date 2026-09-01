@@ -1,3 +1,10 @@
+2.24.906 (2026-09-01)
+=====================
+
+- Support for ``qh3`` v2. This major release of the quic state machine bring a substantial performance
+  improvement. Up to approximately 40% higher throughput in HTTP/3 workloads.
+- Improved overall async performance by 1 to 2% with several micro-optimizations.
+
 2.24.905 (2026-08-28)
 =====================
 
