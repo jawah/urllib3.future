@@ -115,7 +115,7 @@ def _intent_to_write(*states: TrafficState) -> bool:
     Querying for states with open streams that may be at capacity
     (SATURATED) implies a READ intent — waiting to consume responses.
     """
-    return all(state < TrafficState.SATURATED for state in states)
+    return TrafficState.SATURATED not in states
 
 
 class AsyncSignals(typing.Generic[T]):
