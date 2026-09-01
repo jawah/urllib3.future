@@ -893,7 +893,7 @@ class PoolManager(RequestMethods):
         if u.scheme not in (None, "http", "https"):
             from .contrib.webextensions import load_extension
 
-            extension = load_extension(*parse_extension(u.scheme))
+            extension = load_extension(*parse_extension(u.scheme))  # type: ignore[arg-type]
             kw["extension"] = extension()
             kw.update(kw["extension"].urlopen_kwargs)
 
