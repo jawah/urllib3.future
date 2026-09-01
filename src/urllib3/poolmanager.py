@@ -890,7 +890,7 @@ class PoolManager(RequestMethods):
             u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
         )
 
-        if u.scheme is not None and u.scheme.lower() not in ("http", "https"):
+        if u.scheme not in (None, "http", "https"):
             from .contrib.webextensions import load_extension
 
             extension = load_extension(*parse_extension(u.scheme))
