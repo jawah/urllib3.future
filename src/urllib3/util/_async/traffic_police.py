@@ -429,12 +429,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         return None
 
-    def _unset_cursor(self) -> None:
-        current_task = _current_task_or_die()
-
-        if current_task in self._cursors:
-            del self._cursors[current_task]
-
     @property
     def busy(self) -> bool:
         return self._cursor is not None
@@ -542,7 +536,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
     async def kill_cursor(self) -> None:
         """In case there is no other way, a conn or pool may be unusable and should be destroyed.
         This make the scheduler forget about it."""
-        active_cursor = self._cursor
+        current_task = _current_task_or_die()
+        active_cursor = self._cursors.get(current_task)
 
         if active_cursor is None:
             return
@@ -556,7 +551,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 await asyncio.sleep(0)
         else:
             del self._container[active_cursor.obj_id]
-            self._unset_cursor()
+            del self._cursors[current_task]
 
         try:
             await active_cursor.conn_or_pool.close()
@@ -674,6 +669,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
         block: bool = True,
         immediately_unavailable: bool = False,
     ) -> None:
+        current_task = _current_task_or_die()
+
         # clear was called, each conn/pool that gets back must be destroyed appropriately.
         if self._shutdown:
             await self.kill_cursor()
@@ -694,13 +691,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
             # yield control to another task.
             # so we placed a placeholder to avoid
             # another task taking the spot.
-            if self._cursor is not None:
-                del self._registry[self._cursor.obj_id]
-                self._unset_cursor()
+            active_cursor = self._cursors.get(current_task)
+            if active_cursor is not None:
+                del self._registry[active_cursor.obj_id]
+                del self._cursors[current_task]
 
         should_schedule_another_task: bool = False
-        current_task = _current_task_or_die()
-        active_cursor = self._cursor
+        active_cursor = self._cursors.get(current_task)
 
         try:
             obj_id = id(conn_or_pool)
@@ -728,10 +725,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
                             if self._signals.next():
                                 should_schedule_another_task = True
                             else:
-                                self._unset_cursor()
+                                del self._cursors[current_task]
                                 self._container[obj_id] = conn_or_pool
                         else:
-                            self._unset_cursor()
+                            del self._cursors[current_task]
             else:
                 self._registry[obj_id] = conn_or_pool
 
@@ -774,7 +771,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
     ) -> T | None:
         conn_or_pool = None
 
-        if self._cursor is not None:
+        current_task = _current_task_or_die()
+
+        if current_task in self._cursors:
             raise AtomicTraffic(
                 "One connection/pool active per task at a given time. "
                 "Call release prior to calling this method."
@@ -793,8 +792,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     block=block,
                 )
                 return None
-
-        current_task = _current_task_or_die()
 
         if self._container:
             if non_saturated_only:
@@ -974,13 +971,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             swap_made = True
 
-            active_cursor = self._cursor
+            current_task = _current_task_or_die()
+            active_cursor = self._cursors.get(current_task)
 
             if (
                 active_cursor is not None
             ):  # only allowed in tests, should never occur in real conditions.
                 del self._registry[active_cursor.obj_id]
-                self._unset_cursor()
+                del self._cursors[current_task]
 
             await self.put(
                 swappable_conn_or_pool,
@@ -1117,8 +1115,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
             else:
                 # simulate reentrant lock/borrow
                 # get_response PM -> get_response HPM -> read R
-                if self._cursor is not None:
-                    active_cursor = self._cursor
+                active_cursor = self._cursor
+                if active_cursor is not None:
                     active_cursor.depth += 1
                     obj_id, conn_or_pool = (
                         active_cursor.obj_id,
@@ -1157,7 +1155,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 await asyncio.sleep(0)
 
     def release(self) -> bool:
-        active_cursor = self._cursor
+        current_task = _current_task_or_die()
+        active_cursor = self._cursors.get(current_task)
         cursor_transferred: bool = False
         if active_cursor is not None:
             active_cursor.depth -= 1
@@ -1169,9 +1168,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
                         self._container[active_cursor.obj_id] = (
                             active_cursor.conn_or_pool
                         )
-                        self._unset_cursor()
+                        del self._cursors[current_task]
                 else:
-                    self._unset_cursor()
+                    del self._cursors[current_task]
 
         return cursor_transferred
 
@@ -1200,11 +1199,12 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             self._map_clear(conn_or_pool)
 
-        active_cursor = self._cursor
+        current_task = _current_task_or_die()
+        active_cursor = self._cursors.get(current_task)
 
         if active_cursor is not None:
             if active_cursor.obj_id in planned_removal:
-                self._unset_cursor()
+                del self._cursors[current_task]
 
     def qsize(self) -> int:
         return len(self._container)
