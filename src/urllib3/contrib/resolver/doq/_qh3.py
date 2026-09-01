@@ -133,7 +133,9 @@ class QUICResolver(PlainResolver):
         self._dgram_gro_enabled: bool = _sock_has_gro(self._socket)
         self._dgram_gso_enabled: bool = _sock_has_gso(self._socket)
 
-        self._quic.connect((self._server, self._port), monotonic())
+        self._peer_addr = self._socket.getpeername()
+
+        self._quic.connect(self._peer_addr, monotonic())
         self.__exchange_until(HandshakeCompleted, receive_first=False)
 
         self._terminated: bool = False
@@ -584,11 +586,9 @@ class QUICResolver(PlainResolver):
 
                     if isinstance(data_in, list):
                         for gro_segment in data_in:
-                            quic.receive_datagram(
-                                gro_segment, (self._server, self._port), now
-                            )
+                            quic.receive_datagram(gro_segment, self._peer_addr, now)
                     else:
-                        quic.receive_datagram(data_in, (self._server, self._port), now)
+                        quic.receive_datagram(data_in, self._peer_addr, now)
 
                     while True:
                         now = monotonic()

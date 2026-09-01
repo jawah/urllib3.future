@@ -137,6 +137,8 @@ class QUICResolver(PlainResolver):
         # DNS over QUIC mandate the size-prefix (unsigned int, 2b)
         self._rfc1035_prefix_mandated = True
 
+        self._peer_addr: tuple[str, int] | None = None
+
         # DoQ transactions are correlated by QUIC stream, never by DNS ID.
         self._pending: dict[int, DomainNameServerQuery] = {}
         self._completed: dict[int, DomainNameServerReturn] = {}
@@ -187,7 +189,6 @@ class QUICResolver(PlainResolver):
     async def _connect(self) -> None:
         assert self.server is not None
         self._quic = QuicConnection(configuration=self._configuration)
-        self._quic.connect((self._server, self._port), monotonic())
         self._socket = await SystemResolver().create_connection(
             (self.server, self.port or 853),
             timeout=self._timeout,
@@ -195,6 +196,8 @@ class QUICResolver(PlainResolver):
             socket_options=None,
             socket_kind=self._socket_type,
         )
+        self._peer_addr = self._socket.getpeername()
+        self._quic.connect(self._peer_addr, monotonic())
         try:
             await self.__exchange_until(HandshakeCompleted, receive_first=False)
         except BaseException:
@@ -600,12 +603,10 @@ class QUICResolver(PlainResolver):
                     now = monotonic()
 
                     if not isinstance(data_in, list):
-                        quic.receive_datagram(data_in, (self._server, self._port), now)
+                        quic.receive_datagram(data_in, self._peer_addr, now)
                     else:
                         for gro_segment in data_in:
-                            quic.receive_datagram(
-                                gro_segment, (self._server, self._port), now
-                            )
+                            quic.receive_datagram(gro_segment, self._peer_addr, now)
 
                     while True:
                         datagrams = quic.datagrams_to_send(now)
