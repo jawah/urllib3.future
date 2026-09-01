@@ -1075,23 +1075,28 @@ class HfaceBackend(BaseBackend):
                         protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
-                        for udp_gro_segment in data_in:
-                            if data_in_len_from is None:
-                                data_in_len += len(udp_gro_segment)
+                        if (
+                            data_in_len_from is None
+                            and maximal_data_in_read is not None
+                        ):
+                            data_in_len += sum(map(len, data_in))
 
-                            try:
-                                protocol.bytes_received(udp_gro_segment)
-                            except _proto_exc as e:
-                                if hasattr(e, "expected_length") and hasattr(
-                                    e, "actual_length"
-                                ):
-                                    raise IncompleteRead(
-                                        partial=e.actual_length,
-                                        expected=e.expected_length,
-                                    ) from e  # Defensive:
-                                raise ProtocolError(e) from e  # Defensive:
+                        try:
+                            protocol.many_bytes_received(data_in)  # type: ignore[union-attr]
+                        except _proto_exc as e:
+                            if hasattr(e, "expected_length") and hasattr(
+                                e, "actual_length"
+                            ):
+                                raise IncompleteRead(
+                                    partial=e.actual_length,
+                                    expected=e.expected_length,
+                                ) from e  # Defensive:
+                            raise ProtocolError(e) from e  # Defensive:
                     else:
-                        if data_in_len_from is None:
+                        if (
+                            data_in_len_from is None
+                            and maximal_data_in_read is not None
+                        ):
                             data_in_len += len(data_in)
 
                         try:
@@ -1247,7 +1252,7 @@ class HfaceBackend(BaseBackend):
                     and data_in_len >= maximal_data_in_read
                 )
 
-                if (event_type and isinstance(event, event_type)) or target_cap_reached:
+                if isinstance(event, event_type) or target_cap_reached:
                     # if event type match, make sure it is the latest one
                     # simply put, end_stream should be True.
                     if (
@@ -1303,14 +1308,13 @@ class HfaceBackend(BaseBackend):
         skip_accept_encoding: bool = False,
     ) -> None:
         """Internally fhace translate this into what putrequest does. e.g. initial trame."""
-        self.__headers = []
         self.__expected_body_length = None
         self.__remaining_body_length = None
         self.__legacy_host_entry = None
         self.__authority_bit_set = False
         self.__protocol_bit_set = False
 
-        self._start_last_request = datetime.now(tz=timezone.utc)
+        self._start_last_request = datetime.now(timezone.utc)
 
         if self._tunnel_host is not None:
             host, port = self._tunnel_host, self._tunnel_port

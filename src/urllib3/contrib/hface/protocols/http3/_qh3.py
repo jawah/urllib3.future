@@ -244,7 +244,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._quic.reset_stream(stream_id, error_code)
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
-        return self._events.popleft(stream_id=stream_id)
+        return self._events.popleft(stream_id)
 
     def has_pending_event(
         self,
@@ -261,6 +261,23 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def bytes_received(self, data: bytes) -> None:
         quic = self._quic
         quic.receive_datagram(data, self._remote_address, now=monotonic())
+        self._fetch_events()
+
+        remote_max = quic._remote_max_stream_data_bidi_remote
+
+        if remote_max and remote_max != self._max_frame_size:
+            self._max_frame_size = remote_max
+
+    def many_bytes_received(self, data: list[bytes]) -> None:
+        quic = self._quic
+        receive_many_datagrams = getattr(quic, "receive_many_datagrams", None)
+
+        if receive_many_datagrams is None:
+            for datagram in data:
+                self.bytes_received(datagram)
+            return
+
+        receive_many_datagrams(data, self._remote_address, now=monotonic())
         self._fetch_events()
 
         remote_max = quic._remote_max_stream_data_bidi_remote
