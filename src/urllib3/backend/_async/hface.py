@@ -527,13 +527,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                 self._protocol = HTTPProtocolFactory.new(
                     HTTP3Protocol,  # type: ignore[type-abstract]
-                    remote_address=(
-                        self.__custom_tls_settings.assert_hostname
-                        if self.__custom_tls_settings.assert_hostname
-                        else server,
-                        int(port),
-                    ),
-                    server_name=server,
+                    remote_address=self.sock.getpeername(),
+                    server_name=self.__custom_tls_settings.assert_hostname if self.__custom_tls_settings.assert_hostname else server,
                     tls_config=self.__custom_tls_settings,
                 )
 
