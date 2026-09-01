@@ -107,8 +107,9 @@ def headers_from_response(
     Generates from pseudo (colon) headers from a response line.
     """
     return [
-        (b":status", str(response.status_code).encode("ascii"))
-    ] + response.headers.raw_items()
+        (b":status", str(response.status_code).encode("ascii")),
+        *response.headers.raw_items(),
+    ]
 
 
 class RelaxConnectionState(ConnectionState):
@@ -249,7 +250,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
         return data
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
-        return self._events.popleft(stream_id=stream_id)
+        return self._events.popleft(stream_id)
 
     def has_pending_event(
         self,
@@ -280,7 +281,17 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
             ev_type = h11_event.__class__
 
-            if h11_event is h11.NEED_DATA or h11_event is h11.PAUSED:
+            if ev_type is h11.Data:
+                # officially h11 typed data as "bytes"
+                # but we... found that it store bytearray sometime.
+                payload = h11_event.data  # type: ignore[union-attr]
+                a(
+                    DataReceived(
+                        self._current_stream_id,
+                        bytes(payload) if payload.__class__ is bytearray else payload,
+                    )
+                )
+            elif h11_event is h11.NEED_DATA or h11_event is h11.PAUSED:
                 if h11.MUST_CLOSE == conn.their_state:
                     a(self._connection_terminated())
                 else:
@@ -297,16 +308,6 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                     EarlyHeadersReceived(
                         stream_id=self._current_stream_id,
                         headers=headers_from_response(h11_event),  # type: ignore[arg-type]
-                    )
-                )
-            elif ev_type is h11.Data:
-                # officially h11 typed data as "bytes"
-                # but we... found that it store bytearray sometime.
-                payload = h11_event.data  # type: ignore[union-attr]
-                a(
-                    DataReceived(
-                        self._current_stream_id,
-                        bytes(payload) if payload.__class__ is bytearray else payload,
                     )
                 )
             elif ev_type is h11.EndOfMessage:

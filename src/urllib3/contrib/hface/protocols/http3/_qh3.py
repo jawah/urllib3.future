@@ -377,22 +377,24 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> Event | None:
         event_type = h3_event.__class__
 
-        if event_type is h3_events.HeadersReceived:
-            if h3_event.stream_ended:  # type: ignore[attr-defined]
-                self._open_stream_count -= 1
-            return HeadersReceived(
-                h3_event.stream_id,  # type: ignore[attr-defined]
-                h3_event.headers,  # type: ignore[attr-defined]
-                h3_event.stream_ended,  # type: ignore[attr-defined]
-            )
-
         if event_type is h3_events.DataReceived:
-            if h3_event.stream_ended:  # type: ignore[attr-defined]
+            stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
+            if stream_ended:
                 self._open_stream_count -= 1
             return DataReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.data,  # type: ignore[attr-defined]
-                h3_event.stream_ended,  # type: ignore[attr-defined]
+                stream_ended,
+            )
+
+        if event_type is h3_events.HeadersReceived:
+            stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
+            if stream_ended:
+                self._open_stream_count -= 1
+            return HeadersReceived(
+                h3_event.stream_id,  # type: ignore[attr-defined]
+                h3_event.headers,  # type: ignore[attr-defined]
+                stream_ended,
             )
 
         if event_type is h3_events.InformationalHeadersReceived:
