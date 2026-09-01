@@ -535,16 +535,12 @@ class HfaceBackend(BaseBackend):
             elif self._svn == HttpVersion.h3:
                 assert self.__custom_tls_settings is not None
 
-                if self.__alt_authority is not None:
-                    _, port = self.__alt_authority
-                    server = self.host
-                else:
-                    server, port = self.host, self.port
-
                 self._protocol = HTTPProtocolFactory.new(
                     HTTP3Protocol,  # type: ignore[type-abstract]
                     remote_address=self.sock.getpeername(),
-                    server_name=self.__custom_tls_settings.assert_hostname if self.__custom_tls_settings.assert_hostname else server,
+                    server_name=self.__custom_tls_settings.assert_hostname
+                    if self.__custom_tls_settings.assert_hostname
+                    else self.host,
                     tls_config=self.__custom_tls_settings,
                 )
 
