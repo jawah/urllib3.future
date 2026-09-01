@@ -1197,9 +1197,9 @@ class HTTPResponse(io.IOBase):
             if not self._decoded_buffer:
                 if (
                     decoder is None
-                    and amt is not None
                     and decode_content
                     and isinstance(self._fp, LowLevelResponse)
+                    and (amt is not None or not cache_content)
                 ):
                     return data
 
