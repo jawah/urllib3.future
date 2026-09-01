@@ -262,24 +262,24 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
 
     def __setitem__(self, key: str, val: str) -> None:
         # avoid a bytes/str comparison by decoding before httplib
-        self._container[_lower_wrapper(key)] = [key, val]
+        self._container[key.lower()] = [key, val]
 
     def __getitem__(self, key: str) -> str:
         if isinstance(key, bytes):
             key = key.decode("latin-1")
-        val = self._container[_lower_wrapper(key)]
+        val = self._container[key.lower()]
         return ", ".join(val[1:])
 
     def __delitem__(self, key: str) -> None:
         if isinstance(key, bytes):
             key = key.decode("latin-1")
-        del self._container[_lower_wrapper(key)]
+        del self._container[key.lower()]
 
     def __contains__(self, key: object) -> bool:
         if isinstance(key, bytes):
             key = key.decode("latin-1")
         if isinstance(key, str):
-            return _lower_wrapper(key) in self._container
+            return key.lower() in self._container
         return False
 
     def setdefault(self, key: str, default: str = "") -> str:
@@ -292,8 +292,8 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         else:
             other_as_http_header_dict = type(self)(maybe_constructable)
 
-        return {_lower_wrapper(k): v for k, v in self.itermerged()} == {
-            _lower_wrapper(k): v for k, v in other_as_http_header_dict.itermerged()
+        return {k.lower(): v for k, v in self.itermerged()} == {
+            k.lower(): v for k, v in other_as_http_header_dict.itermerged()
         }
 
     def __ne__(self, other: object) -> bool:
@@ -332,7 +332,7 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         >>> list(headers.items())
         [('foo', 'bar, baz, quz')]
         """
-        key_lower = _lower_wrapper(key)
+        key_lower = key.lower()
         new_vals = [key, val]
         # Keep the common case aka no item present as fast as possible
         vals = self._container.setdefault(key_lower, new_vals)
@@ -390,7 +390,7 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         if isinstance(key, bytes):
             key = key.decode("latin-1")
         try:
-            vals = self._container[_lower_wrapper(key)]
+            vals = self._container[key.lower()]
         except KeyError:
             if default is _Sentinel.not_passed:
                 # _DT is unbound; empty list is instance of List[str]
@@ -414,9 +414,8 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
         return f"{type(self).__name__}({dict(self.itermerged())})"
 
     def _copy_from(self, other: HTTPHeaderDict) -> None:
-        for key in other:
-            val = other.getlist(key)
-            self._container[_lower_wrapper(key)] = [key, *val]
+        for key, val in other._container.items():
+            self._container[key] = val.copy()
 
     def copy(self) -> HTTPHeaderDict:
         clone = type(self)()
@@ -425,15 +424,13 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
 
     def iteritems(self) -> typing.Iterator[tuple[str, str]]:
         """Iterate over all header lines, including duplicate ones."""
-        for key in self:
-            vals = self._container[_lower_wrapper(key)]
+        for vals in self._container.values():
             for val in vals[1:]:
                 yield vals[0], val
 
     def itermerged(self) -> typing.Iterator[tuple[str, str]]:
         """Iterate over all headers, merging duplicate ones together."""
-        for key in self:
-            val = self._container[_lower_wrapper(key)]
+        for val in self._container.values():
             yield val[0], ", ".join(val[1:])
 
     def items(self) -> HTTPHeaderDictItemView:  # type: ignore[override]
@@ -441,7 +438,7 @@ class HTTPHeaderDict(typing.MutableMapping[str, str]):
 
     def _has_value_for_header(self, header_name: str, potential_value: str) -> bool:
         if header_name in self:
-            return potential_value in self._container[_lower_wrapper(header_name)][1:]
+            return potential_value in self._container[header_name.lower()][1:]
         return False
 
 
@@ -520,26 +517,35 @@ class GroupedDict(typing.Dict[_GK, _GV]):
             self._index.setdefault(self._key_fn(v), set()).add(k)
 
     def __setitem__(self, key: _GK, value: _GV) -> None:
-        old = super().get(key, _Sentinel.not_passed)
+        old = dict.get(self, key, _Sentinel.not_passed)
         if old is not _Sentinel.not_passed:
             old_h = self._key_fn(old)
             new_h = self._key_fn(value)
             if old_h == new_h:
-                super().__setitem__(key, value)
+                dict.__setitem__(self, key, value)
                 return
             bucket = self._index.get(old_h)
             if bucket is not None:
                 bucket.discard(key)
                 if not bucket:
                     del self._index[old_h]
-            super().__setitem__(key, value)
-            self._index.setdefault(new_h, set()).add(key)
+            dict.__setitem__(self, key, value)
+            bucket = self._index.get(new_h)
+            if bucket is None:
+                self._index[new_h] = {key}
+            else:
+                bucket.add(key)
             return
-        super().__setitem__(key, value)
-        self._index.setdefault(self._key_fn(value), set()).add(key)
+        dict.__setitem__(self, key, value)
+        value_h = self._key_fn(value)
+        bucket = self._index.get(value_h)
+        if bucket is None:
+            self._index[value_h] = {key}
+        else:
+            bucket.add(key)
 
     def __delitem__(self, key: _GK) -> None:
-        old = super().pop(key)
+        old = dict.pop(self, key)
         old_h = self._key_fn(old)
         bucket = self._index.get(old_h)
         if bucket is not None:
