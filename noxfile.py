@@ -20,6 +20,8 @@ import nox
 
 
 _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
+
+
 @contextlib.contextmanager
 def traefik_boot(
     session: nox.Session, *args: str, stop_on_exit: bool = True
