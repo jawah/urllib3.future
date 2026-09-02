@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import json
 import os
 import platform
 import random
@@ -10,10 +8,8 @@ import shutil
 import string
 import subprocess
 import sys
-import tempfile
 import time
 import typing
-import zipfile
 from http.client import RemoteDisconnected
 from pathlib import Path
 from socket import timeout as SocketTimeout
@@ -24,91 +20,6 @@ import nox
 
 
 _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
-_QH3_RUN_ID = 33594055867
-
-
-def install_unreleased_qh3(session: nox.Session) -> None:
-    token = (
-        os.environ.get("QH3_ARTIFACT_TOKEN")
-        or os.environ.get("GH_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-    )
-    if token is None:
-        session.warn("No GitHub token available; using the published qh3 wheel")
-        return
-
-    target = {
-        "Darwin": "macos-universal2",
-        "Linux": "linux-x86_64-manylinux2014",
-        "Windows": "windows-x64",
-    }.get(platform.system())
-    if target is None or platform.machine().lower() not in {"amd64", "x86_64"}:
-        return
-
-    implementation, python_version, gil_disabled = session.run(  # type: ignore[union-attr]
-        "python",
-        "-c",
-        "import platform, sys; "
-        "print(platform.python_implementation(), "
-        "f'{sys.version_info.major}.{sys.version_info.minor}', "
-        "int(hasattr(sys, '_is_gil_enabled') and not sys._is_gil_enabled()))",
-        silent=True,
-    ).split()
-
-    if implementation == "PyPy":
-        wheel_build = f"pypy-{python_version}"
-    elif gil_disabled == "1":
-        wheel_build = f"{python_version}t"
-    else:
-        # The regular CPython wheel uses the stable ABI from Python 3.7 onward.
-        wheel_build = "3.10"
-
-    artifact_name = f"wheels-{target}-{wheel_build}"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "urllib3.future-nox",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    metadata_url = (
-        "https://api.github.com/repos/jawah/qh3/actions/runs/"
-        f"{_QH3_RUN_ID}/artifacts?name={artifact_name}"
-    )
-
-    metadata_request = Request(metadata_url, headers=headers)
-    metadata_request.add_header("Authorization", f"Bearer {token}")
-    with urlopen(metadata_request) as response:
-        artifacts = json.load(response)["artifacts"]
-
-    if len(artifacts) != 1:
-        session.error(f"Unable to find qh3 artifact {artifact_name!r}")
-
-    artifact = artifacts[0]
-    expected_digest = artifact["digest"].split(":", 1)[1]
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        archive_path = Path(tmp_dir) / f"{artifact_name}.zip"
-        request = Request(artifact["archive_download_url"], headers=headers)
-        request.add_unredirected_header("Authorization", f"Bearer {token}")
-        with urlopen(request) as response:
-            with archive_path.open("wb") as archive:
-                shutil.copyfileobj(response, archive)
-
-        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-        if digest != expected_digest:
-            session.error(f"Checksum mismatch for qh3 artifact {artifact_name!r}")
-
-        with zipfile.ZipFile(archive_path) as archive:
-            wheels = [name for name in archive.namelist() if name.endswith(".whl")]
-            if len(wheels) != 1:
-                session.error(
-                    f"Expected one wheel in qh3 artifact {artifact_name!r}, "
-                    f"found {len(wheels)}"
-                )
-            wheel = Path(archive.extract(wheels[0], tmp_dir))
-
-        session.install(str(wheel), "--force-reinstall", silent=False)
-
-
 @contextlib.contextmanager
 def traefik_boot(
     session: nox.Session, *args: str, stop_on_exit: bool = True
@@ -326,8 +237,6 @@ def tests_impl(
             "from urllib3.contrib.anytls import ssl, BACKEND; "
             "print(BACKEND, ssl.OPENSSL_VERSION)",
         )
-
-        install_unreleased_qh3(session)
 
         # Inspired from https://hynek.me/articles/ditch-codecov-python/
         # We use parallel mode and then combine in a later CI step
