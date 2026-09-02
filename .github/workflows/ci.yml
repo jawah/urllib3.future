@@ -7,6 +7,7 @@ on:
   pull_request:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -243,6 +244,7 @@ jobs:
         run: ${{ contains(matrix.os, 'mac') && 'sudo -E' || '' }} ./ci/run_tests.sh
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
+          QH3_ARTIFACT_TOKEN: ${{ secrets.QH3_ARTIFACT_TOKEN || github.token }}  # zizmor: ignore[secrets-outside-env]
           NOX_SESSION: ${{ matrix.nox-session }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
           TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && steps.colima-ip.outputs.autodiscover || '127.0.0.1' }}
