@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sys
 import platform
 import random
 import shutil
 import string
 import subprocess
+import sys
 import time
 import typing
 from http.client import RemoteDisconnected
@@ -210,6 +210,7 @@ def tests_impl(
     extras: str = "socks,brotli,zstd,ws",
     byte_string_comparisons: bool = False,
     tracemalloc_enable: bool = False,
+    xdist_enable: bool = True,
 ) -> None:
     # Install deps and the package itself.
     session.install("-U", "pip", "setuptools", silent=False)
@@ -246,8 +247,11 @@ def tests_impl(
             *(("-bb",) if byte_string_comparisons else ()),
             "-m",
             "pytest",
-            "-n",
-            "2" if os.environ.get("CI") else "4",
+            *(
+                ("-n", "2" if os.environ.get("CI") else "4")
+                if xdist_enable
+                else ("-n", "0")
+            ),
             "--cov",
             "urllib3",
             "-v",
@@ -332,7 +336,7 @@ def test_utls(session: nox.Session) -> None:
 
 @nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"])
 def tracemalloc(session: nox.Session) -> None:
-    tests_impl(session, tracemalloc_enable=True)
+    tests_impl(session, tracemalloc_enable=True, xdist_enable=False)
 
 
 @nox.session(python=["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"])

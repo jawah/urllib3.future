@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import contextlib
 import os
 import socket
@@ -435,6 +436,42 @@ def requires_http3(for_async: bool = False) -> None:
 
     if _TARGET_METHOD() is False:
         pytest.skip("Test requires HTTP/3 support")
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_terminal_summary(
+    terminalreporter: typing.Any,
+    exitstatus: int,
+    config: pytest.Config,
+) -> typing.Generator[None, None, None]:
+    """Fold skipped tests by reason instead of source location."""
+    reportchars = terminalreporter.reportchars
+    terminalreporter.reportchars = reportchars.replace("s", "")
+
+    try:
+        yield
+    finally:
+        terminalreporter.reportchars = reportchars
+        skipped = terminalreporter.stats.get("skipped", [])
+        reasons: Counter[str] = Counter()
+
+        for report in skipped:
+            longrepr = report.longrepr
+            if isinstance(longrepr, tuple) and len(longrepr) == 3:
+                reason = str(longrepr[2])
+            else:
+                reason = str(longrepr)
+
+            if reason.startswith("Skipped: "):
+                reason = reason[len("Skipped: ") :]
+            reasons[reason] += 1
+
+        if reasons:
+            terminalreporter.write_sep(
+                "=", "skipped tests by reason", yellow=True, bold=True
+            )
+            for reason, count in reasons.most_common():
+                terminalreporter.write_line(f"SKIPPED [{count}] {reason}", yellow=True)
 
 
 if os.environ.get("XDIST_DEBUG"):

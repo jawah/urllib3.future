@@ -259,8 +259,10 @@ class HTTPProtocol(metaclass=ABCMeta):
 
         :return: an iterator that unpack "next_event" until exhausted.
         """
+        next_event = self.next_event
+
         while True:
-            ev = self.next_event(stream_id=stream_id)
+            ev = next_event(stream_id)
 
             if ev is None:
                 break
@@ -309,6 +311,11 @@ class HTTPOverQUICProtocol(HTTPProtocol, OverQUICProtocol, metaclass=ABCMeta):
     Abstract base class for HTTP/3 protocols.
     Extends :class:`.HTTPProtocol`.
     """
+
+    @abstractmethod
+    def many_bytes_received(self, data: list[bytes]) -> None:
+        """Process a batch of datagrams received by a single socket read."""
+        raise NotImplementedError
 
 
 class HTTP1Protocol(HTTPOverTCPProtocol, metaclass=ABCMeta):

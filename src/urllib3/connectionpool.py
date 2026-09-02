@@ -637,57 +637,60 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                             if completed_count >= len(challengers):
                                 event.set()
 
-                    tpe = ThreadPoolExecutor(max_workers=max_task)
-
                     tasks: list[Future[None]] = []
+                    tpe = ThreadPoolExecutor(max_workers=max_task)
+                    try:
+                        for challenger in challengers:
+                            task = tpe.submit(challenger.connect)
+                            task.add_done_callback(_happy_eyeballs_completed)
 
-                    for challenger in challengers:
-                        task = tpe.submit(challenger.connect)
-                        task.add_done_callback(_happy_eyeballs_completed)
+                            tasks.append(task)
+                    except RuntimeError:
+                        pass
+                    else:
+                        event.wait(timeout=override_timeout + 1.0)
 
-                        tasks.append(task)
+                        for task in tasks:
+                            if task == winning_task:
+                                continue
 
-                    event.wait(timeout=override_timeout + 1.0)
+                            associated_conn = challengers[tasks.index(task)]
 
-                    for task in tasks:
-                        if task == winning_task:
-                            continue
+                            if task.running():
+                                try:
+                                    sock_cursor = associated_conn._resolver._sock_cursor
+                                    if sock_cursor is not None:
+                                        sock_cursor.shutdown(0)
+                                        sock_cursor.close()
+                                    elif associated_conn.sock:
+                                        associated_conn.sock.shutdown(0)
+                                        associated_conn.sock.close()
+                                        associated_conn.sock = None
+                                except OSError:
+                                    pass
+                                associated_conn.close()
+                                task.cancel()
+                            else:
+                                associated_conn.close()
 
-                        associated_conn = challengers[tasks.index(task)]
+                        if winning_task is None:
+                            within_delay_msg: str = (
+                                f" within {override_timeout}s"
+                                if override_timeout
+                                else ""
+                            )
+                            raise NewConnectionError(
+                                challengers[0],
+                                f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs for {self.host}:{self.port}{within_delay_msg}",
+                            ) from tasks[0].exception()
 
-                        if task.running():
-                            try:
-                                sock_cursor = associated_conn._resolver._sock_cursor
-                                if sock_cursor is not None:
-                                    sock_cursor.shutdown(0)
-                                    sock_cursor.close()
-                                elif associated_conn.sock:
-                                    associated_conn.sock.shutdown(0)
-                                    associated_conn.sock.close()
-                                    associated_conn.sock = None
-                            except OSError:
-                                pass
-                            associated_conn.close()
-                            task.cancel()
-                        else:
-                            associated_conn.close()
+                        conn = challengers[tasks.index(winning_task)]
 
-                    if winning_task is None:
-                        within_delay_msg: str = (
-                            f" within {override_timeout}s" if override_timeout else ""
-                        )
-                        raise NewConnectionError(
-                            challengers[0],
-                            f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs for {self.host}:{self.port}{within_delay_msg}",
-                        ) from tasks[0].exception()
+                        # we have to replace the resolution latency metric
+                        if conn.conn_info:
+                            conn.conn_info.resolution_latency = delta_post_resolve
 
-                    conn = challengers[tasks.index(winning_task)]
-
-                    # we have to replace the resolution latency metric
-                    if conn.conn_info:
-                        conn.conn_info.resolution_latency = delta_post_resolve
-
-                    tpe.shutdown(wait=False)
+                        tpe.shutdown(wait=False)
                 else:
                     log.debug(
                         "Happy-Eyeball Ineligible %s:%s",
@@ -2382,59 +2385,62 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                             if completed_count >= len(challengers):
                                 event.set()
 
-                    tpe = ThreadPoolExecutor(max_workers=max_task)
-
                     tasks: list[Future[None]] = []
+                    tpe = ThreadPoolExecutor(max_workers=max_task)
+                    try:
+                        for challenger in challengers:
+                            task = tpe.submit(challenger.connect)
+                            task.add_done_callback(_happy_eyeballs_completed)
 
-                    for challenger in challengers:
-                        task = tpe.submit(challenger.connect)
-                        task.add_done_callback(_happy_eyeballs_completed)
+                            tasks.append(task)
+                    except RuntimeError:
+                        pass
+                    else:
+                        event.wait(timeout=override_timeout + 1.0)
 
-                        tasks.append(task)
+                        for task in tasks:
+                            if task == winning_task:
+                                continue
 
-                    event.wait(timeout=override_timeout + 1.0)
+                            associated_conn = challengers[tasks.index(task)]
 
-                    for task in tasks:
-                        if task == winning_task:
-                            continue
+                            if task.running():
+                                # dangling TCP conn
+                                try:
+                                    sock_cursor = associated_conn._resolver._sock_cursor
+                                    if sock_cursor is not None:
+                                        sock_cursor.shutdown(0)
+                                        sock_cursor.close()
+                                    # dangling UDP conn (they usually stuck later in the process)
+                                    elif associated_conn.sock:
+                                        associated_conn.sock.shutdown(0)
+                                        associated_conn.sock.close()
+                                        associated_conn.sock = None  # ensure it's not used to send close frames
+                                except OSError:
+                                    pass  # ignore any error
+                                associated_conn.close()
+                                task.cancel()
+                            else:
+                                associated_conn.close()
 
-                        associated_conn = challengers[tasks.index(task)]
+                        if winning_task is None:
+                            within_delay_msg: str = (
+                                f" within {override_timeout}s"
+                                if override_timeout
+                                else ""
+                            )
+                            raise NewConnectionError(
+                                challengers[0],
+                                f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs algorithm for {actual_host}:{actual_port}{within_delay_msg}",
+                            ) from tasks[0].exception()
 
-                        if task.running():
-                            # dangling TCP conn
-                            try:
-                                sock_cursor = associated_conn._resolver._sock_cursor
-                                if sock_cursor is not None:
-                                    sock_cursor.shutdown(0)
-                                    sock_cursor.close()
-                                # dangling UDP conn (they usually stuck later in the process)
-                                elif associated_conn.sock:
-                                    associated_conn.sock.shutdown(0)
-                                    associated_conn.sock.close()
-                                    associated_conn.sock = None  # ensure it's not used to send close frames
-                            except OSError:
-                                pass  # ignore any error
-                            associated_conn.close()
-                            task.cancel()
-                        else:
-                            associated_conn.close()
+                        conn = challengers[tasks.index(winning_task)]
 
-                    if winning_task is None:
-                        within_delay_msg: str = (
-                            f" within {override_timeout}s" if override_timeout else ""
-                        )
-                        raise NewConnectionError(
-                            challengers[0],
-                            f"Failed to establish a new connection: No suitable address to connect to using Happy Eyeballs algorithm for {actual_host}:{actual_port}{within_delay_msg}",
-                        ) from tasks[0].exception()
+                        # we have to replace the resolution latency metric
+                        if conn.conn_info:
+                            conn.conn_info.resolution_latency = delta_post_resolve
 
-                    conn = challengers[tasks.index(winning_task)]
-
-                    # we have to replace the resolution latency metric
-                    if conn.conn_info:
-                        conn.conn_info.resolution_latency = delta_post_resolve
-
-                    tpe.shutdown(wait=False)
+                        tpe.shutdown(wait=False)
                 else:
                     log.debug(
                         "Happy-Eyeball Ineligible %s:%s",

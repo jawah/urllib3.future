@@ -242,6 +242,7 @@ TCP_DEFAULT_BLOCKSIZE: int = DEFAULT_BLOCKSIZE
 
 UDP_LINUX_GRO: int = 104
 UDP_LINUX_SEGMENT: int = 103
+UDP_MAX_RECV_BURST: int = 64
 
 # Mozilla TLS recommendations for ciphers
 # General-purpose servers with a variety of clients, recommended for almost all systems.

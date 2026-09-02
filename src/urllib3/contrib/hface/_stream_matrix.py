@@ -93,13 +93,14 @@ class StreamMatrix:
         if self._count == 0:
             return None
 
-        have_global_event: bool = None in self._matrix and bool(self._matrix[None])
+        matrix = self._matrix
+        have_global_event: bool = None in matrix and bool(matrix[None])
         any_stream_event: bool = (
-            bool(self._matrix) if not have_global_event else len(self._matrix) > 1
+            bool(matrix) if not have_global_event else len(matrix) > 1
         )
 
         if stream_id is None and any_stream_event:
-            matrix_dict_iter = self._matrix.__iter__()
+            matrix_dict_iter = matrix.__iter__()
 
             stream_id = next(matrix_dict_iter)
 
@@ -109,23 +110,24 @@ class StreamMatrix:
         if (
             stream_id is not None
             and have_global_event
-            and stream_id in self._matrix
-            and self._matrix[None][0]._id < self._matrix[stream_id][0]._id
+            and stream_id in matrix
+            and matrix[None][0]._id < matrix[stream_id][0]._id
         ):
             stream_id = None
-        elif have_global_event and stream_id not in self._matrix:
+        elif have_global_event and stream_id not in matrix:
             stream_id = None
 
-        if stream_id not in self._matrix:
+        if stream_id not in matrix:
             return None
 
-        ev = self._matrix[stream_id].popleft()
+        stream = matrix[stream_id]
+        ev = stream.popleft()
 
         if ev is not None:
             self._count -= 1
 
-            if stream_id is not None and not self._matrix[stream_id]:
-                del self._matrix[stream_id]
+            if stream_id is not None and not stream:
+                del matrix[stream_id]
                 self._stream_count -= 1
 
         return ev

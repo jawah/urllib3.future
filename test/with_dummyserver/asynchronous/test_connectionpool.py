@@ -593,8 +593,11 @@ class TestConnectionPool(HTTPDummyServerTestCase):
                 preload_content=False,
             )
 
-        assert response.status == 200
-        gzip_decompress.assert_not_called()
+        try:
+            assert response.status == 200
+            gzip_decompress.assert_not_called()
+        finally:
+            await response.close()
 
     async def test_303_redirect_makes_request_lose_body(self) -> None:
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:

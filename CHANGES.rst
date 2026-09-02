@@ -1,3 +1,13 @@
+2.24.906 (2026-09-02)
+=====================
+
+- Support for ``qh3`` v2. This major release of the quic state machine bring a substantial performance
+  improvement. Up to approximately 40% higher throughput in HTTP/3 workloads.
+- Improved overall async performance by 1 to 2% with several micro-optimizations.
+- Fixed unclosed connection in async happy eyeball contestants (resource warning).
+- Fixed crash when happy_eyeballs is enabled on platform that do not support threads. E.g. WASI.
+  Now silently fallback to the sequential algorithm.
+
 2.24.905 (2026-08-28)
 =====================
 

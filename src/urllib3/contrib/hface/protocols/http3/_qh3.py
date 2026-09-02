@@ -244,7 +244,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._quic.reset_stream(stream_id, error_code)
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
-        return self._events.popleft(stream_id=stream_id)
+        return self._events.popleft(stream_id)
 
     def has_pending_event(
         self,
@@ -261,6 +261,23 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def bytes_received(self, data: bytes) -> None:
         quic = self._quic
         quic.receive_datagram(data, self._remote_address, now=monotonic())
+        self._fetch_events()
+
+        remote_max = quic._remote_max_stream_data_bidi_remote
+
+        if remote_max and remote_max != self._max_frame_size:
+            self._max_frame_size = remote_max
+
+    def many_bytes_received(self, data: list[bytes]) -> None:
+        quic = self._quic
+        receive_many_datagrams = getattr(quic, "receive_many_datagrams", None)
+
+        if receive_many_datagrams is None:
+            for datagram in data:
+                self.bytes_received(datagram)
+            return
+
+        receive_many_datagrams(data, self._remote_address, now=monotonic())
         self._fetch_events()
 
         remote_max = quic._remote_max_stream_data_bidi_remote
@@ -360,22 +377,24 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> Event | None:
         event_type = h3_event.__class__
 
-        if event_type is h3_events.HeadersReceived:
-            if h3_event.stream_ended:  # type: ignore[attr-defined]
-                self._open_stream_count -= 1
-            return HeadersReceived(
-                h3_event.stream_id,  # type: ignore[attr-defined]
-                h3_event.headers,  # type: ignore[attr-defined]
-                h3_event.stream_ended,  # type: ignore[attr-defined]
-            )
-
         if event_type is h3_events.DataReceived:
-            if h3_event.stream_ended:  # type: ignore[attr-defined]
+            stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
+            if stream_ended:
                 self._open_stream_count -= 1
             return DataReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.data,  # type: ignore[attr-defined]
-                h3_event.stream_ended,  # type: ignore[attr-defined]
+                stream_ended,
+            )
+
+        if event_type is h3_events.HeadersReceived:
+            stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
+            if stream_ended:
+                self._open_stream_count -= 1
+            return HeadersReceived(
+                h3_event.stream_id,  # type: ignore[attr-defined]
+                h3_event.headers,  # type: ignore[attr-defined]
+                stream_ended,
             )
 
         if event_type is h3_events.InformationalHeadersReceived:
@@ -396,25 +415,30 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         # accessing our QUIC loss detector
         # yes, we now, it's private, and we
         # also maintain qh3, so we're aware.
-        loss = self._quic._loss
+        if hasattr(self._quic, "_loss"):
+            loss = self._quic._loss
 
-        # At least 2 ack-eliciting packets outstanding.
-        # RFC 9000 section 13.2.1
-        # - ACK after the peer receives <= 2 ack-eliciting packets.
-        # - ACK within the peer's negotiated max_ack_delay (<= 25 ms by default).
-        n_outstanding = sum(s.ack_eliciting_in_flight for s in loss.spaces)
+            # At least 2 ack-eliciting packets outstanding.
+            # RFC 9000 section 13.2.1
+            # - ACK after the peer receives <= 2 ack-eliciting packets.
+            # - ACK within the peer's negotiated max_ack_delay (<= 25 ms by default).
+            n_outstanding = sum(s.ack_eliciting_in_flight for s in loss.spaces)
 
-        if n_outstanding >= 2:
-            return True
-
-        now = monotonic()
-
-        # Or max_ack_delay elapsed since the last ack-eliciting send.
-        # Yes, we know, it's approximative, borderline heuristic
-        if n_outstanding >= 1:
-            deadline = loss._time_of_last_sent_ack_eliciting_packet + loss.max_ack_delay
-            if now >= deadline:
+            if n_outstanding >= 2:
                 return True
+
+            now = monotonic()
+
+            # Or max_ack_delay elapsed since the last ack-eliciting send.
+            # Yes, we know, it's approximative, borderline heuristic
+            if n_outstanding >= 1:
+                deadline = (
+                    loss._time_of_last_sent_ack_eliciting_packet + loss.max_ack_delay
+                )
+                if now >= deadline:
+                    return True
+        elif hasattr(self._quic, "should_wait_for_ack"):
+            return self._quic.should_wait_for_ack(monotonic())
 
         return False
 

@@ -182,10 +182,10 @@ def _parse_gro_segment_size(ancdata: list[tuple[int, int, bytes]]) -> int | None
         if cmsg_level == _SOL_UDP and cmsg_type == UDP_LINUX_GRO:
             n = len(cmsg_data)
             if n >= _GRO_CMSG.size:
-                return int(_GRO_CMSG.unpack_from(cmsg_data, 0)[0])
+                return _GRO_CMSG.unpack_from(cmsg_data, 0)[0]  # type: ignore[no-any-return]
             if n >= _UINT16.size:
                 # Older kernels / unusual builds emit a u16 here.
-                return int(_UINT16.unpack_from(cmsg_data, 0)[0])
+                return _UINT16.unpack_from(cmsg_data, 0)[0]  # type: ignore[no-any-return]
             return 0
     return None
 

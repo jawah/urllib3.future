@@ -11,6 +11,28 @@ from ..conftest import ServerConfig
 
 
 class TestHappyEyeballsOverHTTPS:
+    def test_fallback_without_threads(
+        self, ipv6_san_server: ServerConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def submit_raises(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(
+            "urllib3.connectionpool.ThreadPoolExecutor.submit", submit_raises
+        )
+
+        with PoolManager(
+            happy_eyeballs=True,
+            resolver="in-memory://default?hosts=dummy.io:127.0.0.1,dummy.io:[::1]",
+            cert_reqs=0,
+        ) as pm:
+            with pytest.warns(InsecureRequestWarning):
+                response = pm.urlopen(
+                    "GET", f"https://dummy.io:{ipv6_san_server.port}/"
+                )
+
+        assert response.status == 200
+
     def test_dual_stack(self, ipv6_san_server: ServerConfig) -> None:
         with PoolManager(
             happy_eyeballs=True,
@@ -198,6 +220,24 @@ class TestHappyEyeballsOverHTTPS:
 
 
 class TestHappyEyeballsOverHTTP:
+    def test_fallback_without_threads(
+        self, ipv6_plain_server: ServerConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def submit_raises(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(
+            "urllib3.connectionpool.ThreadPoolExecutor.submit", submit_raises
+        )
+
+        with PoolManager(
+            happy_eyeballs=True,
+            resolver="in-memory://default?hosts=dummy.io:127.0.0.1,dummy.io:[::1]",
+        ) as pm:
+            response = pm.urlopen("GET", f"http://dummy.io:{ipv6_plain_server.port}/")
+
+        assert response.status == 200
+
     def test_dual_stack(self, ipv6_plain_server: ServerConfig) -> None:
         with PoolManager(
             happy_eyeballs=True,

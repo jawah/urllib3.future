@@ -14,6 +14,7 @@ from .._constant import (
     DEFAULT_BLOCKSIZE,
     DEFAULT_KEEPALIVE_DELAY,
     UDP_DEFAULT_BLOCKSIZE,
+    UDP_MAX_RECV_BURST,
     responses,
     HTTP1_ONLY_HEADERS,
     DEFAULT_BACKGROUND_WATCH_WINDOW,
@@ -54,7 +55,7 @@ from ..exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from ..util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ..util import parse_alt_svc, resolve_cert_reqs, parse_url, wait_for_read
 from ..util.socket_state import enable_keepalive
 from ..util.sub_timeout import SubTimeout
 from ._base import (
@@ -535,21 +536,12 @@ class HfaceBackend(BaseBackend):
             elif self._svn == HttpVersion.h3:
                 assert self.__custom_tls_settings is not None
 
-                if self.__alt_authority is not None:
-                    _, port = self.__alt_authority
-                    server = self.host
-                else:
-                    server, port = self.host, self.port
-
                 self._protocol = HTTPProtocolFactory.new(
                     HTTP3Protocol,  # type: ignore[type-abstract]
-                    remote_address=(
-                        self.__custom_tls_settings.assert_hostname
-                        if self.__custom_tls_settings.assert_hostname
-                        else server,
-                        int(port),
-                    ),
-                    server_name=server,
+                    remote_address=self.sock.getpeername(),
+                    server_name=self.__custom_tls_settings.assert_hostname
+                    if self.__custom_tls_settings.assert_hostname
+                    else self.host,
                     tls_config=self.__custom_tls_settings,
                 )
 
@@ -1028,6 +1020,27 @@ class HfaceBackend(BaseBackend):
                             data_in = sync_recv_gro(sock, blocksize)
                         else:
                             data_in = sock.recv(blocksize)
+                        if is_quic and data_in:
+                            datagrams = (
+                                data_in if isinstance(data_in, list) else [data_in]
+                            )
+                            # drain pending datagrams.
+                            # avoid invoke QUIC state machine eagerly
+                            # on each datagram received. too much effort.
+                            while len(datagrams) < UDP_MAX_RECV_BURST and wait_for_read(
+                                sock, timeout=0
+                            ):
+                                pending = (
+                                    sync_recv_gro(sock, blocksize)
+                                    if gro_enabled
+                                    else sock.recv(blocksize)
+                                )
+                                if isinstance(pending, list):
+                                    datagrams.extend(pending)
+                                else:
+                                    datagrams.append(pending)
+                            if len(datagrams) > 1:
+                                data_in = datagrams
                 except (
                     ConnectionAbortedError,
                     ConnectionResetError,
@@ -1080,23 +1093,28 @@ class HfaceBackend(BaseBackend):
                         protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
-                        for udp_gro_segment in data_in:
-                            if data_in_len_from is None:
-                                data_in_len += len(udp_gro_segment)
+                        if (
+                            data_in_len_from is None
+                            and maximal_data_in_read is not None
+                        ):
+                            data_in_len += sum(map(len, data_in))
 
-                            try:
-                                protocol.bytes_received(udp_gro_segment)
-                            except _proto_exc as e:
-                                if hasattr(e, "expected_length") and hasattr(
-                                    e, "actual_length"
-                                ):
-                                    raise IncompleteRead(
-                                        partial=e.actual_length,
-                                        expected=e.expected_length,
-                                    ) from e  # Defensive:
-                                raise ProtocolError(e) from e  # Defensive:
+                        try:
+                            protocol.many_bytes_received(data_in)  # type: ignore[union-attr]
+                        except _proto_exc as e:
+                            if hasattr(e, "expected_length") and hasattr(
+                                e, "actual_length"
+                            ):
+                                raise IncompleteRead(
+                                    partial=e.actual_length,
+                                    expected=e.expected_length,
+                                ) from e  # Defensive:
+                            raise ProtocolError(e) from e  # Defensive:
                     else:
-                        if data_in_len_from is None:
+                        if (
+                            data_in_len_from is None
+                            and maximal_data_in_read is not None
+                        ):
                             data_in_len += len(data_in)
 
                         try:
@@ -1252,7 +1270,7 @@ class HfaceBackend(BaseBackend):
                     and data_in_len >= maximal_data_in_read
                 )
 
-                if (event_type and isinstance(event, event_type)) or target_cap_reached:
+                if isinstance(event, event_type) or target_cap_reached:
                     # if event type match, make sure it is the latest one
                     # simply put, end_stream should be True.
                     if (
@@ -1308,14 +1326,13 @@ class HfaceBackend(BaseBackend):
         skip_accept_encoding: bool = False,
     ) -> None:
         """Internally fhace translate this into what putrequest does. e.g. initial trame."""
-        self.__headers = []
         self.__expected_body_length = None
         self.__remaining_body_length = None
         self.__legacy_host_entry = None
         self.__authority_bit_set = False
         self.__protocol_bit_set = False
 
-        self._start_last_request = datetime.now(tz=timezone.utc)
+        self._start_last_request = datetime.now(timezone.utc)
 
         if self._tunnel_host is not None:
             host, port = self._tunnel_host, self._tunnel_port

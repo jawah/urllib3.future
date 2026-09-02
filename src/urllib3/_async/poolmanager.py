@@ -747,10 +747,10 @@ class AsyncPoolManager(AsyncRequestMethods):
             u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
         )
 
-        if u.scheme is not None and u.scheme.lower() not in ("http", "https"):
+        if u.scheme not in (None, "http", "https"):
             from ..contrib.webextensions._async import load_extension
 
-            extension = load_extension(*parse_extension(u.scheme))
+            extension = load_extension(*parse_extension(u.scheme))  # type: ignore[arg-type]
             kw["extension"] = extension()
             kw.update(kw["extension"].urlopen_kwargs)
 

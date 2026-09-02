@@ -631,7 +631,6 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     ]
 
                     winner_task = None
-                    remnant_tasks = []
                     pending: set[Task[None]] = set()
 
                     while True:
@@ -650,15 +649,19 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                             if finished_task.exception():
                                 continue
 
-                            remnant_tasks.append(finished_task)
-
                         if winner_task or not pending:
                             break
 
                     for task in pending:
                         task.cancel()
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
 
                     if winner_task is None:
+                        await asyncio.gather(
+                            *(challenger.close() for challenger in challengers),
+                            return_exceptions=True,
+                        )
                         within_delay_msg: str = (
                             f" within {override_timeout}s" if override_timeout else ""
                         )
@@ -673,10 +676,14 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     if conn.conn_info:
                         conn.conn_info.resolution_latency = delta_post_resolve
 
-                    if remnant_tasks:
-                        # we may have more than one conn ready, we shall then carefully close the others.
-                        for disposable_remnant in remnant_tasks:
-                            await challengers[tasks.index(disposable_remnant)].close()
+                    await asyncio.gather(
+                        *(
+                            challenger.close()
+                            for challenger in challengers
+                            if challenger is not conn
+                        ),
+                        return_exceptions=True,
+                    )
                 else:
                     log.debug(
                         "Happy-Eyeball Ineligible %s:%s",
@@ -2423,7 +2430,6 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                     ]
 
                     winner_task = None
-                    remnant_tasks = []
                     pending: set[Task[None]] = set()
 
                     # here we'll need at least one task that ended successfully OR every task terminated/completed.
@@ -2443,16 +2449,20 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                             if finished_task.exception():
                                 continue
 
-                            remnant_tasks.append(finished_task)
-
                         if winner_task or not pending:
                             break
 
                     # we need to kill the remaining tasks.
                     for task in pending:
                         task.cancel()
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
 
                     if winner_task is None:
+                        await asyncio.gather(
+                            *(challenger.close() for challenger in challengers),
+                            return_exceptions=True,
+                        )
                         within_delay_msg: str = (
                             f" within {override_timeout}s" if override_timeout else ""
                         )
@@ -2469,10 +2479,14 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                     if conn.conn_info:
                         conn.conn_info.resolution_latency = delta_post_resolve
 
-                    if remnant_tasks:
-                        # we may have more than one conn ready, we shall then carefully close the others.
-                        for disposable_remnant in remnant_tasks:
-                            await challengers[tasks.index(disposable_remnant)].close()
+                    await asyncio.gather(
+                        *(
+                            challenger.close()
+                            for challenger in challengers
+                            if challenger is not conn
+                        ),
+                        return_exceptions=True,
+                    )
                 else:
                     log.debug(
                         "Happy-Eyeball Ineligible %s:%s",

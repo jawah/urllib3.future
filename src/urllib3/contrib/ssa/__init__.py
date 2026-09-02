@@ -461,8 +461,6 @@ class AsyncSocket:
         try:
             self._writer.write(data)  # type: ignore[arg-type]
             await self._writer.drain()
-        except Exception:
-            raise
         finally:
             self._writer_semaphore.release()
 
