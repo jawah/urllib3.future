@@ -24,7 +24,7 @@ import nox
 
 
 _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
-_QH3_RUN_ID = 33543364451
+_QH3_RUN_ID = 33594055867
 
 
 def install_unreleased_qh3(session: nox.Session) -> None:
