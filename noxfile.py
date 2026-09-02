@@ -45,7 +45,7 @@ def install_unreleased_qh3(session: nox.Session) -> None:
     if target is None or platform.machine().lower() not in {"amd64", "x86_64"}:
         return
 
-    implementation, python_version, gil_disabled = session.run(
+    implementation, python_version, gil_disabled = session.run(  # type: ignore[union-attr]
         "python",
         "-c",
         "import platform, sys; "
