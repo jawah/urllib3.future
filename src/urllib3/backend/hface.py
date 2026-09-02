@@ -14,6 +14,7 @@ from .._constant import (
     DEFAULT_BLOCKSIZE,
     DEFAULT_KEEPALIVE_DELAY,
     UDP_DEFAULT_BLOCKSIZE,
+    UDP_MAX_RECV_BURST,
     responses,
     HTTP1_ONLY_HEADERS,
     DEFAULT_BACKGROUND_WATCH_WINDOW,
@@ -54,7 +55,7 @@ from ..exceptions import (
     ResponseNotReady,
     SSLError,
 )
-from ..util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ..util import parse_alt_svc, resolve_cert_reqs, parse_url, wait_for_read
 from ..util.socket_state import enable_keepalive
 from ..util.sub_timeout import SubTimeout
 from ._base import (
@@ -1019,6 +1020,27 @@ class HfaceBackend(BaseBackend):
                             data_in = sync_recv_gro(sock, blocksize)
                         else:
                             data_in = sock.recv(blocksize)
+                        if is_quic and data_in:
+                            datagrams = (
+                                data_in if isinstance(data_in, list) else [data_in]
+                            )
+                            # drain pending datagrams.
+                            # avoid invoke QUIC state machine eagerly
+                            # on each datagram received. too much effort.
+                            while len(datagrams) < UDP_MAX_RECV_BURST and wait_for_read(
+                                sock, timeout=0
+                            ):
+                                pending = (
+                                    sync_recv_gro(sock, blocksize)
+                                    if gro_enabled
+                                    else sock.recv(blocksize)
+                                )
+                                if isinstance(pending, list):
+                                    datagrams.extend(pending)
+                                else:
+                                    datagrams.append(pending)
+                            if len(datagrams) > 1:
+                                data_in = datagrams
                 except (
                     ConnectionAbortedError,
                     ConnectionResetError,
