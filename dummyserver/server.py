@@ -143,8 +143,10 @@ class SocketServerThread(threading.Thread):
         if self.ready_event:
             self.ready_event.set()
 
-        self.socket_handler(sock)
-        sock.close()
+        try:
+            self.socket_handler(sock)
+        finally:
+            sock.close()
 
     def run(self) -> None:
         self._start_server()
