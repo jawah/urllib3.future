@@ -1592,6 +1592,7 @@ class TestSSL(SocketDummyServerTestCase):
 
         context = mock.create_autospec(ssl_.SSLContext)
         context.load_default_certs = mock.Mock()
+        context.wrap_socket.side_effect = ssl.SSLError("intentional test failure")
         context.options = 0
 
         from urllib3.util.ssl_ import _SSLContextCache
