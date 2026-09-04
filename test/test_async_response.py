@@ -96,9 +96,7 @@ class TestAsyncResponse:
         self, content_encoding: str | None
     ) -> None:
         headers = {"content-encoding": content_encoding} if content_encoding else None
-        response = AsyncHTTPResponse(
-            BytesIO(), headers=headers, preload_content=False
-        )
+        response = AsyncHTTPResponse(BytesIO(), headers=headers, preload_content=False)
 
         with mock.patch.object(
             response.headers, "get", wraps=response.headers.get
