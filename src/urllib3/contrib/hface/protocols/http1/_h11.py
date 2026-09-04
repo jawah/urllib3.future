@@ -37,19 +37,27 @@ _IDLE_STATES = frozenset({h11.IDLE, h11.MUST_CLOSE})
 
 
 class _H11ReceiveBuffer(ReceiveBuffer):
-    """Extract body data with one copy instead of two bytearray slices."""
+    """Hand off complete body buffers without copying them."""
 
-    def maybe_extract_at_most(self, count: int) -> bytes | None:  # type: ignore[override]
-        if not self._data:
+    def maybe_extract_at_most(  # type: ignore[override]
+        self, count: int
+    ) -> bytes | memoryview | None:
+        if count <= 0 or not self._data:
             return None
 
-        view = memoryview(self._data)
-        chunk = view[:count]
-        data = chunk.tobytes()
-        chunk.release()
-        view.release()
+        current = self._data
+        data: bytes | memoryview
+        if count >= len(current):
+            self._data = bytearray()
+            data = memoryview(current)
+        else:
+            view = memoryview(current)
+            chunk = view[:count]
+            data = chunk.tobytes()
+            chunk.release()
+            view.release()
+            del current[:count]
 
-        del self._data[:count]
         self._next_line_search = 0
         self._multiple_lines_search = 0
 
