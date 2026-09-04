@@ -91,6 +91,24 @@ nP4HF2uWHA=="""
 
 @pytest.mark.asyncio
 class TestAsyncResponse:
+    @pytest.mark.parametrize("content_encoding", (None, "gzip"))
+    async def test_content_encoding_is_inspected_once(
+        self, content_encoding: str | None
+    ) -> None:
+        headers = {"content-encoding": content_encoding} if content_encoding else None
+        response = AsyncHTTPResponse(
+            BytesIO(), headers=headers, preload_content=False
+        )
+
+        with mock.patch.object(
+            response.headers, "get", wraps=response.headers.get
+        ) as get_header:
+            response._init_decoder()
+            response._init_decoder()
+
+        assert get_header.call_count == 1
+        assert (response._decoder is not None) is (content_encoding is not None)
+
     async def test_cache_content(self) -> None:
         r = AsyncHTTPResponse(b"foo")
         assert r._body == b"foo"

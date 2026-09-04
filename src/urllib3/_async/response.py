@@ -98,6 +98,7 @@ class AsyncHTTPResponse(HTTPResponse):
                 self.chunked = True
 
         self._decoder: ContentDecoder | None = None
+        self._decoder_initialized = False
 
         self.enforce_content_length = enforce_content_length
         self.auto_close = auto_close

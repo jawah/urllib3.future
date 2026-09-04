@@ -113,6 +113,39 @@ def sock() -> typing.Generator[socket.socket, None, None]:
 
 
 class TestResponse:
+    @pytest.mark.parametrize("content_encoding", (None, "gzip"))
+    def test_content_encoding_is_inspected_once(
+        self, content_encoding: str | None
+    ) -> None:
+        headers = {"content-encoding": content_encoding} if content_encoding else None
+        response = HTTPResponse(BytesIO(), headers=headers, preload_content=False)
+
+        with mock.patch.object(
+            response.headers, "get", wraps=response.headers.get
+        ) as get_header:
+            response._init_decoder()
+            response._init_decoder()
+
+        assert get_header.call_count == 1
+        assert (response._decoder is not None) is (content_encoding is not None)
+
+    def test_decoder_initialization_is_retried_after_failure(self) -> None:
+        response = HTTPResponse(
+            BytesIO(), headers={"content-encoding": "gzip"}, preload_content=False
+        )
+        decoder = mock.Mock()
+
+        with mock.patch(
+            "urllib3.response._get_decoder", side_effect=(RuntimeError, decoder)
+        ) as get_decoder:
+            with pytest.raises(RuntimeError):
+                response._init_decoder()
+            response._init_decoder()
+            response._init_decoder()
+
+        assert response._decoder is decoder
+        assert get_decoder.call_count == 2
+
     def test_cache_content(self) -> None:
         r = HTTPResponse(b"foo")
         assert r._body == b"foo"
