@@ -181,11 +181,14 @@ class TrafficPolice(typing.Generic[T]):
         # by doing the right/left append logic, we are leveraging multiplexing on capable conn_or_pool!
         return signal
 
-    def _next_signal_or_container_insert(self) -> None:
+    def _next_signal_or_container_insert(self, current_key: int) -> None:
         """We either transfer our cursor (active conn_or_pool) to some sleeping thread, or we reinsert it in the container."""
-        current_key = get_ident()
-
         active_cursor = self._cursor.pop(current_key)
+
+        if not self._signals:
+            self._container[active_cursor.obj_id] = active_cursor.conn_or_pool
+            return
+
         cursor_state = traffic_state_of(active_cursor.conn_or_pool)
 
         next_signal: PendingSignal[T] | None = None
@@ -273,11 +276,7 @@ class TrafficPolice(typing.Generic[T]):
         if obj_id not in self._registry:
             return
 
-        outdated_keys = []
-
-        for key, val in self._map.items():
-            if id(val) == obj_id:
-                outdated_keys.append(key)
+        outdated_keys = list(self._map.keys_for(value))
 
         for key in outdated_keys:
             del self._map[key]
@@ -509,7 +508,7 @@ class TrafficPolice(typing.Generic[T]):
                     active_cursor.depth -= 1
 
                     if active_cursor.depth == 0:
-                        self._next_signal_or_container_insert()
+                        self._next_signal_or_container_insert(cursor_key)
 
             else:  # we may want to declare it unavailable immediately.
                 if cursor_key not in self._cursor:
@@ -826,11 +825,11 @@ class TrafficPolice(typing.Generic[T]):
                     else id(traffic_indicator)
                 )
 
-                if key not in self._map:
+                conn_or_pool = self._map.get(key)
+                if conn_or_pool is None:
                     # we must fallback on beacon (sub police officer if any)
-                    conn_or_pool, obj_id = None, None
+                    obj_id = None
                 else:
-                    conn_or_pool = self._map[key]
                     obj_id = id(conn_or_pool)
             else:
                 self._lock.release()
@@ -873,9 +872,8 @@ class TrafficPolice(typing.Generic[T]):
         cursor_key = get_ident()
 
         with self._lock:
-            if self.busy:
-                active_cursor = self._cursor[cursor_key]
-
+            active_cursor = self._cursor.get(cursor_key)
+            if active_cursor is not None:
                 if active_cursor.obj_id == obj_id:
                     active_cursor.depth += 1
 
@@ -997,19 +995,18 @@ class TrafficPolice(typing.Generic[T]):
 
     def release(self) -> None:
         with self._lock:
-            if not self.busy:
+            cursor_key = get_ident()
+            active_cursor = self._cursor.get(cursor_key)
+            if active_cursor is None:
                 # we want to allow calling release twice.
                 # due to legacy urllib3 constraints[...]
                 return
-
-            cursor_key = get_ident()
-            active_cursor = self._cursor[cursor_key]
 
             active_cursor.depth -= 1
 
             if active_cursor.depth == 0:
                 if not self.concurrency:
-                    self._next_signal_or_container_insert()
+                    self._next_signal_or_container_insert(cursor_key)
                 else:
                     del self._cursor[cursor_key]
 
