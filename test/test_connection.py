@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import typing
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -15,6 +16,9 @@ from urllib3.connection import (  # type: ignore[attr-defined]
     _wrap_proxy_error,
 )
 from urllib3._async.connection import AsyncHTTPConnection
+from urllib3.backend import HttpVersion
+from urllib3.backend._async.hface import AsyncHfaceBackend
+from urllib3.backend.hface import HfaceBackend
 from urllib3.exceptions import HTTPError, ProxyError, ResponseNotReady, SSLError
 from urllib3.util import ssl_
 from urllib3.util.ssl_match_hostname import (
@@ -46,6 +50,67 @@ class TestConnection:
         assert conn._new_conn() is sock
         assert conn._ech_config == ech_config
 
+    def test_alt_svc_probe_waits_for_successful_response(self) -> None:
+        conn = HfaceBackend("example.com", disabled_svn={HttpVersion.h3})
+        conn.sock = mock.MagicMock()
+        conn._svn = HttpVersion.h11
+        probe = mock.Mock(side_effect=[None, ("", 443)])
+
+        with mock.patch.object(conn, "_HfaceBackend__altsvc_probe", probe):
+            with mock.patch.object(conn, "close") as close:
+                conn._response = SimpleNamespace(status=401)  # type: ignore[assignment]
+                conn._upgrade()
+                conn._response = SimpleNamespace(status=200)  # type: ignore[assignment]
+                conn._upgrade()
+                conn._upgrade()
+
+        assert probe.call_count == 2
+        assert conn._svn is HttpVersion.h2
+        close.assert_called_once()
+
+    @pytest.mark.parametrize("status", (302, 401, 503))
+    def test_alt_svc_on_unsuccessful_response_is_honored(self, status: int) -> None:
+        conn = HfaceBackend("example.com", disabled_svn={HttpVersion.h3})
+        conn.sock = mock.MagicMock()
+        conn._svn = HttpVersion.h11
+        probe = mock.Mock(return_value=("", 443))
+
+        with mock.patch.object(conn, "_HfaceBackend__altsvc_probe", probe):
+            with mock.patch.object(conn, "close") as close:
+                conn._response = SimpleNamespace(status=status)  # type: ignore[assignment]
+                conn._upgrade()
+
+        probe.assert_called_once_with(svc="h2")
+        assert conn._svn is HttpVersion.h2
+        close.assert_called_once()
+
+    def test_successful_alt_svc_miss_is_checked_once(self) -> None:
+        conn = HfaceBackend("example.com", disabled_svn={HttpVersion.h3})
+        conn.sock = mock.MagicMock()
+        conn._svn = HttpVersion.h11
+        conn._response = SimpleNamespace(status=200)  # type: ignore[assignment]
+        probe = mock.Mock(return_value=None)
+
+        with mock.patch.object(conn, "_HfaceBackend__altsvc_probe", probe):
+            conn._upgrade()
+            conn._upgrade()
+
+        probe.assert_called_once_with(svc="h2")
+
+    def test_alt_svc_does_not_probe_disabled_protocols(self) -> None:
+        conn = HfaceBackend(
+            "example.com", disabled_svn={HttpVersion.h2, HttpVersion.h3}
+        )
+        conn.sock = mock.MagicMock()
+        conn._svn = HttpVersion.h11
+        conn._response = SimpleNamespace(status=200)  # type: ignore[assignment]
+
+        with mock.patch.object(conn, "_HfaceBackend__altsvc_probe") as probe:
+            conn._upgrade()
+            conn._upgrade()
+
+        probe.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_async_new_conn_receives_ech_config(self) -> None:
         ech_config = b"ech-config"
@@ -61,6 +126,44 @@ class TestConnection:
 
         assert await conn._new_conn() is sock
         assert conn._ech_config == ech_config
+
+    @pytest.mark.asyncio
+    async def test_async_alt_svc_probe_waits_for_successful_response(self) -> None:
+        conn = AsyncHfaceBackend("example.com", disabled_svn={HttpVersion.h3})
+        conn.sock = mock.MagicMock()
+        conn._svn = HttpVersion.h11
+        probe = mock.Mock(side_effect=[None, ("", 443)])
+        close_count = 0
+
+        async def close() -> None:
+            nonlocal close_count
+            close_count += 1
+
+        with mock.patch.object(conn, "_AsyncHfaceBackend__altsvc_probe", probe):
+            with mock.patch.object(conn, "close", new=close):
+                conn._response = SimpleNamespace(status=401)  # type: ignore[assignment]
+                await conn._upgrade()
+                conn._response = SimpleNamespace(status=200)  # type: ignore[assignment]
+                await conn._upgrade()
+                await conn._upgrade()
+
+        assert probe.call_count == 2
+        assert conn._svn is HttpVersion.h2
+        assert close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_successful_alt_svc_miss_is_checked_once(self) -> None:
+        conn = AsyncHfaceBackend("example.com", disabled_svn={HttpVersion.h3})
+        conn.sock = mock.MagicMock()
+        conn._svn = HttpVersion.h11
+        conn._response = SimpleNamespace(status=200)  # type: ignore[assignment]
+        probe = mock.Mock(return_value=None)
+
+        with mock.patch.object(conn, "_AsyncHfaceBackend__altsvc_probe", probe):
+            await conn._upgrade()
+            await conn._upgrade()
+
+        probe.assert_called_once_with(svc="h2")
 
     def test_match_hostname_no_cert(self) -> None:
         cert = None

@@ -549,6 +549,7 @@ class HTTPResponse(io.IOBase):
                 self.chunked = True
 
         self._decoder: ContentDecoder | None = None
+        self._decoder_initialized = False
 
         self.enforce_content_length = enforce_content_length
         self.auto_close = auto_close
@@ -677,18 +678,21 @@ class HTTPResponse(io.IOBase):
         """
         Set-up the _decoder attribute if necessary.
         """
-        # Note: content-encoding value should be case-insensitive, per RFC 7230
-        # Section 3.2
-        if "content-encoding" not in self.headers:
+        if self._decoder_initialized:
             return
-        content_encoding = self.headers.get("content-encoding", "").lower()
+
         if self._decoder is None:
+            # Note: content-encoding value should be case-insensitive, per RFC 7230
+            # Section 3.2
+            content_encoding = self.headers.get("content-encoding", "").lower()
             if content_encoding in self.CONTENT_DECODERS:
                 self._decoder = _get_decoder(content_encoding)
             elif "," in content_encoding:
                 encodings = [e.strip() for e in content_encoding.split(",")]
                 if encodings and all(e in self.CONTENT_DECODERS for e in encodings):
                     self._decoder = _get_decoder(content_encoding)
+
+        self._decoder_initialized = True
 
     def _decode(
         self,

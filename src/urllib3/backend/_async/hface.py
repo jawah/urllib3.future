@@ -128,6 +128,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         # h3 specifics
         self.__custom_tls_settings: QuicTLSConfig | None = None
         self.__alt_authority: tuple[str, int] | None = None
+        self.__alt_svc_checked: bool = False
         self.__origin_port: int | None = None
 
         # automatic upgrade shield against errors!
@@ -224,12 +225,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         assert self.sock is not None
         assert self._svn is not None
 
-        #: Don't search for alt-svc again if already done once.
-        if self.__alt_authority is not None:
+        #: Don't search for alt-svc again after finding one or after the first
+        #: successful response without one.
+        if self.__alt_svc_checked or self.__alt_authority is not None:
             return
-
-        #: determine if http/3 support is present in environment
-        has_h3_support = _HAS_HTTP3_SUPPORT()
 
         #: are we on a plain conn? unencrypted?
         is_plain_socket = type(self.sock) is AsyncSocket
@@ -237,11 +236,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         #: did the user purposely killed h3/h2 support?
         is_h3_disabled = HttpVersion.h3 in self._disabled_svn
         is_h2_disabled = HttpVersion.h2 in self._disabled_svn
+        is_successful_response = 200 <= self._response.status < 300
 
         upgradable_svn: HttpVersion | None = None
 
         if is_plain_socket:
             if is_h2_disabled or self._svn == HttpVersion.h2:
+                if is_successful_response:
+                    self.__alt_svc_checked = True
                 return
             upgradable_svn = HttpVersion.h2
 
@@ -253,18 +255,25 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             # already maxed out!
             if self._svn == HttpVersion.h3:
+                if is_successful_response:
+                    self.__alt_svc_checked = True
                 return
 
-            if not is_h3_disabled and has_h3_support:
+            if not is_h3_disabled and _HAS_HTTP3_SUPPORT():
                 upgradable_svn = HttpVersion.h3
                 self.__alt_authority = self.__altsvc_probe(svc="h3")
 
             # no h3 target found[...] try to locate h2 support if appropriated!
-            if not self.__alt_authority and self._svn == HttpVersion.h11:
+            if (
+                not self.__alt_authority
+                and not is_h2_disabled
+                and self._svn == HttpVersion.h11
+            ):
                 upgradable_svn = HttpVersion.h2
                 self.__alt_authority = self.__altsvc_probe(svc="h2")
 
         if self.__alt_authority:
+            self.__alt_svc_checked = True
             # we want to infer a "best delay" to wait for silent upgrade.
             # for that we use the previous known delay for handshake or establishment.
             # and apply a "safe" margin of 50%.
@@ -304,6 +313,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             # We purposely ignore setting the Hostname. Avoid MITM attack from local cache attack.
             self.port = self.__alt_authority[1]
             await self.close()
+        elif is_successful_response:
+            self.__alt_svc_checked = True
 
     def _custom_tls(
         self,

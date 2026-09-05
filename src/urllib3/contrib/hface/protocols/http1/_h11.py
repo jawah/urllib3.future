@@ -19,6 +19,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 import h11
+from h11._receivebuffer import ReceiveBuffer
 from h11._state import _SWITCH_UPGRADE, ConnectionState
 
 from ..._stream_matrix import StreamMatrix
@@ -33,6 +34,34 @@ from ...events import (
 from .._protocols import HTTP1Protocol
 
 _IDLE_STATES = frozenset({h11.IDLE, h11.MUST_CLOSE})
+
+
+class _H11ReceiveBuffer(ReceiveBuffer):
+    """Hand off complete body buffers without copying them."""
+
+    def maybe_extract_at_most(  # type: ignore[override]
+        self, count: int
+    ) -> bytes | memoryview | None:
+        if count <= 0 or not self._data:
+            return None
+
+        current = self._data
+        data: bytes | memoryview
+        if count >= len(current):
+            self._data = bytearray()
+            data = memoryview(current)
+        else:
+            view = memoryview(current)
+            chunk = view[:count]
+            data = chunk.tobytes()
+            chunk.release()
+            view.release()
+            del current[:count]
+
+        self._next_line_search = 0
+        self._multiple_lines_search = 0
+
+        return data
 
 
 @lru_cache(maxsize=64)
@@ -136,6 +165,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def __init__(self) -> None:
         self._connection: h11.Connection = h11.Connection(h11.CLIENT)
+        self._connection._receive_buffer = _H11ReceiveBuffer()
         self._connection._cstate = RelaxConnectionState()
 
         self._data_buffer: list[bytes] = []

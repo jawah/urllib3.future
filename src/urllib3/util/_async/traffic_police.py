@@ -423,11 +423,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
         current_task = _current_task_or_die()
-
-        if current_task in self._cursors:
-            return self._cursors[current_task]
-
-        return None
+        return self._cursors.get(current_task)
 
     @property
     def busy(self) -> bool:
@@ -477,11 +473,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if obj_id not in self._registry:
             return
 
-        outdated_keys = []
-
-        for key, val in self._map.items():
-            if id(val) == obj_id:
-                outdated_keys.append(key)
+        outdated_keys = list(self._map.keys_for(value))
 
         for key in outdated_keys:
             del self._map[key]
@@ -1006,11 +998,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
                     else id(traffic_indicator)
                 )
 
-                if key not in self._map:
+                conn_or_pool = self._map.get(key)
+                if conn_or_pool is None:
                     # we must fallback on beacon (sub police officer if any)
-                    conn_or_pool, obj_id = None, None
+                    obj_id = None
                 else:
-                    conn_or_pool = self._map[key]
                     obj_id = id(conn_or_pool)
             else:
                 raise ValueError("unsupported traffic_indicator")
