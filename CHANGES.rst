@@ -1,3 +1,24 @@
+2.24.907 (2026-09-05)
+=====================
+
+- Improved HTTP/1.1 response throughput by eliminating redundant body-buffer copies from
+  the underlying state machine.
+- Improved HTTP/3 receive performance by avoiding Python IntFlag dispatch on every
+  datagram.
+- Reduced sync and async connection-pooling overhead by avoiding repeated ownership
+  lookups and using reverse-indexed response/promise mapping cleanup. Synchronous
+  connection release also skips state evaluation when no threads are waiting.
+- Avoided repeated Alt-Svc discovery after finding a usable alternative or inspecting
+  the first successful (2xx) response. Advertisements on other status codes remain
+  eligible, and unsuccessful responses without a usable advertisement do not prevent
+  discovery on a later response.
+- Fixed Alt-Svc discovery selecting HTTP/2 when it was explicitly disabled, in both
+  sync and async.
+- Backported "Avoid repeated response decoder initialization" from upstream
+  https://github.com/urllib3/urllib3/pull/5209
+  This reduces repeated Content-Encoding inspection when streaming compressed or
+  uncompressed responses, in both sync and async.
+
 2.24.906 (2026-09-02)
 =====================
 
