@@ -70,8 +70,9 @@ _IS_DARWIN: typing.Final = sys.platform in {"darwin", "ios"}
 
 # Pre-resolved socket constants (avoid repeated attribute lookups in hot paths).
 _SOL_UDP: typing.Final = getattr(socket, "SOL_UDP", 17)
-_MSG_TRUNC: typing.Final = getattr(socket, "MSG_TRUNC", 0)
-_MSG_CTRUNC: typing.Final = getattr(socket, "MSG_CTRUNC", 0)
+# Avoid IntFlag dispatch on every datagram
+_MSG_TRUNC: typing.Final = int(getattr(socket, "MSG_TRUNC", 0))
+_MSG_CTRUNC: typing.Final = int(getattr(socket, "MSG_CTRUNC", 0))
 
 # Ancillary buffer size for the GRO cmsg. Computed once, the kernel never
 # returns more than one UDP_GRO cmsg per recvmsg().
