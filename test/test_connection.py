@@ -133,9 +133,14 @@ class TestConnection:
         conn.sock = mock.MagicMock()
         conn._svn = HttpVersion.h11
         probe = mock.Mock(side_effect=[None, ("", 443)])
+        close_count = 0
+
+        async def close() -> None:
+            nonlocal close_count
+            close_count += 1
 
         with mock.patch.object(conn, "_AsyncHfaceBackend__altsvc_probe", probe):
-            with mock.patch.object(conn, "close", new_callable=mock.AsyncMock) as close:
+            with mock.patch.object(conn, "close", new=close):
                 conn._response = SimpleNamespace(status=401)  # type: ignore[assignment]
                 await conn._upgrade()
                 conn._response = SimpleNamespace(status=200)  # type: ignore[assignment]
@@ -144,7 +149,7 @@ class TestConnection:
 
         assert probe.call_count == 2
         assert conn._svn is HttpVersion.h2
-        close.assert_awaited_once()
+        assert close_count == 1
 
     @pytest.mark.asyncio
     async def test_async_successful_alt_svc_miss_is_checked_once(self) -> None:
