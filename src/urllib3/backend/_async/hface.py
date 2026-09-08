@@ -1910,35 +1910,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._last_used_at = time.monotonic()
 
     async def close(self) -> None:  # type: ignore[override]
-        if self.sock:
-            if self._protocol is not None:
-                try:
-                    self._protocol.submit_close()
-                except self._protocol.exceptions() as e:  # Defensive:
-                    # overly protective, made in case of possible exception leak.
-                    raise ProtocolError(e) from e  # Defensive:
-                else:
-                    while True:
-                        goodbye_frame = self._protocol.bytes_to_send()
-                        if not goodbye_frame:
-                            break
-                        try:
-                            await self.sock.sendall(goodbye_frame)
-                        except (
-                            OSError,
-                            ssl.SSLEOFError,
-                        ):  # don't want our goodbye, never mind then!
-                            break
+        # Claim teardown before yielding
+        sock, self.sock = self.sock, None
+        protocol, self._protocol = self._protocol, None
 
-            try:
-                self.sock.close()
-                # this avoids having SelectorSocketTransport in "closing" state
-                # pending. Thus avoid a ResourceWarning.
-                await self.sock.wait_for_close()
-            except OSError:
-                pass
-
-        self._protocol = None
         self._stream_id = None
         self._promises = {}
         self._promises_per_stream = {}
@@ -1954,3 +1929,35 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._recv_size_ema = 0.0
         self._ech_config = None
         self._custom_tls_context = None
+
+        if sock is None:
+            return
+
+        try:
+            if protocol is not None:
+                try:
+                    protocol.submit_close()
+                except protocol.exceptions() as e:  # Defensive:
+                    # overly protective, made in case of possible exception leak.
+                    raise ProtocolError(e) from e  # Defensive:
+                else:
+                    while True:
+                        goodbye_frame = protocol.bytes_to_send()
+                        if not goodbye_frame:
+                            break
+                        try:
+                            await sock.sendall(goodbye_frame)
+                        except (
+                            OSError,
+                            ssl.SSLEOFError,
+                        ):  # don't want our goodbye, never mind then!
+                            break
+        finally:
+            # Cancellation or a protocol error must still close the socket.
+            try:
+                sock.close()
+                # this avoids having SelectorSocketTransport in "closing" state
+                # pending. Thus avoid a ResourceWarning.
+                await sock.wait_for_close()
+            except OSError:
+                pass

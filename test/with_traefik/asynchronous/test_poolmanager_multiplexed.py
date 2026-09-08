@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import typing
 from asyncio import sleep
 from random import randint
 from test import notMacOS
@@ -8,7 +9,15 @@ from time import time
 
 import pytest
 
-from urllib3 import AsyncPoolManager, ResponsePromise, Retry
+from urllib3 import (
+    AsyncHTTPResponse,
+    AsyncPoolManager,
+    ConnectionInfo,
+    HttpVersion,
+    ResponsePromise,
+    Retry,
+)
+from urllib3._async.connection import AsyncHTTPConnection
 from urllib3.exceptions import MaxRetryError
 
 from .. import TraefikTestCase
@@ -16,6 +25,72 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestPoolManagerMultiplexed(TraefikTestCase):
+    async def test_as_completed_early_exit_cancels_pending_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        all_connected = asyncio.Event()
+        hold_responses = asyncio.Event()
+        connected = 0
+        first_response = True
+        getresponse = AsyncHTTPConnection.getresponse
+
+        async def on_post_connection(info: ConnectionInfo) -> None:
+            nonlocal connected
+            assert info.http_version == HttpVersion.h2
+            connected += 1
+            if connected == 15:
+                all_connected.set()
+
+        async def get_one_response(
+            conn: AsyncHTTPConnection, *args: typing.Any, **kwargs: typing.Any
+        ) -> AsyncHTTPResponse:
+            nonlocal first_response
+            if not first_response:
+                # Stay inside the request's cleanup scope until cancelled,
+                # regardless of how quickly Traefik sends the other responses.
+                await hold_responses.wait()
+            first_response = False
+            await asyncio.wait_for(all_connected.wait(), timeout=5)
+            return await getresponse(conn, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncHTTPConnection, "getresponse", get_one_response)
+        requests = []
+        try:
+            async with AsyncPoolManager(
+                timeout=3,
+                retries=False,
+                maxsize=1,
+                ca_certs=self.ca_authority,
+                resolver=self.test_async_resolver,
+                disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            ) as pool:
+                requests = [
+                    asyncio.create_task(
+                        pool.request(
+                            "GET",
+                            f"{self.https_url}/get",
+                            on_post_connection=on_post_connection,
+                        )
+                    )
+                    for _ in range(15)
+                ]
+                for future in asyncio.as_completed(requests):
+                    response = await future
+                    assert response.status == 200
+                    assert response.version == 20
+                    assert sum(not request.done() for request in requests) == 14
+                    connection_pool = await pool.connection_from_url(self.https_url)
+                    assert connection_pool.num_connections == 1
+                    break
+        finally:
+            for request in requests:
+                request.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(*requests, return_exceptions=True), timeout=5
+            )
+
+        assert sum(request.cancelled() for request in requests) == 14
+
     @notMacOS()
     async def test_multiplexing_fastest_to_slowest(self) -> None:
         async with AsyncPoolManager(
