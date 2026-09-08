@@ -268,7 +268,8 @@ class TestProtocolLevel(TraefikTestCase):
                 and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
             ):
                 assert p._background_monitoring is not None
-                assert p._background_monitoring.is_alive()
+                assert p._background_monitoring.ident is None
+                assert not p._background_monitoring.is_alive()
             else:
                 assert p._background_monitoring is None
 
@@ -345,7 +346,8 @@ class TestProtocolLevel(TraefikTestCase):
                 and background_watch_delay >= MINIMAL_BACKGROUND_WATCH_WINDOW
             ):
                 assert p._background_monitoring is not None
-                assert p._background_monitoring.is_alive()
+                assert p._background_monitoring.ident is None
+                assert not p._background_monitoring.is_alive()
             else:
                 assert p._background_monitoring is None
 
@@ -412,7 +414,8 @@ class TestProtocolLevel(TraefikTestCase):
             disabled_svn=disabled_svn,
         ) as p:
             assert p._background_monitoring is not None
-            assert p._background_monitoring.is_alive()
+            assert p._background_monitoring.ident is None
+            assert not p._background_monitoring.is_alive()
 
             resp = p.urlopen("GET", f"{self.https_url}/get")
 

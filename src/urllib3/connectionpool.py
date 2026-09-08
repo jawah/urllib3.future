@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from socket import timeout as SocketTimeout
 from types import TracebackType
-from weakref import proxy
+from weakref import finalize, proxy
 
 from ._collections import HTTPHeaderDict
 from ._constant import (
@@ -446,6 +446,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         self.conn_kw["keepalive_delay"] = keepalive_delay
 
         self._background_monitoring_stop = threading.Event()
+        self._background_monitoring_lock = threading.Lock()
+        finalize(self, self._background_monitoring_stop.set)
 
         if (
             background_watch_delay is not None
@@ -477,7 +479,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 ),
             )
             self._background_monitoring.daemon = True  # don't hang on exit.
-            self._background_monitoring.start()
         else:
             self._background_monitoring = None
 
@@ -837,6 +838,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         """
         if conn.is_closed:
             conn.connect()
+
+        watcher = self._background_monitoring
+        if watcher is not None and watcher.ident is None:
+            with self._background_monitoring_lock:
+                watcher = self._background_monitoring
+                if watcher is not None and watcher.ident is None:
+                    watcher.start()
 
     def _prepare_proxy(self, conn: HTTPConnection) -> None:
         # Nothing to do for HTTP connections.
@@ -1527,20 +1535,17 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         """
         Close all pooled connections and disable the pool.
         """
-        if self.pool is None:
-            return
+        with self._background_monitoring_lock:
+            if self.pool is None:
+                return
 
-        # Disable access to the pool
-        old_pool, self.pool = self.pool, None
-
-        # Close all the HTTPConnections in the pool.
-        old_pool.clear()
-
-        # kill the background monitoring task that watch
-        # for unsolicited incoming data
-        if self._background_monitoring is not None:
+            # Disable the pool and prevent the watcher from starting after close.
+            old_pool, self.pool = self.pool, None
             self._background_monitoring_stop.set()
             self._background_monitoring = None
+
+        # Close all the HTTPConnections outside the watcher lifecycle lock.
+        old_pool.clear()
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
