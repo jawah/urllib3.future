@@ -1,3 +1,9 @@
+2.24.908 (2026-09-08)
+=====================
+
+- Fixed a race condition that could cause hangs during concurrent asyncio task teardown. (https://github.com/jawah/niquests/issues/460)
+- Delayed startup of the idle connection watcher thread until the first successful connection.
+
 2.24.907 (2026-09-05)
 =====================
 
