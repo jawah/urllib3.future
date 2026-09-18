@@ -1,0 +1,3 @@
+Fixed an async TLS connection cleanup race that could cause new connections to
+fail with "File descriptor ... is used by transport" when a socket descriptor
+was immediately reused.
