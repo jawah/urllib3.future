@@ -216,7 +216,10 @@ class HTTPConnection(HfaceBackend):
         #   "A server yield its support for HTTP/2 or HTTP/3 through Alt-Svc, but
         #    it cannot connect to the alt-svc, thus confusing the end-user on why it
         #    waits forever for the 2nd request."
-        if self._max_tolerable_delay_for_upgrade is not None:
+        if (
+            self._max_tolerable_delay_for_upgrade is not None
+            and self.socket_kind != socket.SOCK_DGRAM
+        ):
             backup_timeout = self.timeout
             self.timeout = self._max_tolerable_delay_for_upgrade
 
