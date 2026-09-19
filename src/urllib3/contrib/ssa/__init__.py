@@ -134,7 +134,11 @@ class AsyncSocket:
         if self._writer is not None:
             try:
                 self._writer.close()
-                if self._writer.get_extra_info("ssl_object") is not None:
+                try:
+                    is_ssl = self._writer.get_extra_info("ssl_object") is not None
+                except AttributeError:
+                    is_ssl = False
+                if is_ssl:
                     # TLS close() defers transport shutdown. Abort before the
                     # raw fd is released below, so another connection can reuse
                     # it without conflicting with an active asyncio transport.
