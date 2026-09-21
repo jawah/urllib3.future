@@ -271,7 +271,6 @@ class AsyncSignals(typing.Generic[T]):
             raise AtomicTraffic
 
         cursor = self._cursors[current_task]
-        current_state = traffic_state_of(cursor.conn_or_pool)
 
         # this code will certainly surprise most people
         # in our investigations, the signal management
@@ -304,11 +303,15 @@ class AsyncSignals(typing.Generic[T]):
             # ... bookkeeping, signal dispatch ...
             self._last_dispatch_end = time.perf_counter()
 
+        if not (
+            self._priority_signals or self._furthest_signals or self._saturated_signals
+        ):
+            return False
+
+        current_state = traffic_state_of(cursor.conn_or_pool)
         can_write_more: bool = current_state is not TrafficState.SATURATED
         can_read_anything: bool = current_state is not TrafficState.IDLE
         can_only_write: bool = current_state is TrafficState.IDLE
-
-        any_broadcast_push: bool = False
 
         if cursor.obj_id in self._saturated_signals:
             event = self._saturated_signals[cursor.obj_id]
@@ -316,7 +319,6 @@ class AsyncSignals(typing.Generic[T]):
             if current_state is TrafficState.SATURATED:
                 if not event.is_set():
                     event.set()
-                    any_broadcast_push = True
             else:
                 if event.is_set():
                     event.clear()
@@ -344,7 +346,7 @@ class AsyncSignals(typing.Generic[T]):
             return True
 
         if (can_only_write and not anything_pending_write) or not can_read_anything:
-            return any_broadcast_push
+            return False
 
         late_signal_elected: AsyncPendingSignal[T] | None = None
 
@@ -369,7 +371,7 @@ class AsyncSignals(typing.Generic[T]):
             self._refresh_generic_waiters()
             return True
 
-        return any_broadcast_push
+        return False
 
 
 class AsyncTrafficPolice(typing.Generic[T]):
@@ -559,10 +561,15 @@ class AsyncTrafficPolice(typing.Generic[T]):
         if not self._registry:
             return
 
+        current_task = _current_task_or_die()
         for obj_id, conn_or_pool in self._registry.items():
             if (
                 obj_id in self._container
                 and traffic_state_of(conn_or_pool) is TrafficState.IDLE
+                and not any(
+                    task is not current_task and cursor.obj_id == obj_id
+                    for task, cursor in self._cursors.items()
+                )
             ):
                 eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
                 break
@@ -774,8 +781,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
         # This part is ugly but set for backward compatibility
         # urllib3 used to fill the bag with 'None'. This simulates that
         # old and bad behavior.
+        # Held objects must not hide spare capacity from new requests.
+        candidates = self._container if non_saturated_only else self._registry
         if (
-            not self._container or self.bag_only_saturated
+            not self._container
+            or all(
+                traffic_state_of(obj) is TrafficState.SATURATED
+                for obj in candidates.values()
+            )
         ) and self.maxsize is not None:
             if self.maxsize > len(self._registry):
                 await self.put(
@@ -989,8 +1002,28 @@ class AsyncTrafficPolice(typing.Generic[T]):
         traffic_indicator: MappableTraffic,
         block: bool = True,
         timeout: float | None = None,
+        *,
+        conn_pre_pick_callable: typing.Callable[
+            [T], typing.Callable[[], typing.Awaitable[None]] | None
+        ]
+        | None = None,
     ) -> T | None:
+        """Locate and acquire the owner of a traffic indicator.
+
+        The optional callback must not block. It returns None when ready, or a
+        deferred wait to run without ownership. Reentrant borrows bypass it.
+        """
+        deadline = None
+        if conn_pre_pick_callable is not None:
+            if self.concurrency:
+                raise ValueError("Pre-pick callbacks require exclusive ownership")
+            if timeout is not None:
+                deadline = time.monotonic() + timeout
+
         while True:
+            if deadline is not None:
+                timeout = max(0, deadline - time.monotonic())
+            wait = None
             if not isinstance(traffic_indicator, type):
                 key: PoolKey | int = (
                     traffic_indicator
@@ -1020,54 +1053,89 @@ class AsyncTrafficPolice(typing.Generic[T]):
                             conn_or_pool, obj_id = r_conn_or_pool, r_obj_id
                             break
 
-            if not isinstance(conn_or_pool, ItemPlaceholder):
-                break
+            if isinstance(conn_or_pool, ItemPlaceholder):
+                if deadline is None:
+                    await asyncio.sleep(0)
+                else:
+                    async with ctx_expire_in(timeout):
+                        await asyncio.sleep(0)
+                continue
 
-            await asyncio.sleep(0)
+            if conn_or_pool is None or obj_id is None:
+                return None
 
-        if conn_or_pool is None or obj_id is None:
-            return None
+            active_cursor = self._cursor
 
-        active_cursor = self._cursor
-
-        if active_cursor is not None:
-            if active_cursor.obj_id == obj_id:
-                active_cursor.depth += 1
-                return active_cursor.conn_or_pool
-            raise AtomicTraffic(
-                "Seeking to locate a connection when having another one used, did you forget a call to release?"
-            )
-
-        if obj_id not in self._container or self._signals.should_queue_read_operation(
-            conn_or_pool
-        ):
-            if not block:
-                raise UnavailableTraffic("Unavailable connection")
-
-            signal = self._signals.register(
-                conn_or_pool,
-                TrafficState.USED,
-                TrafficState.SATURATED,
-            )
-
-            try:
-                await signal.event.wait()
-            except asyncio.CancelledError:
-                self._signals.unregister(signal)
-                raise
+            if active_cursor is not None:
+                if active_cursor.obj_id == obj_id:
+                    active_cursor.depth += 1
+                    return active_cursor.conn_or_pool
+                raise AtomicTraffic(
+                    "Seeking to locate a connection when having another one used, did you forget a call to release?"
+                )
 
             if (
-                signal.conn_or_pool is None
-                or signal.target_obj_id not in self._registry
+                obj_id not in self._container
+                or self._signals.should_queue_read_operation(conn_or_pool)
             ):
-                raise UnavailableTraffic("Connection was killed in flight")
-        else:
-            self._cursors[_current_task_or_die()] = ActiveCursor(obj_id, conn_or_pool)
+                if not block:
+                    raise UnavailableTraffic("Unavailable connection")
 
-            if not self.concurrency:
-                del self._container[obj_id]
+                signal = self._signals.register(
+                    conn_or_pool,
+                    TrafficState.USED,
+                    TrafficState.SATURATED,
+                )
 
-        return conn_or_pool
+                try:
+                    if deadline is None:
+                        await signal.event.wait()
+                    else:
+                        async with ctx_expire_in(timeout):
+                            await signal.event.wait()
+                except asyncio.CancelledError:
+                    self._signals.unregister(signal)
+                    raise
+                except TimeoutError:
+                    if deadline is not None:
+                        self._signals.unregister(signal)
+                    raise
+
+                if (
+                    signal.conn_or_pool is None
+                    or signal.target_obj_id not in self._registry
+                ):
+                    raise UnavailableTraffic("Connection was killed in flight")
+                if conn_pre_pick_callable is None:
+                    return conn_or_pool
+                # A queued waiter already owns the connection after handoff.
+                try:
+                    wait = conn_pre_pick_callable(conn_or_pool)
+                except BaseException:
+                    if self.release():
+                        await asyncio.sleep(0)
+                    raise
+                if wait is None:
+                    return conn_or_pool
+                if self.release():
+                    await asyncio.sleep(0)
+            else:
+                if conn_pre_pick_callable is not None:
+                    wait = conn_pre_pick_callable(conn_or_pool)
+                if wait is None:
+                    self._cursors[_current_task_or_die()] = ActiveCursor(
+                        obj_id, conn_or_pool
+                    )
+
+                    if not self.concurrency:
+                        del self._container[obj_id]
+
+                    return conn_or_pool
+
+            if not block:
+                raise UnavailableTraffic("Candidate is not ready")
+            assert wait is not None
+            await wait()
 
     @contextlib.asynccontextmanager
     async def borrow(
@@ -1076,6 +1144,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
         not_idle_only: bool = False,
+        *,
+        conn_pre_pick_callable: typing.Callable[
+            [T], typing.Callable[[], typing.Awaitable[None]] | None
+        ]
+        | None = None,
     ) -> typing.AsyncGenerator[T, None]:
         clean_exit = True
         conn_or_pool: T | None = None
@@ -1102,7 +1175,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
                                 del self._container[obj_id]
                 else:
                     conn_or_pool = await self.locate(
-                        traffic_indicator, block=block, timeout=timeout
+                        traffic_indicator,
+                        block=block,
+                        timeout=timeout,
+                        conn_pre_pick_callable=conn_pre_pick_callable,
                     )
             else:
                 # simulate reentrant lock/borrow
@@ -1163,6 +1239,24 @@ class AsyncTrafficPolice(typing.Generic[T]):
                         del self._cursors[current_task]
                 else:
                     del self._cursors[current_task]
+                    if (
+                        self._signals._priority_signals
+                        and traffic_state_of(active_cursor.conn_or_pool)
+                        is TrafficState.IDLE
+                        and not any(
+                            cursor.obj_id == active_cursor.obj_id
+                            for cursor in self._cursors.values()
+                        )
+                    ):
+                        # The last borrower released an idle pool. Eviction
+                        # waiters may retry without taking ownership of it.
+                        # Wake all so cancellation cannot consume the notification.
+                        for signal in tuple(self._signals._priority_signals):
+                            if signal.target_conn_or_pool is None and signal.states == (
+                                TrafficState.IDLE,
+                            ):
+                                self._signals.unregister(signal, unblock=True)
+                        self._signals._refresh_generic_waiters()
 
         return cursor_transferred
 

@@ -93,3 +93,33 @@ async def test_get_response_none_path_yields_control() -> None:
         assert beats > 1
     finally:
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_connection_waiter_does_not_strand_owner() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from typing import Any
+    from urllib3._async.response import AsyncHTTPResponse
+    from urllib3.util._async.traffic_police import AsyncTrafficPolice
+
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice(maxsize=1)
+    conn = SimpleNamespace(is_idle=False, is_saturated=True)
+    indicator = AsyncHTTPResponse()
+    await police.put(conn, indicator, immediately_unavailable=True)
+    await police.put(conn)
+
+    async def borrow() -> None:
+        async with police.borrow(indicator) as acquired:
+            assert acquired is conn
+
+    async with police.borrow(indicator):
+        waiting = asyncio.create_task(borrow())
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+    # A saturation notification must not pretend ownership was handed to the
+    # cancelled task. The released connection must remain borrowable.
+    await asyncio.wait_for(asyncio.create_task(borrow()), 1)
