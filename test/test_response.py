@@ -28,6 +28,7 @@ from urllib3.exceptions import (
 )
 from urllib3.response import (  # type: ignore[attr-defined]
     BytesQueueBuffer,
+    GzipDecoder,
     HTTPResponse,
     brotli,
     zstd,
@@ -346,6 +347,22 @@ class TestResponse:
         r = HTTPResponse(fp, headers={"content-encoding": "gzip"})
 
         assert r.data == b"foofoofoo"
+
+    def test_decode_gzip_flush_after_trailing_garbage(self) -> None:
+        decoder = GzipDecoder()
+        assert decoder.decompress(gzip.compress(b"foo") + b"garbage") == b"foo"
+
+        # Older Python versions silently ignore this error in zlib.flush().
+        with mock.patch.object(decoder, "_obj") as decompressor:
+            decompressor.flush.side_effect = zlib.error("invalid trailing data")
+            assert decoder.flush() == b""
+
+    def test_decode_gzip_flush_error_is_not_swallowed(self) -> None:
+        decoder = GzipDecoder()
+        with mock.patch.object(decoder, "_obj") as decompressor:
+            decompressor.flush.side_effect = zlib.error("invalid compressed data")
+            with pytest.raises(zlib.error, match="invalid compressed data"):
+                decoder.flush()
 
     @onlyBrotli()
     def test_decode_brotli(self) -> None:

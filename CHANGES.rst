@@ -1,6 +1,9 @@
 2.25.900 (2026-09-21)
 =====================
 
+- Fixed gzip responses with trailing garbage raising an error on Python versions
+  with stricter ``zlib.Decompress.flush()`` error handling, in both sync and async.
+  See https://github.com/urllib3/urllib3/issues/5268
 - Added opt-in response body caching for retry-delay hooks with
   ``Retry(cache_response_body=True)``, plus ``Retry.async_get_retry_after()`` for async
   body inspection. Caching defaults to off in both sync and async. (#346)
