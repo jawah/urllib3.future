@@ -191,6 +191,39 @@ class TestAsyncResponse:
 
         assert await r.data == b"foo"
 
+    @pytest.mark.timeout(5)
+    @pytest.mark.parametrize("wbits", (zlib.MAX_WBITS, -zlib.MAX_WBITS))
+    @pytest.mark.parametrize("read_method", ("read", "read1", "stream", "read_chunked"))
+    async def test_deflate_trailing_data(self, wbits: int, read_method: str) -> None:
+        payload = b"A" * 100
+        compressor = zlib.compressobj(wbits=wbits)
+        encoded = compressor.compress(payload) + compressor.flush() + b"tail"
+
+        async def body_reader(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            return [encoded], True, None
+
+        headers = HTTPHeaderDict(
+            {"transfer-encoding": "chunked", "content-encoding": "deflate"}
+        )
+        raw = AsyncLowLevelResponse("GET", 200, 11, "OK", headers, body_reader)
+        response = AsyncHTTPResponse(raw, headers=headers, preload_content=False)
+
+        assert await response.read(0) == b""
+        if read_method in ("stream", "read_chunked"):
+            chunks = [chunk async for chunk in getattr(response, read_method)(50)]
+        else:
+            chunks = []
+            while True:
+                chunk = await getattr(response, read_method)(50)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+
+        assert b"".join(chunks) == payload
+        assert all(0 < len(chunk) <= 50 for chunk in chunks)
+
     async def test_decode_deflate_case_insensitive(self) -> None:
         data = zlib.compress(b"foo")
 

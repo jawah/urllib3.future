@@ -941,6 +941,34 @@ class TestResponse:
         with pytest.raises(StopIteration):
             next(stream)
 
+    @pytest.mark.timeout(5)
+    @pytest.mark.parametrize("wbits", (zlib.MAX_WBITS, -zlib.MAX_WBITS))
+    @pytest.mark.parametrize("read_method", ("read", "read1", "stream", "read_chunked"))
+    def test_deflate_trailing_data(self, wbits: int, read_method: str) -> None:
+        payload = b"A" * 100
+        compressor = zlib.compressobj(wbits=wbits)
+        encoded = compressor.compress(payload) + compressor.flush() + b"tail"
+
+        def body_reader(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            return [encoded], True, None
+
+        headers = HTTPHeaderDict(
+            {"transfer-encoding": "chunked", "content-encoding": "deflate"}
+        )
+        raw = LowLevelResponse("GET", 200, 11, "OK", headers, body_reader)
+        response = HTTPResponse(raw, headers=headers, preload_content=False)
+
+        assert response.read(0) == b""
+        if read_method in ("stream", "read_chunked"):
+            chunks = list(getattr(response, read_method)(50))
+        else:
+            chunks = list(iter(lambda: getattr(response, read_method)(50), b""))
+
+        assert b"".join(chunks) == payload
+        assert all(0 < len(chunk) <= 50 for chunk in chunks)
+
     def test_empty_stream(self) -> None:
         fp = BytesIO(b"")
         resp = HTTPResponse(fp, preload_content=False)
