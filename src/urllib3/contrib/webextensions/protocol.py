@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import typing
 from abc import ABCMeta
-from contextlib import contextmanager
 from socket import timeout as SocketTimeout
+from types import TracebackType
 
 if typing.TYPE_CHECKING:
     from ...backend import HttpVersion
@@ -29,102 +29,11 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
         self._response: HTTPResponse | None = None
         self._police_officer: TrafficPolice | None = None  # type: ignore[type-arg]
 
-    @contextmanager
-    def _read_error_catcher(self) -> typing.Generator[None, None, None]:
-        """
-        Catch low-level python exceptions, instead re-raising urllib3
-        variants, so that low-level exceptions are not leaked in the
-        high-level api.
+    def _read_error_catcher(self) -> _ReadErrorCatcher:
+        return _ReadErrorCatcher(self)
 
-        On unrecoverable issues, release the connection back to the pool.
-        """
-        clean_exit = False
-
-        try:
-            try:
-                yield
-
-            except SocketTimeout as e:
-                clean_exit = True
-                pool = (
-                    self._response._pool
-                    if self._response and hasattr(self._response, "_pool")
-                    else None
-                )
-                raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
-
-            except BaseSSLError as e:
-                # FIXME: Is there a better way to differentiate between SSLErrors?
-                if "read operation timed out" not in str(e):
-                    # SSL errors related to framing/MAC get wrapped and reraised here
-                    raise SSLError(e) from e
-                clean_exit = True  # ws algorithms based on timeouts can expect this without being harmful!
-                pool = (
-                    self._response._pool
-                    if self._response and hasattr(self._response, "_pool")
-                    else None
-                )
-                raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
-
-            except (OSError, MustRedialError) as e:
-                # This includes IncompleteRead.
-                raise ProtocolError(f"Connection broken: {e!r}", e) from e
-
-            # If no exception is thrown, we should avoid cleaning up
-            # unnecessarily.
-            clean_exit = True
-        finally:
-            # If we didn't terminate cleanly, we need to throw away our
-            # connection.
-            if not clean_exit:
-                # The response may not be closed but we're not going to use it
-                # anymore so close it now to ensure that the connection is
-                # released back to the pool.
-                if self._response:
-                    self.close()
-
-    @contextmanager
-    def _write_error_catcher(self) -> typing.Generator[None, None, None]:
-        """
-        Catch low-level python exceptions, instead re-raising urllib3
-        variants, so that low-level exceptions are not leaked in the
-        high-level api.
-
-        On unrecoverable issues, release the connection back to the pool.
-        """
-        clean_exit = False
-
-        try:
-            try:
-                yield
-
-            except SocketTimeout as e:
-                pool = (
-                    self._response._pool
-                    if self._response and hasattr(self._response, "_pool")
-                    else None
-                )
-                raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
-
-            except BaseSSLError as e:
-                raise SSLError(e) from e
-
-            except OSError as e:
-                # This includes IncompleteRead.
-                raise ProtocolError(f"Connection broken: {e!r}", e) from e
-
-            # If no exception is thrown, we should avoid cleaning up
-            # unnecessarily.
-            clean_exit = True
-        finally:
-            # If we didn't terminate cleanly, we need to throw away our
-            # connection.
-            if not clean_exit:
-                # The response may not be closed but we're not going to use it
-                # anymore so close it now to ensure that the connection is
-                # released back to the pool.
-                if self._response:
-                    self.close()
+    def _write_error_catcher(self) -> _WriteErrorCatcher:
+        return _WriteErrorCatcher(self)
 
     @property
     def urlopen_kwargs(self) -> dict[str, typing.Any]:
@@ -187,3 +96,90 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
         """Set up a callback that will be invoked automatically once a payload is received.
         Meaning that you stop calling manually next_payload()."""
         raise NotImplementedError
+
+
+class _ReadErrorCatcher:
+    """Translate read errors, preserving the extension on read timeouts."""
+
+    __slots__ = ("_owner",)
+
+    def __init__(self, owner: ExtensionFromHTTP) -> None:
+        self._owner = owner
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> typing.Literal[False]:
+        if exc is None:
+            return False
+        owner = self._owner
+        clean_exit = False
+        try:
+            if isinstance(exc, SocketTimeout):
+                clean_exit = True  # A read timeout leaves the extension usable.
+                pool = (
+                    owner._response._pool
+                    if owner._response and hasattr(owner._response, "_pool")
+                    else None
+                )
+                raise ReadTimeoutError(pool, None, "Read timed out.") from exc  # type: ignore[arg-type]
+            elif isinstance(exc, BaseSSLError):
+                if "read operation timed out" not in str(exc):
+                    raise SSLError(exc) from exc
+                clean_exit = True  # A read timeout leaves the extension usable.
+                pool = (
+                    owner._response._pool
+                    if owner._response and hasattr(owner._response, "_pool")
+                    else None
+                )
+                raise ReadTimeoutError(pool, None, "Read timed out.") from exc  # type: ignore[arg-type]
+            elif isinstance(exc, (OSError, MustRedialError)):
+                raise ProtocolError(f"Connection broken: {exc!r}", exc) from exc
+            return False
+        finally:
+            if not clean_exit:
+                if owner._response:
+                    owner.close()
+
+
+class _WriteErrorCatcher:
+    """Translate write errors and close the extension on failure."""
+
+    __slots__ = ("_owner",)
+
+    def __init__(self, owner: ExtensionFromHTTP) -> None:
+        self._owner = owner
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> typing.Literal[False]:
+        if exc is None:
+            return False
+        owner = self._owner
+        try:
+            if isinstance(exc, SocketTimeout):
+                pool = (
+                    owner._response._pool
+                    if owner._response and hasattr(owner._response, "_pool")
+                    else None
+                )
+                raise ReadTimeoutError(pool, None, "Read timed out.") from exc  # type: ignore[arg-type]
+            elif isinstance(exc, BaseSSLError):
+                raise SSLError(exc) from exc
+            elif isinstance(exc, OSError):
+                raise ProtocolError(f"Connection broken: {exc!r}", exc) from exc
+            return False
+        finally:
+            if owner._response:
+                owner.close()

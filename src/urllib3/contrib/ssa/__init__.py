@@ -90,6 +90,7 @@ class AsyncSocket:
         self._addr: tuple[str, int] | tuple[str, int, int, int] | None = None
 
         self._external_timeout: float | int | None = None
+        self._read_ready_hint = False
         self._tls_in_tls = False
 
     def fileno(self) -> int:
@@ -417,6 +418,35 @@ class AsyncSocket:
 
         return self  # type: ignore[return-value]
 
+    def read_ready(self) -> bool:
+        reader = self._reader
+        if not isinstance(reader, asyncio.StreamReader):
+            raise OSError("Readiness requires a connected stream")
+        ready = bool(
+            getattr(reader, "_buffer") or reader.exception() or reader.at_eof()
+        )
+        self._read_ready_hint = ready
+        return ready
+
+    async def until_data_available(self, remaining: float | None = None) -> None:
+        if remaining is None:
+            remaining = self._external_timeout
+        reader = self._reader
+        if not isinstance(reader, asyncio.StreamReader):
+            raise OSError("Readiness requires a connected stream")
+        async with self._reader_semaphore:
+            if reader.exception() is not None:
+                raise reader.exception()
+            if getattr(reader, "_buffer") or reader.at_eof():
+                self._read_ready_hint = True
+                return
+            try:
+                async with timeout(remaining):
+                    await getattr(reader, "_wait_for_data")("until_data_available")
+            except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as exc:
+                raise StandardTimeoutError from exc
+            self._read_ready_hint = True
+
     async def recv(self, size: int = -1) -> bytes | list[bytes]:
         """Receive data from the socket.
 
@@ -436,6 +466,21 @@ class AsyncSocket:
         try:
             if self._external_timeout is not None:
                 try:
+                    if self._read_ready_hint:
+                        self._read_ready_hint = False
+                        # Only readiness users opt into this path. Recheck after
+                        # acquiring the semaphore; an earlier reader may have
+                        # consumed the bytes. A positive read on the standard
+                        # StreamReader cannot suspend when it has bytes or EOF.
+                        if (
+                            type(self._reader) is asyncio.StreamReader
+                            and size > 0
+                            and (
+                                getattr(self._reader, "_buffer")
+                                or self._reader.at_eof()
+                            )
+                        ):
+                            return await self._reader.read(n=size)
                     async with timeout(self._external_timeout):
                         return await self._reader.read(n=size)
                 except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:

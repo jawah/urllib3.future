@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import time
+from socket import timeout as SocketTimeout
 import typing
 
 if typing.TYPE_CHECKING:
     from ...._async.response import AsyncHTTPResponse
+    from ...._async.connection import AsyncHTTPConnection
 
 from wsproto import ConnectionType, WSConnection
+from wsproto.connection import Connection
 from wsproto.events import (
     AcceptConnection,
     BytesMessage,
@@ -19,7 +24,8 @@ from wsproto.extensions import PerMessageDeflate
 from wsproto.utilities import ProtocolError as WebSocketProtocolError
 
 from ....backend import HttpVersion
-from ....exceptions import ProtocolError
+from ....exceptions import ProtocolError, ReadTimeoutError
+from ...ssa import AsyncSocket
 from ....util.traffic_police import UnavailableTraffic
 from .protocol import AsyncExtensionFromHTTP
 
@@ -27,9 +33,14 @@ from .protocol import AsyncExtensionFromHTTP
 class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
     def __init__(self) -> None:
         super().__init__()
-        self._protocol = WSConnection(ConnectionType.CLIENT)
+        self._protocol: WSConnection | Connection = WSConnection(ConnectionType.CLIENT)
         self._request_headers: dict[str, str] | None = None
         self._remote_shutdown: bool = False
+        self._read_closed = False
+        self._read_lock: asyncio.Lock | None = None
+        self._ready_socket: AsyncSocket | None = None
+        self._read_deadline: float | None = None
+        self._read_timeout: float | None = None
 
     @staticmethod
     def supported_svn() -> set[HttpVersion]:
@@ -76,6 +87,12 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                 "The WebSocket state-machine did not pass the handshake phase when expected."
             )
 
+        # The HTTP upgrade is complete. Keep the established state machine;
+        # the handshake wrapper adds no further protocol work.
+        if isinstance(self._protocol, WSConnection):
+            assert self._protocol.connection is not None
+            self._protocol = self._protocol.connection
+
     def headers(self, http_version: HttpVersion) -> dict[str, str]:
         """Specific HTTP headers required (request) before the 101 status response."""
         if self._request_headers is not None:
@@ -108,42 +125,40 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         return request_headers
 
     async def close(self) -> None:
-        """End/Notify close for sub protocol."""
-        if self._dsa is not None:
-            if self._police_officer is not None:
-                try:
-                    async with self._police_officer.borrow(self._response):
-                        # close() must be tolerant: when the peer has already
-                        # gone (TCP FIN, half-closed stream, or a protocol
-                        # violation that tore down the underlying HTTP state
-                        # machine), every socket-touching call below can fail.
-                        if self._remote_shutdown is False:
-                            try:
-                                data_to_send: bytes = self._protocol.send(
-                                    CloseConnection(0)
-                                )
-                                await self._dsa.sendall(data_to_send)
-                            except (WebSocketProtocolError, OSError, AssertionError):
-                                pass
+        """End the WebSocket and release its transport ownership."""
+        self._read_closed = True
+        response, police = self._response, self._police_officer
+        if self._dsa is not None and police is not None:
+            try:
+                async with police.borrow(response):
+                    dsa = self._dsa
+                    if dsa is None:
+                        return
+                    if not self._remote_shutdown:
                         try:
-                            await self._dsa.close()
-                        except (OSError, AssertionError):
+                            data_to_send = self._protocol.send(CloseConnection(0))
+                            await dsa.sendall(data_to_send)
+                        except (WebSocketProtocolError, OSError, AssertionError):
                             pass
-                        self._dsa = None
-                except UnavailableTraffic:
-                    # the underlying connection was already destroyed
-                    # (e.g. via kill_cursor() after a protocol violation).
-                    # nothing to send; just clean up local state.
+                    try:
+                        await dsa.close()
+                    except (OSError, AssertionError):
+                        pass
+                    if response is not None and response.version == 11:
+                        # An H1 upgrade owns the transport. Removing it closes
+                        # the socket and wakes socket and connection waiters.
+                        await police.kill_cursor()
                     self._dsa = None
-            else:
+            except UnavailableTraffic:
                 self._dsa = None
-        if self._response is not None:
-            if self._police_officer is not None:
-                self._police_officer.forget(self._response)
+        else:
+            self._dsa = None
+        if response is not None:
+            if police is not None:
+                police.forget(response)
             else:
-                await self._response.close()
-            self._response = None
-
+                await response.close()
+        self._response = None
         self._police_officer = None
 
     async def next_payload(self) -> str | bytes | None:
@@ -151,85 +166,193 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._dsa is None or self._response is None or self._police_officer is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
-        text_buf: list[str] = []
-        bytes_buf: list[bytes] = []
-
-        async with self._police_officer.borrow(self._response):
-            # wsproto uses bare ``assert`` statements inside ``events()`` and
-            # the per-message-deflate inbound decompression to validate frame
-            # payloads. We treat such failures as a protocol violation.
-            try:
-                for event in self._protocol.events():
-                    if isinstance(event, TextMessage):
-                        if event.message_finished and not text_buf:
-                            return event.data
-                        text_buf.append(event.data)
-                        if event.message_finished:
-                            return "".join(text_buf)
-                    elif isinstance(event, BytesMessage):
-                        if event.message_finished and not bytes_buf:
-                            return event.data
-                        bytes_buf.append(event.data)
-                        if event.message_finished:
-                            return b"".join(bytes_buf)
-                    elif isinstance(event, CloseConnection):
-                        self._remote_shutdown = True
-                        await self.close()
+        response, police = self._response, self._police_officer
+        cooperative = response.version == 11 and not police.busy
+        if cooperative:
+            if self._read_lock is None:
+                self._read_lock = asyncio.Lock()
+            await self._read_lock.acquire()
+        try:
+            if self._read_closed:
+                return None
+            text_buf: list[str] = []
+            bytes_buf: list[bytes] = []
+            before_pick = None
+            self._read_deadline = None
+            self._ready_socket = None
+            while True:
+                yield_to_writer = False
+                borrow = (
+                    police.borrow(response)
+                    if before_pick is None
+                    else police.borrow(
+                        response,
+                        timeout=None
+                        if self._read_deadline is None
+                        else max(0, self._read_deadline - time.monotonic()),
+                        conn_pre_pick_callable=before_pick,
+                    )
+                )
+                async with borrow as conn:
+                    if self._read_closed:
                         return None
-                    elif isinstance(event, Ping):
+                    # wsproto uses bare ``assert`` statements inside ``events()`` and
+                    # the per-message-deflate inbound decompression to validate frame
+                    # payloads. We treat such failures as a protocol violation.
+                    try:
+                        for event in self._protocol.events():
+                            if isinstance(event, TextMessage):
+                                if event.message_finished and not text_buf:
+                                    return event.data
+                                text_buf.append(event.data)
+                                if event.message_finished:
+                                    return "".join(text_buf)
+                            elif isinstance(event, BytesMessage):
+                                if event.message_finished and not bytes_buf:
+                                    return event.data
+                                bytes_buf.append(event.data)
+                                if event.message_finished:
+                                    return b"".join(bytes_buf)
+                            elif isinstance(event, CloseConnection):
+                                self._remote_shutdown = True
+                                await self.close()
+                                return None
+                            elif isinstance(event, Ping):
+                                try:
+                                    data_to_send: bytes = self._protocol.send(
+                                        event.response()
+                                    )
+                                except WebSocketProtocolError as e:
+                                    await self.close()
+                                    raise ProtocolError from e
+
+                                async with self._write_error_catcher():
+                                    await self._dsa.sendall(data_to_send)
+                    except AssertionError as e:
+                        await self.close()
+                        raise ProtocolError from e
+
+                    while True:
+                        # Reuse this ownership while buffered input can satisfy
+                        # the receive. A deferred wait must run after release.
+                        if cooperative and self._before_read_pick(conn) is not None:
+                            break
+                        async with self._read_error_catcher():
+                            sock = conn.sock if cooperative else None
+                            if self._read_deadline is not None:
+                                remaining = self._read_deadline - time.monotonic()
+                                if remaining <= 0:
+                                    raise SocketTimeout("Read timed out")
+                                sock.settimeout(remaining)
+                            try:
+                                data, eot, _ = await self._dsa.recv_extended(None)
+                            finally:
+                                if (
+                                    self._read_deadline is not None
+                                    and conn.sock is sock
+                                ):
+                                    sock.settimeout(self._read_timeout)
+                        self._read_deadline = None
+                        self._ready_socket = None
+
                         try:
-                            data_to_send: bytes = self._protocol.send(event.response())
+                            self._protocol.receive_data(data)
                         except WebSocketProtocolError as e:
                             await self.close()
                             raise ProtocolError from e
 
-                        async with self._write_error_catcher():
-                            await self._dsa.sendall(data_to_send)
-            except AssertionError as e:
-                await self.close()
-                raise ProtocolError from e
-
-            while True:
-                async with self._read_error_catcher():
-                    data, eot, _ = await self._dsa.recv_extended(None)
-
-                try:
-                    self._protocol.receive_data(data)
-                except WebSocketProtocolError as e:
-                    await self.close()
-                    raise ProtocolError from e
-
-                try:
-                    for event in self._protocol.events():
-                        if isinstance(event, TextMessage):
-                            if event.message_finished and not text_buf:
-                                return event.data
-                            text_buf.append(event.data)
-                            if event.message_finished:
-                                return "".join(text_buf)
-                        elif isinstance(event, BytesMessage):
-                            if event.message_finished and not bytes_buf:
-                                return event.data
-                            bytes_buf.append(event.data)
-                            if event.message_finished:
-                                return b"".join(bytes_buf)
-                        elif isinstance(event, CloseConnection):
-                            self._remote_shutdown = True
+                        try:
+                            for event in self._protocol.events():
+                                if isinstance(event, TextMessage):
+                                    if event.message_finished and not text_buf:
+                                        return event.data
+                                    text_buf.append(event.data)
+                                    if event.message_finished:
+                                        return "".join(text_buf)
+                                elif isinstance(event, BytesMessage):
+                                    if event.message_finished and not bytes_buf:
+                                        return event.data
+                                    bytes_buf.append(event.data)
+                                    if event.message_finished:
+                                        return b"".join(bytes_buf)
+                                elif isinstance(event, CloseConnection):
+                                    self._remote_shutdown = True
+                                    await self.close()
+                                    return None
+                                elif isinstance(event, Ping):
+                                    try:
+                                        data_to_send = self._protocol.send(
+                                            event.response()
+                                        )
+                                    except WebSocketProtocolError as e:
+                                        await self.close()
+                                        raise ProtocolError from e
+                                    async with self._write_error_catcher():
+                                        await self._dsa.sendall(data_to_send)
+                                elif isinstance(event, Pong):
+                                    continue
+                        except AssertionError as e:
                             await self.close()
-                            return None
-                        elif isinstance(event, Ping):
-                            try:
-                                data_to_send = self._protocol.send(event.response())
-                            except WebSocketProtocolError as e:
-                                await self.close()
-                                raise ProtocolError from e
-                            async with self._write_error_catcher():
-                                await self._dsa.sendall(data_to_send)
-                        elif isinstance(event, Pong):
-                            continue
-                except AssertionError as e:
-                    await self.close()
-                    raise ProtocolError from e
+                            raise ProtocolError from e
+                        if cooperative:
+                            yield_to_writer = True
+                            break
+                if yield_to_writer:
+                    await asyncio.sleep(0)
+                before_pick = self._before_read_pick
+        except (SocketTimeout, TimeoutError) as e:
+            # Queue and socket timeouts are distinct before Python 3.10.
+            pool = self._response._pool if self._response is not None else None
+            raise ReadTimeoutError(pool, None, "Read timed out.") from e  # type: ignore[arg-type]
+        except UnavailableTraffic:
+            if self._read_closed:
+                return None
+            raise
+        except asyncio.CancelledError:
+            # A cancelled active reader may have consumed part of a message.
+            await self.close()
+            raise
+        finally:
+            if cooperative:
+                assert self._read_lock is not None
+                self._read_lock.release()
+
+    def _before_read_pick(
+        self, conn: AsyncHTTPConnection
+    ) -> typing.Callable[[], typing.Awaitable[None]] | None:
+        if self._read_closed:
+            raise UnavailableTraffic("The WebSocket is closed")
+        assert self._dsa is not None and conn._protocol is not None
+        assert conn.sock is not None
+        if self._dsa._buffer or self._dsa._eot or conn._protocol.has_pending_event():
+            return None
+        sock = conn.sock
+        if sock is self._ready_socket:
+            return None
+        if sock.read_ready():
+            return None
+        if self._read_deadline is None:
+            self._read_timeout = sock.gettimeout()
+            if self._read_timeout is not None:
+                self._read_deadline = time.monotonic() + self._read_timeout
+        return lambda: self._wait_for_read(sock)
+
+    async def _wait_for_read(self, sock: AsyncSocket) -> None:
+        if self._read_closed:
+            return
+        remaining = (
+            None
+            if self._read_deadline is None
+            else max(0, self._read_deadline - time.monotonic())
+        )
+        async with self._read_error_catcher():
+            try:
+                await sock.until_data_available(remaining)
+            except (OSError, ValueError):
+                if self._read_closed:
+                    return
+                raise
+        self._ready_socket = sock
 
     async def send_payload(self, buf: str | bytes) -> None:
         """Dispatch a buffer to remote."""
