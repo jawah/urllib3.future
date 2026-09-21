@@ -83,6 +83,12 @@ class AsyncDirectStreamAccess:
                 __bufsize is not None,
                 False,
             )
+            # An unbounded extension read can return a single protocol chunk
+            # directly; there are no leftovers to enqueue.
+            if __bufsize is None and len(chunks) == 1 and isinstance(chunks[0], bytes):
+                if self._eot:
+                    self._read = None
+                return chunks[0], self._eot, trailers
             self._buffer.put_many(chunks)
 
         if self._buffer:
