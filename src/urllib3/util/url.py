@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import typing
-from functools import lru_cache
+from functools import lru_cache, partial
 
 from ..exceptions import LocationParseError
 from .util import to_str
@@ -14,6 +14,8 @@ _NORMALIZABLE_SCHEMES = ("http", "https", None)
 # Almost all of these patterns were derived from the
 # 'rfc3986' module: https://github.com/python-hyper/rfc3986
 _PERCENT_RE = re.compile(r"%[a-fA-F0-9]{2}")
+_HOST_PERCENT_RE = re.compile(r"%[a-fA-F0-9]{2}|%")
+_HOST_INVALID_CHAR_RE = re.compile(r"[\x00-\x20\x7f]")
 _SCHEME_RE = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+-]*:|/)")
 _URI_RE = re.compile(
     r"^(?:([a-zA-Z][a-zA-Z0-9+.-]*):)?"
@@ -301,31 +303,67 @@ def _normalize_host(host: str, scheme: str | None) -> str: ...
 
 def _normalize_host(host: str | None, scheme: str | None) -> str | None:
     if host:
-        if scheme in _NORMALIZABLE_SCHEMES:
-            is_ipv6 = _IPV6_ADDRZ_RE.match(host)
-            if is_ipv6:
-                # IPv6 hosts of the form 'a::b%zone' are encoded in a URL as
-                # such per RFC 6874: 'a::b%25zone'. Unquote the ZoneID
-                # separator as necessary to return a valid RFC 4007 scoped IP.
-                match = _ZONE_ID_RE.search(host)
-                if match:
-                    start, end = match.span(1)
-                    zone_id = host[start:end]
+        invalid_host_char = _HOST_INVALID_CHAR_RE.search(host)
+        if invalid_host_char:
+            raise LocationParseError(
+                f"Host {host!r} contains invalid character {invalid_host_char.group()!r}"
+            )
+        # Validate every scheme without changing non-HTTP host normalization.
+        normalize = scheme in _NORMALIZABLE_SCHEMES
+        is_ipv6 = _IPV6_ADDRZ_RE.fullmatch(host)
+        if is_ipv6:
+            # IPv6 hosts of the form 'a::b%zone' are encoded in a URL as
+            # such per RFC 6874: 'a::b%25zone'. Unquote the ZoneID
+            # separator as necessary to return a valid RFC 4007 scoped IP.
+            match = _ZONE_ID_RE.search(host)
+            if match:
+                start, end = match.span(1)
+                zone_id = host[start:end]
 
-                    if zone_id.startswith("%25") and zone_id != "%25":
-                        zone_id = zone_id[3:]
-                    else:
-                        zone_id = zone_id[1:]
+                if zone_id.startswith("%25") and zone_id != "%25":
+                    zone_id = zone_id[3:]
+                else:
+                    zone_id = zone_id[1:]
+                zone_id = _PERCENT_RE.sub(
+                    partial(_normalize_host_percent_encoding, decode_unreserved=False),
+                    zone_id,
+                )
+                if normalize:
                     zone_id = _encode_invalid_chars(zone_id, _UNRESERVED_CHARS)
                     return f"{host[:start].lower()}%{zone_id}{host[end:]}"
-                else:
-                    return host.lower()
-            elif not _IPV4_RE.match(host):
+            elif normalize:
+                return host.lower()
+        elif not _IPV4_RE.fullmatch(host):
+            if "%" in host:
+                normalized_host = _HOST_PERCENT_RE.sub(
+                    _normalize_host_percent_encoding, host
+                )
+                if normalize:
+                    host = normalized_host
+            if normalize:
                 return to_str(
                     b".".join([_idna_encode(label) for label in host.split(".")]),
                     "ascii",
                 )
     return host
+
+
+def _normalize_host_percent_encoding(
+    match: re.Match[str], *, decode_unreserved: bool = True
+) -> str:
+    encoded = match.group(0)
+    if encoded == "%":
+        raise LocationParseError(f"{match.string!r} is not a valid host")
+    decoded = chr(int(encoded[1:], 16))
+    # Encoded spaces and reserved characters stay encoded; controls are invalid.
+    if decoded < "\x20" or decoded == "\x7f":
+        raise LocationParseError(
+            f"Host {match.string!r} contains invalid percent-encoded control "
+            f"character {encoded!r}"
+        )
+    if decode_unreserved and decoded in _UNRESERVED_CHARS:
+        return decoded
+    return encoded.upper()
 
 
 def _idna_encode(name: str) -> bytes:
@@ -368,7 +406,10 @@ def _idna_encode(name: str) -> bytes:
                     f"Name '{name}' is not a valid IDNA label"
                 ) from None
 
-    return name.lower().encode("ascii")
+    name = name.lower()
+    if "%" in name:
+        name = _PERCENT_RE.sub(lambda match: match.group(0).upper(), name)
+    return name.encode("ascii")
 
 
 @lru_cache(maxsize=1024)
@@ -447,7 +488,7 @@ def parse_url(url: str) -> Url:
         if authority:
             auth, _, host_port = authority.rpartition("@")
             auth = auth or None
-            host, port = _HOST_PORT_RE.match(host_port).groups()  # type: ignore[union-attr]
+            host, port = _HOST_PORT_RE.fullmatch(host_port).groups()  # type: ignore[union-attr]
             if auth and normalize_uri:
                 auth = _encode_invalid_chars(auth, _USERINFO_CHARS)
             if port == "":

@@ -34,7 +34,7 @@ from urllib3.util.ssl_ import (
     ssl_wrap_socket,
 )
 from urllib3.util.timeout import _DEFAULT_TIMEOUT, Timeout
-from urllib3.util.url import Url, _encode_invalid_chars, parse_url
+from urllib3.util.url import Url, _encode_invalid_chars, _normalize_host, parse_url
 from urllib3.util.util import to_bytes, to_str
 
 from . import clear_warnings, USING_SECONDARY_ENTRYPOINT
@@ -233,6 +233,78 @@ class TestUtil:
             query="query" + percent_char,
             fragment="fragment" + percent_char,
         )
+
+    @pytest.mark.parametrize(
+        "prefix", ("http://", "https://", "//", "wss+fast://", "doq://", "socks5://")
+    )
+    @pytest.mark.parametrize("char", [chr(i) for i in range(0x21)] + ["\x7f"])
+    def test_raw_control_characters_in_host_raise(self, prefix: str, char: str) -> None:
+        with pytest.raises(LocationParseError):
+            parse_url(f"{prefix}example{char}.com/path")
+
+    @pytest.mark.parametrize(
+        "prefix", ("http://", "https://", "//", "wss+fast://", "doq://", "socks5://")
+    )
+    @pytest.mark.parametrize("octet", [*range(0x20), 0x7F])
+    @pytest.mark.parametrize("host", ("example{}.com", "[::1%25eth{}]", "[::1%eth{}]"))
+    def test_percent_encoded_control_characters_in_host_raise(
+        self, prefix: str, octet: int, host: str
+    ) -> None:
+        with pytest.raises(LocationParseError):
+            parse_url(prefix + host.format(f"%{octet:02x}") + "/path")
+
+    @pytest.mark.parametrize(
+        "authority", ("example.com:80\n", "127.0.0.1:80\n", "[::1]:80\n")
+    )
+    def test_host_port_match_rejects_trailing_newline(self, authority: str) -> None:
+        with pytest.raises(LocationParseError):
+            parse_url(f"http://{authority}/path")
+
+    @pytest.mark.parametrize(
+        "host",
+        (
+            "bad host",
+            "bad\x00host",
+            "bad%00host",
+            "bad%7fhost",
+            "bad%host",
+            "[::1%eth%0d]",
+        ),
+    )
+    def test_normalize_host_rejects_invalid_host(self, host: str) -> None:
+        with pytest.raises(LocationParseError):
+            _normalize_host(host, "https")
+
+    @pytest.mark.parametrize(
+        "host, expected",
+        [
+            ("%65XAMPLE%2ecom%2E", "example.com."),
+            ("foo%7Ebar.com", "foo~bar.com"),
+            ("%31%32%37.0.0.1", "127.0.0.1"),
+            ("Königsgäßchen.de", "xn--knigsgchen-b4a3dun.de"),
+            ("K%c3%b6nigsg%c3%a4%c3%9fchen.de", "k%C3%B6nigsg%C3%A4%C3%9Fchen.de"),
+            ("%ff.example", "%FF.example"),
+            ("%ed%a0%80.example", "%ED%A0%80.example"),
+            ("foo%20bar.com", "foo%20bar.com"),
+            ("victim%40evil.com", "victim%40evil.com"),
+            ("example%2f%5c%5b%5d%3a%3f%23.com", "example%2F%5C%5B%5D%3A%3F%23.com"),
+            ("a%25b.example", "a%25b.example"),
+            ("[::FF%25etH%2f%41]", "[::ff%etH%2F%41]"),
+            ("[::1%1F]", "[::1%1F]"),
+        ],
+    )
+    def test_host_percent_normalization(self, host: str, expected: str) -> None:
+        assert parse_url(f"https://{host}/path").host == expected
+        assert _normalize_host(host, "https") == expected
+
+    @pytest.mark.parametrize("scheme", ("http+unix", "wss+fast", "doq", "socks5"))
+    @pytest.mark.parametrize(
+        "host", ("%2fvar%2frun%2fSOCKET", "%65XAMPLE.com", "[::FF%25etH%41]")
+    )
+    def test_other_schemes_preserve_host_normalization(
+        self, scheme: str, host: str
+    ) -> None:
+        assert parse_url(f"{scheme}://{host}/path").host == host
 
     parse_url_host_map = [
         ("http://google.com/mail", Url("http", host="google.com", path="/mail")),
@@ -438,7 +510,7 @@ class TestUtil:
         # CVE-2016-5699
         (
             "http://127.0.0.1%0d%0aConnection%3a%20keep-alive",
-            Url("http", host="127.0.0.1%0d%0aconnection%3a%20keep-alive"),
+            False,
         ),
         # NodeJS unicode -> double dot
         (
