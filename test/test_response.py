@@ -1145,6 +1145,41 @@ class TestResponse:
         assert r._decoder is None
         assert len(r._decoded_buffer) == 0
 
+    @pytest.mark.parametrize("body_size", [0, 2**16, 2**16 + 1, 200_000])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    def test_drain_conn_reads_in_bounded_chunks(
+        self, body_size: int, partial_read: bool
+    ) -> None:
+        fp = BytesIO(b"x" * body_size)
+        response = HTTPResponse(
+            fp, headers={"content-length": str(body_size)}, preload_content=False
+        )
+        if partial_read:
+            response.read(1)
+        with mock.patch.object(fp, "read", wraps=fp.read) as read:
+            response.drain_conn()
+        assert fp.closed
+        assert response.tell() == body_size
+        assert response.length_remaining == 0
+        for args, _ in read.call_args_list:
+            assert args and isinstance(args[0], int) and 0 < args[0] <= 2**16
+
+    @pytest.mark.parametrize(
+        "method, status, version", [("GET", 101, 11), ("CONNECT", 200, 20)]
+    )
+    def test_drain_conn_preserves_upgraded_stream(
+        self, method: str, status: int, version: int
+    ) -> None:
+        dsa = mock.Mock()
+        fp = LowLevelResponse(
+            method, status, version, "", HTTPHeaderDict(), None, dsa=dsa
+        )
+        response = HTTPResponse(fp, original_response=fp, preload_content=False)
+        closed = fp.closed
+        response.drain_conn()
+        assert fp._dsa is dsa
+        assert fp.closed is closed
+
     def test_length_no_header(self) -> None:
         fp = BytesIO(b"12345")
         resp = HTTPResponse(fp, preload_content=False)

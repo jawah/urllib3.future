@@ -224,8 +224,11 @@ class AsyncHTTPResponse(HTTPResponse):
 
         Unread data in the HTTPResponse connection blocks the connection from being released back to the pool.
         """
+        # A sized read would close upgraded responses and clear their stream access.
+        amt = 2**16 if getattr(self._fp, "_dsa", None) is None else None
         try:
-            await self._raw_read()
+            while await self._raw_read(amt):
+                pass
         except (HTTPError, OSError, BaseSSLError):
             pass
         if self._has_decoded_content:

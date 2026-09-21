@@ -988,6 +988,41 @@ class TestAsyncResponse:
         assert r._decoder is None
         assert len(r._decoded_buffer) == 0
 
+    @pytest.mark.parametrize("body_size", [0, 2**16, 2**16 + 1, 200_000])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    async def test_drain_conn_reads_in_bounded_chunks(
+        self, body_size: int, partial_read: bool
+    ) -> None:
+        headers = {"content-length": str(body_size)}
+        fp = _make_async_fp(b"x" * body_size, headers=headers)
+        response = AsyncHTTPResponse(fp, headers=headers, preload_content=False)
+        if partial_read:
+            await response.read(1)
+        read = mock.Mock(wraps=fp.read)
+        with mock.patch.object(fp, "read", read):
+            await response.drain_conn()
+        assert fp.closed
+        assert response.tell() == body_size
+        assert response.length_remaining == 0
+        for args, _ in read.call_args_list:
+            assert args and isinstance(args[0], int) and 0 < args[0] <= 2**16
+
+    @pytest.mark.parametrize(
+        "method, status, version", [("GET", 101, 11), ("CONNECT", 200, 20)]
+    )
+    async def test_drain_conn_preserves_upgraded_stream(
+        self, method: str, status: int, version: int
+    ) -> None:
+        dsa = mock.Mock()
+        fp = AsyncLowLevelResponse(
+            method, status, version, "", HTTPHeaderDict(), None, dsa=dsa
+        )
+        response = AsyncHTTPResponse(fp, original_response=fp, preload_content=False)
+        closed = fp.closed
+        await response.drain_conn()
+        assert fp._dsa is dsa
+        assert fp.closed is closed
+
     async def test_length_w_valid_header(self) -> None:
         headers = {"content-length": "5"}
         fp = _make_async_fp(b"12345")
