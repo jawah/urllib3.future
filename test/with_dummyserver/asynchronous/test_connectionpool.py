@@ -610,6 +610,30 @@ class TestConnectionPool(HTTPDummyServerTestCase):
         assert data["params"] == {}
         assert "Content-Type" not in HTTPHeaderDict(data["headers"])
 
+    @pytest.mark.parametrize("chunked_via", ["kwarg", "header"])
+    async def test_303_redirect_makes_request_lose_body_framing(
+        self, chunked_via: str
+    ) -> None:
+        # The body is dropped, so the redirected GET must not keep announcing
+        # a chunked body that it is never going to send.
+        request_headers: dict[str, str] = {}
+        kw: dict[str, typing.Any] = {}
+        if chunked_via == "kwarg":
+            kw["chunked"] = True
+        else:
+            request_headers["Transfer-Encoding"] = "chunked"
+        async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+            response = await pool.request(
+                "POST",
+                "/redirect?target=/headers_and_params",
+                body=iter([b"xxxxxxxx"]),
+                headers=request_headers,
+                **kw,
+            )
+        headers = HTTPHeaderDict((await response.json())["headers"])
+        assert "Transfer-Encoding" not in headers
+        assert "Content-Length" not in headers
+
     async def test_bad_connect(self) -> None:
         async with AsyncHTTPConnectionPool("badhost.invalid", self.port) as pool:
             with pytest.raises(MaxRetryError) as e:

@@ -549,7 +549,8 @@ class AsyncPoolManager(AsyncRequestMethods):
             )
             chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
             body_pos = typing.cast(
-                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+                typing.Optional[_TYPE_BODY_POSITION],
+                from_promise.get_parameter("body_pos"),
             )
             retries = typing.cast(Retry, from_promise.get_parameter("retries"))
 
@@ -559,6 +560,8 @@ class AsyncPoolManager(AsyncRequestMethods):
             if response.status == 303:
                 method = "GET"
                 body = None
+                chunked = False
+                body_pos = None
                 headers = HTTPHeaderDict(headers)
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
@@ -789,6 +792,8 @@ class AsyncPoolManager(AsyncRequestMethods):
         if response.status == 303:
             method = "GET"
             kw["body"] = None
+            kw["chunked"] = False
+            kw["body_pos"] = None
             kw["headers"] = HTTPHeaderDict(kw["headers"])
 
             for should_be_removed_header in NOT_FORWARDABLE_HEADERS:

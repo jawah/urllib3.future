@@ -33,6 +33,7 @@ NOT_FORWARDABLE_HEADERS = frozenset(
         "content-length",
         "digest",
         "last-modified",
+        "transfer-encoding",
     ]
 )
 
