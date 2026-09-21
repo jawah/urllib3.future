@@ -87,7 +87,6 @@ if not BYPASS_SOCKS_LEGACY:
     import typing
     from socket import socket
     from socket import timeout as SocketTimeout
-    from urllib.parse import unquote
 
     # asynchronous part
     from .._async.connection import AsyncHTTPConnection, AsyncHTTPSConnection
@@ -233,10 +232,8 @@ if not BYPASS_SOCKS_LEGACY:
         ):
             parsed = parse_url(proxy_url)
 
-            if username is None and password is None and parsed.auth is not None:
-                username, separator, password = parsed.auth.partition(":")
-                username = unquote(username)
-                password = unquote(password) if separator else None
+            if username is None and password is None:
+                username, password = parsed.auth_decoded
             if parsed.scheme == "socks5":
                 socks_version = ProxyType.SOCKS5
                 rdns = False
@@ -391,10 +388,8 @@ if not BYPASS_SOCKS_LEGACY:
         ):
             parsed = parse_url(proxy_url)
 
-            if username is None and password is None and parsed.auth is not None:
-                username, separator, password = parsed.auth.partition(":")
-                username = unquote(username)
-                password = unquote(password) if separator else None
+            if username is None and password is None:
+                username, password = parsed.auth_decoded
             if parsed.scheme == "socks5":
                 socks_version = ProxyType.SOCKS5
                 rdns = False
