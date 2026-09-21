@@ -1,3 +1,69 @@
+2.25.900 (2026-09-21)
+=====================
+
+- Added opt-in response body caching for retry-delay hooks with
+  ``Retry(cache_response_body=True)``, plus ``Retry.async_get_retry_after()`` for async
+  body inspection. Caching defaults to off in both sync and async. (#346)
+- Backported HTTPS proxy TLS configuration isolation from upstream
+  https://github.com/urllib3/urllib3/pull/3786 and https://github.com/urllib3/urllib3/pull/5093
+  An explicit ``proxy_ssl_context`` now retains its own trust and certificate policy for
+  forwarding and CONNECT proxies, in both sync and async. Destination SNI, identity assertions,
+  and client-certificate parameters no longer configure forwarding-proxy TLS. (GHSA-8988-9cw3-xx77)
+- Backported Deflate end-of-stream handling from upstream
+  https://github.com/urllib3/urllib3/security/advisories/GHSA-gh4c-6fx4-qh6g
+  Finished Deflate streams with trailing bytes no longer raise a spurious ``DecodeError``
+  during sync or async streaming.
+- Added concurrent WebSocket reads and writes over HTTP/1.1, in both sync and async.
+  A waiting ``next_payload()`` releases the connection while waiting for data, allowing
+  another thread or task to call ``send_payload()`` or ``ping()``. Concurrent readers are
+  serialized and read timeouts remain in effect. An already-entered blocking TLS receive
+  can still delay a concurrent writer. (#400)
+- Added an alternative WebSocket backend based on the ``websockets`` Sans-I/O engine.
+  Install ``urllib3-future[ws-fast]`` and select ``ws+fast://`` or ``wss+fast://`` for sync
+  and async WebSocket over HTTP/1.1. Requires Python 3.9+ and ``websockets>=15.0.1,<18``.
+  Plain ``ws://`` and ``wss://`` prefer ``wsproto`` when installed and otherwise use this backend.
+- Reduced webextension read/write overhead and avoided redundant buffering of single
+  protocol chunks in ``DirectStreamAccess`` and its async counterpart.
+- Fixed connection allocation and pool eviction races under thread and task contention,
+  including missed wakeups and incorrect ownership transfers. Available capacity can now
+  be used while other connections are held, within the configured pool limits.
+- Fixed short HTTP/3 upgrade timeouts being applied to UDP socket creation and resolver
+  work instead of preserving the configured connect timeout, in both sync and async. (#416)
+- Reset Linux ``UDP_SEGMENT`` after probing GSO support, preventing unintended segmentation
+  when falling back to ordinary datagram sends.
+- Backported stricter URL host validation and percent normalization from upstream
+  https://github.com/urllib3/urllib3/pull/5095
+  Rejects raw spaces and control characters, encoded controls, malformed host escapes,
+  and trailing newlines after ports. Validation also covers WebSocket, SOCKS, and resolver schemes.
+- Backported removal of fragments from absolute request targets from upstream
+  https://github.com/urllib3/urllib3/pull/5079
+  URL fragments are no longer sent to servers or forwarding proxies, in both sync and async.
+- Backported clearing request body framing and rewind state on HTTP 303 redirects from upstream
+  https://github.com/urllib3/urllib3/pull/5161
+  Applies to sync and async, including deferred responses in multiplexed mode.
+- Backported draining unread response bodies in 64 KiB chunks from upstream
+  https://github.com/urllib3/urllib3/pull/5019
+  Reduces peak memory use in sync and async ``drain_conn()`` while preserving upgraded
+  webextension streams.
+- Backported raising ``UnrewindableBodyError`` when a request body has no ``seek()`` method from upstream
+  https://github.com/urllib3/urllib3/pull/3780
+  Applies to both synchronous and asynchronous body rewinding.
+- Backported raising ``SSLError`` for non-hexadecimal certificate fingerprints from upstream
+  https://github.com/urllib3/urllib3/pull/5212
+- Backported percent-decoding SOCKS proxy credentials from upstream
+  https://github.com/urllib3/urllib3/pull/5031
+  Applies to sync and async ``python-socks`` and the ``PySocks`` fallback, preserving explicit
+  credential overrides and decoding each username and password only once.
+- Backported faster URL percent encoding from upstream
+  https://github.com/urllib3/urllib3/pull/5221
+  Adds a fast path for valid ASCII components and reduces allocations in the general encoder.
+- Backported ``Url.auth_decoded`` and ``Url.auth_decoded_joined`` from upstream
+  https://github.com/urllib3/urllib3/pull/5055
+  These expose UTF-8-decoded credentials while keeping ``Url.auth`` percent-encoded.
+- Backported ``basic_auth_encoding`` and ``proxy_basic_auth_encoding`` options in ``make_headers()`` from upstream
+  https://github.com/urllib3/urllib3/pull/5092
+  Origin and proxy credentials can use independent encodings; both retain the Latin-1 default.
+
 2.24.908 (2026-09-08)
 =====================
 
