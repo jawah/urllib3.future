@@ -469,6 +469,40 @@ That is it! That easy.
 
 .. warning:: In case anything goes wrong (e.g. server denies us access), ``resp.extension`` will be worth ``None``! Be careful.
 
+Full-duplex reads and writes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For WebSocket over HTTP/1.1, a waiting ``next_payload()`` allows another thread
+or task to call ``send_payload()`` or ``ping()``. Concurrent readers are
+serialized so each message is delivered to one reader. Read timeouts remain
+in effect while waiting for socket readiness and reacquiring the connection.
+An already-entered blocking TLS receive can still delay a concurrent writer.
+
+Alternative WebSocket engine
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Install ``urllib3-future[ws-fast]`` to use the ``websockets`` Sans-I/O
+engine, then select ``ws+fast://`` or ``wss+fast://``. The extension
+API is the same for ``PoolManager`` and ``AsyncPoolManager``:
+
+.. code-block:: python
+
+    with urllib3.PoolManager() as pm:
+        resp = pm.urlopen("GET", "wss+fast://echo.websocket.org")
+        resp.extension.send_payload("Hello")
+        print(resp.extension.next_payload())
+
+This backend supports HTTP/1.1 and requires Python 3.9 or newer. Supported
+``websockets`` versions range from 15.0.1 through 17.x: use 15.0.1 on Python
+3.9, 16.1.1 on Python 3.10, and 17.1 on Python 3.11 or newer. Installing
+``urllib3-future[ws-fast]`` selects a compatible version automatically.
+When both engines are installed, plain ``ws://`` and ``wss://`` continue to
+select ``wsproto``; use ``ws+fast://`` or ``wss+fast://`` to select this backend.
+
+.. warning:: Versions 15.0.1 and 16.0 have an upstream DEBUG-log formatting bug for text frames
+    that split a UTF-8 character. With logging handlers that propagate formatting
+    exceptions, this can abort reception. Versions 16.1.1 and 17.1 pass this case.
+
 Using multiplexed mode
 ~~~~~~~~~~~~~~~~~~~~~~
 

@@ -10,6 +10,11 @@ except ImportError:
     WebSocketExtensionFromHTTP = None  # type: ignore[misc, assignment]
     WebSocketExtensionFromMultiplexedHTTP = None  # type: ignore[misc, assignment]
 
+try:
+    from .ws_fast import FastWebSocketExtensionFromHTTP
+except ImportError:
+    FastWebSocketExtensionFromHTTP = None  # type: ignore[misc, assignment]
+
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -56,5 +61,6 @@ __all__ = (
     "WebSocketExtensionFromHTTP",
     "WebSocketExtensionFromMultiplexedHTTP",
     "ServerSideEventExtensionFromHTTP",
+    "FastWebSocketExtensionFromHTTP",
     "load_extension",
 )
