@@ -161,18 +161,27 @@ class AsyncWasiTests(unittest.TestCase):
         async with AsyncPoolManager(
             ca_certs=ROOT_CA, resolver=async_resolver()
         ) as pool:
-            response = await pool.urlopen(
-                "GET", HTTPS_URL.replace("https://", "wss://") + "/websocket/echo"
-            )
-            self.assertEqual(response.status, 101)
-            self.assertIsInstance(response.extension, AsyncWebSocketExtensionFromHTTP)
-            websocket = cast(AsyncWebSocketExtensionFromHTTP, response.extension)
-            await websocket.send_payload("async wasi")
-            await websocket.send_payload(b"async bytes")
-            await websocket.ping()
-            self.assertEqual(await websocket.next_payload(), "async wasi")
-            self.assertEqual(await websocket.next_payload(), b"async bytes")
-            await websocket.close()
+            for base_url in (HTTP_URL, HTTPS_URL):
+                response = await pool.urlopen(
+                    "GET", base_url.replace("http", "ws", 1) + "/websocket/echo"
+                )
+                self.assertEqual(response.status, 101)
+                self.assertIsInstance(
+                    response.extension, AsyncWebSocketExtensionFromHTTP
+                )
+                websocket = cast(AsyncWebSocketExtensionFromHTTP, response.extension)
+
+                async def send() -> None:
+                    await websocket.send_payload("async wasi")
+                    await websocket.send_payload(b"async bytes")
+                    await websocket.ping()
+
+                first, second, _ = await asyncio.gather(
+                    websocket.next_payload(), websocket.next_payload(), send()
+                )
+                self.assertEqual(first, "async wasi")
+                self.assertEqual(second, b"async bytes")
+                await websocket.close()
 
             response = await pool.urlopen(
                 "GET",
