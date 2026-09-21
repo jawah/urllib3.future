@@ -243,6 +243,57 @@ def handle_socks4_negotiation(
 
 
 class TestSOCKSProxyManager:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "manager_name", ["SOCKSProxyManager", "AsyncSOCKSProxyManager"]
+    )
+    @pytest.mark.parametrize("scheme", ["socks4", "socks4a", "socks5", "socks5h"])
+    @pytest.mark.parametrize(
+        "auth, overrides, expected",
+        [
+            ("", {}, (None, None)),
+            ("user:pass@", {}, ("user", "pass")),
+            ("user%3Aname:pa%40ss@", {}, ("user:name", "pa@ss")),
+            ("user:pa:ss@", {}, ("user", "pa:ss")),
+            ("user%253A:pa%2540@", {}, ("user%3A", "pa%40")),
+            ("user+name:pa+ss@", {}, ("user+name", "pa+ss")),
+            ("user%20name:pa%20ss@", {}, ("user name", "pa ss")),
+            ("user%C3%A9:pa%C3%9F@", {}, ("useré", "paß")),
+            ("user%3Aname@", {}, ("user:name", None)),
+            ("user:@", {}, ("user", "")),
+            (":pass@", {}, ("", "pass")),
+            ("user%zz:pass%@", {}, ("user%zz", "pass%")),
+            ("user:pass@", {"username": "explicit%40+"}, ("explicit%40+", None)),
+            ("user:pass@", {"password": "explicit%3A"}, (None, "explicit%3A")),
+            (
+                "user:pass@",
+                {"username": "explicit%40", "password": "explicit%3A"},
+                ("explicit%40", "explicit%3A"),
+            ),
+            ("user:pass@", {"username": "", "password": ""}, ("", "")),
+        ],
+    )
+    async def test_proxy_url_credentials(
+        self,
+        manager_name: str,
+        scheme: str,
+        auth: str,
+        overrides: dict[str, str],
+        expected: tuple[str | None, str | None],
+    ) -> None:
+        manager_cls = getattr(socks, manager_name, None)
+        if manager_cls is None:
+            pytest.skip("Async SOCKS requires python-socks")
+        manager = manager_cls(f"{scheme}://{auth}127.0.0.1:1080", **overrides)
+        try:
+            options = manager.connection_pool_kw["_socks_options"]
+            assert (options["username"], options["password"]) == expected
+        finally:
+            if manager_name == "AsyncSOCKSProxyManager":
+                await manager.clear()
+            else:
+                manager.clear()
+
     def test_invalid_socks_version_is_valueerror(self) -> None:
         with pytest.raises(ValueError, match="Unable to determine SOCKS version"):
             socks.SOCKSProxyManager(proxy_url="http://example.org")
@@ -499,6 +550,42 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
             assert response.data == b""
             assert response.headers["Server"] == "SocksTestServer"
 
+    def test_socks_with_percent_encoded_auth_in_url(self) -> None:
+        def request_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            handler = handle_socks5_negotiation(
+                sock, negotiate=True, username=b"user:name", password=b"pa@ss"
+            )
+            addr, port = next(handler)
+
+            assert addr == "16.17.18.19"
+            assert port == 80
+            with pytest.raises(StopIteration):
+                handler.send(True)
+
+            while True:
+                buf = sock.recv(65535)
+                if buf.endswith(b"\r\n\r\n"):
+                    break
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Server: SocksTestServer\r\n"
+                b"Content-Length: 0\r\n"
+                b"\r\n"
+            )
+            sock.close()
+
+        self._start_server(request_handler)
+        proxy_url = f"socks5://user%3Aname:pa%40ss@{self.host}:{self.port}"
+        with socks.SOCKSProxyManager(proxy_url) as pm:
+            response = pm.request("GET", "http://16.17.18.19")
+
+            assert response.status == 200
+            assert response.data == b""
+            assert response.headers["Server"] == "SocksTestServer"
+
     def test_socks_with_invalid_password(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_up_fake_getaddrinfo(monkeypatch)
 
@@ -724,6 +811,40 @@ class TestSOCKS4Proxy(IPV4SocketDummyServerTestCase):
         self._start_server(request_handler)
         proxy_url = f"socks4://{self.host}:{self.port}"
         with socks.SOCKSProxyManager(proxy_url, username="user") as pm:
+            response = pm.request("GET", "http://16.17.18.19")
+
+            assert response.status == 200
+            assert response.data == b""
+            assert response.headers["Server"] == "SocksTestServer"
+
+    def test_socks4_with_percent_encoded_username_in_url(self) -> None:
+        def request_handler(listener: socket.socket) -> None:
+            sock = listener.accept()[0]
+
+            handler = handle_socks4_negotiation(sock, username=b"user:name")
+            addr, port = next(handler)
+
+            assert addr == "16.17.18.19"
+            assert port == 80
+            with pytest.raises(StopIteration):
+                handler.send(True)
+
+            while True:
+                buf = sock.recv(65535)
+                if buf.endswith(b"\r\n\r\n"):
+                    break
+
+            sock.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Server: SocksTestServer\r\n"
+                b"Content-Length: 0\r\n"
+                b"\r\n"
+            )
+            sock.close()
+
+        self._start_server(request_handler)
+        proxy_url = f"socks4://user%3Aname@{self.host}:{self.port}"
+        with socks.SOCKSProxyManager(proxy_url) as pm:
             response = pm.request("GET", "http://16.17.18.19")
 
             assert response.status == 200
