@@ -25,7 +25,7 @@ from urllib3.exceptions import (
 from urllib3.util import is_fp_closed
 from urllib3.util.connection import _has_ipv6, allowed_gai_family
 from urllib3.util.proxy import connection_requires_http_tunnel
-from urllib3.util.request import _FAILEDTELL, make_headers, rewind_body
+from urllib3.util.request import _FAILEDTELL, arewind_body, make_headers, rewind_body
 from urllib3.util.ssl_ import (
     _TYPE_VERSION_INFO,
     _is_has_never_check_common_name_reliable,
@@ -695,6 +695,21 @@ class TestUtil:
 
         with pytest.raises(UnrewindableBodyError):
             rewind_body(BadSeek(), body_pos=2)
+
+    def test_rewind_body_no_seek(self) -> None:
+        class NoSeek(io.StringIO):
+            seek = None  # type: ignore[assignment]
+
+        with pytest.raises(UnrewindableBodyError):
+            rewind_body(NoSeek(), body_pos=2)
+
+    @pytest.mark.asyncio
+    async def test_arewind_body_no_seek(self) -> None:
+        class NoSeek(io.StringIO):
+            seek = None  # type: ignore[assignment]
+
+        with pytest.raises(UnrewindableBodyError):
+            await arewind_body(NoSeek(), body_pos=2)
 
     def test_add_stderr_logger(self) -> None:
         handler = add_stderr_logger(level=logging.INFO)  # Don't actually print debug

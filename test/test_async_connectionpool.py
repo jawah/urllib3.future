@@ -6,8 +6,10 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from urllib3 import Retry
 from urllib3._async.connectionpool import AsyncHTTPConnectionPool
 from urllib3._async.response import AsyncHTTPResponse
+from urllib3.exceptions import UnrewindableBodyError
 
 
 @pytest.mark.asyncio
@@ -68,6 +70,46 @@ async def test_absolute_redirect_request_target_strips_fragment() -> None:
         "/",
         "http://localhost/next?x=%23",
     ]
+
+
+@pytest.mark.asyncio
+async def test_retry_with_body_that_has_tell_but_no_seek() -> None:
+    """An async body with tell() but no seek() cannot be replayed on retry."""
+
+    class TellableStream:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+            self._pos = 0
+
+        async def read(self, n: int = -1) -> bytes:
+            if n == -1:
+                chunk = self._data[self._pos :]
+                self._pos = len(self._data)
+            else:
+                chunk = self._data[self._pos : self._pos + n]
+                self._pos += len(chunk)
+            return chunk
+
+        async def tell(self) -> int:
+            return self._pos
+
+    async def make_request(*args: typing.Any, **kwargs: typing.Any) -> typing.NoReturn:
+        raise OSError("connection reset")
+
+    body = TellableStream(b"hello world")
+
+    async with AsyncHTTPConnectionPool(host="localhost", maxsize=1) as pool:
+        with patch.object(pool, "_make_request", make_request):
+            with pytest.raises(
+                UnrewindableBodyError, match="body does not implement seek"
+            ):
+                await pool.urlopen(  # type: ignore[call-overload]
+                    "POST",
+                    "/",
+                    body=body,
+                    retries=Retry(total=2, allowed_methods=["POST"]),
+                    body_pos=None,
+                )
 
 
 @pytest.mark.asyncio
