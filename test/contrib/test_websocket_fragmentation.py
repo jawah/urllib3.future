@@ -17,6 +17,7 @@ import pytest
 wsproto = pytest.importorskip("wsproto")
 
 from wsproto import ConnectionType, WSConnection  # noqa: E402
+from wsproto.connection import Connection  # noqa: E402
 from wsproto.events import (  # noqa: E402
     AcceptConnection,
     BytesMessage,
@@ -30,8 +31,9 @@ from urllib3.contrib.webextensions._async import (  # noqa: E402
 from urllib3.contrib.webextensions.ws import WebSocketExtensionFromHTTP  # noqa: E402
 
 
-def _complete_handshake(client: WSConnection) -> WSConnection:
+def _complete_handshake(client: WSConnection | Connection) -> WSConnection:
     """Drive a wsproto client/server handshake and return the server side."""
+    assert isinstance(client, WSConnection)
     server = WSConnection(ConnectionType.SERVER)
     server.receive_data(client.send(Request(host="localhost", target="/")))
     for _ in server.events():
