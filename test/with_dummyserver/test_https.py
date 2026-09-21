@@ -774,6 +774,11 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             e = _test_request(https_pool)
             assert "Fingerprint of invalid length:" in str(e)
 
+            # Supported length, but not hexadecimal.
+            https_pool.assert_fingerprint = "GG:" * 19 + "GG"
+            e = _test_request(https_pool)
+            assert "Non-hexadecimal digit found" in str(e)
+
     def test_verify_none_and_bad_fingerprint(self) -> None:
         with HTTPSConnectionPool(
             "127.0.0.1",

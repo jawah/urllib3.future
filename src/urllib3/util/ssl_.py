@@ -10,6 +10,7 @@ import sys
 import threading
 import typing
 import warnings
+from binascii import Error as BinasciiError
 from binascii import unhexlify
 from pathlib import Path
 
@@ -327,7 +328,10 @@ def assert_fingerprint(cert: bytes | None, fingerprint: str) -> None:
         )
 
     # We need encode() here for py32; works on py2 and p33.
-    fingerprint_bytes = unhexlify(fingerprint.encode())
+    try:
+        fingerprint_bytes = unhexlify(fingerprint.encode())
+    except BinasciiError as e:
+        raise SSLError(e) from e
 
     cert_digest = hashfunc(cert).digest()
 
