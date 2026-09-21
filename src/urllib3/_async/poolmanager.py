@@ -761,7 +761,7 @@ class AsyncPoolManager(AsyncRequestMethods):
             kw["headers"] = self.headers
 
         if self._proxy_requires_url_absolute_form(u):
-            response = await conn.urlopen(method, url, **kw)
+            response = await conn.urlopen(method, u._replace(fragment=None).url, **kw)
         else:
             response = await conn.urlopen(method, u.request_uri, **kw)
 

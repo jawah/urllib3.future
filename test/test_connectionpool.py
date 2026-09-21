@@ -58,6 +58,46 @@ class TestConnectionPool:
     without actually making any network requests or connections.
     """
 
+    @pytest.mark.parametrize("absolute", [False, True])
+    @pytest.mark.parametrize(
+        "target, expected",
+        [
+            ("/path#private", "/path"),
+            ("/path?x=1#private", "/path?x=1"),
+            ("/#private", "/"),
+            ("/path?x=1#", "/path?x=1"),
+            ("/pa%23th?x=%23#private", "/pa%23th?x=%23"),
+            ("/path?x=1", "/path?x=1"),
+        ],
+    )
+    def test_request_target_strips_fragment(
+        self, absolute: bool, target: str, expected: str
+    ) -> None:
+        prefix = "http://localhost" if absolute else ""
+        with HTTPConnectionPool("localhost") as pool:
+            with patch.object(
+                pool, "_make_request", return_value=HTTPResponse(status=200)
+            ) as make_request:
+                pool.urlopen("GET", prefix + target)
+            assert make_request.call_args[0][2] == prefix + expected
+
+    def test_absolute_redirect_request_target_strips_fragment(self) -> None:
+        responses = [
+            HTTPResponse(
+                status=302,
+                headers={"location": "http://localhost/next?x=%23#private"},
+            ),
+            HTTPResponse(status=200),
+        ]
+        with HTTPConnectionPool("localhost") as pool:
+            with patch.object(pool, "_make_request", side_effect=responses) as request:
+                response = pool.urlopen("GET", "/", retries=1)
+        assert response.status == 200
+        assert [call[0][2] for call in request.call_args_list] == [
+            "/",
+            "http://localhost/next?x=%23",
+        ]
+
     @pytest.mark.parametrize(
         "a, b",
         [

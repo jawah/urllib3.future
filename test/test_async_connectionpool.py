@@ -1,10 +1,73 @@
 from __future__ import annotations
 
 import asyncio
+import typing
+from unittest.mock import Mock, patch
 
 import pytest
 
 from urllib3._async.connectionpool import AsyncHTTPConnectionPool
+from urllib3._async.response import AsyncHTTPResponse
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("absolute", [False, True])
+@pytest.mark.parametrize(
+    "target, expected",
+    [
+        ("/path#private", "/path"),
+        ("/path?x=1#private", "/path?x=1"),
+        ("/#private", "/"),
+        ("/path?x=1#", "/path?x=1"),
+        ("/pa%23th?x=%23#private", "/pa%23th?x=%23"),
+        ("/path?x=1", "/path?x=1"),
+    ],
+)
+async def test_request_target_strips_fragment(
+    absolute: bool, target: str, expected: str
+) -> None:
+    prefix = "http://localhost" if absolute else ""
+    request = Mock()
+
+    async def make_request(
+        *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncHTTPResponse:
+        request(*args, **kwargs)
+        return AsyncHTTPResponse(status=200)
+
+    async with AsyncHTTPConnectionPool("localhost") as pool:
+        with patch.object(pool, "_make_request", make_request):
+            await pool.urlopen("GET", prefix + target)
+        assert request.call_args[0][2] == prefix + expected
+
+
+@pytest.mark.asyncio
+async def test_absolute_redirect_request_target_strips_fragment() -> None:
+    responses = iter(
+        [
+            AsyncHTTPResponse(
+                status=302,
+                headers={"location": "http://localhost/next?x=%23#private"},
+            ),
+            AsyncHTTPResponse(status=200),
+        ]
+    )
+    request = Mock()
+
+    async def make_request(
+        *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncHTTPResponse:
+        request(*args, **kwargs)
+        return next(responses)
+
+    async with AsyncHTTPConnectionPool("localhost") as pool:
+        with patch.object(pool, "_make_request", make_request):
+            response = await pool.urlopen("GET", "/", retries=1)
+    assert response.status == 200
+    assert [call[0][2] for call in request.call_args_list] == [
+        "/",
+        "http://localhost/next?x=%23",
+    ]
 
 
 @pytest.mark.asyncio

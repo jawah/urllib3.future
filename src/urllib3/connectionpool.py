@@ -1787,7 +1787,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if url.startswith("/"):
             url = to_str(_encode_target(url))
         else:
-            url = to_str(parsed_url.url)
+            url = to_str(parsed_url._replace(fragment=None).url)
 
         conn = None
 
