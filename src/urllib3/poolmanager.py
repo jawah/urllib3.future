@@ -718,6 +718,8 @@ class PoolManager(RequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                response.read(cache_content=True)
             response.drain_conn()
             retries.sleep_for_retry(response)
             log.debug("Redirecting %s -> %s", url, redirect_location)
@@ -788,6 +790,8 @@ class PoolManager(RequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                response.read(cache_content=True)
             response.drain_conn()
             retries.sleep(response)
             log.debug("Retry: %s", url)

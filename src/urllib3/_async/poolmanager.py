@@ -577,6 +577,8 @@ class AsyncPoolManager(AsyncRequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                await response.read(cache_content=True)
             await response.drain_conn()
             await retries.async_sleep_for_retry(response)
             log.debug("Redirecting %s -> %s", url, redirect_location)
@@ -646,6 +648,8 @@ class AsyncPoolManager(AsyncRequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                await response.read(cache_content=True)
             await response.drain_conn()
             await retries.async_sleep(response)
             log.debug("Retry: %s", url)

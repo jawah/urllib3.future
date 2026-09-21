@@ -185,6 +185,14 @@ class Retry:
         Retry-After headers. Defaults to :attr:`Retry.DEFAULT_RETRY_AFTER_MAX`.
         Any Retry-After headers larger than this value will be limited to this
         value.
+
+    :param bool cache_response_body:
+        Cache response bodies before retry-delay hooks run, even when
+        ``preload_content=False``. Defaults to ``False`` in both sync and async.
+        Enabling this loads the entire body into memory, with decompression
+        controlled by the response's ``decode_content`` setting. Body read and
+        decoding errors propagate. Override :meth:`get_retry_after` for sync
+        responses or :meth:`async_get_retry_after` for async responses.
     """
 
     #: Default methods to be used for ``allowed_methods``
@@ -231,6 +239,8 @@ class Retry:
         ] = DEFAULT_REMOVE_HEADERS_ON_REDIRECT,
         backoff_jitter: float = 0.0,
         retry_after_max: int = DEFAULT_RETRY_AFTER_MAX,
+        *,
+        cache_response_body: bool = False,
     ) -> None:
         self.total = total
         self.connect = connect
@@ -256,6 +266,7 @@ class Retry:
         )
         self.backoff_jitter = backoff_jitter
         self.retry_after_max = retry_after_max
+        self.cache_response_body = cache_response_body
 
     def new(self, **kw: typing.Any) -> Retry:
         params = dict(
@@ -278,6 +289,9 @@ class Retry:
             retry_after_max=self.retry_after_max,
         )
 
+        # Keep the default constructor arguments compatible with older subclasses.
+        if self.cache_response_body:
+            params["cache_response_body"] = True
         params.update(kw)
         return type(self)(**params)  # type: ignore[arg-type]
 
@@ -380,8 +394,16 @@ class Retry:
 
         self._sleep_backoff()
 
+    async def async_get_retry_after(self, response: AsyncHTTPResponse) -> float | None:
+        """Async retry-delay hook; defaults to the existing synchronous hook.
+
+        With ``cache_response_body=True``, overrides can inspect ``await
+        response.data`` or ``await response.json()`` after the body is cached.
+        """
+        return self.get_retry_after(response)
+
     async def async_sleep_for_retry(self, response: AsyncHTTPResponse) -> bool:
-        retry_after = self.get_retry_after(response)
+        retry_after = await self.async_get_retry_after(response)
         if retry_after:
             await asyncio.sleep(retry_after)
             return True

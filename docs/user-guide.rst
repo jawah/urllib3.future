@@ -768,6 +768,43 @@ specify the retry at the :class:`~urllib3.poolmanager.PoolManager` level:
 You still override this pool-level retry policy by specifying ``retries`` to
 :meth:`~urllib3.PoolManager.request`.
 
+Inspecting response bodies in retry hooks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set ``Retry(cache_response_body=True)`` to retain a response body before retry-delay
+hooks run, including when the request uses ``preload_content=False``. This is disabled
+by default in both sync and async. Retry eligibility still depends on the configured
+status codes and methods; enabling caching does not make additional responses retryable.
+
+For synchronous requests, override ``get_retry_after()`` and inspect ``response.data``
+or ``response.json()``. For asynchronous requests, override ``async_get_retry_after()``
+and await those accessors. For example, a service might return a JSON ``retry_delay``:
+
+.. code-block:: python
+
+    class BodyRetry(urllib3.Retry):
+        async def async_get_retry_after(self, response):
+            delay = await super().async_get_retry_after(response)
+            if delay is not None:
+                return delay
+            body = await response.json()
+            return min(self.retry_after_max, max(0, float(body["retry_delay"])))
+
+    async with urllib3.AsyncPoolManager() as pm:
+        response = await pm.request(
+            "GET", "https://example.com/api",
+            retries=BodyRetry(
+                total=2, status_forcelist=[503], cache_response_body=True
+            ),
+            preload_content=False,
+        )
+
+The entire retry body is loaded into memory. Decompression follows the response's
+``decode_content`` setting, and compressed bodies can expand substantially. Body read
+and decoding errors propagate. The connection is released before retry-delay hooks
+and sleeping; final responses remain available to the caller. The async hook defaults
+to the existing synchronous hook, preserving overrides that only inspect headers.
+
 Errors & Exceptions
 -------------------
 
