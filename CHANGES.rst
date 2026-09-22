@@ -69,6 +69,9 @@
 - Backported ``basic_auth_encoding`` and ``proxy_basic_auth_encoding`` options in ``make_headers()`` from upstream
   https://github.com/urllib3/urllib3/pull/5092
   Origin and proxy credentials can use independent encodings; both retain the Latin-1 default.
+- Fixed an async TLS connection cleanup race that could cause new connections to
+  fail with "File descriptor ... is used by transport" when a socket descriptor
+  was immediately reused. (#417)
 
 2.24.908 (2026-09-08)
 =====================
