@@ -47,7 +47,7 @@ jobs:
       matrix:
         python-version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t", "3.15"]  # todo: add "3.15t" when qh3 is ready
         os:
-          - macos-26-intel
+          - macos-15-intel
           - windows-2025
           - ubuntu-24.04
         nox-session: ['']
@@ -163,12 +163,12 @@ jobs:
           - python-version: "3.8"
             os: ubuntu-24.04
           - python-version: "3.7"
-            os: macos-26-intel
+            os: macos-15-intel
           - python-version: "3.8"
-            os: macos-26-intel
+            os: macos-15-intel
 
     runs-on: ${{ matrix.os }}
-    name: ${{ fromJson('{"macos-26-intel":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
+    name: ${{ fromJson('{"macos-15-intel":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 45
     steps:
@@ -179,7 +179,8 @@ jobs:
 
       - name: "Traefik: Setup Docker - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        uses: douglascamata/setup-docker-macos-action@d5ccc6aae0ce23e7700154f5e63cc53e6433ac48
+        uses: ./.github/actions/setup-docker-macos
+        timeout-minutes: 15
         with:
           colima-network-address: true
 
@@ -197,7 +198,7 @@ jobs:
             COLIMA_IP="192.168.65.2"
           fi
 
-          echo "autodiscover=$COLIMA_IP" >> $GITHUB_OUTPUT
+          echo "autodiscover=$COLIMA_IP" >> "$GITHUB_OUTPUT"
           echo "Colima VM IP: $COLIMA_IP"
 
       - name: "Setup Python ${{ matrix.python-version }}"
