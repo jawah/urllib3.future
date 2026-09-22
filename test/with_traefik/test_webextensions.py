@@ -7,6 +7,7 @@ import pytest
 from urllib3 import HttpVersion, PoolManager, Timeout
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.contrib.webextensions import (
+    FastWebSocketExtensionFromHTTP,
     RawExtensionFromHTTP,
     ServerSideEventExtensionFromHTTP,
     WebSocketExtensionFromHTTP,
@@ -16,6 +17,13 @@ from urllib3.exceptions import ReadTimeoutError, URLSchemeUnknown
 
 from .. import notWindows
 from . import TraefikTestCase
+
+
+WebSocketExtension = (
+    WebSocketExtensionFromHTTP
+    if WebSocketExtensionFromHTTP is not None
+    else FastWebSocketExtensionFromHTTP
+)
 
 
 class TestWebExtensions(TraefikTestCase):
@@ -28,7 +36,7 @@ class TestWebExtensions(TraefikTestCase):
                 pm.urlopen("GET", target_url + "/websocket/echo")
 
     @pytest.mark.skipif(
-        WebSocketExtensionFromHTTP is None, reason="test requires wsproto"
+        WebSocketExtension is None, reason="test requires a WebSocket backend"
     )
     @pytest.mark.parametrize(
         "target_protocol",
@@ -46,7 +54,7 @@ class TestWebExtensions(TraefikTestCase):
         target_url = (
             target_url.replace("https://", "wss://")
             if target_protocol == "wss"
-            else target_url.replace("http://", "ws+wsproto://")
+            else target_url.replace("http://", "ws://")
         )
 
         with PoolManager(resolver=self.test_resolver, ca_certs=self.ca_authority) as pm:
@@ -63,8 +71,8 @@ class TestWebExtensions(TraefikTestCase):
             assert resp.data == b""
             assert resp.read() == b""
 
-            # the extension here should be WebSocketExtensionFromHTTP
-            assert isinstance(resp.extension, WebSocketExtensionFromHTTP)
+            # The extension should use the available WebSocket backend.
+            assert isinstance(resp.extension, WebSocketExtension)
 
             # send two example payloads, one of type string, one of type bytes.
             resp.extension.send_payload("Hello World!")
@@ -181,7 +189,7 @@ class TestWebExtensions(TraefikTestCase):
             resp.extension.close()
 
     @pytest.mark.skipif(
-        WebSocketExtensionFromHTTP is None, reason="test requires wsproto"
+        WebSocketExtension is None, reason="test requires a WebSocket backend"
     )
     @pytest.mark.parametrize(
         "target_protocol",
@@ -201,7 +209,7 @@ class TestWebExtensions(TraefikTestCase):
             resp = pm.urlopen(
                 "GET",
                 target_url + "/websocket/echo",
-                extension=WebSocketExtensionFromHTTP(),
+                extension=WebSocketExtension(),
             )
 
             # The response ends with a "101 Switching Protocol"!
@@ -215,8 +223,8 @@ class TestWebExtensions(TraefikTestCase):
             assert resp.data == b""
             assert resp.read() == b""
 
-            # the extension here should be WebSocketExtensionFromHTTP
-            assert isinstance(resp.extension, WebSocketExtensionFromHTTP)
+            # The extension should use the available WebSocket backend.
+            assert isinstance(resp.extension, WebSocketExtension)
 
             # send two example payloads, one of type string, one of type bytes.
             resp.extension.send_payload("Hello World!")
@@ -237,7 +245,7 @@ class TestWebExtensions(TraefikTestCase):
             resp.extension.close()
 
     @pytest.mark.skipif(
-        WebSocketExtensionFromHTTP is None, reason="test requires wsproto"
+        WebSocketExtension is None, reason="test requires a WebSocket backend"
     )
     @pytest.mark.parametrize(
         "target_protocol",
@@ -275,8 +283,8 @@ class TestWebExtensions(TraefikTestCase):
             assert resp.data == b""
             assert resp.read() == b""
 
-            # the extension here should be WebSocketExtensionFromHTTP
-            assert isinstance(resp.extension, WebSocketExtensionFromHTTP)
+            # The extension should use the available WebSocket backend.
+            assert isinstance(resp.extension, WebSocketExtension)
 
             with pytest.raises(ReadTimeoutError):
                 resp.extension.next_payload()
@@ -514,6 +522,10 @@ class TestWebExtensions(TraefikTestCase):
 
             assert time.time() - before <= 10.0
 
+    @pytest.mark.skipif(
+        WebSocketExtensionFromMultiplexedHTTP is None,
+        reason="RFC 8441 requires wsproto",
+    )
     @notWindows()
     def test_websocket_rfc8441(self) -> None:
         target_url = self.https_haproxy_url

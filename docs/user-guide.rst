@@ -12,6 +12,9 @@ urllib3 can be installed with `pip <https://pip.pypa.io>`_
 
   $ python -m pip install urllib3.future
 
+This selects urllib3.future for ``import urllib3`` throughout the environment.
+To keep upstream urllib3 and use the fork through ``import urllib3_future``,
+follow the :doc:`cohabitation` guide.
 
 HTTP/2 and HTTP/3 support
 -------------------------
@@ -469,6 +472,40 @@ That is it! That easy.
 
 .. warning:: In case anything goes wrong (e.g. server denies us access), ``resp.extension`` will be worth ``None``! Be careful.
 
+Full-duplex reads and writes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For WebSocket over HTTP/1.1, a waiting ``next_payload()`` allows another thread
+or task to call ``send_payload()`` or ``ping()``. Concurrent readers are
+serialized so each message is delivered to one reader. Read timeouts remain
+in effect while waiting for socket readiness and reacquiring the connection.
+An already-entered blocking TLS receive can still delay a concurrent writer.
+
+Alternative WebSocket engine
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Install ``urllib3-future[ws-fast]`` to use the ``websockets`` Sans-I/O
+engine, then select ``ws+fast://`` or ``wss+fast://``. The extension
+API is the same for ``PoolManager`` and ``AsyncPoolManager``:
+
+.. code-block:: python
+
+    with urllib3.PoolManager() as pm:
+        resp = pm.urlopen("GET", "wss+fast://echo.websocket.org")
+        resp.extension.send_payload("Hello")
+        print(resp.extension.next_payload())
+
+This backend supports HTTP/1.1 and requires Python 3.9 or newer. Supported
+``websockets`` versions range from 15.0.1 through 17.x: use 15.0.1 on Python
+3.9, 16.1.1 on Python 3.10, and 17.1 on Python 3.11 or newer. Installing
+``urllib3-future[ws-fast]`` selects a compatible version automatically.
+When both engines are installed, plain ``ws://`` and ``wss://`` continue to
+select ``wsproto``; use ``ws+fast://`` or ``wss+fast://`` to select this backend.
+
+.. warning:: Versions 15.0.1 and 16.0 have an upstream DEBUG-log formatting bug for text frames
+    that split a UTF-8 character. With logging handlers that propagate formatting
+    exceptions, this can abort reception. Versions 16.1.1 and 17.1 pass this case.
+
 Using multiplexed mode
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -733,6 +770,43 @@ specify the retry at the :class:`~urllib3.poolmanager.PoolManager` level:
 
 You still override this pool-level retry policy by specifying ``retries`` to
 :meth:`~urllib3.PoolManager.request`.
+
+Inspecting response bodies in retry hooks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set ``Retry(cache_response_body=True)`` to retain a response body before retry-delay
+hooks run, including when the request uses ``preload_content=False``. This is disabled
+by default in both sync and async. Retry eligibility still depends on the configured
+status codes and methods; enabling caching does not make additional responses retryable.
+
+For synchronous requests, override ``get_retry_after()`` and inspect ``response.data``
+or ``response.json()``. For asynchronous requests, override ``async_get_retry_after()``
+and await those accessors. For example, a service might return a JSON ``retry_delay``:
+
+.. code-block:: python
+
+    class BodyRetry(urllib3.Retry):
+        async def async_get_retry_after(self, response):
+            delay = await super().async_get_retry_after(response)
+            if delay is not None:
+                return delay
+            body = await response.json()
+            return min(self.retry_after_max, max(0, float(body["retry_delay"])))
+
+    async with urllib3.AsyncPoolManager() as pm:
+        response = await pm.request(
+            "GET", "https://example.com/api",
+            retries=BodyRetry(
+                total=2, status_forcelist=[503], cache_response_body=True
+            ),
+            preload_content=False,
+        )
+
+The entire retry body is loaded into memory. Decompression follows the response's
+``decode_content`` setting, and compressed bodies can expand substantially. Body read
+and decoding errors propagate. The connection is released before retry-delay hooks
+and sleeping; final responses remain available to the caller. The async hook defaults
+to the existing synchronous hook, preserving overrides that only inspect headers.
 
 Errors & Exceptions
 -------------------

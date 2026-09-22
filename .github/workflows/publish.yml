@@ -24,7 +24,7 @@ jobs:
       - name: "Setup Python"
         uses: "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
         with:
-          python-version: "3.x"
+          python-version: "3.12"
 
       - name: "Install dependencies"
         run: python -m pip install build
@@ -34,16 +34,31 @@ jobs:
           SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) \
           python -m build
 
+      - name: "Build cohabitation wheel from the release sdist"
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) \
+          python ci/isolation.py build dist/*.tar.gz
+
       - name: "Generate hashes"
         id: hash
         run: |
-          cd dist && echo "::set-output name=hashes::$(sha256sum * | base64 -w0)"
+          (cd dist && sha256sum *) > "$RUNNER_TEMP/subjects.sha256"
+          (cd dist-isolation && sha256sum *.whl) >> "$RUNNER_TEMP/subjects.sha256"
+          echo "hashes=$(base64 -w0 "$RUNNER_TEMP/subjects.sha256")" >> "$GITHUB_OUTPUT"
 
       - name: "Upload dists"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: "dist"
           path: "dist/"
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: "Upload cohabitation wheel"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: dist-isolation
+          path: dist-isolation/
           if-no-files-found: error
           retention-days: 5
 
@@ -78,15 +93,33 @@ jobs:
         name: "dist"
         path: "dist/"
 
+    - name: "Download cohabitation wheel"
+      uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+      with:
+        name: dist-isolation
+        path: dist-isolation/
+
     - name: "Upload dists to GitHub Release"
       env:
         GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
         REF_NAME: ${{ github.ref_name }}
         REPOSITORY: ${{ github.repository }}
       run: |
-        gh release upload "$REF_NAME" dist/* --repo "$REPOSITORY"
+        gh release upload "$REF_NAME" dist/* dist-isolation/*.whl --repo "$REPOSITORY"
 
     - name: "Publish dists to PyPI"
       uses: "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33" # v1.14.2
       with:
         attestations: true
+
+  publish-isolation:
+    name: "Publish cohabitation index"
+    needs: [publish]
+    concurrency:
+      group: isolation-pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish-isolation.yml

@@ -1,16 +1,57 @@
 from __future__ import annotations
 
+import typing
+from unittest.mock import Mock, patch
+
 import pytest
 
+from urllib3.backend import ResponsePromise
 from urllib3.exceptions import MaxRetryError, NewConnectionError, ProxyError
 from urllib3.poolmanager import ProxyManager
+from urllib3.response import HTTPResponse
 from urllib3.util.retry import Retry
 from urllib3.util.url import parse_url
 
 from .port_helpers import find_unused_port
 
+if typing.TYPE_CHECKING:
+    from typing_extensions import Literal
+
 
 class TestProxyManager:
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    @pytest.mark.parametrize(
+        "proxy_scheme, target_scheme, forwarding, expected",
+        [
+            ("http", "http", False, "http://localhost/pa%23th?x=%23"),
+            ("https", "http", False, "http://localhost/pa%23th?x=%23"),
+            ("http", "https", False, "/pa%23th?x=%23"),
+            ("https", "https", False, "/pa%23th?x=%23"),
+            ("https", "https", True, "https://localhost/pa%23th?x=%23"),
+        ],
+    )
+    def test_pool_request_target_strips_fragment(
+        self,
+        multiplexed: Literal[False, True],
+        proxy_scheme: str,
+        target_scheme: str,
+        forwarding: bool,
+        expected: str,
+    ) -> None:
+        target = f"{target_scheme}://localhost/pa%23th?x=%23#private"
+        result = (
+            ResponsePromise(Mock(), 1, []) if multiplexed else HTTPResponse(status=200)
+        )
+        with ProxyManager(
+            f"{proxy_scheme}://proxy:8080", use_forwarding_for_https=forwarding
+        ) as manager:
+            pool = manager.connection_from_url(target)
+            with patch.object(pool, "urlopen", return_value=result) as request:
+                assert manager.urlopen("GET", target, multiplexed=multiplexed) is result
+            assert request.call_args[0][1] == expected
+            if isinstance(result, ResponsePromise):
+                assert result.get_parameter("pm_url") == target
+
     @pytest.mark.parametrize("proxy_scheme", ["http", "https"])
     def test_proxy_headers(self, proxy_scheme: str) -> None:
         url = "http://pypi.org/project/urllib3/"

@@ -1,10 +1,115 @@
 from __future__ import annotations
 
 import asyncio
+import typing
+from unittest.mock import Mock, patch
 
 import pytest
 
+from urllib3 import Retry
 from urllib3._async.connectionpool import AsyncHTTPConnectionPool
+from urllib3._async.response import AsyncHTTPResponse
+from urllib3.exceptions import UnrewindableBodyError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("absolute", [False, True])
+@pytest.mark.parametrize(
+    "target, expected",
+    [
+        ("/path#private", "/path"),
+        ("/path?x=1#private", "/path?x=1"),
+        ("/#private", "/"),
+        ("/path?x=1#", "/path?x=1"),
+        ("/pa%23th?x=%23#private", "/pa%23th?x=%23"),
+        ("/path?x=1", "/path?x=1"),
+    ],
+)
+async def test_request_target_strips_fragment(
+    absolute: bool, target: str, expected: str
+) -> None:
+    prefix = "http://localhost" if absolute else ""
+    request = Mock()
+
+    async def make_request(
+        *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncHTTPResponse:
+        request(*args, **kwargs)
+        return AsyncHTTPResponse(status=200)
+
+    async with AsyncHTTPConnectionPool("localhost") as pool:
+        with patch.object(pool, "_make_request", make_request):
+            await pool.urlopen("GET", prefix + target)
+        assert request.call_args[0][2] == prefix + expected
+
+
+@pytest.mark.asyncio
+async def test_absolute_redirect_request_target_strips_fragment() -> None:
+    responses = iter(
+        [
+            AsyncHTTPResponse(
+                status=302,
+                headers={"location": "http://localhost/next?x=%23#private"},
+            ),
+            AsyncHTTPResponse(status=200),
+        ]
+    )
+    request = Mock()
+
+    async def make_request(
+        *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncHTTPResponse:
+        request(*args, **kwargs)
+        return next(responses)
+
+    async with AsyncHTTPConnectionPool("localhost") as pool:
+        with patch.object(pool, "_make_request", make_request):
+            response = await pool.urlopen("GET", "/", retries=1)
+    assert response.status == 200
+    assert [call[0][2] for call in request.call_args_list] == [
+        "/",
+        "http://localhost/next?x=%23",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_with_body_that_has_tell_but_no_seek() -> None:
+    """An async body with tell() but no seek() cannot be replayed on retry."""
+
+    class TellableStream:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+            self._pos = 0
+
+        async def read(self, n: int = -1) -> bytes:
+            if n == -1:
+                chunk = self._data[self._pos :]
+                self._pos = len(self._data)
+            else:
+                chunk = self._data[self._pos : self._pos + n]
+                self._pos += len(chunk)
+            return chunk
+
+        async def tell(self) -> int:
+            return self._pos
+
+    async def make_request(*args: typing.Any, **kwargs: typing.Any) -> typing.NoReturn:
+        raise OSError("connection reset")
+
+    body = TellableStream(b"hello world")
+
+    async with AsyncHTTPConnectionPool(host="localhost", maxsize=1) as pool:
+        with patch.object(pool, "_make_request", make_request):
+            with pytest.raises(
+                UnrewindableBodyError, match="body does not implement seek"
+            ):
+                await pool.urlopen(  # type: ignore[call-overload]
+                    "POST",
+                    "/",
+                    body=body,
+                    retries=Retry(total=2, allowed_methods=["POST"]),
+                    body_pos=None,
+                )
 
 
 @pytest.mark.asyncio
@@ -93,3 +198,33 @@ async def test_get_response_none_path_yields_control() -> None:
         assert beats > 1
     finally:
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_connection_waiter_does_not_strand_owner() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from typing import Any
+    from urllib3._async.response import AsyncHTTPResponse
+    from urllib3.util._async.traffic_police import AsyncTrafficPolice
+
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice(maxsize=1)
+    conn = SimpleNamespace(is_idle=False, is_saturated=True)
+    indicator = AsyncHTTPResponse()
+    await police.put(conn, indicator, immediately_unavailable=True)
+    await police.put(conn)
+
+    async def borrow() -> None:
+        async with police.borrow(indicator) as acquired:
+            assert acquired is conn
+
+    async with police.borrow(indicator):
+        waiting = asyncio.create_task(borrow())
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+    # A saturation notification must not pretend ownership was handed to the
+    # cancelled task. The released connection must remain borrowable.
+    await asyncio.wait_for(asyncio.create_task(borrow()), 1)

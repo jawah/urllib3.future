@@ -249,6 +249,15 @@ an `absolute URI <https://tools.ietf.org/html/rfc7230#section-5.3.2>`_ if the
 **only use this option with trusted or corporate proxies** as the proxy will have
 full visibility of your requests.
 
+Configure HTTPS proxy trust and client certificates in ``proxy_ssl_context``,
+and proxy identity checks with ``proxy_assert_hostname`` or
+``proxy_assert_fingerprint``. An explicit proxy context keeps its own certificate
+policy and trust store; destination TLS settings do not override them. Destination
+SNI, identity assertions, and client certificate parameters do not apply to
+forwarding proxy handshakes. When no proxy context is supplied, the pool's TLS
+policy remains the fallback, including ``ssl_context`` for forwarding connections.
+This applies to both ``ProxyManager`` and ``AsyncProxyManager``.
+
 .. _https_proxy_error_http_proxy:
 
 Your proxy appears to only use HTTP and not HTTPS

@@ -16,6 +16,12 @@ except ImportError:
 from .. import recursive_subclasses
 
 
+try:
+    from .ws_fast import AsyncFastWebSocketExtensionFromHTTP
+except ImportError:
+    AsyncFastWebSocketExtensionFromHTTP = None  # type: ignore[misc, assignment]
+
+
 def load_extension(
     scheme: str | None, implementation: str | None = None
 ) -> type[AsyncExtensionFromHTTP]:
@@ -47,5 +53,6 @@ __all__ = (
     "AsyncWebSocketExtensionFromHTTP",
     "AsyncWebSocketExtensionFromMultiplexedHTTP",
     "AsyncServerSideEventExtensionFromHTTP",
+    "AsyncFastWebSocketExtensionFromHTTP",
     "load_extension",
 )

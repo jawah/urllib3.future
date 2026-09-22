@@ -54,6 +54,11 @@ jobs:
         include:
           - experimental: false
             traefik-server: true
+          - traefik-server: true
+            nox-session: test_ws_fast-3.14
+            python-version: "3.14"
+            os: ubuntu-24.04
+            experimental: false
           - traefik-server: false
             nox-session: test_ssl_large_resources-3.7
             python-version: "3.7"
@@ -170,7 +175,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ fromJson('{"macos-15-intel":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
@@ -179,7 +184,8 @@ jobs:
 
       - name: "Traefik: Setup Docker - Colima (MacOS)"
         if: ${{ matrix.traefik-server && contains(matrix.os, 'mac') }}
-        uses: douglascamata/setup-docker-macos-action@d5ccc6aae0ce23e7700154f5e63cc53e6433ac48
+        uses: ./.github/actions/setup-docker-macos
+        timeout-minutes: 15
         with:
           colima-network-address: true
 
@@ -197,7 +203,7 @@ jobs:
             COLIMA_IP="192.168.65.2"
           fi
 
-          echo "autodiscover=$COLIMA_IP" >> $GITHUB_OUTPUT
+          echo "autodiscover=$COLIMA_IP" >> "$GITHUB_OUTPUT"
           echo "Colima VM IP: $COLIMA_IP"
 
       - name: "Setup Python ${{ matrix.python-version }}"

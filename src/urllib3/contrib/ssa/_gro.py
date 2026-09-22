@@ -105,9 +105,12 @@ def _sock_has_gso(sock: socket.socket) -> bool:
     if not _IS_LINUX:
         return False
     try:
-        return bool(sock.getsockopt(_SOL_UDP, UDP_LINUX_SEGMENT))
+        sock.setsockopt(_SOL_UDP, UDP_LINUX_SEGMENT, 1280)
     except OSError:
         return False
+
+    sock.setsockopt(_SOL_UDP, UDP_LINUX_SEGMENT, 0)
+    return True
 
 
 def _split_gro_buffer(buf: bytes, segment_size: int) -> list[bytes]:

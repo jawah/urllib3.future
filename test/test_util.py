@@ -25,7 +25,7 @@ from urllib3.exceptions import (
 from urllib3.util import is_fp_closed
 from urllib3.util.connection import _has_ipv6, allowed_gai_family
 from urllib3.util.proxy import connection_requires_http_tunnel
-from urllib3.util.request import _FAILEDTELL, make_headers, rewind_body
+from urllib3.util.request import _FAILEDTELL, arewind_body, make_headers, rewind_body
 from urllib3.util.ssl_ import (
     _TYPE_VERSION_INFO,
     _is_has_never_check_common_name_reliable,
@@ -34,7 +34,13 @@ from urllib3.util.ssl_ import (
     ssl_wrap_socket,
 )
 from urllib3.util.timeout import _DEFAULT_TIMEOUT, Timeout
-from urllib3.util.url import Url, _encode_invalid_chars, parse_url
+from urllib3.util.url import (
+    _PATH_CHARS,
+    Url,
+    _encode_invalid_chars,
+    _normalize_host,
+    parse_url,
+)
 from urllib3.util.util import to_bytes, to_str
 
 from . import clear_warnings, USING_SECONDARY_ENTRYPOINT
@@ -154,6 +160,56 @@ class TestUtil:
         assert _encode_invalid_chars(None, set()) is None
 
     @pytest.mark.parametrize(
+        "component, expected",
+        [
+            # Already valid components are returned unchanged.
+            ("", ""),
+            ("/", "/"),
+            ("/path/to/resource", "/path/to/resource"),
+            (b"/bytes/path", "/bytes/path"),
+            # Invalid ASCII characters are percent-encoded (uppercase hex).
+            ("/a b|c", "/a%20b%7Cc"),
+            (b"/a b", "/a%20b"),
+            # Non-ASCII characters are encoded as UTF-8 bytes.
+            ("/caf\xe9", "/caf%C3%A9"),
+            ("/日本/\U0001f600", "/%E6%97%A5%E6%9C%AC/%F0%9F%98%80"),
+            # Lone surrogates are encoded with 'surrogatepass' (3 bytes).
+            ("/a\udc80b", "/a%ED%B2%80b"),
+            ("\ud800", "%ED%A0%80"),
+            # Fully percent-encoded components keep their '%' and get their
+            # hex digits normalized to uppercase.
+            ("/%2f%2F", "/%2F%2F"),
+            ("/a%20b c", "/a%20b%20c"),
+            ("%C3%A9\xe9", "%C3%A9%C3%A9"),
+            # A single bare '%' makes every '%' get encoded, even valid ones.
+            ("%", "%25"),
+            ("%2", "%252"),
+            ("%%20", "%25%2520"),
+            ("/%2F%", "/%252F%25"),
+            ("/%2f%2F%zz", "/%252F%252F%25zz"),
+        ],
+    )
+    def test_encode_invalid_chars(self, component: str | bytes, expected: str) -> None:
+        assert _encode_invalid_chars(component, _PATH_CHARS) == expected  # type: ignore[arg-type]
+
+    def test_encode_invalid_chars_respects_allowed_chars(self) -> None:
+        # Only characters in ``allowed_chars`` are kept, and any container
+        # type works, not only the module's own sets.
+        assert _encode_invalid_chars("abc", {"a", "b"}) == "ab%63"
+        assert _encode_invalid_chars("abc", "ab") == "ab%63"
+        assert _encode_invalid_chars("abc", ["a", "b"]) == "ab%63"
+        assert _encode_invalid_chars("abc", frozenset()) == "%61%62%63"
+        assert _encode_invalid_chars("abc", set()) == "%61%62%63"
+        # Non-ASCII characters are always encoded, even if "allowed".
+        assert _encode_invalid_chars("\xe9", {"\xe9"}) == "%C3%A9"
+        # '%' is only kept when the whole component is percent-encoded,
+        # or when it is explicitly allowed.
+        assert _encode_invalid_chars("a%", {"a"}) == "a%25"
+        assert _encode_invalid_chars("a%", {"a", "%"}) == "a%"
+        assert _encode_invalid_chars("a%41%", {"a"}) == "a%25%34%31%25"
+        assert _encode_invalid_chars("a%41%", {"a", "%"}) == "a%%34%31%"
+
+    @pytest.mark.parametrize(
         "url",
         [
             "http://google.com:foo",
@@ -233,6 +289,78 @@ class TestUtil:
             query="query" + percent_char,
             fragment="fragment" + percent_char,
         )
+
+    @pytest.mark.parametrize(
+        "prefix", ("http://", "https://", "//", "wss+fast://", "doq://", "socks5://")
+    )
+    @pytest.mark.parametrize("char", [chr(i) for i in range(0x21)] + ["\x7f"])
+    def test_raw_control_characters_in_host_raise(self, prefix: str, char: str) -> None:
+        with pytest.raises(LocationParseError):
+            parse_url(f"{prefix}example{char}.com/path")
+
+    @pytest.mark.parametrize(
+        "prefix", ("http://", "https://", "//", "wss+fast://", "doq://", "socks5://")
+    )
+    @pytest.mark.parametrize("octet", [*range(0x20), 0x7F])
+    @pytest.mark.parametrize("host", ("example{}.com", "[::1%25eth{}]", "[::1%eth{}]"))
+    def test_percent_encoded_control_characters_in_host_raise(
+        self, prefix: str, octet: int, host: str
+    ) -> None:
+        with pytest.raises(LocationParseError):
+            parse_url(prefix + host.format(f"%{octet:02x}") + "/path")
+
+    @pytest.mark.parametrize(
+        "authority", ("example.com:80\n", "127.0.0.1:80\n", "[::1]:80\n")
+    )
+    def test_host_port_match_rejects_trailing_newline(self, authority: str) -> None:
+        with pytest.raises(LocationParseError):
+            parse_url(f"http://{authority}/path")
+
+    @pytest.mark.parametrize(
+        "host",
+        (
+            "bad host",
+            "bad\x00host",
+            "bad%00host",
+            "bad%7fhost",
+            "bad%host",
+            "[::1%eth%0d]",
+        ),
+    )
+    def test_normalize_host_rejects_invalid_host(self, host: str) -> None:
+        with pytest.raises(LocationParseError):
+            _normalize_host(host, "https")
+
+    @pytest.mark.parametrize(
+        "host, expected",
+        [
+            ("%65XAMPLE%2ecom%2E", "example.com."),
+            ("foo%7Ebar.com", "foo~bar.com"),
+            ("%31%32%37.0.0.1", "127.0.0.1"),
+            ("Königsgäßchen.de", "xn--knigsgchen-b4a3dun.de"),
+            ("K%c3%b6nigsg%c3%a4%c3%9fchen.de", "k%C3%B6nigsg%C3%A4%C3%9Fchen.de"),
+            ("%ff.example", "%FF.example"),
+            ("%ed%a0%80.example", "%ED%A0%80.example"),
+            ("foo%20bar.com", "foo%20bar.com"),
+            ("victim%40evil.com", "victim%40evil.com"),
+            ("example%2f%5c%5b%5d%3a%3f%23.com", "example%2F%5C%5B%5D%3A%3F%23.com"),
+            ("a%25b.example", "a%25b.example"),
+            ("[::FF%25etH%2f%41]", "[::ff%etH%2F%41]"),
+            ("[::1%1F]", "[::1%1F]"),
+        ],
+    )
+    def test_host_percent_normalization(self, host: str, expected: str) -> None:
+        assert parse_url(f"https://{host}/path").host == expected
+        assert _normalize_host(host, "https") == expected
+
+    @pytest.mark.parametrize("scheme", ("http+unix", "wss+fast", "doq", "socks5"))
+    @pytest.mark.parametrize(
+        "host", ("%2fvar%2frun%2fSOCKET", "%65XAMPLE.com", "[::FF%25etH%41]")
+    )
+    def test_other_schemes_preserve_host_normalization(
+        self, scheme: str, host: str
+    ) -> None:
+        assert parse_url(f"{scheme}://{host}/path").host == host
 
     parse_url_host_map = [
         ("http://google.com/mail", Url("http", host="google.com", path="/mail")),
@@ -429,6 +557,96 @@ class TestUtil:
     def test_netloc(self, url: str, expected_netloc: str | None) -> None:
         assert parse_url(url).netloc == expected_netloc
 
+    url_auth_decoded_map: list[tuple[str, tuple[str | None, str | None]]] = [
+        # Basic username and password
+        ("http://foo:bar@example.com/", ("foo", "bar")),
+        ("http://foo@example.com/", ("foo", None)),
+        ("http://foo:@example.com/", ("foo", "")),
+        # Unreserved chars (not encoded): - . _ ~
+        ("http://user-name:pass_word@example.com/", ("user-name", "pass_word")),
+        ("http://user.name:pass~word@example.com/", ("user.name", "pass~word")),
+        # Sub-delims (not encoded): ! $ & ' ( ) * + , ; =
+        ("http://user!id:pass$word@example.com/", ("user!id", "pass$word")),
+        ("http://user&co:pass'word@example.com/", ("user&co", "pass'word")),
+        ("http://user(test):pass*word@example.com/", ("user(test)", "pass*word")),
+        ("http://user+id:pass,word@example.com/", ("user+id", "pass,word")),
+        ("http://user;id:pass=word@example.com/", ("user;id", "pass=word")),
+        # Encoded colon in username, unencoded colon in password
+        ("http://user%3Aname:pass:word@example.com/", ("user:name", "pass:word")),
+        # Percent-encoded credentials (unreserved chars: - . _ ~)
+        ("http://user%2Dname:pass%2Eword@example.com/", ("user-name", "pass.word")),
+        # Percent-encoded credentials (reserved/special chars)
+        ("http://user%40email:pass%2Fword@example.com/", ("user@email", "pass/word")),
+        ("http://user%20space:pass%3Acolon@example.com/", ("user space", "pass:colon")),
+        # Multiple @ signs (@ is percent-encoded in username part)
+        (
+            "http://user%40email.com:password@example.com/",
+            ("user@email.com", "password"),
+        ),
+        # Special characters already percent-encoded
+        ("http://user%22:quoted@example.com/", ('user"', "quoted")),
+        # No auth
+        ("http://example.com/", (None, None)),
+        # parse_url treats a bare '@' as absent auth.
+        ("http://@example.com/", (None, None)),
+        # Empty usernames with a password delimiter remain present.
+        ("http://:@example.com/", ("", "")),
+        ("http://:secret@example.com/", ("", "secret")),
+        # Split before decoding and decode exactly once.
+        ("http://user%3Aname@example.com/", ("user:name", None)),
+        ("http://user%25:pass%252F@example.com/", ("user%", "pass%2F")),
+        # Raw and percent-encoded Unicode both decode as UTF-8.
+        ("http://caf\u00e9:\u65e5\u672c@example.com/", ("caf\u00e9", "\u65e5\u672c")),
+        (
+            "http://caf%C3%A9:%E6%97%A5%E6%9C%AC@example.com/",
+            ("caf\u00e9", "\u65e5\u672c"),
+        ),
+        # Match unquote's replacement behavior for invalid UTF-8.
+        ("http://user%FF:pass%C3%28@example.com/", ("user\ufffd", "pass\ufffd(")),
+        # Preserve malformed escapes after parse_url's normalization.
+        ("http://user%zz:pass%2@example.com/", ("user%zz", "pass%2")),
+        ("http://user%2F%zz:pass@example.com/", ("user%2F%zz", "pass")),
+    ]
+
+    @pytest.mark.parametrize("url, expected_auth_decoded", url_auth_decoded_map)
+    def test_auth_decoded(
+        self, url: str, expected_auth_decoded: tuple[str | None, str | None]
+    ) -> None:
+        parsed_url = parse_url(url)
+        assert parsed_url.auth_decoded == expected_auth_decoded
+        username, password = expected_auth_decoded
+        if username is None and password is None:
+            assert parsed_url.auth_decoded_joined is None
+        elif password is None:
+            # There is no distinction between an empty password and no
+            # password in the Basic authentication according to RFC 7617,
+            # so the colon is always included.
+            assert parsed_url.auth_decoded_joined == f"{username}:"
+        else:
+            assert parsed_url.auth_decoded_joined == f"{username}:{password}"
+
+    @pytest.mark.parametrize(
+        "auth, expected, joined",
+        [
+            (None, (None, None), None),
+            ("", ("", None), ":"),
+            (":", ("", ""), ":"),
+            ("user%3Aname", ("user:name", None), "user:name:"),
+            ("user%253A:pass%2540", ("user%3A", "pass%40"), "user%3A:pass%40"),
+            ("user%zz:pass%", ("user%zz", "pass%"), "user%zz:pass%"),
+        ],
+    )
+    def test_auth_decoded_from_url_constructor(
+        self,
+        auth: str | None,
+        expected: tuple[str | None, str | None],
+        joined: str | None,
+    ) -> None:
+        url = Url(auth=auth, host="example.com")
+        assert url.auth_decoded == expected
+        assert url.auth_decoded_joined == joined
+        assert url.auth == auth
+
     url_vulnerabilities = [
         # urlparse doesn't follow RFC 3986 Section 3.2
         (
@@ -438,7 +656,7 @@ class TestUtil:
         # CVE-2016-5699
         (
             "http://127.0.0.1%0d%0aConnection%3a%20keep-alive",
-            Url("http", host="127.0.0.1%0d%0aconnection%3a%20keep-alive"),
+            False,
         ),
         # NodeJS unicode -> double dot
         (
@@ -574,9 +792,47 @@ class TestUtil:
             ({"user_agent": "banana"}, {"user-agent": "banana"}),
             ({"keep_alive": True}, {"connection": "keep-alive"}),
             ({"basic_auth": "foo:bar"}, {"authorization": "Basic Zm9vOmJhcg=="}),
+            ({"basic_auth": "user:passé"}, {"authorization": "Basic dXNlcjpwYXNz6Q=="}),
+            (
+                {"basic_auth": "user:passé", "basic_auth_encoding": "utf-8"},
+                {"authorization": "Basic dXNlcjpwYXNzw6k="},
+            ),
             (
                 {"proxy_basic_auth": "foo:bar"},
                 {"proxy-authorization": "Basic Zm9vOmJhcg=="},
+            ),
+            (
+                {"proxy_basic_auth": "proxy:passé"},
+                {"proxy-authorization": "Basic cHJveHk6cGFzc+k="},
+            ),
+            (
+                {
+                    "proxy_basic_auth": "proxy:passé",
+                    "proxy_basic_auth_encoding": "utf-8",
+                },
+                {"proxy-authorization": "Basic cHJveHk6cGFzc8Op"},
+            ),
+            (
+                {
+                    "basic_auth": "user:passé",
+                    "proxy_basic_auth": "proxy:passé",
+                    "basic_auth_encoding": "utf-8",
+                },
+                {
+                    "authorization": "Basic dXNlcjpwYXNzw6k=",
+                    "proxy-authorization": "Basic cHJveHk6cGFzc+k=",
+                },
+            ),
+            (
+                {
+                    "basic_auth": "user:passé",
+                    "proxy_basic_auth": "proxy:passé",
+                    "proxy_basic_auth_encoding": "utf-8",
+                },
+                {
+                    "authorization": "Basic dXNlcjpwYXNz6Q==",
+                    "proxy-authorization": "Basic cHJveHk6cGFzc8Op",
+                },
             ),
             ({"disable_cache": True}, {"cache-control": "no-cache"}),
         ],
@@ -585,6 +841,55 @@ class TestUtil:
         self, kwargs: dict[str, bool | str], expected: dict[str, str]
     ) -> None:
         assert make_headers(**kwargs) == expected  # type: ignore[arg-type]
+
+    def test_make_headers_basic_auth_encoding_error(self) -> None:
+        with pytest.raises(UnicodeEncodeError):
+            make_headers(basic_auth="ім'я:пароль")
+
+    def test_make_headers_basic_auth_utf8_allows_non_latin1(self) -> None:
+        assert make_headers(basic_auth="ім'я:пароль", basic_auth_encoding="utf-8") == {
+            "authorization": "Basic 0ZbQvCfRjzrQv9Cw0YDQvtC70Yw="
+        }
+
+    def test_make_headers_proxy_basic_auth_encoding_error(self) -> None:
+        with pytest.raises(UnicodeEncodeError):
+            make_headers(proxy_basic_auth="ім'я:пароль")
+
+    def test_make_headers_proxy_basic_auth_utf8_allows_non_latin1(self) -> None:
+        assert make_headers(
+            proxy_basic_auth="ім'я:пароль", proxy_basic_auth_encoding="utf-8"
+        ) == {"proxy-authorization": "Basic 0ZbQvCfRjzrQv9Cw0YDQvtC70Yw="}
+
+    def test_make_headers_positional_arguments(self) -> None:
+        assert make_headers(True, "gzip", "agent", "user:pass", "proxy:pass", True) == {
+            "connection": "keep-alive",
+            "accept-encoding": "gzip",
+            "user-agent": "agent",
+            "authorization": "Basic dXNlcjpwYXNz",
+            "proxy-authorization": "Basic cHJveHk6cGFzcw==",
+            "cache-control": "no-cache",
+        }
+
+    def test_make_headers_basic_auth_from_decoded_url(self) -> None:
+        url = parse_url("https://user:pass%C3%A9@example.com/")
+        assert make_headers(
+            basic_auth=url.auth_decoded_joined,
+            basic_auth_encoding="utf-8",
+        ) == {"authorization": "Basic dXNlcjpwYXNzw6k="}
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"basic_auth": "user:pass", "basic_auth_encoding": "unknown-encoding"},
+            {
+                "proxy_basic_auth": "proxy:pass",
+                "proxy_basic_auth_encoding": "unknown-encoding",
+            },
+        ],
+    )
+    def test_make_headers_unknown_auth_encoding(self, kwargs: dict[str, str]) -> None:
+        with pytest.raises(LookupError):
+            make_headers(**kwargs)  # type: ignore[arg-type]
 
     def test_rewind_body(self) -> None:
         body = io.BytesIO(b"test data")
@@ -623,6 +928,21 @@ class TestUtil:
 
         with pytest.raises(UnrewindableBodyError):
             rewind_body(BadSeek(), body_pos=2)
+
+    def test_rewind_body_no_seek(self) -> None:
+        class NoSeek(io.StringIO):
+            seek = None  # type: ignore[assignment]
+
+        with pytest.raises(UnrewindableBodyError):
+            rewind_body(NoSeek(), body_pos=2)
+
+    @pytest.mark.asyncio
+    async def test_arewind_body_no_seek(self) -> None:
+        class NoSeek(io.StringIO):
+            seek = None  # type: ignore[assignment]
+
+        with pytest.raises(UnrewindableBodyError):
+            await arewind_body(NoSeek(), body_pos=2)
 
     def test_add_stderr_logger(self) -> None:
         handler = add_stderr_logger(level=logging.INFO)  # Don't actually print debug

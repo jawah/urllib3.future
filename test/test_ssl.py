@@ -217,6 +217,22 @@ class TestSSL:
                 cert=None, fingerprint="55:39:BF:70:05:12:43:FA:1F:D1:BF:4E:E8:1B:07:1D"
             )
 
+    @pytest.mark.parametrize(
+        "fingerprint",
+        [
+            "g" * 32,
+            "g" * 40,
+            "g" * 64,
+            "a" * 39 + "g",
+            "GG:" * 19 + "GG",
+        ],
+    )
+    def test_assert_fingerprint_raises_sslerror_on_non_hexadecimal(
+        self, fingerprint: str
+    ) -> None:
+        with pytest.raises(SSLError):
+            ssl_.assert_fingerprint(b"certificate", fingerprint)
+
     def test_create_urllib3_context_force_stdlib_backend(self) -> None:
         ctx = ssl_.create_urllib3_context(ssl_backend="ssl")
         # The stdlib backend must always produce a stdlib ``ssl.SSLContext``.

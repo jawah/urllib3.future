@@ -163,7 +163,21 @@ integration, so applications should still run their own representative tests.
 
 ## Installation modes
 
-urllib3.future supports two installation models.
+Choose how urllib3.future fits into your environment. Use drop-in mode to select
+it for existing `urllib3` imports, or cohabitation mode to keep upstream urllib3
+and use both projects side by side.
+
+In-place replacement is the default because we want existing integrations to
+work out of the box. Niquests extends Requests, whose ecosystem includes
+plugins that import urllib3 directly and exchange its objects and exceptions.
+Sharing one implementation preserves that compatibility without requiring
+users to adapt each integration.
+
+Other applications prefer to keep the two transports separate—for example,
+when Niquests is an indirect dependency and existing Requests integrations
+should continue using upstream urllib3. Cohabitation supports that choice
+explicitly. It retains urllib3.future's features, while extensions that exchange
+transport objects between the two implementations may need adaptation.
 
 | Mode         | Import                  | Effect                                                             | Appropriate when                                                                            |
 |--------------|-------------------------|--------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
@@ -172,11 +186,14 @@ urllib3.future supports two installation models.
 
 ### Drop-in mode
 
-Install the published wheel:
+Install the published wheel with your package manager:
 
-```bash
-python -m pip install urllib3-future
-```
+| Package manager | Command |
+|-----------------|---------|
+| pip | `python -m pip install urllib3-future` |
+| uv | `uv add urllib3-future` |
+| Poetry | `poetry add urllib3-future` |
+| PDM | `pdm add urllib3-future` |
 
 Then use the established import:
 
@@ -189,28 +206,190 @@ environment that import `urllib3` will use urllib3.future too.
 
 ### Cohabitation mode
 
-To keep upstream urllib3 and urllib3.future under separate namespaces, follow
-the package-manager-specific
-[cohabitation instructions](https://niquests.readthedocs.io/en/latest/community/faq.html#cohabitation).
+**You can use urllib3.future while keeping upstream urllib3 in place.**
+Cohabitation is a supported installation mode, available through two routes:
 
-The pip form is:
+| Route | How you choose it | What it installs |
+|-------|-------------------|------------------|
+| Source distribution from PyPI | Select a source build and set `URLLIB3_NO_OVERRIDE=1` | Only `urllib3_future`, without a `.pth` startup hook |
+| Prebuilt alternative wheel | Select a `+isolation` release from the project's [isolation index](https://jawah.github.io/urllib3.future/isolation/) | The same separate package, already built, with a verifiable attestation |
+
+Both routes keep `import urllib3` pointing to upstream urllib3 when it is
+installed. Niquests uses `urllib3_future`; Requests and other libraries that
+import `urllib3` continue using upstream. The fork's HTTP/2, HTTP/3 and async
+APIs remain available through its own namespace.
+
+Start with a fresh environment, expand your package manager, and choose one
+route. For prebuilt wheels, select a release listed in the isolation index; the pip
+example below uses `2.25.900+isolation` once that version is available.
+
+<details>
+<summary><strong>pip</strong></summary>
+
+**Build from the PyPI source distribution:**
 
 ```bash
 URLLIB3_NO_OVERRIDE=1 \
-python -m pip install urllib3-future --no-binary urllib3-future
+python -m pip install --no-cache-dir --no-binary=urllib3-future urllib3-future urllib3
 ```
 
-Then import the fork through its separate namespace:
+**Or install a prebuilt `+isolation` wheel:**
+
+Save this in `requirements-isolation.txt`:
+
+```text
+--extra-index-url https://jawah.github.io/urllib3.future/isolation/simple/
+urllib3-future==2.25.900+isolation
+urllib3
+```
+
+Then install it:
+
+```bash
+python -m pip install -r requirements-isolation.txt
+```
+
+Retain the complete `+isolation` pin when updating dependencies. If that wheel is
+unavailable, pip fails to resolve it instead of selecting the drop-in build.
+
+</details>
+
+<details>
+<summary><strong>uv</strong></summary>
+
+**Build from the PyPI source distribution:**
+
+Add this to your project's `pyproject.toml`:
+
+```toml
+[tool.uv]
+no-binary-package = ["urllib3-future"]
+extra-build-variables = { "urllib3-future" = { URLLIB3_NO_OVERRIDE = "1" } }
+```
+
+Then install:
+
+```bash
+uv add urllib3-future urllib3
+```
+
+uv records both choices in the project configuration and applies the build
+flag automatically during installs, syncs, and upgrades, including on Windows.
+
+**Or install a prebuilt `+isolation` wheel:**
+
+Bind the package to the isolation index in `pyproject.toml`:
+
+```toml
+[tool.uv.sources]
+urllib3-future = { index = "urllib3-future-isolation" }
+
+[[tool.uv.index]]
+name = "urllib3-future-isolation"
+url = "https://jawah.github.io/urllib3.future/isolation/simple/"
+explicit = true
+```
+
+Then install:
+
+```bash
+uv add urllib3-future urllib3
+```
+
+Keep `pyproject.toml` and `uv.lock` with your project. The source binding also
+applies when Niquests depends on urllib3.future.
+
+</details>
+
+<details>
+<summary><strong>Poetry</strong></summary>
+
+**Build from the PyPI source distribution:**
+
+```bash
+poetry config --local installer.no-binary urllib3-future
+URLLIB3_NO_OVERRIDE=1 poetry add urllib3-future urllib3
+```
+
+Keep the generated `poetry.toml` setting with your project so subsequent
+installations also select source builds.
+
+**Or install a prebuilt `+isolation` wheel:**
+
+```bash
+poetry source add --priority=explicit urllib3-future-isolation https://jawah.github.io/urllib3.future/isolation/simple/
+poetry add --source urllib3-future-isolation urllib3-future
+poetry add urllib3
+```
+
+Poetry records the fork's source in `pyproject.toml`. Only urllib3.future is
+bound to the isolation index; upstream urllib3 uses the usual source. Keep this
+configuration and `poetry.lock` with your project.
+
+</details>
+
+<details>
+<summary><strong>PDM</strong></summary>
+
+**Build from the PyPI source distribution:**
+
+Add this to your project's `pyproject.toml`:
+
+```toml
+[tool.pdm.resolution]
+no-binary = "urllib3-future"
+```
+
+Then install with the build flag:
+
+```bash
+URLLIB3_NO_OVERRIDE=1 pdm add urllib3-future urllib3
+```
+
+**Or install a prebuilt `+isolation` wheel:**
+
+Bind the package to the isolation index in `pyproject.toml`:
+
+```toml
+[[tool.pdm.source]]
+name = "urllib3-future-isolation"
+url = "https://jawah.github.io/urllib3.future/isolation/simple/"
+include_packages = ["urllib3-future"]
+```
+
+Then install:
+
+```bash
+pdm add urllib3-future urllib3
+```
+
+Keep `pyproject.toml` and `pdm.lock` with your project. The package binding
+restricts urllib3.future to the isolation index, including when it is a dependency
+of Niquests.
+
+</details>
+
+The pip, Poetry, and PDM source-build commands above use Linux/macOS shell
+syntax. In PowerShell, set `$env:URLLIB3_NO_OVERRIDE = "1"` before running the
+package-manager command. Supply this flag during future installs, syncs, and
+upgrades too; uv supplies it through `extra-build-variables`. The wheel route
+records your choice in the pin or package-source binding.
+
+Then each import selects its own implementation:
 
 ```python
-import urllib3_future
+import urllib3         # upstream urllib3
+import urllib3_future  # urllib3.future
 ```
 
-`URLLIB3_NO_OVERRIDE` is evaluated while building the package. It is not a
-runtime switch and does not alter an already-built wheel.
+Follow the **[complete cohabitation guide](https://urllib3future.readthedocs.io/en/latest/cohabitation.html)** for Windows commands,
+persistent requirements, upgrade instructions, and checks you
+can run to verify the installation. The [Niquests cohabitation FAQ](https://niquests.readthedocs.io/en/latest/community/faq.html#cohabitation)
+also covers source builds with pip, Poetry, PDM, and uv.
 
-OS and distribution package maintainers should use cohabitation mode when the
-system package manager is responsible for namespace ownership.
+The environment variable is a **build-time choice**; it does not change an
+already-installed wheel. Keep your chosen recipe in your project and CI so
+future installations preserve the same namespace separation.
 
 ## Depending on urllib3.future from a library
 
@@ -385,11 +564,10 @@ not compromise protocol correctness or security.
 ### Can upstream urllib3 and urllib3.future coexist?
 
 Yes. Cohabitation mode leaves upstream urllib3 behind `import urllib3` and
-provides the fork through `import urllib3_future`.
-
-See the
-[cohabitation instructions](https://niquests.readthedocs.io/en/latest/community/faq.html#cohabitation)
-for pip, Poetry, PDM, and uv.
+provides the fork through `import urllib3_future`. Choose a source build with
+`URLLIB3_NO_OVERRIDE=1` or a prebuilt `+isolation` wheel. Both omit the `.pth` startup
+hook. The [cohabitation guide](https://urllib3future.readthedocs.io/en/latest/cohabitation.html) walks through installation,
+verification, and upgrades for both routes.
 
 ### What are the known platform boundaries?
 

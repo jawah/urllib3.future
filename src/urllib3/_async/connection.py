@@ -213,7 +213,10 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         #   "A server yield its support for HTTP/2 or HTTP/3 through Alt-Svc, but
         #    it cannot connect to the alt-svc, thus confusing the end-user on why it
         #    waits forever for the 2nd request."
-        if self._max_tolerable_delay_for_upgrade is not None:
+        if (
+            self._max_tolerable_delay_for_upgrade is not None
+            and self.socket_kind != socket.SOCK_DGRAM
+        ):
             backup_timeout = self.timeout
             self.timeout = self._max_tolerable_delay_for_upgrade
 
@@ -867,30 +870,38 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
             if self.server_hostname is not None:
                 server_hostname = self.server_hostname
 
-            sock_and_verified = await _ssl_wrap_socket_and_match_hostname(
-                sock=sock,
-                cert_reqs=self.cert_reqs,
-                ssl_version=self.ssl_version,
-                ssl_minimum_version=self.ssl_minimum_version,
-                ssl_maximum_version=self.ssl_maximum_version,
-                ssl_backend=self.ssl_backend,
-                ca_certs=self.ca_certs,
-                ca_cert_dir=self.ca_cert_dir,
-                ca_cert_data=self.ca_cert_data,
-                cert_file=self.cert_file,
-                key_file=self.key_file,
-                key_password=self.key_password,
-                server_hostname=server_hostname,
-                ssl_context=self.ssl_context,
-                tls_in_tls=tls_in_tls,
-                assert_hostname=self.assert_hostname,
-                assert_fingerprint=self.assert_fingerprint,
-                alpn_protocols=alpn_protocols or None,
-                cert_data=self.cert_data,
-                key_data=self.key_data,
-                ciphers=self.ciphers,
-                ech_config_list=self._ech_config,
-            )
+            if self.proxy_is_forwarding and self.proxy_config is not None:
+                proxy_sock = await self._connect_tls_proxy(
+                    self.host, sock, alpn_protocols or None
+                )
+                sock_and_verified = _WrappedAndVerifiedSocket(
+                    proxy_sock, self.proxy_is_verified is True
+                )
+            else:
+                sock_and_verified = await _ssl_wrap_socket_and_match_hostname(
+                    sock=sock,
+                    cert_reqs=self.cert_reqs,
+                    ssl_version=self.ssl_version,
+                    ssl_minimum_version=self.ssl_minimum_version,
+                    ssl_maximum_version=self.ssl_maximum_version,
+                    ssl_backend=self.ssl_backend,
+                    ca_certs=self.ca_certs,
+                    ca_cert_dir=self.ca_cert_dir,
+                    ca_cert_data=self.ca_cert_data,
+                    cert_file=self.cert_file,
+                    key_file=self.key_file,
+                    key_password=self.key_password,
+                    server_hostname=server_hostname,
+                    ssl_context=self.ssl_context,
+                    tls_in_tls=tls_in_tls,
+                    assert_hostname=self.assert_hostname,
+                    assert_fingerprint=self.assert_fingerprint,
+                    alpn_protocols=alpn_protocols or None,
+                    cert_data=self.cert_data,
+                    key_data=self.key_data,
+                    ciphers=self.ciphers,
+                    ech_config_list=self._ech_config,
+                )
 
             # we want the http3 upgrade to behave
             # exactly as http1/http2 ssl handshake
@@ -934,28 +945,48 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
         alpn_protocols: list[str] | None = None,
     ) -> SSLAsyncSocket:
         """
-        Establish a TLS connection to the proxy using the provided SSL context.
+        Establish a TLS connection using proxy-specific trust and identity.
         """
-        # `_connect_tls_proxy` is called when self._tunnel_host is truthy.
         assert self.proxy_config is not None
         proxy_config = self.proxy_config
         ssl_context = proxy_config.ssl_context
+        cert_reqs: int | str | None
+
+        if ssl_context is not None:
+            cert_reqs = ssl_context.verify_mode
+            ca_certs = ca_cert_dir = ca_cert_data = None
+            ssl_version = ssl_minimum_version = ssl_maximum_version = None
+            ssl_backend = None
+            ciphers = None
+        else:
+            # Preserve the pool's TLS policy when no proxy context was supplied.
+            ssl_context = self.ssl_context if self.proxy_is_forwarding else None
+            cert_reqs = self.cert_reqs
+            ca_certs = self.ca_certs
+            ca_cert_dir = self.ca_cert_dir
+            ca_cert_data = self.ca_cert_data
+            ssl_version = self.ssl_version
+            ssl_minimum_version = self.ssl_minimum_version
+            ssl_maximum_version = self.ssl_maximum_version
+            ssl_backend = self.ssl_backend
+            ciphers = self.ciphers
+
         sock_and_verified = await _ssl_wrap_socket_and_match_hostname(
             sock,
-            cert_reqs=self.cert_reqs,
-            ssl_version=self.ssl_version,
-            ssl_minimum_version=self.ssl_minimum_version,
-            ssl_maximum_version=self.ssl_maximum_version,
-            ssl_backend=self.ssl_backend,
-            ca_certs=self.ca_certs,
-            ca_cert_dir=self.ca_cert_dir,
-            ca_cert_data=self.ca_cert_data,
+            cert_reqs=cert_reqs,
+            ssl_version=ssl_version,
+            ssl_minimum_version=ssl_minimum_version,
+            ssl_maximum_version=ssl_maximum_version,
+            ssl_backend=ssl_backend,
+            ca_certs=ca_certs,
+            ca_cert_dir=ca_cert_dir,
+            ca_cert_data=ca_cert_data,
             server_hostname=hostname,
             ssl_context=ssl_context,
             assert_hostname=proxy_config.assert_hostname,
             assert_fingerprint=proxy_config.assert_fingerprint,
-            ciphers=self.ciphers,
-            # Features that aren't implemented for proxies yet:
+            ciphers=ciphers,
+            # Proxy client credentials belong in proxy_ssl_context.
             cert_file=None,
             key_file=None,
             key_password=None,

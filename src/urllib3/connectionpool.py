@@ -1033,13 +1033,16 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             )
             chunked = typing.cast(bool, from_promise.get_parameter("chunked"))
             body_pos = typing.cast(
-                _TYPE_BODY_POSITION, from_promise.get_parameter("body_pos")
+                typing.Optional[_TYPE_BODY_POSITION],
+                from_promise.get_parameter("body_pos"),
             )
             retries = typing.cast(Retry, from_promise.get_parameter("retries"))
 
             if response.status == 303:
                 method = "GET"
                 body = None
+                chunked = False
+                body_pos = None
                 headers = HTTPHeaderDict(headers)
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
@@ -1064,6 +1067,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                response.read(cache_content=True)
             response.drain_conn()
             retries.sleep_for_retry(response)
             log.debug("Redirecting %s -> %s", url, redirect_location)
@@ -1129,6 +1134,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                response.read(cache_content=True)
             response.drain_conn()
             retries.sleep(response)
             log.debug("Retry: %s", url)
@@ -1787,7 +1794,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if url.startswith("/"):
             url = to_str(_encode_target(url))
         else:
-            url = to_str(parsed_url.url)
+            url = to_str(parsed_url._replace(fragment=None).url)
 
         conn = None
 
@@ -2030,6 +2037,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             if response.status == 303:
                 method = "GET"
                 body = None
+                chunked = False
+                body_pos = None
                 headers = HTTPHeaderDict(headers)
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
@@ -2054,6 +2063,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                response.read(cache_content=True)
             response.drain_conn()
             retries.sleep_for_retry(response)
             log.debug("Redirecting %s -> %s", url, redirect_location)
@@ -2088,6 +2099,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     raise
                 return response
 
+            if retries.cache_response_body and response._body is None:
+                response.read(cache_content=True)
             response.drain_conn()
             retries.sleep(response)
             log.debug("Retry: %s", url)

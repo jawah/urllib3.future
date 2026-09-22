@@ -191,6 +191,39 @@ class TestAsyncResponse:
 
         assert await r.data == b"foo"
 
+    @pytest.mark.timeout(5)
+    @pytest.mark.parametrize("wbits", (zlib.MAX_WBITS, -zlib.MAX_WBITS))
+    @pytest.mark.parametrize("read_method", ("read", "read1", "stream", "read_chunked"))
+    async def test_deflate_trailing_data(self, wbits: int, read_method: str) -> None:
+        payload = b"A" * 100
+        compressor = zlib.compressobj(wbits=wbits)
+        encoded = compressor.compress(payload) + compressor.flush() + b"tail"
+
+        async def body_reader(
+            amt: int | None, stream_id: int | None
+        ) -> tuple[list[bytes], bool, HTTPHeaderDict | None]:
+            return [encoded], True, None
+
+        headers = HTTPHeaderDict(
+            {"transfer-encoding": "chunked", "content-encoding": "deflate"}
+        )
+        raw = AsyncLowLevelResponse("GET", 200, 11, "OK", headers, body_reader)
+        response = AsyncHTTPResponse(raw, headers=headers, preload_content=False)
+
+        assert await response.read(0) == b""
+        if read_method in ("stream", "read_chunked"):
+            chunks = [chunk async for chunk in getattr(response, read_method)(50)]
+        else:
+            chunks = []
+            while True:
+                chunk = await getattr(response, read_method)(50)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+
+        assert b"".join(chunks) == payload
+        assert all(0 < len(chunk) <= 50 for chunk in chunks)
+
     async def test_decode_deflate_case_insensitive(self) -> None:
         data = zlib.compress(b"foo")
 
@@ -954,6 +987,41 @@ class TestAsyncResponse:
         await r.drain_conn()
         assert r._decoder is None
         assert len(r._decoded_buffer) == 0
+
+    @pytest.mark.parametrize("body_size", [0, 2**16, 2**16 + 1, 200_000])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    async def test_drain_conn_reads_in_bounded_chunks(
+        self, body_size: int, partial_read: bool
+    ) -> None:
+        headers = {"content-length": str(body_size)}
+        fp = _make_async_fp(b"x" * body_size, headers=headers)
+        response = AsyncHTTPResponse(fp, headers=headers, preload_content=False)
+        if partial_read:
+            await response.read(1)
+        read = mock.Mock(wraps=fp.read)
+        with mock.patch.object(fp, "read", read):
+            await response.drain_conn()
+        assert fp.closed
+        assert response.tell() == body_size
+        assert response.length_remaining == 0
+        for args, _ in read.call_args_list:
+            assert args and isinstance(args[0], int) and 0 < args[0] <= 2**16
+
+    @pytest.mark.parametrize(
+        "method, status, version", [("GET", 101, 11), ("CONNECT", 200, 20)]
+    )
+    async def test_drain_conn_preserves_upgraded_stream(
+        self, method: str, status: int, version: int
+    ) -> None:
+        dsa = mock.Mock()
+        fp = AsyncLowLevelResponse(
+            method, status, version, "", HTTPHeaderDict(), None, dsa=dsa
+        )
+        response = AsyncHTTPResponse(fp, original_response=fp, preload_content=False)
+        closed = fp.closed
+        await response.drain_conn()
+        assert fp._dsa is dsa
+        assert fp.closed is closed
 
     async def test_length_w_valid_header(self) -> None:
         headers = {"content-length": "5"}

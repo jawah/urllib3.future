@@ -31,6 +31,7 @@ from urllib3.exceptions import (
     ReadTimeoutError,
     SSLError,
     TimeoutError,
+    UnrewindableBodyError,
 )
 from urllib3.response import HTTPResponse
 from urllib3.util.ssl_match_hostname import CertificateError
@@ -57,6 +58,46 @@ class TestConnectionPool:
     Tests in this suite should exercise the ConnectionPool functionality
     without actually making any network requests or connections.
     """
+
+    @pytest.mark.parametrize("absolute", [False, True])
+    @pytest.mark.parametrize(
+        "target, expected",
+        [
+            ("/path#private", "/path"),
+            ("/path?x=1#private", "/path?x=1"),
+            ("/#private", "/"),
+            ("/path?x=1#", "/path?x=1"),
+            ("/pa%23th?x=%23#private", "/pa%23th?x=%23"),
+            ("/path?x=1", "/path?x=1"),
+        ],
+    )
+    def test_request_target_strips_fragment(
+        self, absolute: bool, target: str, expected: str
+    ) -> None:
+        prefix = "http://localhost" if absolute else ""
+        with HTTPConnectionPool("localhost") as pool:
+            with patch.object(
+                pool, "_make_request", return_value=HTTPResponse(status=200)
+            ) as make_request:
+                pool.urlopen("GET", prefix + target)
+            assert make_request.call_args[0][2] == prefix + expected
+
+    def test_absolute_redirect_request_target_strips_fragment(self) -> None:
+        responses = [
+            HTTPResponse(
+                status=302,
+                headers={"location": "http://localhost/next?x=%23#private"},
+            ),
+            HTTPResponse(status=200),
+        ]
+        with HTTPConnectionPool("localhost") as pool:
+            with patch.object(pool, "_make_request", side_effect=responses) as request:
+                response = pool.urlopen("GET", "/", retries=1)
+        assert response.status == 200
+        assert [call[0][2] for call in request.call_args_list] == [
+            "/",
+            "http://localhost/next?x=%23",
+        ]
 
     @pytest.mark.parametrize(
         "a, b",
@@ -577,6 +618,53 @@ class TestConnectionPool:
         _test(OSError)
         _test(SocketError)
         _test(ProtocolError)
+
+    def test_retry_with_body_that_has_tell_but_no_seek(self) -> None:
+        """
+        This is a regression test for issue #3779 [1] where, if
+        seek is missing from body and we retried, we previously raised
+        a confusing error.
+
+        [1] <https://github.com/urllib3/urllib3/issues/3779>
+        """
+
+        class TellableStream:
+            """A stream-like object with tell() and read() but no seek()."""
+
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self._pos = 0
+
+            def read(self, n: int = -1) -> bytes:
+                if n == -1:
+                    chunk = self._data[self._pos :]
+                    self._pos = len(self._data)
+                else:
+                    chunk = self._data[self._pos : self._pos + n]
+                    self._pos += len(chunk)
+                return chunk
+
+            def tell(self) -> int:
+                return self._pos
+
+        body = TellableStream(b"hello world")
+
+        with HTTPConnectionPool(host="localhost", maxsize=1) as pool:
+            with patch.object(
+                pool,
+                "_make_request",
+                side_effect=OSError("connection reset"),
+            ):
+                with pytest.raises(
+                    UnrewindableBodyError, match="body does not implement seek"
+                ):
+                    pool.urlopen(  # type: ignore[call-overload]
+                        "POST",
+                        "/",
+                        body=body,
+                        retries=Retry(total=2, allowed_methods=["POST"]),
+                        body_pos=None,
+                    )
 
     def test_read_timeout_0_does_not_raise_bad_status_line_error(self) -> None:
         with HTTPConnectionPool(host="localhost", maxsize=1) as pool:

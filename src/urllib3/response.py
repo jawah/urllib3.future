@@ -109,6 +109,10 @@ class DeflateDecoder(ContentDecoder):
     def decompress(self, data: bytes, max_length: int = -1) -> bytes:
         data = self._unfed_data + data
         self._unfed_data = b""
+        # Data received after EOF cannot produce more output from this
+        # Deflate stream.
+        if self._obj.eof:
+            return b""
         if not data and not self._obj.unconsumed_tail:
             return data
         original_max_length = max_length
@@ -151,7 +155,9 @@ class DeflateDecoder(ContentDecoder):
     @property
     def has_unconsumed_tail(self) -> bool:
         return bool(self._unfed_data) or (
-            bool(self._obj.unconsumed_tail) and not self._first_try
+            bool(self._obj.unconsumed_tail)
+            and not self._first_try
+            and not self._obj.eof
         )
 
     def flush(self) -> bytes:
@@ -225,6 +231,8 @@ class GzipDecoder(ContentDecoder):
         return bool(self._unconsumed_tail)
 
     def flush(self) -> bytes:
+        if self._state == GzipDecoderState.SWALLOW_DATA:
+            return b""
         return self._obj.flush()
 
 
@@ -774,8 +782,11 @@ class HTTPResponse(io.IOBase):
 
         Unread data in the HTTPResponse connection blocks the connection from being released back to the pool.
         """
+        # A sized read would close upgraded responses and clear their stream access.
+        amt = 2**16 if getattr(self._fp, "_dsa", None) is None else None
         try:
-            self._raw_read()
+            while self._raw_read(amt):
+                pass
         except (HTTPError, OSError, BaseSSLError):
             pass
         if self._has_decoded_content:

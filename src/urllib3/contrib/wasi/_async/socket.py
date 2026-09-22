@@ -251,6 +251,7 @@ if sys.platform == "wasi":
             self.proto = proto if proto >= 0 else _stdlib_socket.IPPROTO_TCP
             self._reader: Any | None = None
             self._writer: Any | None = None
+            self._read_buffer = b""
             self._send_error: OSError | None = None
             self._receive_error: OSError | None = None
             self._connected = False
@@ -301,11 +302,30 @@ if sys.platform == "wasi":
         async def write_all(self, data: bytes) -> None:
             await self.sendall(data)
 
+        def read_ready(self) -> bool:
+            if self._reader is None:
+                raise OSError(errno.ENOTCONN, "socket is not connected")
+            return bool(
+                self._read_buffer
+                or self._receive_error is not None
+                or self._reader.writer_dropped
+            )
+
+        async def until_data_available(self, remaining: float | None = None) -> None:
+            # Preview 3 streams have no peek operation. Retain a bounded read
+            # for recv(); cancellation/timeouts are not supported by the runtime.
+            if not self.read_ready():
+                self._read_buffer = await self.recv(65536)
+
         async def recv(self, bufsize: int) -> bytes:
             if self._receive_error is not None:
                 raise self._receive_error
             if self._reader is None:
                 raise OSError(errno.ENOTCONN, "socket is not connected")
+            if self._read_buffer:
+                data = self._read_buffer[:bufsize]
+                self._read_buffer = self._read_buffer[bufsize:]
+                return data
             return await self._reader.read(bufsize)
 
         async def read_exact(self, size: int) -> bytes:
@@ -476,6 +496,7 @@ if sys.platform == "wasi":
                 server_hostname=server_hostname,
             )
             self._plaintext_writer, self._plaintext_reader = wit_world.byte_stream()
+            self._read_buffer = b""
             self._write_lock = asyncio.Lock()
             self._error: BaseException | None = None
             self._closed = False
@@ -564,7 +585,23 @@ if sys.platform == "wasi":
         async def write_all(self, data: bytes) -> None:
             await self.sendall(data)
 
+        def read_ready(self) -> bool:
+            return bool(
+                self._read_buffer
+                or self._error is not None
+                or self._plaintext_reader.writer_dropped
+            )
+
+        async def until_data_available(self, remaining: float | None = None) -> None:
+            # Wait for plaintext from the TLS pump, not ciphertext readiness.
+            if not self.read_ready():
+                self._read_buffer = await self.recv(65536)
+
         async def recv(self, bufsize: int) -> bytes:
+            if self._read_buffer:
+                data = self._read_buffer[:bufsize]
+                self._read_buffer = self._read_buffer[bufsize:]
+                return data
             data = await self._plaintext_reader.read(bufsize)
             if not data and self._error is not None:
                 raise self._error

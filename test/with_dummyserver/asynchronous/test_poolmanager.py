@@ -334,6 +334,30 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             assert "Content-Type" not in HTTPHeaderDict(data["headers"])
             await response.data  # consume content, avoid resource warning
 
+    @pytest.mark.parametrize("chunked_via", ["kwarg", "header"])
+    async def test_303_redirect_makes_request_lose_body_framing(
+        self, chunked_via: str
+    ) -> None:
+        # The body is dropped, so the redirected GET must not keep announcing
+        # a chunked body that it is never going to send.
+        request_headers: dict[str, str] = {}
+        kw: dict[str, typing.Any] = {}
+        if chunked_via == "kwarg":
+            kw["chunked"] = True
+        else:
+            request_headers["Transfer-Encoding"] = "chunked"
+        async with AsyncPoolManager() as http:
+            response = await http.request(
+                "POST",
+                f"{self.base_url}/redirect?target={self.base_url}/headers_and_params",
+                body=iter([b"xxxxxxxx"]),
+                headers=request_headers,
+                **kw,
+            )
+        headers = HTTPHeaderDict((await response.json())["headers"])
+        assert "Transfer-Encoding" not in headers
+        assert "Content-Length" not in headers
+
     async def test_unknown_scheme(self) -> None:
         async with AsyncPoolManager() as http:
             unknown_scheme = "unknown"

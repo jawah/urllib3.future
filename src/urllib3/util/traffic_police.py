@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import queue
+import time
 import typing
 from collections import deque
 from dataclasses import dataclass, field
@@ -396,13 +397,16 @@ class TrafficPolice(typing.Generic[T]):
                     cursor_key = get_ident()
                     active_cursor = self._cursor[cursor_key]
 
-                    if (
-                        traffic_state_of(active_cursor.conn_or_pool)
-                        is TrafficState.IDLE
+                    if traffic_state_of(
+                        active_cursor.conn_or_pool
+                    ) is TrafficState.IDLE and not any(
+                        key != cursor_key and cursor.obj_id == active_cursor.obj_id
+                        for key, cursor in self._cursor.items()
                     ):
                         self._map_clear(active_cursor.conn_or_pool)
 
                         del self._registry[active_cursor.obj_id]
+                        self._container.pop(active_cursor.obj_id, None)
 
                         try:
                             active_cursor.conn_or_pool.close()
@@ -419,6 +423,9 @@ class TrafficPolice(typing.Generic[T]):
                     if (
                         obj_id in self._container
                         and traffic_state_of(conn_or_pool) is TrafficState.IDLE
+                        and not any(
+                            cursor.obj_id == obj_id for cursor in self._cursor.values()
+                        )
                     ):
                         eligible_obj_id, eligible_conn_or_pool = obj_id, conn_or_pool
                         break
@@ -599,8 +606,14 @@ class TrafficPolice(typing.Generic[T]):
             # This part is ugly but set for backward compatibility
             # urllib3 used to fill the bag with 'None'. This simulates that
             # old and bad behavior.
+            # Held objects must not hide spare capacity from new requests.
+            candidates = self._container if non_saturated_only else self._registry
             if (
-                not self._container or self.bag_only_saturated
+                not self._container
+                or all(
+                    traffic_state_of(obj) is TrafficState.SATURATED
+                    for obj in candidates.values()
+                )
             ) and self.maxsize is not None:
                 if self.maxsize > len(self._registry):
                     self.put(
@@ -757,15 +770,28 @@ class TrafficPolice(typing.Generic[T]):
         is required.
         """
         if traffic_indicator is not None:
-            conn_or_pool = self.locate(
-                traffic_indicator=traffic_indicator,
-                block=block,
-                release_on_missing=False,
-            )
+            while True:
+                conn_or_pool = self.locate(
+                    traffic_indicator=traffic_indicator,
+                    block=block,
+                    release_on_missing=False,
+                )
 
-            if conn_or_pool is not None:
-                yield conn_or_pool
-                return
+                if conn_or_pool is not None:
+                    yield conn_or_pool
+                    return
+
+                if (
+                    placeholder_set
+                    or not self._registry
+                    or self.maxsize is None
+                    or len(self._registry) < self.maxsize
+                ):
+                    break
+                # Waiting for capacity must not hold the lookup lock: other
+                # threads need it to release the pools we could evict.
+                self._lock.release()
+                self._sacrifice_first_idle(block=block)
 
         traffic_indicators = []
 
@@ -810,12 +836,27 @@ class TrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
         release_on_missing: bool = True,
+        *,
+        conn_pre_pick_callable: typing.Callable[[T], typing.Callable[[], None] | None]
+        | None = None,
     ) -> T | None:
-        """We want to know what conn_or_pool hold ownership of traffic_indicator."""
-        conn_or_pool: T | None
-        signal = None
+        """Locate and acquire the owner of a traffic indicator.
+
+        The optional callback must not block. It returns None when ready, or a
+        deferred wait to run without ownership. Reentrant borrows bypass it.
+        """
+        deadline = None
+        if conn_pre_pick_callable is not None:
+            if self.concurrency:
+                raise ValueError("Pre-pick callbacks require exclusive ownership")
+            if timeout is not None:
+                deadline = time.monotonic() + timeout
 
         while True:
+            if deadline is not None:
+                timeout = max(0, deadline - time.monotonic())
+            wait = None
+            signal = None
             self._lock.acquire()
 
             if not isinstance(traffic_indicator, type):
@@ -853,63 +894,93 @@ class TrafficPolice(typing.Generic[T]):
                     self._lock.release()
                 return None
 
-            # past that, it's only a PlaceHolder. Let's wait.
-            if not isinstance(conn_or_pool, ItemPlaceholder):
+            if isinstance(conn_or_pool, ItemPlaceholder):
+                signal_pre_locate = self._register_signal(
+                    conn_or_pool, TrafficState.SATURATED
+                )
                 self._lock.release()
-                break
 
-            signal_pre_locate = self._register_signal(
-                conn_or_pool, TrafficState.SATURATED
-            )
+                if not signal_pre_locate.event.wait(timeout=timeout):
+                    raise TimeoutError(
+                        "Timed out while waiting for conn_or_pool to become available"
+                    )
+                continue
 
-            self._lock.release()
+            # Keep lookup and borrower/waiter registration atomic.
+            try:
+                cursor_key = get_ident()
+                if obj_id not in self._registry:
+                    raise UnavailableTraffic(
+                        "The connection was closed before acquisition"
+                    )
+                active_cursor = self._cursor.get(cursor_key)
+                if active_cursor is not None:
+                    if active_cursor.obj_id == obj_id:
+                        active_cursor.depth += 1
 
-            if not signal_pre_locate.event.wait(timeout=timeout):
-                raise TimeoutError(
-                    "Timed out while waiting for conn_or_pool to become available"
-                )
+                        return active_cursor.conn_or_pool
+                    raise AtomicTraffic(
+                        "Seeking to locate a connection when having another one used, did you forget a call to release?"
+                    )
 
-        cursor_key = get_ident()
-
-        with self._lock:
-            active_cursor = self._cursor.get(cursor_key)
-            if active_cursor is not None:
-                if active_cursor.obj_id == obj_id:
-                    active_cursor.depth += 1
-
-                    return active_cursor.conn_or_pool
-                raise AtomicTraffic(
-                    "Seeking to locate a connection when having another one used, did you forget a call to release?"
-                )
-
-            if obj_id not in self._container:
-                if not block:
-                    raise UnavailableTraffic("Unavailable connection")
-            else:
-                if not self.concurrency:
-                    del self._container[obj_id]
-
-                if cursor_key not in self._cursor:
-                    self._cursor[cursor_key] = ActiveCursor(obj_id, conn_or_pool)
+                if obj_id not in self._container:
+                    if not block:
+                        raise UnavailableTraffic("Unavailable connection")
                 else:
-                    self._cursor[cursor_key].depth += 1
+                    if conn_pre_pick_callable is not None:
+                        wait = conn_pre_pick_callable(conn_or_pool)
+                    if wait is None:
+                        if not self.concurrency:
+                            del self._container[obj_id]
 
-                return conn_or_pool
+                        if cursor_key not in self._cursor:
+                            self._cursor[cursor_key] = ActiveCursor(
+                                obj_id, conn_or_pool
+                            )
+                        else:
+                            self._cursor[cursor_key].depth += 1
 
-            signal = self._register_signal(conn_or_pool)
+                        return conn_or_pool
 
-        if not signal.event.wait(timeout=timeout):
-            raise TimeoutError(
-                "Timed out while waiting for conn_or_pool to become available"
-            )
+                if wait is None:
+                    signal = self._register_signal(conn_or_pool)
+            finally:
+                self._lock.release()
 
-        if signal.conn_or_pool is None or obj_id not in self._registry:
-            raise UnavailableTraffic(
-                "The signal was awaken without conn_or_pool assignment. "
-                "This means that a connection was broken, presumably in another thread."
-            )
+            if signal is not None:
+                if not signal.event.wait(timeout=timeout):
+                    with self._lock:
+                        # A transfer may have won the race with timeout. Otherwise
+                        # remove the abandoned waiter so it cannot take ownership later.
+                        if not signal.event.is_set():
+                            self._signals.remove(signal)
+                            raise TimeoutError(
+                                "Timed out while waiting for conn_or_pool to become available"
+                            )
 
-        return signal.conn_or_pool
+                if signal.conn_or_pool is None or obj_id not in self._registry:
+                    raise UnavailableTraffic(
+                        "The signal was awaken without conn_or_pool assignment. "
+                        "This means that a connection was broken, presumably in another thread."
+                    )
+
+                conn_or_pool = signal.conn_or_pool
+                if conn_pre_pick_callable is None:
+                    return conn_or_pool
+                # A queued waiter already owns the connection after handoff.
+                try:
+                    wait = conn_pre_pick_callable(conn_or_pool)
+                except BaseException:
+                    self.release()
+                    raise
+                if wait is None:
+                    return conn_or_pool
+                self.release()
+
+            if not block:
+                raise UnavailableTraffic("Candidate is not ready")
+            assert wait is not None
+            wait()
 
     @contextlib.contextmanager
     def borrow(
@@ -918,6 +989,9 @@ class TrafficPolice(typing.Generic[T]):
         block: bool = True,
         timeout: float | None = None,
         not_idle_only: bool = False,
+        *,
+        conn_pre_pick_callable: typing.Callable[[T], typing.Callable[[], None] | None]
+        | None = None,
     ) -> typing.Generator[T, None, None]:
         clean_exit = True
         conn_or_pool: T | None = None
@@ -949,7 +1023,10 @@ class TrafficPolice(typing.Generic[T]):
                             )
                 else:
                     conn_or_pool = self.locate(
-                        traffic_indicator, block=block, timeout=timeout
+                        traffic_indicator,
+                        block=block,
+                        timeout=timeout,
+                        conn_pre_pick_callable=conn_pre_pick_callable,
                     )
             else:
                 # simulate reentrant lock/borrow
@@ -1009,6 +1086,24 @@ class TrafficPolice(typing.Generic[T]):
                     self._next_signal_or_container_insert(cursor_key)
                 else:
                     del self._cursor[cursor_key]
+                    if (
+                        self._signals
+                        and traffic_state_of(active_cursor.conn_or_pool)
+                        is TrafficState.IDLE
+                        and not any(
+                            cursor.obj_id == active_cursor.obj_id
+                            for cursor in self._cursor.values()
+                        )
+                    ):
+                        # The last borrower released an idle pool. Eviction
+                        # waiters may retry without taking ownership of it.
+                        # Wake all so cancellation cannot consume the notification.
+                        for signal in tuple(self._signals):
+                            if signal.target_conn_or_pool is None and signal.states == (
+                                TrafficState.IDLE,
+                            ):
+                                self._signals.remove(signal)
+                                signal.event.set()
 
     def clear(self) -> None:
         """Shutdown traffic pool."""
