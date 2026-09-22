@@ -1,4 +1,4 @@
-2.25.900 (2026-09-21)
+2.25.900 (2026-09-22)
 =====================
 
 - Added cohabitation wheels with a ``+isolation`` version suffix, distributed through
