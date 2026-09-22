@@ -298,6 +298,21 @@ def test(session: nox.Session) -> None:
     tests_impl(session)
 
 
+@nox.session(python=["3.14"])
+def test_ws_fast(session: nox.Session) -> None:
+    """Run the WebSocket and webextension suites with only the fast backend."""
+    if not session.posargs:
+        session.posargs.extend(
+            [
+                "test/contrib/test_websocket_fragmentation.py",
+                "test/with_dummyserver/test_websocket_full_duplex.py",
+                "test/with_traefik/test_webextensions.py",
+                "test/with_traefik/asynchronous/test_webextensions.py",
+            ]
+        )
+    tests_impl(session, extras="ws-fast")
+
+
 @nox.session(
     python=[
         "3.7",

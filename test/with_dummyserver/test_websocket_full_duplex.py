@@ -11,15 +11,18 @@ from typing import Any, AsyncGenerator
 import pytest
 import trustme
 
-pytest.importorskip("wsproto")
+from urllib3 import AsyncPoolManager, AsyncProxyManager, PoolManager, ProxyManager
+from urllib3.contrib.ssa import AsyncSocket
+from urllib3.exceptions import ReadTimeoutError
+from urllib3.util.wait import wait_for_read
 
-from wsproto import ConnectionType, WSConnection  # noqa: E402
-from wsproto.events import AcceptConnection, BytesMessage, TextMessage  # noqa: E402
-
-from urllib3 import AsyncPoolManager, AsyncProxyManager, PoolManager, ProxyManager  # noqa: E402
-from urllib3.contrib.ssa import AsyncSocket  # noqa: E402
-from urllib3.exceptions import ReadTimeoutError  # noqa: E402
-from urllib3.util.wait import wait_for_read  # noqa: E402
+try:
+    import wsproto
+except ImportError:
+    wsproto = None  # type: ignore[assignment]
+    pytest.importorskip("websockets")
+    from websockets.frames import Frame, Opcode
+    from websockets.server import ServerProtocol
 
 
 # Cancelling an executor future cannot stop a stranded synchronous reader.
@@ -28,7 +31,11 @@ pytestmark = pytest.mark.timeout(60, method="thread")
 
 class Peer:
     def __init__(self: Any, initial_message: str | None = None) -> None:
-        self.protocol = WSConnection(ConnectionType.SERVER)
+        self.protocol = (
+            wsproto.WSConnection(wsproto.ConnectionType.SERVER)
+            if wsproto is not None
+            else ServerProtocol()
+        )
         self.writer: asyncio.StreamWriter | None = None
         self.received: asyncio.Queue[str | bytes] = asyncio.Queue()
         self.finished = asyncio.Event()
@@ -40,19 +47,35 @@ class Peer:
         self.writer = writer
         try:
             self.protocol.receive_data(await reader.readuntil(b"\r\n\r\n"))
-            list(self.protocol.events())
-            handshake = self.protocol.send(AcceptConnection())
+            if wsproto is not None:
+                list(self.protocol.events())
+                handshake = self.protocol.send(wsproto.events.AcceptConnection())
+            else:
+                request = self.protocol.events_received()[0]
+                self.protocol.send_response(self.protocol.accept(request))
+                handshake = b"".join(self.protocol.data_to_send())
             if self.initial_message is not None:
-                handshake += self.protocol.send(TextMessage(self.initial_message))
+                handshake += self.encode(self.initial_message)
             writer.write(handshake)
             while True:
                 data = await reader.read(65536)
                 if not data:
                     break
                 self.protocol.receive_data(data)
-                for event in self.protocol.events():
-                    if isinstance(event, (TextMessage, BytesMessage)):
-                        self.received.put_nowait(event.data)
+                if wsproto is not None:
+                    for event in self.protocol.events():
+                        if isinstance(
+                            event,
+                            (wsproto.events.TextMessage, wsproto.events.BytesMessage),
+                        ):
+                            self.received.put_nowait(event.data)
+                else:
+                    for event in self.protocol.events_received():
+                        if isinstance(event, Frame):
+                            if event.opcode is Opcode.TEXT:
+                                self.received.put_nowait(event.data.decode())
+                            elif event.opcode is Opcode.BINARY:
+                                self.received.put_nowait(event.data)
         except ConnectionResetError:
             pass
         finally:
@@ -63,9 +86,29 @@ class Peer:
                 pass
             self.finished.set()
 
-    def send(self: Any, *messages: TextMessage | BytesMessage) -> None:
+    def encode(self: Any, message: str | bytes, message_finished: bool = True) -> bytes:
+        if wsproto is not None:
+            event = (
+                wsproto.events.TextMessage(message, message_finished=message_finished)
+                if isinstance(message, str)
+                else wsproto.events.BytesMessage(
+                    message, message_finished=message_finished
+                )
+            )
+            encoded: bytes = self.protocol.send(event)
+            return encoded
+        data = message.encode() if isinstance(message, str) else message
+        if self.protocol.expect_continuation_frame:
+            self.protocol.send_continuation(data, fin=message_finished)
+        elif isinstance(message, str):
+            self.protocol.send_text(data, fin=message_finished)
+        else:
+            self.protocol.send_binary(data, fin=message_finished)
+        return b"".join(self.protocol.data_to_send())
+
+    def send(self: Any, *messages: str | bytes, message_finished: bool = True) -> None:
         assert self.writer is not None
-        self.writer.write(b"".join(self.protocol.send(m) for m in messages))
+        self.writer.write(b"".join(self.encode(m, message_finished) for m in messages))
 
 
 @pytest.fixture(params=[False, True], ids=["sync", "async"])
@@ -190,6 +233,8 @@ async def _connection(
 def connection(request: pytest.FixtureRequest) -> Any:
     if request.param == "fast":
         pytest.importorskip("websockets", minversion="15.0")
+    else:
+        pytest.importorskip("wsproto")
     return functools.partial(_connection, implementation=request.param)
 
 
@@ -231,13 +276,13 @@ async def test_write_during_read_and_fragmentation(
             await asyncio.wait_for(call(ws.send_payload, "outgoing"), 2)
             assert await asyncio.wait_for(peer.received.get(), 2) == "outgoing"
             assert not read.done()
-            peer.send(TextMessage("first", message_finished=False))
+            peer.send("first", message_finished=False)
             await asyncio.wait_for(waiting.get(), 5)
             await asyncio.wait_for(call(ws.send_payload, b"between fragments"), 2)
             assert (
                 await asyncio.wait_for(peer.received.get(), 2) == b"between fragments"
             )
-            peer.send(TextMessage("last"))
+            peer.send("last")
             assert await asyncio.wait_for(read, 5) == "firstlast"
         finally:
             await call(ws.close)
@@ -254,7 +299,7 @@ async def test_two_readers_with_coalesced_messages(
         await asyncio.wait_for(waiting.get(), 5)
         second = asyncio.ensure_future(call(ws.next_payload))
         try:
-            peer.send(TextMessage("one"), BytesMessage(b"two"))
+            peer.send("one", b"two")
             assert await asyncio.wait_for(first, 5) == "one"
             assert await asyncio.wait_for(second, 5) == b"two"
         finally:
@@ -329,7 +374,7 @@ async def test_timeout_preserves_extension(
         with pytest.raises(ReadTimeoutError):
             await asyncio.wait_for(call(ws.next_payload), 2)
         assert not ws.closed
-        peer.send(TextMessage("after timeout"))
+        peer.send("after timeout")
         assert await asyncio.wait_for(call(ws.next_payload), 2) == "after timeout"
 
 
@@ -341,7 +386,7 @@ async def test_buffered_transport_input(
         # One TLS record / asyncio buffer contains far more than one backend read.
         response._fp.from_promise._conn.blocksize = 64
         payload = b"x" * 8000
-        peer.send(BytesMessage(payload))
+        peer.send(payload)
         assert await asyncio.wait_for(call(ws.next_payload), 5) == payload
 
 
@@ -389,7 +434,7 @@ async def test_cancel_queued_reader(
         with pytest.raises(asyncio.CancelledError):
             await second
         assert not ws.closed
-        peer.send(TextMessage("first reader still owns the message"))
+        peer.send("first reader still owns the message")
         assert await asyncio.wait_for(first, 2) == "first reader still owns the message"
 
 
@@ -425,7 +470,7 @@ async def test_cancel_between_borrows(
 
         monkeypatch.setattr(ws._protocol, "receive_data", receive)
         monkeypatch.setattr(ws._police_officer, "borrow", cancel_after_fragment)
-        peer.send(TextMessage("incomplete", message_finished=False))
+        peer.send("incomplete", message_finished=False)
         read = asyncio.ensure_future(call(ws.next_payload))
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(read, 2)
@@ -468,7 +513,7 @@ async def test_read_deadline_includes_reacquiring_connection(
         writer = asyncio.ensure_future(call(hold))
         try:
             await asyncio.wait_for(holding.wait(), 2)
-            peer.send(TextMessage("still buffered"))
+            peer.send("still buffered")
             with pytest.raises(ReadTimeoutError):
                 await asyncio.wait_for(read, 1)
             assert not ws.closed
@@ -513,7 +558,7 @@ async def test_close_after_readiness_before_reacquire(
         # Data may arrive before the reader enters its wait: observe the wait
         # itself so this tests exactly the readiness/reacquisition race.
         await asyncio.wait_for(entered.wait(), 2)
-        peer.send(TextMessage("incoming"))
+        peer.send("incoming")
         await asyncio.wait_for(ready.wait(), 2)
         try:
             await asyncio.wait_for(call(ws.close), 2)
@@ -573,14 +618,14 @@ async def test_buffered_fragments_allow_writer_progress(
         response._fp.from_promise._conn.blocksize = 64
         # Buffer many incomplete fragments. The read must give the writer a
         # turn before another socket-readiness suspension is needed.
-        peer.send(*[TextMessage("x" * 100, message_finished=False) for _ in range(100)])
+        peer.send(*["x" * 100 for _ in range(100)], message_finished=False)
         read = asyncio.ensure_future(call(ws.next_payload))
         await asyncio.wait_for(first_chunk.wait(), 2)
         await asyncio.wait_for(call(ws.send_payload, "writer"), 2)
         assert await asyncio.wait_for(peer.received.get(), 2) == "writer"
         assert not read.done()
         assert written_at[0] < 150
-        peer.send(TextMessage("end"))
+        peer.send("end")
         assert await asyncio.wait_for(read, 3) == "x" * 10000 + "end"
 
 
@@ -642,7 +687,7 @@ async def test_reentrant_read_keeps_blocking_semantics(
         with pytest.raises(ReadTimeoutError):
             await asyncio.wait_for(call(read), 1)
         assert not ws.closed
-        peer.send(TextMessage("valid"))
+        peer.send("valid")
         assert await asyncio.wait_for(call(read), 1) == "valid"
 
 
