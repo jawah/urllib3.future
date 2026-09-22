@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import ssl
+import sys
 from contextlib import asynccontextmanager
 from threading import Event, Lock
 from typing import Any, AsyncGenerator
@@ -175,7 +176,7 @@ async def _connection(
             await call(response.extension.close)
         await call(manager.clear)
         if peer.writer is not None:
-            peer.writer.close()
+            # Let the peer consume the final close frame before TLS shutdown.
             await asyncio.wait_for(peer.finished.wait(), 5)
         server.close()
         await server.wait_closed()
@@ -274,12 +275,15 @@ async def test_close_wakes_indefinite_read(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Read-side shutdown does not wake Windows select()"
+)
 @pytest.mark.parametrize("tls_proxy", [False, True], ids=["tcp", "tls-proxy"])
 async def test_close_waits_for_readiness_wait(
     connection: Any, tls_proxy: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async with connection(False, tls_proxy, tls_proxy=tls_proxy) as (ws, _, call, _):
-        # Exercise the macOS/DragonFly close ordering on every test platform.
+        # Exercise the macOS/DragonFly close ordering on other POSIX platforms.
         ws._read_wait_lock = Lock()
         loop = asyncio.get_running_loop()
         entered = asyncio.Event()
