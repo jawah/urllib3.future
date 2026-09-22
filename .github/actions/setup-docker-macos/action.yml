@@ -76,11 +76,14 @@ runs:
     - name: "Start Colima"
       shell: bash
       env:
+        ACTION_PATH: ${{ github.action_path }}
         COLIMA_CPUS: ${{ inputs.cpus }}
         COLIMA_MEMORY: ${{ inputs.memory }}
         COLIMA_NETWORK_ADDRESS: ${{ inputs.colima-network-address }}
       run: |
-        colima start --runtime=docker --arch=x86_64 \
+        mkdir -p "$HOME/.colima/_lima/_config"
+        cp "$ACTION_PATH/lima-override.yaml" "$HOME/.colima/_lima/_config/override.yaml"
+        time colima start --runtime=docker --arch=x86_64 \
           --vm-type=vz --mount-type=virtiofs \
           --cpus="$COLIMA_CPUS" --memory="$COLIMA_MEMORY" \
           --network-address="$COLIMA_NETWORK_ADDRESS"
