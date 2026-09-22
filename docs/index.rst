@@ -7,6 +7,7 @@ urllib3.future
 
    v2-migration-guide
    user-guide
+   cohabitation
    wasi
    async
    advanced-usage
@@ -68,6 +69,9 @@ urllib3.future can be installed with `pip <https://pip.pypa.io>`_
 .. code-block:: bash
 
   $ python -m pip install urllib3.future
+
+To keep upstream urllib3 alongside the fork, see :doc:`cohabitation` for
+source-build and prebuilt-wheel installation methods.
 
 Usage
 -----

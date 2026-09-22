@@ -1,0 +1,81 @@
+name: Publish cohabitation index
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  prepare:
+    name: Prepare index from release assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      pages-artifact: isolation-pages-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install packaging
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: dist-isolation
+          path: incoming
+      - name: Restore released wheels and generate index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" > releases.json
+          jq '[.[][] | select(.draft == false) | .assets[]]' releases.json > assets.json
+          python ci/isolation.py restore site assets.json
+          python ci/isolation.py index site incoming/*.whl
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          # Pass the producer's name to deployment, including on a partial rerun.
+          name: isolation-pages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: site
+
+  deploy:
+    name: Deploy index
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    outputs:
+      page-url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+        with:
+          artifact_name: ${{ needs.prepare.outputs.pages-artifact }}
+
+  verify:
+    name: Check published wheel bytes
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install packaging
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: dist-isolation
+          path: incoming
+      - env:
+          PAGE_URL: ${{ needs.deploy.outputs.page-url }}
+        run: python ci/isolation.py check "$PAGE_URL" incoming/*.whl

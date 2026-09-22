@@ -1,6 +1,9 @@
 2.25.900 (2026-09-21)
 =====================
 
+- Added cohabitation wheels with a ``+isolation`` version suffix, distributed through
+  the GitHub Pages isolation index with SLSA attestations. These install only
+  ``urllib3_future`` and omit the ``.pth`` startup hook.
 - Fixed gzip responses with trailing garbage raising an error on Python versions
   with stricter ``zlib.Decompress.flush()`` error handling, in both sync and async.
   See https://github.com/urllib3/urllib3/issues/5268

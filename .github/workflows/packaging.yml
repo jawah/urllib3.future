@@ -12,6 +12,46 @@ concurrency:
 
 jobs:
 
+  isolation-wheel:
+    name: Cohabitation wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - name: Build and validate the cohabitation wheel
+        run: |
+          python -m build
+          python ci/isolation.py build dist/*.tar.gz
+          python -m twine check --strict dist/* dist-isolation/*
+          python ci/test_isolation.py
+      - name: Verify the pip pin cannot fall back to drop-in
+        run: |
+          version=$(python -c 'from pathlib import Path; from packaging.utils import parse_wheel_filename; print(parse_wheel_filename(next(Path("dist-isolation").glob("*.whl")).name)[1])')
+          python -m pip download --no-deps --no-index --find-links dist --find-links dist-isolation \
+            "urllib3-future==$version" -d selected
+          if python -m pip download --no-deps --no-index --find-links dist \
+            "urllib3-future==$version" -d missing; then
+            echo "Unexpectedly resolved a missing isolation version"
+            exit 1
+          fi
+      - name: Verify installation and independent uninstallation
+        run: |
+          python -m pip install urllib3 niquests requests dist-isolation/*.whl
+          python -m pip check
+          python ci/test_isolation.py --installed
+          python -m pip uninstall -y urllib3
+          python -c 'from importlib.metadata import version; import urllib3_future; assert version("urllib3-future") == urllib3_future.__version__ + "+isolation"'
+          python -m pip install urllib3
+          python ci/test_isolation.py --installed
+          python -m pip uninstall -y urllib3-future
+          python -c 'import requests, urllib3; assert requests.packages.urllib3 is urllib3; assert not hasattr(urllib3, "AsyncPoolManager")'
+
   mixed-env-a:
     name: Ensure PTH support
     runs-on: ${{ matrix.os }}

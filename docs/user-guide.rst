@@ -12,6 +12,9 @@ urllib3 can be installed with `pip <https://pip.pypa.io>`_
 
   $ python -m pip install urllib3.future
 
+This selects urllib3.future for ``import urllib3`` throughout the environment.
+To keep upstream urllib3 and use the fork through ``import urllib3_future``,
+follow the :doc:`cohabitation` guide.
 
 HTTP/2 and HTTP/3 support
 -------------------------
@@ -470,7 +473,7 @@ That is it! That easy.
 .. warning:: In case anything goes wrong (e.g. server denies us access), ``resp.extension`` will be worth ``None``! Be careful.
 
 Full-duplex reads and writes
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For WebSocket over HTTP/1.1, a waiting ``next_payload()`` allows another thread
 or task to call ``send_payload()`` or ``ping()``. Concurrent readers are
@@ -769,7 +772,7 @@ You still override this pool-level retry policy by specifying ``retries`` to
 :meth:`~urllib3.PoolManager.request`.
 
 Inspecting response bodies in retry hooks
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Set ``Retry(cache_response_body=True)`` to retain a response body before retry-delay
 hooks run, including when the request uses ``preload_content=False``. This is disabled
