@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import socket
+import sys
 import time
 from threading import Lock
+from contextlib import nullcontext
 import typing
 
 if typing.TYPE_CHECKING:
@@ -39,6 +41,11 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         self._remote_shutdown: bool = False
         self._read_closed = False
         self._read_lock = Lock()
+        self._read_wait_lock = (
+            Lock()
+            if sys.platform == "darwin" or sys.platform.startswith("dragonfly")
+            else nullcontext()
+        )
         self._ready_socket: socket.socket | SSLTransport | None = None
         self._read_deadline: float | None = None
         self._read_timeout: float | None = None
@@ -146,18 +153,19 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                     except (OSError, AssertionError):
                         pass
                     if response is not None and response.version == 11:
-                        # An H1 upgrade owns the transport. Removing it closes
-                        # the socket and wakes socket and connection waiters.
-                        # SSLTransport doesn't expose shutdown() to the backend.
+                        # Wake the reader before closing its descriptor: macOS
+                        # and DragonFly BSD can discard a pending poll/kqueue
+                        # notification when the descriptor is closed.
                         sock = conn.sock
-                        if isinstance(sock, SSLTransport):
-                            while isinstance(sock, SSLTransport):
-                                sock = sock.socket
+                        while isinstance(sock, SSLTransport):
+                            sock = sock.socket
+                        if sock is not None:
                             try:
                                 sock.shutdown(socket.SHUT_RD)
                             except OSError:
                                 pass
-                        police.kill_cursor()
+                        with self._read_wait_lock:
+                            police.kill_cursor()
                     self._dsa = None
             except UnavailableTraffic:
                 self._dsa = None
@@ -344,21 +352,22 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         return lambda: self._wait_for_read(sock)
 
     def _wait_for_read(self, sock: socket.socket | SSLTransport) -> None:
-        if self._read_closed:
-            return
         remaining = (
             None
             if self._read_deadline is None
             else max(0, self._read_deadline - time.monotonic())
         )
         with self._read_error_catcher():
-            try:
-                if not wait_for_read(sock, remaining):  # type: ignore[arg-type]
-                    raise socket.timeout("Read timed out")
-            except (OSError, ValueError):
+            with self._read_wait_lock:
                 if self._read_closed:
                     return
-                raise
+                try:
+                    if not wait_for_read(sock, remaining):  # type: ignore[arg-type]
+                        raise socket.timeout("Read timed out")
+                except (OSError, ValueError):
+                    if self._read_closed:
+                        return
+                    raise
         self._ready_socket = sock
 
     def send_payload(self, buf: str | bytes) -> None:

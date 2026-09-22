@@ -4,6 +4,7 @@ import asyncio
 import functools
 import ssl
 from contextlib import asynccontextmanager
+from threading import Event, Lock
 from typing import Any, AsyncGenerator
 
 import pytest
@@ -17,6 +18,11 @@ from wsproto.events import AcceptConnection, BytesMessage, TextMessage  # noqa: 
 from urllib3 import AsyncPoolManager, AsyncProxyManager, PoolManager, ProxyManager  # noqa: E402
 from urllib3.contrib.ssa import AsyncSocket  # noqa: E402
 from urllib3.exceptions import ReadTimeoutError  # noqa: E402
+from urllib3.util.wait import wait_for_read  # noqa: E402
+
+
+# Cancelling an executor future cannot stop a stranded synchronous reader.
+pytestmark = pytest.mark.timeout(60, method="thread")
 
 
 class Peer:
@@ -265,6 +271,50 @@ async def test_close_wakes_indefinite_read(
         await asyncio.wait_for(waiting.get(), 5)
         await asyncio.wait_for(call(ws.close), 2)
         assert await asyncio.wait_for(read, 2) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tls_proxy", [False, True], ids=["tcp", "tls-proxy"])
+async def test_close_waits_for_readiness_wait(
+    connection: Any, tls_proxy: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with connection(False, tls_proxy, tls_proxy=tls_proxy) as (ws, _, call, _):
+        # Exercise the macOS/DragonFly close ordering on every test platform.
+        ws._read_wait_lock = Lock()
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        woken = asyncio.Event()
+        resume = Event()
+        sockets = []
+
+        def wait(sock: Any, timeout: float | None = None) -> bool:
+            sockets.append(sock)
+            loop.call_soon_threadsafe(entered.set)
+            result = wait_for_read(sock, timeout)
+            loop.call_soon_threadsafe(woken.set)
+            assert resume.wait(5)
+            return result
+
+        monkeypatch.setattr(f"{type(ws).__module__}.wait_for_read", wait)
+        read = asyncio.ensure_future(call(ws.next_payload))
+        close = None
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            close = asyncio.ensure_future(call(ws.close))
+            await asyncio.wait_for(woken.wait(), 5)
+            # The reader hasn't finished handling the shutdown notification.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(close), 0.05)
+            assert sockets[0].fileno() >= 0
+            resume.set()
+            await asyncio.wait_for(close, 2)
+            assert await asyncio.wait_for(read, 2) is None
+        finally:
+            resume.set()
+            if close is not None:
+                await asyncio.gather(close, return_exceptions=True)
+            await call(ws.close)
+            await asyncio.gather(read, return_exceptions=True)
 
 
 @pytest.mark.asyncio
