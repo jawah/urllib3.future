@@ -3135,3 +3135,30 @@ class TestReuseAfterGoaway(SocketDummyServerTestCase):
             assert pool.request("POST", "/", body=b"{}").status == 200
 
         assert len(accepted) == 2
+
+    @staticmethod
+    def _stale_408_handler(listener: socket.socket) -> None:
+        # Answers one request, then sends an unsolicited 408 while the
+        # connection is idle and closes it only 2s later.
+        sock = listener.accept()[0]
+        buf = b""
+        while not buf.endswith(b"\r\n\r\n"):
+            buf += sock.recv(65536)
+        sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        time.sleep(0.5)
+        sock.sendall(
+            b"HTTP/1.1 408 Request Timeout\r\n"
+            b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        time.sleep(2.0)
+        sock.close()
+
+    def test_idle_http11_connection_is_not_read_before_reuse(self) -> None:
+        # Only multiplexed connections are read before reuse. Reading the 408
+        # into the idle HTTP/1.1 connection made the next request raise.
+        self._start_server(self._stale_408_handler)
+
+        with HTTPConnectionPool(self.host, self.port, retries=False) as pool:
+            assert pool.request("GET", "/").status == 200
+            time.sleep(1.2)
+            assert pool.request("GET", "/").status == 408

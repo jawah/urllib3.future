@@ -40,6 +40,12 @@ def may_hold_unread_frames(
     Neither the TCP state nor the protocol state reveal those until they are read.
     :param conn: :class:`urllib3.connection.HTTPConnection` object.
     """
+    # HTTP/1.1 signals a close with the FIN itself, which is_connection_dropped
+    # already detects. Data read on an idle HTTP/1.1 connection (e.g. an
+    # unsolicited 408) would leave it in a state unusable for the next request.
+    if not getattr(conn, "is_multiplexed", False):
+        return False
+
     if getattr(conn, "_promises", None) or getattr(conn, "_pending_responses", None):
         return False  # in use by other streams, reading here would steal their data.
 
