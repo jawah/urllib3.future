@@ -255,6 +255,10 @@ DEFAULT_KEEPALIVE_DELAY: float = 600.0
 DEFAULT_KEEPALIVE_IDLE_WINDOW: float = 60.0
 MINIMAL_KEEPALIVE_IDLE_WINDOW: float = 1.0
 
+# pooled connections idle for at least that long are read before reuse,
+# so that frames received meanwhile (e.g. GOAWAY) are acted upon.
+MINIMAL_IDLE_BEFORE_PEEK: float = 1.0
+
 DEFAULT_TCP_KEEPALIVE_ATTEMPT_COUNT: int = 2
 
 C_INT_MAX = 2**31 - 1

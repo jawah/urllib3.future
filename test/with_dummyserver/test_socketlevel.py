@@ -39,11 +39,16 @@ from dummyserver.server import (
     encrypt_key_pem,
     get_unreachable_address,
 )
-from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from dummyserver.testcase import (
+    SocketDummyServerTestCase,
+    consume_socket,
+    goaway_on_idle_handler,
+)
 from urllib3 import (
     HTTPConnectionPool,
     HTTPResponse,
     HTTPSConnectionPool,
+    HttpVersion,
     ProxyManager,
     util,
 )
@@ -3112,3 +3117,21 @@ class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
                     body=_async_body(),
                     chunked=True,
                 )
+
+
+class TestReuseAfterGoaway(SocketDummyServerTestCase):
+    def test_idle_connection_that_received_goaway_is_not_reused(self) -> None:
+        # The server sends GOAWAY after 0.5s idle and closes 2s later. The
+        # second request is sent in between, past MINIMAL_IDLE_BEFORE_PEEK and
+        # before the idle watcher's next pass.
+        accepted: list[socket.socket] = []
+        self._start_server(goaway_on_idle_handler(0.5, 2.0, accepted))
+
+        with HTTPConnectionPool(
+            self.host, self.port, retries=False, disabled_svn={HttpVersion.h11}
+        ) as pool:
+            assert pool.request("POST", "/", body=b"{}").status == 200
+            time.sleep(1.2)
+            assert pool.request("POST", "/", body=b"{}").status == 200
+
+        assert len(accepted) == 2

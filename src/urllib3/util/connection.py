@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import sys
+import time
 import typing
 
 if sys.platform == "wasi":
@@ -16,6 +17,7 @@ if typing.TYPE_CHECKING:
     from .._async.connection import AsyncHTTPConnection
     from ..contrib.ssa import AsyncSocket
 
+from .._constant import MINIMAL_IDLE_BEFORE_PEEK
 from .timeout import _DEFAULT_TIMEOUT
 
 
@@ -27,6 +29,26 @@ def is_connection_dropped(
     :param conn: :class:`urllib3.connection.HTTPConnection` object.
     """
     return not conn.is_connected
+
+
+def may_hold_unread_frames(
+    conn: HTTPConnection | AsyncHTTPConnection,
+) -> bool:
+    """
+    Returns True if the connection sat idle long enough to have received frames
+    that were not read yet, e.g. a GOAWAY sent by a server closing idle connections.
+    Neither the TCP state nor the protocol state reveal those until they are read.
+    :param conn: :class:`urllib3.connection.HTTPConnection` object.
+    """
+    if getattr(conn, "_promises", None) or getattr(conn, "_pending_responses", None):
+        return False  # in use by other streams, reading here would steal their data.
+
+    last_used_at: float | None = getattr(conn, "last_used_at", None)
+
+    if last_used_at is None:
+        return False
+
+    return time.monotonic() - last_used_at >= MINIMAL_IDLE_BEFORE_PEEK
 
 
 # Kept for backward compatibility. Developers rely on it sometime.

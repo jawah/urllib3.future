@@ -1,8 +1,10 @@
+import asyncio
+
 import pytest
-from urllib3 import AsyncHTTPConnectionPool
+from urllib3 import AsyncHTTPConnectionPool, HttpVersion
 from urllib3.exceptions import IncompleteRead, InvalidHeader, ProtocolError
 
-from dummyserver.testcase import SocketDummyServerTestCase
+from dummyserver.testcase import SocketDummyServerTestCase, goaway_on_idle_handler
 from threading import Event
 import socket
 
@@ -120,3 +122,22 @@ class TestPartialBodyClose(SocketDummyServerTestCase):
             resp = await pool.request("GET", "/", preload_content=False, retries=False)
             with pytest.raises((IncompleteRead, ProtocolError)):
                 await resp.read()
+
+
+@pytest.mark.asyncio
+class TestReuseAfterGoaway(SocketDummyServerTestCase):
+    """Async mirror of the sync test of the same name in
+    ``test/with_dummyserver/test_socketlevel.py``."""
+
+    async def test_idle_connection_that_received_goaway_is_not_reused(self) -> None:
+        accepted: list[socket.socket] = []
+        self._start_server(goaway_on_idle_handler(0.5, 2.0, accepted))
+
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, retries=False, disabled_svn={HttpVersion.h11}
+        ) as pool:
+            assert (await pool.request("POST", "/", body=b"{}")).status == 200
+            await asyncio.sleep(1.2)
+            assert (await pool.request("POST", "/", body=b"{}")).status == 200
+
+        assert len(accepted) == 2

@@ -61,7 +61,7 @@ from .exceptions import (
     TimeoutError,
 )
 from .response import HTTPResponse
-from .util.connection import is_connection_dropped
+from .util.connection import is_connection_dropped, may_hold_unread_frames
 from .util.proxy import connection_requires_http_tunnel
 from .util.request import NOT_FORWARDABLE_HEADERS, set_file_position
 from .util.retry import Retry
@@ -747,10 +747,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if conn and is_connection_dropped(conn):
             log.debug("Resetting dropped connection: %s", self.host)
             conn.close()
-        elif conn and getattr(conn, "expect_pong", False):
+        elif conn and (
+            getattr(conn, "expect_pong", False) or may_hold_unread_frames(conn)
+        ):
             conn.peek_and_react()
 
-            if conn.expect_pong:
+            if conn.expect_pong or is_connection_dropped(conn):
                 log.debug("Resetting dropped connection: %s", self.host)
                 conn.close()
 
