@@ -5,6 +5,7 @@ import contextlib
 import socket
 import ssl
 import threading
+import time
 import typing
 import warnings
 from test import LONG_TIMEOUT
@@ -36,6 +37,52 @@ def consume_socket(
         if b.endswith(b"\r\n\r\n"):
             break
     return consumed
+
+
+def goaway_on_idle_handler(
+    idle: float, grace: float, accepted: list[socket.socket]
+) -> typing.Callable[[socket.socket], None]:
+    """HTTP/2 cleartext server that, after ``idle`` seconds without a request,
+    sends GOAWAY (NO_ERROR) and closes the socket ``grace`` seconds later,
+    like most reverse proxies closing idle connections."""
+    import jh2.config  # type: ignore
+    import jh2.connection  # type: ignore
+    import jh2.events  # type: ignore
+
+    def serve(sock: socket.socket) -> None:
+        conn = jh2.connection.H2Connection(
+            jh2.config.H2Configuration(client_side=False)
+        )
+        conn.initiate_connection()
+        sock.sendall(conn.data_to_send())
+        sock.settimeout(idle)
+        while True:
+            try:
+                data = sock.recv(65536)
+            except socket.timeout:
+                conn.close_connection()
+                sock.sendall(conn.data_to_send())
+                time.sleep(grace)
+                sock.close()
+                return
+            if not data:
+                sock.close()
+                return
+            for event in conn.receive_data(data):
+                if isinstance(event, jh2.events.StreamEnded):
+                    conn.send_headers(
+                        event.stream_id, [(":status", "200"), ("content-length", "2")]
+                    )
+                    conn.send_data(event.stream_id, b"ok", end_stream=True)
+            sock.sendall(conn.data_to_send())
+
+    def socket_handler(listener: socket.socket) -> None:
+        for _ in range(2):
+            sock = listener.accept()[0]
+            accepted.append(sock)
+            threading.Thread(target=serve, args=(sock,), daemon=True).start()
+
+    return socket_handler
 
 
 class SocketDummyServerTestCase:
