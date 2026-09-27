@@ -747,6 +747,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             if conn.expect_pong:
                 log.debug("Resetting dropped connection: %s", self.host)
                 await conn.close()
+        elif conn and conn.is_idle:
+            if await conn.peek_and_react() and is_connection_dropped(conn):
+                log.debug("Resetting dropped connection: %s", self.host)
+                await conn.close()
 
         try:
             return conn or await self._new_conn(heb_timeout=heb_timeout)

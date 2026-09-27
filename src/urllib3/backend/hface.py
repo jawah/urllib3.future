@@ -57,6 +57,7 @@ from ..exceptions import (
 )
 from ..util import parse_alt_svc, resolve_cert_reqs, parse_url, wait_for_read
 from ..util.socket_state import enable_keepalive
+from ..util.ssltransport import SSLTransport
 from ..util.sub_timeout import SubTimeout
 from ._base import (
     BaseBackend,
@@ -888,7 +889,8 @@ class HfaceBackend(BaseBackend):
         """This method should be called by a thread using TrafficPolice when it is idle.
         Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
         or when reaching a WebSocket.
-        This method return True if there is any event ready to unpack for the connection.
+        Return True when input or a connection failure was observed, so the caller
+        can recheck connection state. False means no new state was observed.
         Some server implementation may be aggressive toward "idle" session
         this is especially true when using QUIC.
         For example, google/quiche send regular unsolicited data and expect regular ACKs, otherwise will
@@ -899,50 +901,89 @@ class HfaceBackend(BaseBackend):
         if self.sock is None or self._protocol is None:
             return False
 
-        bck_timeout = self.sock.gettimeout()
-
-        self.sock.settimeout(0.001 if not expect_frame else 0.1)
-
         try:
-            if self._dgram_gro_enabled:
-                peek_data = sync_recv_gro(self.sock, self.blocksize)
-            else:
-                peek_data = self.sock.recv(self.blocksize)
-        except (OSError, TimeoutError, socket.timeout):
-            return False
-        except (ConnectionAbortedError, ConnectionResetError):
-            peek_data = b""
-        finally:
-            self.sock.settimeout(bck_timeout)
-
-        if not peek_data:
-            # connection loss...
+            if not expect_frame and not self.expect_pong:
+                # TLS may have consumed the socket bytes already, including
+                # through another TLS layer when using an HTTPS proxy.
+                pending_sock = self.sock
+                buffered = False
+                while isinstance(pending_sock, SSLTransport) and not buffered:
+                    buffered = bool(
+                        pending_sock.sslobj.pending() or pending_sock.incoming.pending
+                    )
+                    pending_sock = pending_sock.socket
+                pending = getattr(pending_sock, "pending", None)
+                if not buffered and not (pending is not None and pending()):
+                    if not wait_for_read(self.sock, timeout=0):
+                        return False
+        except OSError:
             self._protocol.connection_lost()
-            return False
+            return True
+
+        bck_timeout = self.sock.gettimeout()
+        self.sock.settimeout(0.1 if expect_frame else 0.001)
 
         try:
-            if isinstance(peek_data, list):
-                for gro_segment in peek_data:
-                    self._protocol.bytes_received(gro_segment)
-            else:
-                self._protocol.bytes_received(peek_data)
-        except self._protocol.exceptions():
-            return False
+            try:
+                if self._dgram_gro_enabled:
+                    peek_data = sync_recv_gro(self.sock, self.blocksize)
+                else:
+                    peek_data = self.sock.recv(self.blocksize)
+                if self._svn is HttpVersion.h3 and peek_data:
+                    datagrams = (
+                        peek_data if isinstance(peek_data, list) else [peek_data]
+                    )
+                    while len(datagrams) < UDP_MAX_RECV_BURST and wait_for_read(
+                        self.sock, timeout=0
+                    ):
+                        pending = (
+                            sync_recv_gro(self.sock, self.blocksize)
+                            if self._dgram_gro_enabled
+                            else self.sock.recv(self.blocksize)
+                        )
+                        if isinstance(pending, list):
+                            datagrams.extend(pending)
+                        else:
+                            datagrams.append(pending)
+                    if len(datagrams) > 1:
+                        peek_data = datagrams
+            except (SocketTimeout, BlockingIOError):
+                return False
+            except OSError:
+                self._protocol.connection_lost()
+                return True
 
-        while True:
-            data_out = self._protocol.bytes_to_send()
-
-            if not data_out:
-                break
+            if not peek_data:
+                if self.sock.type == SOCK_STREAM:
+                    self._protocol.connection_lost()
+                return True
 
             try:
-                self.sock.sendall(data_out)
-            except OSError:
-                return False
+                if isinstance(peek_data, list):
+                    self._protocol.many_bytes_received(peek_data)  # type: ignore[union-attr]
+                else:
+                    self._protocol.bytes_received(peek_data)
+            except self._protocol.exceptions():
+                self._protocol.connection_lost()
+                return True
 
-        self._last_used_at = time.monotonic()
+            while True:
+                data_out = self._protocol.bytes_to_send()
 
-        return self._protocol.has_pending_event()
+                if not data_out:
+                    break
+
+                try:
+                    self.sock.sendall(data_out)
+                except OSError:
+                    self._protocol.connection_lost()
+                    return True
+
+            self._last_used_at = time.monotonic()
+
+            return True
+        finally:
+            self.sock.settimeout(bck_timeout)
 
     def __exchange_until(
         self,

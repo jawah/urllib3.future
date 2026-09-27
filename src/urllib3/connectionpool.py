@@ -753,6 +753,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             if conn.expect_pong:
                 log.debug("Resetting dropped connection: %s", self.host)
                 conn.close()
+        elif conn and conn.is_idle:
+            if conn.peek_and_react() and is_connection_dropped(conn):
+                log.debug("Resetting dropped connection: %s", self.host)
+                conn.close()
 
         try:
             return conn or self._new_conn(heb_timeout=heb_timeout)
