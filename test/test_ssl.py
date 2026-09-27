@@ -1,17 +1,229 @@
 from __future__ import annotations
 
 import ssl
+import datetime
+import threading
 import typing
 from unittest import mock
 
 import pytest
+import trustme
 
 from urllib3._constant import MOZ_INTERMEDIATE_CIPHERS
 from urllib3.exceptions import ProxySchemeUnsupported, SSLError
 from urllib3.util import ssl_
 
 
+@pytest.fixture
+def malformed_ca() -> str:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import ExtensionOID, NameOID
+
+    ca = trustme.CA()
+    key = serialization.load_pem_private_key(ca.private_key_pem.bytes(), None)
+    assert isinstance(key, ec.EllipticCurvePrivateKey)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Malformed CA")])
+    # The outer certificate parses, but its Basic Constraints is not a SEQUENCE.
+    # X509_check_ca() leaves INVALID_CERTIFICATE queued while returning false.
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(datetime.datetime(2020, 1, 1))
+        .not_valid_after(datetime.datetime(2035, 1, 1))
+        .add_extension(
+            x509.UnrecognizedExtension(ExtensionOID.BASIC_CONSTRAINTS, b"\x01\x01\xff"),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode()
+
+
+@pytest.fixture
+def tls_reader() -> ssl.SSLObject:
+    ca = trustme.CA()
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ca.issue_cert("localhost").configure_cert(server_ctx)
+    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ca.configure_trust(client_ctx)
+    client_in, client_out, server_in, server_out = [ssl.MemoryBIO() for _ in range(4)]
+    client = client_ctx.wrap_bio(client_in, client_out, server_hostname="localhost")
+    server = server_ctx.wrap_bio(server_in, server_out, server_side=True)
+    done = set()
+    for _ in range(10):
+        for obj in (client, server):
+            if obj not in done:
+                try:
+                    obj.do_handshake()
+                    done.add(obj)
+                except ssl.SSLWantReadError:
+                    pass
+        server_in.write(client_out.read())
+        client_in.write(server_out.read())
+        if len(done) == 2:
+            break
+    assert len(done) == 2
+    # Consume TLS 1.3 tickets before inspecting the unrelated certificate store.
+    with pytest.raises(ssl.SSLWantReadError):
+        client.read(1)
+    return client
+
+
 class TestSSL:
+    @pytest.mark.parametrize("fallback", [False, True])
+    def test_cert_store_error_queue_isolation(
+        self, malformed_ca: str, fallback: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        if ssl_._get_clear_error() is None:
+            pytest.skip("stdlib OpenSSL error queue is not accessible")
+        from urllib3.contrib.imcc._ctypes import _OpenSSL
+
+        lib = _OpenSSL()
+        contexts = [ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) for _ in range(5)]
+        for ctx in contexts:
+            ctx.load_verify_locations(cadata=malformed_ca)
+
+        def drain() -> list[int]:
+            errors = []
+            while True:
+                error = lib.ERR_get_error()
+                if not error:
+                    break
+                errors.append(error)
+            return errors
+
+        lib.ERR_clear_error()
+        try:
+            # Error-stack depth differs between OpenSSL versions.
+            contexts[0].cert_store_stats()
+            contexts[1].cert_store_stats()
+            expected = drain()
+            assert len(expected) >= 2
+            contexts[2].cert_store_stats()
+            contexts[3].cert_store_stats()
+            if fallback:
+                monkeypatch.setattr(ssl_, "_get_clear_error", lambda: None)
+            ssl_._cert_store_stats(contexts[4])
+            # The worker cannot consume the caller's errors or add its own.
+            # The inline path clears every entry, including its own errors.
+            assert drain() == (expected if fallback else [])
+        finally:
+            lib.ERR_clear_error()
+
+    @pytest.mark.parametrize("method", ["cert_store_stats", "get_ca_certs"])
+    @pytest.mark.parametrize("fallback", [False, True])
+    def test_cert_store_inspection_does_not_poison_tls_read(
+        self,
+        malformed_ca: str,
+        tls_reader: ssl.SSLObject,
+        method: str,
+        fallback: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        clear = ssl_._get_clear_error()
+        if not fallback and clear is None:
+            pytest.skip("stdlib OpenSSL error queue is not accessible")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(cadata=malformed_ca)
+        if fallback:
+            monkeypatch.setattr(ssl_, "_get_clear_error", lambda: None)
+        try:
+            if method == "cert_store_stats":
+                assert ssl_._cert_store_stats(ctx) == {
+                    "x509": 1,
+                    "x509_ca": 0,
+                    "crl": 0,
+                }
+            else:
+                assert ssl_._get_ca_certs(ctx) == []
+            with pytest.raises(ssl.SSLWantReadError):
+                tls_reader.read(1)
+        finally:
+            if clear is not None:
+                clear()
+
+    @pytest.mark.parametrize("fallback", [False, True])
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_cert_store_inspection_thread_and_exception(
+        self, fallback: bool, raises: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        caller = threading.current_thread()
+        threads = []
+        expected = {"x509_ca": 2}
+        error = NotImplementedError("inspection unavailable")
+        clear = mock.Mock()
+        monkeypatch.setattr(
+            ssl_, "_get_clear_error", lambda: None if fallback else clear
+        )
+
+        def inspect() -> dict[str, int]:
+            threads.append(threading.current_thread())
+            if raises:
+                raise error
+            return expected
+
+        monkeypatch.setattr(ctx, "cert_store_stats", inspect)
+        if raises:
+            with pytest.raises(NotImplementedError) as caught:
+                ssl_._cert_store_stats(ctx)
+            assert caught.value is error
+        else:
+            assert ssl_._cert_store_stats(ctx) is expected
+        assert len(threads) == 1
+        if fallback:
+            assert threads[0] is not caller
+            assert not threads[0].is_alive()
+            clear.assert_not_called()
+        else:
+            assert threads[0] is caller
+            clear.assert_called_once_with()
+
+    @pytest.mark.parametrize("backend", ["rtls", "utls"])
+    def test_alternative_cert_store_bypasses_workaround(
+        self, backend: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3.contrib import anytls
+
+        module = getattr(anytls, backend)
+        if module is None:
+            pytest.skip(f"{backend} is not installed")
+        ctx = module.SSLContext(module.PROTOCOL_TLS_CLIENT)
+        lookup = mock.Mock(side_effect=AssertionError("must not probe ctypes"))
+        monkeypatch.setattr(ssl_, "_get_clear_error", lookup)
+        assert ssl_._cert_store_stats(ctx) == ctx.cert_store_stats()
+        assert ssl_._get_ca_certs(ctx) == ctx.get_ca_certs(binary_form=True)
+        lookup.assert_not_called()
+
+    def test_cert_store_results_are_not_cached(self) -> None:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        assert ssl_._cert_store_stats(ctx)["x509_ca"] == 0
+        assert ssl_._get_ca_certs(ctx) == []
+        ca = trustme.CA()
+        ca.configure_trust(ctx)
+        assert ssl_._cert_store_stats(ctx)["x509_ca"] == 1
+        assert len(ssl_._get_ca_certs(ctx)) == 1
+
+    def test_cert_store_unavailable_binding_is_cached(self) -> None:
+        from io import UnsupportedOperation
+        from urllib3.contrib.imcc import _ctypes
+
+        ssl_._get_clear_error.cache_clear()
+        try:
+            with mock.patch.object(
+                _ctypes, "_OpenSSL", side_effect=UnsupportedOperation("unavailable")
+            ) as factory:
+                assert ssl_._get_clear_error() is None
+                assert ssl_._get_clear_error() is None
+                factory.assert_called_once_with()
+        finally:
+            ssl_._get_clear_error.cache_clear()
+
     @pytest.fixture(autouse=True)
     def _clear_ssl_context_cache(self) -> typing.Iterator[None]:
         from urllib3.util.ssl_ import _SSLContextCache

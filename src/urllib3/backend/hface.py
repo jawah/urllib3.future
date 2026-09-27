@@ -56,6 +56,7 @@ from ..exceptions import (
     SSLError,
 )
 from ..util import parse_alt_svc, resolve_cert_reqs, parse_url, wait_for_read
+from ..util.ssl_ import _cert_store_stats, _get_ca_certs
 from ..util.socket_state import enable_keepalive
 from ..util.ssltransport import SSLTransport
 from ..util.sub_timeout import SubTimeout
@@ -376,7 +377,7 @@ class HfaceBackend(BaseBackend):
         ssl_ctx_have_certs: bool = False
         if ssl_context is not None:
             try:
-                cert_stats = ssl_context.cert_store_stats()
+                cert_stats = _cert_store_stats(ssl_context)
                 ssl_ctx_have_certs = (
                     "x509_ca" in cert_stats and cert_stats["x509_ca"] > 0
                 )
@@ -412,7 +413,7 @@ class HfaceBackend(BaseBackend):
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
                 try:
-                    ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                    ctx_root_certificates: list[bytes] = _get_ca_certs(ssl_context)
                 except (
                     AttributeError,
                     NotImplementedError,

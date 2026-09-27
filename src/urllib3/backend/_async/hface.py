@@ -48,6 +48,7 @@ from ...exceptions import (
     SSLError,
 )
 from ...util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ...util.ssl_ import _cert_store_stats, _get_ca_certs
 from ...util.socket_state import enable_keepalive
 from ...util.sub_timeout import AsyncSubTimeout
 from .._base import (
@@ -344,7 +345,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         try:
             cert_stats = (
-                ssl_context.cert_store_stats() if ssl_context is not None else None
+                _cert_store_stats(ssl_context) if ssl_context is not None else None
             )
             ssl_ctx_have_certs: bool = (
                 cert_stats is not None
@@ -383,7 +384,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
                 try:
-                    ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                    ctx_root_certificates: list[bytes] = _get_ca_certs(ssl_context)
                 except (
                     AttributeError,
                     NotImplementedError,

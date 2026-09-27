@@ -23,6 +23,10 @@
 - Fixed an additional scoped IPv6 issue when creating pools from URLs: zone identifiers
   beginning with ``25`` are no longer decoded twice. Covers sync and async managers,
   proxy pools, standalone pool factories, and same-host comparisons.
+- Fixed stdlib TLS certificate-store inspection leaving OpenSSL errors that could
+  cause an unrelated TLS read to fail. Applies to both sync and async, including
+  QUIC and DNS over QUIC certificate extraction. Uses a short-lived thread when
+  direct OpenSSL error cleanup is unavailable.
 
 2.25.900 (2026-09-22)
 =====================

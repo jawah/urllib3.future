@@ -116,6 +116,7 @@ class _OpenSSL:
             "PEM_read_bio_X509",
             "PEM_read_bio_PrivateKey",
             "ERR_get_error",
+            "ERR_clear_error",
             "ERR_error_string",
         ]:
             if not hasattr(self._crypto, required_symbol):
@@ -168,6 +169,10 @@ class _OpenSSL:
         self.ERR_get_error = self._crypto.ERR_get_error
         self.ERR_get_error.argtypes = []
         self.ERR_get_error.restype = ctypes.c_ulong
+
+        self.ERR_clear_error = self._crypto.ERR_clear_error
+        self.ERR_clear_error.argtypes = []
+        self.ERR_clear_error.restype = None
 
         self.ERR_error_string = self._crypto.ERR_error_string
         self.ERR_error_string.argtypes = [ctypes.c_ulong, ctypes.c_char_p]
