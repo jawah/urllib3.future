@@ -3,7 +3,10 @@ from __future__ import annotations
 import socket
 import secrets
 import typing
+from threading import Lock
+from time import monotonic
 
+from ....util.wait import wait_for_read, wait_for_write
 from ...ssa._gro import _sock_has_gro, sync_recv_gro
 from .._cache import (
     ResolutionResult,
@@ -22,11 +25,10 @@ from ..protocols import (
 )
 from ..system import SystemResolver
 from ..utils import (
+    _UDP_DEFAULT_TIMEOUT,
+    _udp_retry_deadlines,
     is_ipv4,
     is_ipv6,
-    rfc1035_pack,
-    rfc1035_should_read,
-    rfc1035_unpack,
     validate_length_of,
 )
 
@@ -88,6 +90,12 @@ class PlainResolver(BaseResolver):
         self._rfc1035_prefix_mandated: bool = False
 
         self._gro_enabled: bool = _sock_has_gro(self._socket)
+        if self.protocol is ProtocolResolver.DOU:
+            self._timeout = self._socket.gettimeout()
+            self._read_lock = Lock()
+            # UDP waits use per-lookup deadlines without changing a shared
+            # socket timeout while other threads send queries.
+            self._socket.setblocking(False)
 
         self._pending: dict[int, DomainNameServerQuery] = {}
         self._completed: dict[int, DomainNameServerReturn] = {}
@@ -131,6 +139,83 @@ class PlainResolver(BaseResolver):
             for query in queries:
                 self._pending.pop(query.id, None)
                 self._completed.pop(query.id, None)
+
+    def _exchange(
+        self, queries: list[DomainNameServerQuery]
+    ) -> list[DomainNameServerReturn]:
+        deadline = monotonic() + (
+            self._timeout if self._timeout is not None else _UDP_DEFAULT_TIMEOUT
+        )
+        try:
+            for attempt_deadline in _udp_retry_deadlines(deadline):
+                with self._lock:
+                    missing = [q for q in queries if q.id not in self._completed]
+                for query in missing:
+                    while monotonic() < attempt_deadline:
+                        try:
+                            self._socket.sendall(bytes(query))
+                            break
+                        except BlockingIOError:
+                            if not wait_for_write(
+                                self._socket, max(0, attempt_deadline - monotonic())
+                            ):
+                                break
+
+                while monotonic() < attempt_deadline:
+                    with self._lock:
+                        if self._terminated:
+                            raise OSError("DNS resolver is closed")
+                        if all(q.id in self._completed for q in queries):
+                            return [self._completed[q.id] for q in queries]
+                    if not self._read_lock.acquire(
+                        timeout=max(0, attempt_deadline - monotonic())
+                    ):
+                        break
+                    try:
+                        with self._lock:
+                            if self._terminated:
+                                raise OSError("DNS resolver is closed")
+                            if all(q.id in self._completed for q in queries):
+                                return [self._completed[q.id] for q in queries]
+                        if not wait_for_read(
+                            self._socket, max(0, attempt_deadline - monotonic())
+                        ):
+                            break
+                        try:
+                            data = (
+                                sync_recv_gro(self._socket, 65535)
+                                if self._gro_enabled
+                                else self._socket.recv(1500)
+                            )
+                        except BlockingIOError:
+                            continue
+                        with self._lock:
+                            for payload in data if isinstance(data, list) else (data,):
+                                try:
+                                    response = DomainNameServerReturn(
+                                        payload, ignore_truncated_https=True
+                                    )
+                                except DomainNameServerParseException:
+                                    continue
+                                pending_query = self._pending.get(response.id)
+                                if pending_query is not None and response.matches(
+                                    pending_query
+                                ):
+                                    self._completed.setdefault(response.id, response)
+                    finally:
+                        self._read_lock.release()
+            # Another reader may have collected our answers while we waited
+            # for read ownership, including during the final attempt.
+            with self._lock:
+                if self._terminated:
+                    raise OSError("DNS resolver is closed")
+                if all(q.id in self._completed for q in queries):
+                    return [self._completed[q.id] for q in queries]
+        except (OSError, ValueError) as e:
+            raise socket.gaierror(
+                "Got unexpectedly disconnected while waiting for name resolution"
+            ) from e
+        raise socket.gaierror(socket.EAI_AGAIN, "DNS resolution timed out")
 
     @cache_resolution
     def getaddrinfo(
@@ -225,82 +310,8 @@ class PlainResolver(BaseResolver):
         tbq.append(SupportedQueryType.HTTPS)
 
         queries = self._reserve_queries(host, tbq)
-        responses: list[DomainNameServerReturn] = []
-        response_ids: set[int] = set()
         try:
-            with self._lock:
-                for query in queries:
-                    payload = bytes(query)
-                    if self._rfc1035_prefix_mandated is True:
-                        payload = rfc1035_pack(payload)
-                    self._socket.sendall(payload)
-
-            while len(responses) < len(tbq):
-                with self._lock:
-                    for query in queries:
-                        dns_resp = self._completed.get(query.id)
-                        if dns_resp is not None and query.id not in response_ids:
-                            responses.append(dns_resp)
-                            response_ids.add(query.id)
-                    if len(responses) == len(tbq):
-                        continue
-
-                    try:
-                        if self._gro_enabled:
-                            data_in_or_segments = sync_recv_gro(self._socket, 65535)
-                        else:
-                            data_in_or_segments = self._socket.recv(1500)
-
-                        if isinstance(data_in_or_segments, list):
-                            payloads = data_in_or_segments
-                        elif data_in_or_segments:
-                            payloads = [data_in_or_segments]
-                        else:
-                            payloads = []
-
-                        if self._rfc1035_prefix_mandated is True and payloads:
-                            payload = b"".join(payloads)
-                            while rfc1035_should_read(payload):
-                                extra = self._socket.recv(1500)
-                                if isinstance(extra, list):
-                                    payload += b"".join(extra)
-                                else:
-                                    payload += extra
-                            payloads = [payload]
-                    except (
-                        TimeoutError,
-                        OSError,
-                        socket.timeout,
-                        ConnectionError,
-                    ) as e:
-                        raise socket.gaierror(
-                            "Got unexpectedly disconnected while waiting for name resolution"
-                        ) from e
-
-                    if not payloads:
-                        self._terminated = True
-                        raise socket.gaierror(
-                            "Got unexpectedly disconnected while waiting for name resolution"
-                        )
-
-                    for payload in payloads:
-                        if self._rfc1035_prefix_mandated is True:
-                            fragments = rfc1035_unpack(payload)
-                        else:
-                            fragments = (payload,)
-
-                        for fragment in fragments:
-                            try:
-                                dns_resp = DomainNameServerReturn(fragment)
-                            except DomainNameServerParseException:
-                                continue
-                            pending_query = self._pending.get(dns_resp.id)
-                            if (
-                                pending_query is not None
-                                and dns_resp.matches(pending_query)
-                                and dns_resp.id not in self._completed
-                            ):
-                                self._completed[dns_resp.id] = dns_resp
+            responses = self._exchange(queries)
         finally:
             self._release_queries(queries)
 

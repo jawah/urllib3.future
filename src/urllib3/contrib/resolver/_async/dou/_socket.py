@@ -4,8 +4,10 @@ import asyncio
 import secrets
 import socket
 import typing
+from time import monotonic
 
 from ....ssa import AsyncSocket
+from ....ssa._timeout import timeout as timeout_
 from ..._cache import (
     AsyncResolverCache,
     ResolutionResult,
@@ -14,18 +16,17 @@ from ..._cache import (
 )
 from ...protocols import (
     COMMON_RCODE_LABEL,
-    DomainNameServerQuery,
     DomainNameServerParseException,
+    DomainNameServerQuery,
     DomainNameServerReturn,
     ProtocolResolver,
     SupportedQueryType,
 )
 from ...utils import (
+    _UDP_DEFAULT_TIMEOUT,
+    _udp_retry_deadlines,
     is_ipv4,
     is_ipv6,
-    rfc1035_pack,
-    rfc1035_should_read,
-    rfc1035_unpack,
     validate_length_of,
 )
 from ..protocols import AsyncBaseResolver
@@ -87,7 +88,12 @@ class PlainResolver(AsyncBaseResolver):
         self._pending: dict[int, DomainNameServerQuery] = {}
         self._completed: dict[int, DomainNameServerReturn] = {}
 
-        self._read_semaphore: asyncio.Semaphore = asyncio.Semaphore()
+        # Older asyncio semaphores let a reader overtake already queued readers.
+        self._read_semaphore: asyncio.Semaphore | asyncio.Lock = (
+            asyncio.Lock()
+            if self.protocol is ProtocolResolver.DOU
+            else asyncio.Semaphore()
+        )
         self._connection_task: asyncio.Task[None] | None = None
 
         self._terminated: bool = False
@@ -128,6 +134,11 @@ class PlainResolver(AsyncBaseResolver):
         if task is None:
             task = asyncio.ensure_future(self._connect())
             self._connection_task = task
+            if self.protocol is ProtocolResolver.DOU:
+                # The lookup deadline may expire before this shared task finishes.
+                task.add_done_callback(
+                    lambda t: t.exception() if not t.cancelled() else None
+                )
         try:
             await asyncio.shield(task)
         except BaseException:
@@ -162,6 +173,68 @@ class PlainResolver(AsyncBaseResolver):
             for query in queries:
                 self._pending.pop(query.id, None)
                 self._completed.pop(query.id, None)
+
+    async def _exchange(
+        self, queries: list[DomainNameServerQuery], deadline: float | None
+    ) -> list[DomainNameServerReturn]:
+        assert self._socket is not None
+        assert deadline is not None
+        try:
+            for attempt_deadline in _udp_retry_deadlines(deadline):
+                try:
+                    async with timeout_(max(0, attempt_deadline - monotonic())):
+                        with self._lock:
+                            missing = [
+                                q for q in queries if q.id not in self._completed
+                            ]
+                        for query in missing:
+                            await self._socket.sendall(bytes(query))
+
+                        while monotonic() < attempt_deadline:
+                            with self._lock:
+                                if self._terminated:
+                                    raise OSError("DNS resolver is closed")
+                                if all(q.id in self._completed for q in queries):
+                                    return [self._completed[q.id] for q in queries]
+                            async with self._read_semaphore:
+                                with self._lock:
+                                    if self._terminated:
+                                        raise OSError("DNS resolver is closed")
+                                    if all(q.id in self._completed for q in queries):
+                                        return [self._completed[q.id] for q in queries]
+                                data = await self._socket.recv(1500)
+                                with self._lock:
+                                    for payload in (
+                                        data if isinstance(data, list) else (data,)
+                                    ):
+                                        try:
+                                            response = DomainNameServerReturn(
+                                                payload, ignore_truncated_https=True
+                                            )
+                                        except DomainNameServerParseException:
+                                            continue
+                                        pending_query = self._pending.get(response.id)
+                                        if (
+                                            pending_query is not None
+                                            and response.matches(pending_query)
+                                        ):
+                                            self._completed.setdefault(
+                                                response.id, response
+                                            )
+                except (TimeoutError, socket.timeout):
+                    continue
+            # Another reader may have collected our answers while we waited
+            # for read ownership, including during the final attempt.
+            with self._lock:
+                if self._terminated:
+                    raise OSError("DNS resolver is closed")
+                if all(q.id in self._completed for q in queries):
+                    return [self._completed[q.id] for q in queries]
+        except OSError as e:
+            raise socket.gaierror(
+                "Got unexpectedly disconnected while waiting for name resolution"
+            ) from e
+        raise socket.gaierror(socket.EAI_AGAIN, "DNS resolution timed out")
 
     @async_cache_resolution
     async def getaddrinfo(  # type: ignore[override]
@@ -239,7 +312,22 @@ class PlainResolver(AsyncBaseResolver):
 
         validate_length_of(host)
 
-        await self._ensure_connected()
+        udp_deadline = None
+        if self.protocol is ProtocolResolver.DOU:
+            udp_deadline = monotonic() + (
+                self._timeout if self._timeout is not None else _UDP_DEFAULT_TIMEOUT
+            )
+            if udp_deadline <= monotonic():
+                raise socket.gaierror(socket.EAI_AGAIN, "DNS resolution timed out")
+            try:
+                async with timeout_(max(0, udp_deadline - monotonic())):
+                    await self._ensure_connected()
+            except (TimeoutError, socket.timeout) as e:
+                raise socket.gaierror(
+                    socket.EAI_AGAIN, "DNS resolution timed out"
+                ) from e
+        else:
+            await self._ensure_connected()
         assert self._socket is not None
 
         remote_preemptive_quic_rr = False
@@ -259,80 +347,8 @@ class PlainResolver(AsyncBaseResolver):
         tbq.append(SupportedQueryType.HTTPS)
 
         queries = self._reserve_queries(host, tbq)
-        responses: list[DomainNameServerReturn] = []
-        response_ids: set[int] = set()
         try:
-            for query in queries:
-                payload = bytes(query)
-                if self._rfc1035_prefix_mandated is True:
-                    payload = rfc1035_pack(payload)
-                await self._socket.sendall(payload)
-
-            while len(responses) < len(tbq):
-                async with self._read_semaphore:
-                    with self._lock:
-                        for query in queries:
-                            dns_resp = self._completed.get(query.id)
-                            if dns_resp is not None and query.id not in response_ids:
-                                responses.append(dns_resp)
-                                response_ids.add(query.id)
-                    if len(responses) == len(tbq):
-                        continue
-
-                    try:
-                        data_in_or_segments = await self._socket.recv(1500)
-
-                        if isinstance(data_in_or_segments, list):
-                            payloads = data_in_or_segments
-                        elif data_in_or_segments:
-                            payloads = [data_in_or_segments]
-                        else:
-                            payloads = []
-
-                        if self._rfc1035_prefix_mandated is True and payloads:
-                            payload = b"".join(payloads)
-                            while rfc1035_should_read(payload):
-                                extra = await self._socket.recv(1500)
-                                if isinstance(extra, list):
-                                    payload += b"".join(extra)
-                                else:
-                                    payload += extra
-                            payloads = [payload]
-                    except (
-                        TimeoutError,
-                        OSError,
-                        socket.timeout,
-                        ConnectionError,
-                    ) as e:
-                        raise socket.gaierror(
-                            "Got unexpectedly disconnected while waiting for name resolution"
-                        ) from e
-
-                    if not payloads:
-                        self._terminated = True
-                        raise socket.gaierror(
-                            "Got unexpectedly disconnected while waiting for name resolution"
-                        )
-
-                    for payload in payloads:
-                        if self._rfc1035_prefix_mandated is True:
-                            fragments = rfc1035_unpack(payload)
-                        else:
-                            fragments = (payload,)
-
-                        for fragment in fragments:
-                            try:
-                                dns_resp = DomainNameServerReturn(fragment)
-                            except DomainNameServerParseException:
-                                continue
-                            with self._lock:
-                                pending_query = self._pending.get(dns_resp.id)
-                                if (
-                                    pending_query is not None
-                                    and dns_resp.matches(pending_query)
-                                    and dns_resp.id not in self._completed
-                                ):
-                                    self._completed[dns_resp.id] = dns_resp
+            responses = await self._exchange(queries, udp_deadline)
         finally:
             self._release_queries(queries)
 

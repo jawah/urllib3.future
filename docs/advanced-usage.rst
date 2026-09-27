@@ -977,6 +977,18 @@ answers earlier than their authoritative TTL; they never extend an authoritative
 DNS over UDP (Insecure)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+Unanswered UDP questions are retried after approximately 333 milliseconds, with exponential backoff and jitter.
+Questions that already received a valid response are not resent. Each lookup has a seven-second total budget by
+default; a numeric resolver ``timeout`` replaces that budget, whether shorter or longer. For example,
+``dou://1.1.1.1/?timeout=2`` allows two seconds for the entire exchange, including retries and waiting for another
+reader. Unrelated or duplicate packets do not extend this deadline. Exhaustion raises ``socket.gaierror`` with
+``EAI_AGAIN``. These retries apply only to UDP, not DNS over TCP or TLS.
+
+If a matching UDP reply to an HTTPS question has the truncation flag set (``TC=1``) and reports no DNS error,
+the HTTPS question is considered finished but its records are discarded. Resolution can still succeed using
+the A/AAAA answers, without ECH configuration or HTTP/3 discovery from that HTTPS reply. The resulting lookup
+is not cached, so later lookups can discover the missing HTTPS information. DNS over TCP and TLS are unaffected.
+
 In order to specify your own DNS server over UDP you can specify it like so::
 
     from urllib3 import PoolManager

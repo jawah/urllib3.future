@@ -601,7 +601,7 @@ class DomainNameServerReturn:
     Meant for A, AAAA and HTTPS records. Basically only what we need.
     """
 
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, *, ignore_truncated_https: bool = False) -> None:
         try:
             up = struct.unpack("!HHHHHH", payload[:12])
 
@@ -628,6 +628,17 @@ class DomainNameServerReturn:
 
             self._records: list[tuple[SupportedQueryType, int, str | HttpsRecord]] = []
             self._answer_ttls: list[int] = []
+
+            if (
+                ignore_truncated_https
+                and self._flags & 0x0200
+                and self._query_type == SupportedQueryType.HTTPS.value
+                and self._rcode == 0
+            ):
+                # UDP may finish an HTTPS question without using its incomplete
+                # answer. Do not cache addresses without the missing HTTPS data.
+                self._answer_ttls.append(0)
+                return
 
             if self._an_count:
                 answers_read = 0
