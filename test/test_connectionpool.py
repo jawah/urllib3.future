@@ -89,7 +89,7 @@ class TestConnectionPool:
         assert requested_urls == [f"http://[fe80::1%{zone}]/path"] * 2
 
     @pytest.mark.parametrize("pool_cls", [HTTPConnectionPool, HTTPSConnectionPool])
-    @pytest.mark.parametrize("zone", ["1", "etH0", "et%61"])
+    @pytest.mark.parametrize("zone", ["1", "251", "25ethA", "25251", "etH0", "et%61"])
     def test_unbracketed_scoped_ipv6(
         self, pool_cls: type[HTTPConnectionPool], zone: str
     ) -> None:
@@ -105,6 +105,17 @@ class TestConnectionPool:
         with pool_cls("FE80::1%ethA", port=8080) as pool:
             assert pool.is_same_host(f"{pool.scheme}://[fe80::1%25ethA]:8080/")
             assert not pool.is_same_host(f"{pool.scheme}://[fe80::1%25etha]:8080/")
+
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    @pytest.mark.parametrize("zone", ["1", "251", "25ethA", "25251", "et%61"])
+    def test_scoped_ipv6_factory_preserves_zone(self, scheme: str, zone: str) -> None:
+        url = f"{scheme}://[FE80::1%25{zone}]:8080/"
+        with connection_from_url(url) as pool:
+            assert pool.host == f"fe80::1%{zone}"
+            assert pool._tunnel_host == f"[fe80::1%{zone}]"
+            assert pool.is_same_host(url)
+            assert not pool.is_same_host(f"{scheme}://[fe80::1%25other]:8080/")
+            assert pool._new_conn().host == f"fe80::1%{zone}"
 
     @pytest.mark.parametrize("retry_kind", ["status", "connection"])
     def test_scoped_ipv6_redirect_target_preserved_on_retry(

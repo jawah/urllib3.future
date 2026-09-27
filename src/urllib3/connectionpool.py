@@ -68,7 +68,7 @@ from .util.retry import Retry
 from .util.ssl_match_hostname import CertificateError
 from .util.timeout import _DEFAULT_TIMEOUT, Timeout
 from .util.traffic_police import TrafficPolice, UnavailableTraffic
-from .util.url import Url, _encode_target
+from .util.url import Url, _encode_host, _encode_target
 from .util.url import _normalize_host as normalize_host
 from .util.url import parse_url
 from .util.util import to_str
@@ -1574,7 +1574,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         scheme, _, host, port, *_ = parse_url(url)
         scheme = scheme or "http"
         if host is not None:
-            host = _normalize_host(host, scheme=scheme)
+            # parse_url() already normalized the host, including its zone ID.
+            host = host.strip("[]")
 
         # Use explicit default port for comparison when none is given
         if self.port and not port:
@@ -2546,6 +2547,7 @@ def connection_from_url(url: str, **kw: typing.Any) -> HTTPConnectionPool:
         >>> r = conn.request('GET', '/')
     """
     scheme, _, host, port, *_ = parse_url(url)
+    host = _encode_host(host, scheme)
     scheme = scheme or "http"
     port = port or port_by_scheme.get(scheme, 80)
     if scheme == "https":

@@ -11,10 +11,13 @@ from urllib3._async.connection import AsyncHTTPConnection
 from urllib3._async.connectionpool import (
     AsyncHTTPConnectionPool,
     AsyncHTTPSConnectionPool,
+    connection_from_url,
 )
 from urllib3._async.response import AsyncHTTPResponse
 from urllib3.backend import ResponsePromise
 from urllib3.exceptions import UnrewindableBodyError
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("zone", ["251", "25ethA", "et%61"])
 async def test_scoped_ipv6_target_preserved_on_multiplexed_retry(zone: str) -> None:
@@ -49,7 +52,7 @@ async def test_scoped_ipv6_target_preserved_on_multiplexed_retry(zone: str) -> N
 @pytest.mark.parametrize(
     "pool_cls", [AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool]
 )
-@pytest.mark.parametrize("zone", ["1", "etH0", "et%61"])
+@pytest.mark.parametrize("zone", ["1", "251", "25ethA", "25251", "etH0", "et%61"])
 async def test_unbracketed_scoped_ipv6(
     pool_cls: type[AsyncHTTPConnectionPool], zone: str
 ) -> None:
@@ -69,6 +72,19 @@ async def test_scoped_ipv6_zone_case_changes_host_identity(
     async with pool_cls("FE80::1%ethA", port=8080) as pool:
         assert pool.is_same_host(f"{pool.scheme}://[fe80::1%25ethA]:8080/")
         assert not pool.is_same_host(f"{pool.scheme}://[fe80::1%25etha]:8080/")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["http", "https"])
+@pytest.mark.parametrize("zone", ["1", "251", "25ethA", "25251", "et%61"])
+async def test_scoped_ipv6_factory_preserves_zone(scheme: str, zone: str) -> None:
+    url = f"{scheme}://[FE80::1%25{zone}]:8080/"
+    async with connection_from_url(url) as pool:
+        assert pool.host == f"fe80::1%{zone}"
+        assert pool._tunnel_host == f"[fe80::1%{zone}]"
+        assert pool.is_same_host(url)
+        assert not pool.is_same_host(f"{scheme}://[fe80::1%25other]:8080/")
+        assert (await pool._new_conn()).host == f"fe80::1%{zone}"
 
 
 @pytest.mark.asyncio

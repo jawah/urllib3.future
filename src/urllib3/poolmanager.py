@@ -39,7 +39,7 @@ from .util.request import NOT_FORWARDABLE_HEADERS
 from .util.retry import Retry
 from .util.timeout import Timeout
 from .util.traffic_police import TrafficPolice, UnavailableTraffic
-from .util.url import Url, parse_extension, parse_url
+from .util.url import Url, _encode_host, parse_extension, parse_url
 
 if sys.platform == "wasi":
     # wasi don't support lazy import.
@@ -575,7 +575,10 @@ class PoolManager(RequestMethods):
         """
         u = parse_url(url)
         return self.connection_from_host(
-            u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
+            _encode_host(u.host, u.scheme),
+            port=u.port,
+            scheme=u.scheme,
+            pool_kwargs=pool_kwargs,
         )
 
     def _merge_pool_kwargs(
@@ -899,7 +902,10 @@ class PoolManager(RequestMethods):
             pool_kwargs["disabled_svn"] = disabled_svn
 
         conn = self.connection_from_host(
-            u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
+            _encode_host(u.host, u.scheme),
+            port=u.port,
+            scheme=u.scheme,
+            pool_kwargs=pool_kwargs,
         )
 
         if u.scheme not in (None, "http", "https"):
@@ -1116,7 +1122,7 @@ class ProxyManager(PoolManager):
         assert self.proxy is not None
 
         return super().connection_from_host(
-            self.proxy.host,
+            _encode_host(self.proxy.host, self.proxy.scheme),
             self.proxy.port,
             self.proxy.scheme,
             pool_kwargs=pool_kwargs,

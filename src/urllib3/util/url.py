@@ -411,6 +411,13 @@ def _normalize_host(host: str | None, scheme: str | None) -> str | None:
     return host
 
 
+def _encode_host(host: str | None, scheme: str | None) -> str | None:
+    """Re-encode a parsed zone separator before passing a host to a pool."""
+    if host and host[0] == "[" and "%" in host and scheme in _NORMALIZABLE_SCHEMES:
+        return host.replace("%", "%25", 1)
+    return host
+
+
 def _normalize_host_percent_encoding(
     match: re.Match[str], *, decode_unreserved: bool = True
 ) -> str:

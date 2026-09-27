@@ -18,13 +18,49 @@ if typing.TYPE_CHECKING:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scheme", ["http", "https"])
+@pytest.mark.parametrize("proxy_host", [None, "proxy", "[fe80::2%25251]"])
+@pytest.mark.parametrize("zone", ["251", "25ethA"])
+async def test_scoped_ipv6_request_pool(
+    scheme: str, proxy_host: str | None, zone: str
+) -> None:
+    manager = (
+        AsyncProxyManager(f"http://{proxy_host}:8080")
+        if proxy_host
+        else AsyncPoolManager()
+    )
+    request = Mock()
+
+    async def urlopen(
+        self: AsyncHTTPConnectionPool, *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncHTTPResponse:
+        request(self, *args, **kwargs)
+        return AsyncHTTPResponse(status=200)
+
+    async with manager:
+        with patch.object(AsyncHTTPConnectionPool, "urlopen", urlopen):
+            response = await manager.urlopen("GET", f"{scheme}://[fe80::1%25{zone}]/")
+        assert response.status == 200
+        pool = request.call_args[0][0]
+        if proxy_host and scheme == "http":
+            assert pool.host == ("proxy" if proxy_host == "proxy" else "fe80::2%251")
+        else:
+            assert pool.host == f"fe80::1%{zone}"
+            assert pool._tunnel_host == f"[fe80::1%{zone}]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["http", "https", "ws", "wss"])
 @pytest.mark.parametrize("from_url", [False, True])
+@pytest.mark.parametrize(
+    "zone, other_zone",
+    [("ethA", "etha"), ("251", "1"), ("25ethA", "ethA"), ("25251", "251")],
+)
 async def test_scoped_ipv6_pool_key_preserves_zone_case(
-    scheme: str, from_url: bool
+    scheme: str, from_url: bool, zone: str, other_zone: str
 ) -> None:
     async with AsyncPoolManager() as manager:
         pools = []
-        for host in ("FE80::1%ethA", "fe80::1%etha", "fe80::1%ethA"):
+        for host in (f"FE80::1%{zone}", f"fe80::1%{other_zone}", f"fe80::1%{zone}"):
             if from_url:
                 url = f"{scheme}://[{host.replace('%', '%25')}]:8080/"
                 pools.append(await manager.connection_from_url(url))
@@ -32,8 +68,8 @@ async def test_scoped_ipv6_pool_key_preserves_zone_case(
                 pools.append(await manager.connection_from_host(host, 8080, scheme))
         assert pools[0] is not pools[1]
         assert pools[0] is pools[2]
-        assert pools[0].host == "fe80::1%ethA"
-        assert pools[1].host == "fe80::1%etha"
+        assert pools[0].host == f"fe80::1%{zone}"
+        assert pools[1].host == f"fe80::1%{other_zone}"
 
 
 @pytest.mark.asyncio
