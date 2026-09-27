@@ -1,3 +1,29 @@
+2.25.901 (2026-09-27)
+=====================
+
+- Improved DNS over UDP reliability by retrying unanswered questions, starting after
+  approximately 333 milliseconds with exponential backoff and jitter. Lookups now have
+  a seven-second default budget; an explicit resolver timeout overrides it. Applies to
+  both sync and async, without adding retries to DNS over TLS.
+- Fixed handling of truncated HTTPS DNS replies over UDP. Their records are discarded
+  while resolution can still succeed using A/AAAA answers. These lookups are not cached,
+  allowing later attempts to discover the missing ECH and HTTP/3 information.
+- Fixed DNS over TLS hanging when the server closes partway through a response.
+  The resolver now closes its socket and raises ``socket.gaierror``, in both sync and async.
+- Fixed async timeouts leaving pending cancellation counts and incorrectly converting
+  concurrent cancellation into ``TimeoutError`` on Python 3.11+. (#420)
+- Improved idle connection reuse by inspecting pending transport input and rechecking
+  connection state, in both sync and async. This allows HTTP/2 and HTTP/3 shutdown events
+  to be processed before another request is sent. (#421)
+- Fixed async socket readiness checks rejecting datagram readers used by HTTP/3.
+- Backported scoped IPv6 fixes from upstream https://github.com/urllib3/urllib3/pull/5260
+  Native zone identifiers are preserved, interface-name case is respected when selecting
+  pools, and proxy requests and retries no longer decode zone identifiers repeatedly.
+  Applies to both sync and async, including deferred response retries.
+- Fixed an additional scoped IPv6 issue when creating pools from URLs: zone identifiers
+  beginning with ``25`` are no longer decoded twice. Covers sync and async managers,
+  proxy pools, standalone pool factories, and same-host comparisons.
+
 2.25.900 (2026-09-22)
 =====================
 
