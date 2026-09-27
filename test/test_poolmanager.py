@@ -18,6 +18,24 @@ from urllib3.util.url import Url
 
 
 class TestPoolManager:
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    @pytest.mark.parametrize("from_url", [False, True])
+    def test_scoped_ipv6_pool_key_preserves_zone_case(
+        self, scheme: str, from_url: bool
+    ) -> None:
+        with PoolManager() as manager:
+            pools = []
+            for host in ("FE80::1%ethA", "fe80::1%etha", "fe80::1%ethA"):
+                if from_url:
+                    url = f"{scheme}://[{host.replace('%', '%25')}]:8080/"
+                    pools.append(manager.connection_from_url(url))
+                else:
+                    pools.append(manager.connection_from_host(host, 8080, scheme))
+            assert pools[0] is not pools[1]
+            assert pools[0] is pools[2]
+            assert pools[0].host == "fe80::1%ethA"
+            assert pools[1].host == "fe80::1%etha"
+
     @resolvesLocalhostFQDN()
     def test_same_url(self) -> None:
         # Convince ourselves that normally we don't get the same object

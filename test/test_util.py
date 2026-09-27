@@ -119,6 +119,8 @@ class TestUtil:
         # Scoped IPv6 (with ZoneID), both RFC 6874 compliant and not.
         ("http://[a::b%25zone]", ("http", "[a::b%zone]", None)),
         ("http://[a::b%zone]", ("http", "[a::b%zone]", None)),
+        ("http://[fe80::1%2525]", ("http", "[fe80::1%25]", None)),
+        ("http://[fe80::1%25251]", ("http", "[fe80::1%251]", None)),
         # Hosts
         ("HTTP://GOOGLE.COM/mail/", ("http", "google.com", None)),
         ("GOogle.COM/mail", ("http", "google.com", None)),
@@ -249,6 +251,8 @@ class TestUtil:
             ("[::1%zone]", "[::1%zone]"),
             ("[::1%25zone]", "[::1%zone]"),
             ("[::1%25]", "[::1%25]"),
+            ("[::1%2525]", "[::1%25]"),
+            ("[::1%25251]", "[::1%251]"),
             ("[::Ff%etH0%Ff]/%ab%Af", "[::ff%etH0%FF]/%AB%AF"),
             (
                 "http://user:pass@[AaAa::Ff%25etH0%Ff]/%ab%Af",
@@ -325,11 +329,44 @@ class TestUtil:
             "bad%7fhost",
             "bad%host",
             "[::1%eth%0d]",
+            "::1%eth\n0",
+            "::1%eth 0",
+            "::1%eth\x7f0",
+            "::1%l\u00ado0",
+            "::1%l\u200co0",
+            "::1%eté",
         ),
     )
     def test_normalize_host_rejects_invalid_host(self, host: str) -> None:
         with pytest.raises(LocationParseError):
             _normalize_host(host, "https")
+
+    @pytest.mark.parametrize("scheme", [None, "http", "https", "http+unix"])
+    @pytest.mark.parametrize(
+        "zone",
+        [
+            "",
+            "1",
+            "25",
+            "31",
+            "251",
+            "0d",
+            "AB",
+            "FF",
+            "eth0",
+            "etH0",
+            "et%61",
+            "eth%0d",
+            "eth%7F",
+            "et%FF",
+            "25eth+Foo",
+        ],
+    )
+    def test_native_ipv6_zone_is_not_url_encoded(
+        self, scheme: str | None, zone: str
+    ) -> None:
+        address = "FE80::1" if scheme == "http+unix" else "fe80::1"
+        assert _normalize_host(f"FE80::1%{zone}", scheme) == f"{address}%{zone}"
 
     @pytest.mark.parametrize(
         "host, expected",

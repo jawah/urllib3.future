@@ -768,7 +768,8 @@ class AsyncPoolManager(AsyncRequestMethods):
             kw["headers"] = self.headers
 
         if self._proxy_requires_url_absolute_form(u):
-            response = await conn.urlopen(method, u._replace(fragment=None).url, **kw)
+            # Leave URL normalization to the pool to avoid decoding zone IDs twice.
+            response = await conn.urlopen(method, url.split("#", 1)[0], **kw)
         else:
             response = await conn.urlopen(method, u.request_uri, **kw)
 

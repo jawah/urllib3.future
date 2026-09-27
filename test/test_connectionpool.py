@@ -13,6 +13,7 @@ import pytest
 
 from dummyserver.server import DEFAULT_CA
 from urllib3 import Retry
+from urllib3.backend import ResponsePromise
 from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import (
     HTTPConnectionPool,
@@ -58,6 +59,79 @@ class TestConnectionPool:
     Tests in this suite should exercise the ConnectionPool functionality
     without actually making any network requests or connections.
     """
+
+    @pytest.mark.parametrize("zone", ["251", "25ethA", "et%61"])
+    def test_scoped_ipv6_target_preserved_on_multiplexed_retry(self, zone: str) -> None:
+        requested_urls = []
+
+        def make_request(
+            conn: HTTPConnection, method: str, url: str, **kwargs: typing.Any
+        ) -> ResponsePromise:
+            requested_urls.append(url)
+            return ResponsePromise(conn, len(requested_urls), [])
+
+        with HTTPConnectionPool("localhost") as pool:
+            with patch.object(pool, "_make_request", side_effect=make_request):
+                with patch.object(
+                    HTTPConnection,
+                    "getresponse",
+                    side_effect=[HTTPResponse(status=503), HTTPResponse(status=200)],
+                ):
+                    promise = pool.urlopen(
+                        "GET",
+                        f"http://[FE80::1%25{zone}]/path#fragment",
+                        assert_same_host=False,
+                        multiplexed=True,
+                        retries=Retry(total=1, status_forcelist=[503]),
+                    )
+                    response = pool.get_response(promise=promise)
+        assert response is not None and response.status == 200
+        assert requested_urls == [f"http://[fe80::1%{zone}]/path"] * 2
+
+    @pytest.mark.parametrize("pool_cls", [HTTPConnectionPool, HTTPSConnectionPool])
+    @pytest.mark.parametrize("zone", ["1", "etH0", "et%61"])
+    def test_unbracketed_scoped_ipv6(
+        self, pool_cls: type[HTTPConnectionPool], zone: str
+    ) -> None:
+        with pool_cls(f"FE80::1%{zone}", port=8080) as pool:
+            assert pool.host == f"fe80::1%{zone}"
+            assert pool._tunnel_host == f"fe80::1%{zone}"
+            assert pool._new_conn().host == f"fe80::1%{zone}"
+
+    @pytest.mark.parametrize("pool_cls", [HTTPConnectionPool, HTTPSConnectionPool])
+    def test_scoped_ipv6_zone_case_changes_host_identity(
+        self, pool_cls: type[HTTPConnectionPool]
+    ) -> None:
+        with pool_cls("FE80::1%ethA", port=8080) as pool:
+            assert pool.is_same_host(f"{pool.scheme}://[fe80::1%25ethA]:8080/")
+            assert not pool.is_same_host(f"{pool.scheme}://[fe80::1%25etha]:8080/")
+
+    @pytest.mark.parametrize("retry_kind", ["status", "connection"])
+    def test_scoped_ipv6_redirect_target_preserved_on_retry(
+        self, retry_kind: str
+    ) -> None:
+        responses = [
+            HTTPResponse(
+                status=302,
+                headers={"location": "http://[FE80::1%25251]:8080/next?x=%23#fragment"},
+            ),
+            HTTPResponse(status=503) if retry_kind == "status" else OSError("reset"),
+            HTTPResponse(status=200),
+        ]
+        with HTTPConnectionPool("localhost") as pool:
+            with patch.object(pool, "_make_request", side_effect=responses) as request:
+                response = pool.urlopen(
+                    "GET",
+                    "/",
+                    assert_same_host=False,
+                    retries=Retry(total=2, status_forcelist=[503]),
+                )
+        assert response.status == 200
+        assert [call[0][2] for call in request.call_args_list] == [
+            "/",
+            "http://[fe80::1%251]:8080/next?x=%23",
+            "http://[fe80::1%251]:8080/next?x=%23",
+        ]
 
     @pytest.mark.parametrize("absolute", [False, True])
     @pytest.mark.parametrize(

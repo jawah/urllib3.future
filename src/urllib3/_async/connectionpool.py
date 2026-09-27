@@ -131,7 +131,7 @@ class AsyncConnectionPool:
         # to avoid removing square braces around IPv6 addresses.
         # This value is sent to `HTTPConnection.set_tunnel()` if called
         # because square braces are required for HTTP CONNECT tunneling.
-        self._tunnel_host = normalize_host(host, scheme=self.scheme).lower()
+        self._tunnel_host = normalize_host(host, scheme=self.scheme)
 
     def __str__(self) -> str:
         return f"{type(self).__name__}(host={self.host!r}, port={self.port!r})"
@@ -1783,6 +1783,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
 
+        # Retrying must not decode IPv6 zone identifiers a second time.
+        original_url = url
         parsed_url = parse_url(url)
         destination_scheme = parsed_url.scheme
 
@@ -1898,7 +1900,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 response.update_parameters(
                     {
                         "method": method,
-                        "url": url,
+                        "url": original_url,
                         "body": body,
                         "headers": headers,
                         "retries": retries,
@@ -2014,7 +2016,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             )
             return await self.urlopen(  # type: ignore[no-any-return,call-overload,misc]
                 method,
-                url,
+                original_url,
                 body,
                 headers,
                 retries,
@@ -2119,7 +2121,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             log.debug("Retry: %s", url)
             return await self.urlopen(
                 method,
-                url,
+                original_url,
                 body,
                 headers,
                 retries=retries,

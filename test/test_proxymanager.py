@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from urllib3.backend import ResponsePromise
+from urllib3.connectionpool import HTTPConnectionPool
 from urllib3.exceptions import MaxRetryError, NewConnectionError, ProxyError
 from urllib3.poolmanager import ProxyManager
 from urllib3.response import HTTPResponse
@@ -19,6 +20,38 @@ if typing.TYPE_CHECKING:
 
 
 class TestProxyManager:
+    @pytest.mark.parametrize(
+        "proxy_scheme, scheme",
+        [("http", "http"), ("https", "http"), ("https", "https")],
+    )
+    @pytest.mark.parametrize("zone", ["1", "25", "251", "25ethA", "et%61"])
+    @pytest.mark.parametrize("retry_kind", [None, "status", "connection"])
+    def test_scoped_ipv6_request_target_matches_host(
+        self, proxy_scheme: str, scheme: str, zone: str, retry_kind: str | None
+    ) -> None:
+        responses: list[HTTPResponse | Exception] = []
+        if retry_kind == "status":
+            responses.extend([HTTPResponse(status=503), HTTPResponse(status=503)])
+        elif retry_kind == "connection":
+            responses.extend([OSError("reset"), OSError("reset")])
+        responses.append(HTTPResponse(status=200))
+        with ProxyManager(
+            f"{proxy_scheme}://proxy:8080", use_forwarding_for_https=True
+        ) as manager:
+            with patch.object(
+                HTTPConnectionPool, "_make_request", side_effect=responses
+            ) as request:
+                response = manager.urlopen(
+                    "GET",
+                    f"{scheme}://[FE80::1%25{zone}]:8080/path?x=%23#fragment",
+                    retries=Retry(total=2, status_forcelist=[503]),
+                )
+        assert response.status == 200
+        assert request.call_count == len(responses)
+        for call in request.call_args_list:
+            assert call[0][2] == f"{scheme}://[fe80::1%{zone}]:8080/path?x=%23"
+            assert call[1]["headers"]["Host"] == f"[fe80::1%{zone}]:8080"
+
     @pytest.mark.parametrize("multiplexed", [False, True])
     @pytest.mark.parametrize(
         "proxy_scheme, target_scheme, forwarding, expected",
