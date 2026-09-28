@@ -385,7 +385,10 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             with pytest.raises(MaxRetryError):
                 await pool.get_response(promise=promise)
 
-    async def test_multiplexed_concurrent_get_response_drain(self) -> None:
+    @pytest.mark.parametrize("request_count", [1, 32])
+    async def test_multiplexed_concurrent_get_response_drain(
+        self, request_count: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Regression: concurrent ``get_response()`` callers on a single
         multiplexed pool must each receive a distinct response while any
         promises remain, then ``None`` once the pool is drained.
@@ -398,33 +401,45 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
         async with AsyncPoolManager(
             ca_certs=self.ca_authority,
             resolver=self.test_async_resolver,
+            maxsize=1,
+            block=True,
         ) as pool:
             promises = await asyncio.gather(
                 *[
                     pool.urlopen("GET", f"{self.https_url}/get", multiplexed=True)
-                    for _ in range(32)
+                    for _ in range(request_count)
                 ]
             )
 
-            assert len(promises) == 32
+            assert len(promises) == request_count
             assert all(isinstance(p, ResponsePromise) for p in promises)
 
-            for iter_count in range(16):
-                responses = await asyncio.gather(
-                    pool.get_response(),
-                    pool.get_response(),
-                    pool.get_response(),
-                    pool.get_response(),
-                )
+            connection_pool = await pool.connection_from_url(self.https_url)
+            assert connection_pool.pool is not None
+            signals = connection_pool.pool._signals
+            register = signals.register
+            readers_queued = asyncio.Event()
+            getresponse = AsyncHTTPConnection.getresponse
 
-                if iter_count < 8:
-                    assert all(r is not None for r in responses), (
-                        f"iter {iter_count}: expected 4 responses, "
-                        f"got {[r is not None for r in responses]}"
-                    )
-                    assert all(r.status == 200 for r in responses if r is not None)
-                else:
-                    assert all(r is None for r in responses), (
-                        f"iter {iter_count}: expected pool drained, "
-                        f"got {[r is not None for r in responses]}"
-                    )
+            def on_register(*args: typing.Any) -> typing.Any:
+                signal = register(*args)
+                if len(signals._furthest_signals) == 3:
+                    readers_queued.set()
+                return signal
+
+            async def wait_for_readers(
+                conn: AsyncHTTPConnection, *args: typing.Any, **kwargs: typing.Any
+            ) -> AsyncHTTPResponse:
+                await asyncio.wait_for(readers_queued.wait(), 2)
+                return await getresponse(conn, *args, **kwargs)
+
+            monkeypatch.setattr(signals, "register", on_register)
+            monkeypatch.setattr(AsyncHTTPConnection, "getresponse", wait_for_readers)
+
+            for iter_count in range(16):
+                responses = await asyncio.wait_for(
+                    asyncio.gather(*(pool.get_response() for _ in range(4))), 5
+                )
+                expected = min(4, max(0, request_count - iter_count * 4))
+                assert sum(r is not None for r in responses) == expected
+                assert all(r.status == 200 for r in responses if r is not None)

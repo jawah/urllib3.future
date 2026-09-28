@@ -989,8 +989,6 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
 
-        self.pool.forget(from_promise)
-
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
         redirect = typing.cast(bool, from_promise.get_parameter("redirect"))

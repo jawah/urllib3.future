@@ -688,6 +688,11 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             police_officer=police_officer,
         )
 
+        # Remove fulfilled traffic before the connection can pass to another
+        # get_response() caller during body preloading or on return.
+        if police_officer is not None:
+            police_officer.forget(promise)
+
         if resp_options.preload_content:
             response._body = await response.read(
                 decode_content=resp_options.decode_content

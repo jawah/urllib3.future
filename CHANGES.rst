@@ -12,6 +12,8 @@
   The resolver now closes its socket and raises ``socket.gaierror``, in both sync and async.
 - Fixed async timeouts leaving pending cancellation counts and incorrectly converting
   concurrent cancellation into ``TimeoutError`` on Python 3.11+. (#420)
+- Fixed a rare timing-dependent hang when concurrent async ``get_response()`` calls
+  wait for an available connection.
 - Improved idle connection reuse by inspecting pending transport input and rechecking
   connection state, in both sync and async. This allows HTTP/2 and HTTP/3 shutdown events
   to be processed before another request is sent. (#421)
