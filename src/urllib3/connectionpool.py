@@ -753,7 +753,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             if conn.expect_pong:
                 log.debug("Resetting dropped connection: %s", self.host)
                 conn.close()
-        elif conn and conn.is_idle:
+        elif conn and conn.is_idle and sys.platform != "wasi":
             if conn.peek_and_react() and is_connection_dropped(conn):
                 log.debug("Resetting dropped connection: %s", self.host)
                 conn.close()
