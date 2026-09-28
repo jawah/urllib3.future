@@ -1,4 +1,4 @@
-2.25.901 (2026-09-27)
+2.25.901 (2026-09-28)
 =====================
 
 - Improved DNS over UDP reliability by retrying unanswered questions, starting after
@@ -15,7 +15,6 @@
 - Improved idle connection reuse by inspecting pending transport input and rechecking
   connection state, in both sync and async. This allows HTTP/2 and HTTP/3 shutdown events
   to be processed before another request is sent. (#421)
-- Fixed async socket readiness checks rejecting datagram readers used by HTTP/3.
 - Backported scoped IPv6 fixes from upstream https://github.com/urllib3/urllib3/pull/5260
   Native zone identifiers are preserved, interface-name case is respected when selecting
   pools, and proxy requests and retries no longer decode zone identifiers repeatedly.
