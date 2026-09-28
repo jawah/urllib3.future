@@ -11,6 +11,10 @@ import pytest
 from urllib3 import connection_from_url
 from urllib3._constant import DEFAULT_BLOCKSIZE
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.contrib.webextensions import (
+    FastWebSocketExtensionFromHTTP,
+    WebSocketExtensionFromHTTP,
+)
 from urllib3.exceptions import LocationValueError
 from urllib3.poolmanager import PoolKey, PoolManager, ProxyManager, key_fn_by_scheme
 from urllib3.response import HTTPResponse
@@ -55,6 +59,12 @@ class TestPoolManager:
     def test_scoped_ipv6_pool_key_preserves_zone_case(
         self, scheme: str, from_url: bool, zone: str, other_zone: str
     ) -> None:
+        if (
+            scheme in ("ws", "wss")
+            and WebSocketExtensionFromHTTP is None
+            and FastWebSocketExtensionFromHTTP is None
+        ):
+            pytest.skip("test requires a WebSocket backend")
         with PoolManager() as manager:
             pools = []
             for host in (f"FE80::1%{zone}", f"fe80::1%{other_zone}", f"fe80::1%{zone}"):

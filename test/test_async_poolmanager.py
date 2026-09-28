@@ -10,6 +10,10 @@ from urllib3 import AsyncPoolManager, AsyncProxyManager
 from urllib3._async.connectionpool import AsyncHTTPConnectionPool
 from urllib3._async.response import AsyncHTTPResponse
 from urllib3.backend import ResponsePromise
+from urllib3.contrib.webextensions._async import (
+    AsyncFastWebSocketExtensionFromHTTP,
+    AsyncWebSocketExtensionFromHTTP,
+)
 from urllib3.util.retry import Retry
 
 if typing.TYPE_CHECKING:
@@ -58,6 +62,12 @@ async def test_scoped_ipv6_request_pool(
 async def test_scoped_ipv6_pool_key_preserves_zone_case(
     scheme: str, from_url: bool, zone: str, other_zone: str
 ) -> None:
+    if (
+        scheme in ("ws", "wss")
+        and AsyncWebSocketExtensionFromHTTP is None
+        and AsyncFastWebSocketExtensionFromHTTP is None
+    ):
+        pytest.skip("test requires a WebSocket backend")
     async with AsyncPoolManager() as manager:
         pools = []
         for host in (f"FE80::1%{zone}", f"fe80::1%{other_zone}", f"fe80::1%{zone}"):
