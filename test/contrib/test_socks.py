@@ -429,7 +429,7 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
     )
     def test_socket_timeout(self, create_connection: Mock) -> None:
         create_connection.side_effect = SocketTimeout()
-        proxy_url = f"socks5h://{self.host}:{self.port}"
+        proxy_url = f"socks5h://{self.host}:1080"
         with socks.SOCKSProxyManager(proxy_url) as pm:
             with pytest.raises(ConnectTimeoutError, match="timed out"):
                 pm.request("GET", "http://example.com", retries=False)
