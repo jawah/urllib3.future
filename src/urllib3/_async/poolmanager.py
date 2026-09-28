@@ -32,7 +32,7 @@ from ..util.proxy import connection_requires_http_tunnel
 from ..util.request import NOT_FORWARDABLE_HEADERS
 from ..util.retry import Retry
 from ..util.traffic_police import UnavailableTraffic
-from ..util.url import Url, parse_extension, parse_url
+from ..util.url import Url, _encode_host, parse_extension, parse_url
 from .connectionpool import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
 from .response import AsyncHTTPResponse
 
@@ -424,7 +424,10 @@ class AsyncPoolManager(AsyncRequestMethods):
         """
         u = parse_url(url)
         return await self.connection_from_host(
-            u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
+            _encode_host(u.host, u.scheme),
+            port=u.port,
+            scheme=u.scheme,
+            pool_kwargs=pool_kwargs,
         )
 
     def _merge_pool_kwargs(
@@ -751,7 +754,10 @@ class AsyncPoolManager(AsyncRequestMethods):
             pool_kwargs["disabled_svn"] = disabled_svn
 
         conn = await self.connection_from_host(
-            u.host, port=u.port, scheme=u.scheme, pool_kwargs=pool_kwargs
+            _encode_host(u.host, u.scheme),
+            port=u.port,
+            scheme=u.scheme,
+            pool_kwargs=pool_kwargs,
         )
 
         if u.scheme not in (None, "http", "https"):
@@ -768,7 +774,8 @@ class AsyncPoolManager(AsyncRequestMethods):
             kw["headers"] = self.headers
 
         if self._proxy_requires_url_absolute_form(u):
-            response = await conn.urlopen(method, u._replace(fragment=None).url, **kw)
+            # Leave URL normalization to the pool to avoid decoding zone IDs twice.
+            response = await conn.urlopen(method, url.split("#", 1)[0], **kw)
         else:
             response = await conn.urlopen(method, u.request_uri, **kw)
 
@@ -955,7 +962,7 @@ class AsyncProxyManager(AsyncPoolManager):
         assert self.proxy is not None
 
         return await super().connection_from_host(
-            self.proxy.host,
+            _encode_host(self.proxy.host, self.proxy.scheme),
             self.proxy.port,
             self.proxy.scheme,
             pool_kwargs=pool_kwargs,

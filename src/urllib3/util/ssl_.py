@@ -12,6 +12,8 @@ import typing
 import warnings
 from binascii import Error as BinasciiError
 from binascii import unhexlify
+from concurrent.futures import Future
+from functools import lru_cache
 from pathlib import Path
 
 from .._constant import MOZ_INTERMEDIATE_CIPHERS
@@ -19,7 +21,7 @@ from ..contrib.imcc import load_cert_chain as _ctx_load_cert_chain
 from ..exceptions import ProxySchemeUnsupported, SSLError
 from .url import _BRACELESS_IPV6_ADDRZ_RE, _IPV4_RE
 
-from ..contrib.anytls import ssl, IS_NONSTDLIB
+from ..contrib.anytls import ssl, IS_NONSTDLIB, stdlib_ssl
 
 if typing.TYPE_CHECKING:
     from ssl import VerifyMode
@@ -799,7 +801,7 @@ def ssl_wrap_socket(
 
             elif hasattr(context, "load_default_certs"):
                 try:
-                    store_stats = context.cert_store_stats()
+                    store_stats = _cert_store_stats(context)
 
                     # try to load OS default certs; works well on Windows.
                     if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
@@ -930,6 +932,61 @@ def is_capable_for_quic(
     return not quic_disable
 
 
+@lru_cache(maxsize=1)
+def _get_clear_error() -> typing.Callable[[], None] | None:
+    try:
+        from ..contrib.imcc._ctypes import _OpenSSL
+
+        return _OpenSSL().ERR_clear_error
+    except (ImportError, OSError):
+        return None
+
+
+_T = typing.TypeVar("_T")
+
+
+def _inspect_cert_store(ctx: ssl.SSLContext, operation: typing.Callable[[], _T]) -> _T:
+    # rtls/utls contexts also inherit from stdlib SSLContext for compatibility.
+    if (
+        hasattr(ctx, "set_ech_configs")
+        or stdlib_ssl is None
+        or not isinstance(
+            ctx, getattr(stdlib_ssl, "_SSLContext", stdlib_ssl.SSLContext)
+        )
+    ):
+        return operation()
+
+    clear_error = _get_clear_error()
+    if clear_error is not None:
+        try:
+            return operation()
+        finally:
+            # X509_check_ca() can leave errors after a successful inspection.
+            clear_error()
+
+    # OpenSSL errors belong to the OS thread. Never reuse this worker for TLS.
+    result: Future[_T] = Future()
+
+    def run() -> None:
+        try:
+            result.set_result(operation())
+        except BaseException as exc:
+            result.set_exception(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join()
+    return result.result()
+
+
+def _cert_store_stats(ctx: ssl.SSLContext) -> dict[str, int]:
+    return _inspect_cert_store(ctx, ctx.cert_store_stats)
+
+
+def _get_ca_certs(ctx: ssl.SSLContext) -> list[bytes]:
+    return _inspect_cert_store(ctx, lambda: ctx.get_ca_certs(binary_form=True))
+
+
 def convert_ssl_ctx_nonstdlib(ctx: ssl.SSLContext) -> ssl.SSLContext:
     """Attempt to convert stdlib SSLContext to the active non-stdlib backend
     (rtls or utls) SSLContext. Best effort only.
@@ -947,14 +1004,12 @@ def convert_ssl_ctx_nonstdlib(ctx: ssl.SSLContext) -> ssl.SSLContext:
 
     import ssl as stdlib_ssl
 
-    ssl_ctx_have_certs: bool = (
-        "x509_ca" in ctx.cert_store_stats() and ctx.cert_store_stats()["x509_ca"] > 0
-    )
+    ssl_ctx_have_certs = _cert_store_stats(ctx).get("x509_ca", 0) > 0
 
     ca_cert_data: str | None = None
 
     if ssl_ctx_have_certs:
-        ctx_root_certificates: list[bytes] = ctx.get_ca_certs(True)
+        ctx_root_certificates: list[bytes] = _get_ca_certs(ctx)
 
         if ctx_root_certificates:
             ca_cert_data = "\n".join(

@@ -4,8 +4,15 @@ import socket
 import typing
 
 from ....util.ssl_ import resolve_cert_reqs, ssl_wrap_socket
+from ...ssa._gro import sync_recv_gro
 from ..dou import PlainResolver
-from ..protocols import ProtocolResolver
+from ..protocols import (
+    DomainNameServerParseException,
+    DomainNameServerQuery,
+    DomainNameServerReturn,
+    ProtocolResolver,
+)
+from ..utils import rfc1035_pack, rfc1035_should_read, rfc1035_unpack
 from ..system import SystemResolver
 
 
@@ -69,6 +76,92 @@ class TLSResolver(PlainResolver):
 
         # DNS over TLS mandate the size-prefix (unsigned int, 2 bytes)
         self._rfc1035_prefix_mandated = True
+
+    def _exchange(
+        self, queries: list[DomainNameServerQuery]
+    ) -> list[DomainNameServerReturn]:
+        with self._lock:
+            for query in queries:
+                payload = bytes(query)
+                if self._rfc1035_prefix_mandated is True:
+                    payload = rfc1035_pack(payload)
+                self._socket.sendall(payload)
+
+        responses: list[DomainNameServerReturn] = []
+        response_ids: set[int] = set()
+        while len(responses) < len(queries):
+            with self._lock:
+                for query in queries:
+                    dns_resp = self._completed.get(query.id)
+                    if dns_resp is not None and query.id not in response_ids:
+                        responses.append(dns_resp)
+                        response_ids.add(query.id)
+                if len(responses) == len(queries):
+                    continue
+
+                try:
+                    if self._gro_enabled:
+                        data_in_or_segments = sync_recv_gro(self._socket, 65535)
+                    else:
+                        data_in_or_segments = self._socket.recv(1500)
+
+                    if isinstance(data_in_or_segments, list):
+                        payloads = data_in_or_segments
+                    elif data_in_or_segments:
+                        payloads = [data_in_or_segments]
+                    else:
+                        payloads = []
+
+                    if self._rfc1035_prefix_mandated is True and payloads:
+                        payload = b"".join(payloads)
+                        while rfc1035_should_read(payload):
+                            extra = self._socket.recv(1500)
+                            if not extra:
+                                payloads = []
+                                break
+                            if isinstance(extra, list):
+                                payload += b"".join(extra)
+                            else:
+                                payload += extra
+                        else:
+                            payloads = [payload]
+                except (
+                    TimeoutError,
+                    OSError,
+                    socket.timeout,
+                    ConnectionError,
+                ) as e:
+                    raise socket.gaierror(
+                        "Got unexpectedly disconnected while waiting for name resolution"
+                    ) from e
+
+                if not payloads:
+                    # The state lock is already held; self.close() would acquire it again.
+                    self._socket.close()
+                    self._terminated = True
+                    raise socket.gaierror(
+                        "DNS server closed the connection before sending a complete response"
+                    )
+
+                for payload in payloads:
+                    if self._rfc1035_prefix_mandated is True:
+                        fragments = rfc1035_unpack(payload)
+                    else:
+                        fragments = (payload,)
+
+                    for fragment in fragments:
+                        try:
+                            dns_resp = DomainNameServerReturn(fragment)
+                        except DomainNameServerParseException:
+                            continue
+                        pending_query = self._pending.get(dns_resp.id)
+                        if (
+                            pending_query is not None
+                            and dns_resp.matches(pending_query)
+                            and dns_resp.id not in self._completed
+                        ):
+                            self._completed[dns_resp.id] = dns_resp
+        return responses
 
 
 class GoogleResolver(

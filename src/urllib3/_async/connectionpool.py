@@ -76,7 +76,7 @@ from ..util.request import (
 from ..util.retry import Retry
 from ..util.ssl_match_hostname import CertificateError
 from ..util.timeout import _DEFAULT_TIMEOUT, Timeout
-from ..util.url import Url, _encode_target
+from ..util.url import Url, _encode_host, _encode_target
 from ..util.url import _normalize_host as normalize_host
 from ..util.url import parse_url
 from ..util.util import to_str
@@ -131,7 +131,7 @@ class AsyncConnectionPool:
         # to avoid removing square braces around IPv6 addresses.
         # This value is sent to `HTTPConnection.set_tunnel()` if called
         # because square braces are required for HTTP CONNECT tunneling.
-        self._tunnel_host = normalize_host(host, scheme=self.scheme).lower()
+        self._tunnel_host = normalize_host(host, scheme=self.scheme)
 
     def __str__(self) -> str:
         return f"{type(self).__name__}(host={self.host!r}, port={self.port!r})"
@@ -747,6 +747,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             if conn.expect_pong:
                 log.debug("Resetting dropped connection: %s", self.host)
                 await conn.close()
+        elif conn and conn.is_idle:
+            if await conn.peek_and_react() and is_connection_dropped(conn):
+                log.debug("Resetting dropped connection: %s", self.host)
+                await conn.close()
 
         try:
             return conn or await self._new_conn(heb_timeout=heb_timeout)
@@ -984,8 +988,6 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             raise ValueError(
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
-
-        self.pool.forget(from_promise)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -1562,7 +1564,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         scheme, _, host, port, *_ = parse_url(url)
         scheme = scheme or "http"
         if host is not None:
-            host = _normalize_host(host, scheme=scheme)
+            # parse_url() already normalized the host, including its zone ID.
+            host = host.strip("[]")
 
         # Use explicit default port for comparison when none is given
         if self.port and not port:
@@ -1779,6 +1782,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
 
+        # Retrying must not decode IPv6 zone identifiers a second time.
+        original_url = url
         parsed_url = parse_url(url)
         destination_scheme = parsed_url.scheme
 
@@ -1894,7 +1899,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 response.update_parameters(
                     {
                         "method": method,
-                        "url": url,
+                        "url": original_url,
                         "body": body,
                         "headers": headers,
                         "retries": retries,
@@ -2010,7 +2015,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             )
             return await self.urlopen(  # type: ignore[no-any-return,call-overload,misc]
                 method,
-                url,
+                original_url,
                 body,
                 headers,
                 retries,
@@ -2115,7 +2120,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             log.debug("Retry: %s", url)
             return await self.urlopen(
                 method,
-                url,
+                original_url,
                 body,
                 headers,
                 retries=retries,
@@ -2577,6 +2582,7 @@ def connection_from_url(url: str, **kw: typing.Any) -> AsyncHTTPConnectionPool:
         >>> r = conn.request('GET', '/')
     """
     scheme, _, host, port, *_ = parse_url(url)
+    host = _encode_host(host, scheme)
     scheme = scheme or "http"
     port = port or port_by_scheme.get(scheme, 80)
     if scheme == "https":

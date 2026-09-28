@@ -2652,20 +2652,18 @@ class TestContentFraming(SocketDummyServerTestCase):
 
         def socket_handler(listener: socket.socket) -> None:
             nonlocal buffer
-            sock = listener.accept()[0]
-            sock.settimeout(0)
+            with listener.accept()[0] as sock:
+                sock.settimeout(LONG_TIMEOUT)
+                while not buffer.endswith(b"\r\n0\r\n\r\n"):
+                    data = sock.recv(65536)
+                    assert data, (
+                        "Client closed before sending the complete chunked body"
+                    )
+                    buffer += data
 
-            start = time.time()
-            while time.time() - start < (LONG_TIMEOUT / 2):
-                try:
-                    buffer += sock.recv(65536)
-                except OSError:
-                    continue
-
-            sock.sendall(
-                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
-            )
-            sock.close()
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
+                )
 
         body: typing.Any
         if body_type == "generator":

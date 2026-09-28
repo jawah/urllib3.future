@@ -17,6 +17,7 @@ from ...exceptions import SSLError
 from ..ssl_ import (
     ALPN_PROTOCOLS,
     _CacheableSSLContext,
+    _cert_store_stats,
     _is_key_file_encrypted,
     create_urllib3_context,
 )
@@ -150,7 +151,7 @@ async def ssl_wrap_socket(
 
             elif hasattr(context, "load_default_certs"):
                 try:
-                    store_stats = context.cert_store_stats()
+                    store_stats = _cert_store_stats(context)
                     # try to load OS default certs; works well on Windows.
                     if "x509_ca" not in store_stats or not store_stats["x509_ca"]:
                         context.load_default_certs()

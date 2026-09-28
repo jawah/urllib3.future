@@ -7,9 +7,121 @@ from unittest.mock import Mock, patch
 import pytest
 
 from urllib3 import Retry
-from urllib3._async.connectionpool import AsyncHTTPConnectionPool
+from urllib3._async.connection import AsyncHTTPConnection
+from urllib3._async.connectionpool import (
+    AsyncHTTPConnectionPool,
+    AsyncHTTPSConnectionPool,
+    connection_from_url,
+)
 from urllib3._async.response import AsyncHTTPResponse
+from urllib3.backend import ResponsePromise
 from urllib3.exceptions import UnrewindableBodyError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("zone", ["251", "25ethA", "et%61"])
+async def test_scoped_ipv6_target_preserved_on_multiplexed_retry(zone: str) -> None:
+    requested_urls = []
+    responses = iter([AsyncHTTPResponse(status=503), AsyncHTTPResponse(status=200)])
+
+    async def make_request(
+        conn: AsyncHTTPConnection, method: str, url: str, **kwargs: typing.Any
+    ) -> ResponsePromise:
+        requested_urls.append(url)
+        return ResponsePromise(conn, len(requested_urls), [])
+
+    async def getresponse(*args: typing.Any, **kwargs: typing.Any) -> AsyncHTTPResponse:
+        return next(responses)
+
+    async with AsyncHTTPConnectionPool("localhost") as pool:
+        with patch.object(pool, "_make_request", make_request):
+            with patch.object(AsyncHTTPConnection, "getresponse", getresponse):
+                promise = await pool.urlopen(
+                    "GET",
+                    f"http://[FE80::1%25{zone}]/path#fragment",
+                    assert_same_host=False,
+                    multiplexed=True,
+                    retries=Retry(total=1, status_forcelist=[503]),
+                )
+                response = await pool.get_response(promise=promise)
+    assert response is not None and response.status == 200
+    assert requested_urls == [f"http://[fe80::1%{zone}]/path"] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pool_cls", [AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool]
+)
+@pytest.mark.parametrize("zone", ["1", "251", "25ethA", "25251", "etH0", "et%61"])
+async def test_unbracketed_scoped_ipv6(
+    pool_cls: type[AsyncHTTPConnectionPool], zone: str
+) -> None:
+    async with pool_cls(f"FE80::1%{zone}", port=8080) as pool:
+        assert pool.host == f"fe80::1%{zone}"
+        assert pool._tunnel_host == f"fe80::1%{zone}"
+        assert (await pool._new_conn()).host == f"fe80::1%{zone}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pool_cls", [AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool]
+)
+async def test_scoped_ipv6_zone_case_changes_host_identity(
+    pool_cls: type[AsyncHTTPConnectionPool],
+) -> None:
+    async with pool_cls("FE80::1%ethA", port=8080) as pool:
+        assert pool.is_same_host(f"{pool.scheme}://[fe80::1%25ethA]:8080/")
+        assert not pool.is_same_host(f"{pool.scheme}://[fe80::1%25etha]:8080/")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["http", "https"])
+@pytest.mark.parametrize("zone", ["1", "251", "25ethA", "25251", "et%61"])
+async def test_scoped_ipv6_factory_preserves_zone(scheme: str, zone: str) -> None:
+    url = f"{scheme}://[FE80::1%25{zone}]:8080/"
+    async with connection_from_url(url) as pool:
+        assert pool.host == f"fe80::1%{zone}"
+        assert pool._tunnel_host == f"[fe80::1%{zone}]"
+        assert pool.is_same_host(url)
+        assert not pool.is_same_host(f"{scheme}://[fe80::1%25other]:8080/")
+        assert (await pool._new_conn()).host == f"fe80::1%{zone}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_kind", ["status", "connection"])
+async def test_scoped_ipv6_redirect_target_preserved_on_retry(retry_kind: str) -> None:
+    request = Mock(
+        side_effect=[
+            AsyncHTTPResponse(
+                status=302,
+                headers={"location": "http://[FE80::1%25251]:8080/next?x=%23#fragment"},
+            ),
+            AsyncHTTPResponse(status=503)
+            if retry_kind == "status"
+            else OSError("reset"),
+            AsyncHTTPResponse(status=200),
+        ]
+    )
+
+    async def make_request(
+        *args: typing.Any, **kwargs: typing.Any
+    ) -> AsyncHTTPResponse:
+        return request(*args, **kwargs)  # type: ignore[no-any-return]
+
+    async with AsyncHTTPConnectionPool("localhost") as pool:
+        with patch.object(pool, "_make_request", make_request):
+            response = await pool.urlopen(
+                "GET",
+                "/",
+                assert_same_host=False,
+                retries=Retry(total=2, status_forcelist=[503]),
+            )
+    assert response.status == 200
+    assert [call[0][2] for call in request.call_args_list] == [
+        "/",
+        "http://[fe80::1%251]:8080/next?x=%23",
+        "http://[fe80::1%251]:8080/next?x=%23",
+    ]
 
 
 @pytest.mark.asyncio

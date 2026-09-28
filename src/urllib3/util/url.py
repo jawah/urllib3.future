@@ -394,6 +394,10 @@ def _normalize_host(host: str | None, scheme: str | None) -> str | None:
                 return host.lower()
         elif not _IPV4_RE.fullmatch(host):
             if "%" in host:
+                address, separator, zone = host.partition("%")
+                if ":" in address and host.isascii() and _IPV6_RE.fullmatch(address):
+                    # Native IPv6 zone names are literal and may be case-sensitive.
+                    return f"{address.lower()}{separator}{zone}" if normalize else host
                 normalized_host = _HOST_PERCENT_RE.sub(
                     _normalize_host_percent_encoding, host
                 )
@@ -404,6 +408,13 @@ def _normalize_host(host: str | None, scheme: str | None) -> str | None:
                     b".".join([_idna_encode(label) for label in host.split(".")]),
                     "ascii",
                 )
+    return host
+
+
+def _encode_host(host: str | None, scheme: str | None) -> str | None:
+    """Re-encode a parsed zone separator before passing a host to a pool."""
+    if host and host[0] == "[" and "%" in host and scheme in _NORMALIZABLE_SCHEMES:
+        return host.replace("%", "%25", 1)
     return host
 
 

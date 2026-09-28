@@ -10,6 +10,8 @@ __all__ = (
     "timeout",
 )
 
+_HAS_CANCELLATION_COUNT = sys.version_info >= (3, 11)
+
 
 class _State(enum.Enum):
     CREATED = "created"
@@ -85,6 +87,7 @@ class Timeout:
             raise RuntimeError("Timeout should be used inside a task")
         self._state = _State.ENTERED
         self._task = task
+        self._cancelling = task.cancelling() if _HAS_CANCELLATION_COUNT else 0
         self.reschedule(self._when)
         return self
 
@@ -104,7 +107,8 @@ class Timeout:
         if self._state is _State.EXPIRING:
             self._state = _State.EXPIRED
 
-            if exc_type is CancelledError:
+            cancelling = self._task.uncancel() if _HAS_CANCELLATION_COUNT else 0
+            if cancelling <= self._cancelling and exc_type is CancelledError:
                 # Since there are no new cancel requests, we're
                 # handling this.
                 raise TimeoutError from exc_val

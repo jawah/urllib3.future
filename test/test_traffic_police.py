@@ -32,6 +32,96 @@ class AsyncConnection(Connection):
         super().close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["release", "drain", "close"])
+async def test_async_borrow_by_type_wakes_queued_readers(
+    finish: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice(maxsize=1)
+    conn, indicator = AsyncConnection(saturated=True), AsyncHTTPResponse()
+    await police.put(conn, indicator, immediately_unavailable=True)
+    queued = asyncio.Event()
+    register = police._signals.register
+    waiter_count = 0
+
+    def on_register(*args: Any) -> Any:
+        nonlocal waiter_count
+        signal = register(*args)
+        waiter_count += 1
+        if waiter_count == 3:
+            queued.set()
+        return signal
+
+    monkeypatch.setattr(police._signals, "register", on_register)
+
+    async def read() -> Any:
+        try:
+            async with police.borrow(AsyncHTTPResponse) as available:
+                assert available is conn
+                assert police.is_held(conn)
+                return available
+        except UnavailableTraffic:
+            return None
+
+    readers = [asyncio.create_task(read()) for _ in range(3)]
+    try:
+        await asyncio.wait_for(queued.wait(), 1)
+        if finish == "drain":
+            police.forget(indicator)
+            conn.is_saturated = False
+            conn.is_idle = True
+        if finish == "close":
+            await police.kill_cursor()
+        else:
+            police.release()
+        results = await asyncio.wait_for(asyncio.gather(*readers), 1)
+        assert results == [conn if finish == "release" else None] * 3
+        assert list(police._container.values()) == ([] if finish == "close" else [conn])
+        assert not police._cursors
+        assert not police._signals._furthest_signals
+    finally:
+        police.release()
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("notified", [False, True])
+async def test_async_cancelled_type_borrow_does_not_lose_connection(
+    notified: bool,
+) -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice(maxsize=1)
+    conn, indicator = AsyncConnection(saturated=True), AsyncHTTPResponse()
+    await police.put(conn, indicator, immediately_unavailable=True)
+
+    async def read() -> Any:
+        async with police.borrow(AsyncHTTPResponse) as available:
+            return available
+
+    readers = [asyncio.create_task(read()) for _ in range(2)]
+    try:
+        # A single checkpoint lets both readers register before release.
+        await asyncio.sleep(0)
+        assert len(police._signals._furthest_signals) == 2
+        if notified:
+            police.release()
+        readers[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await readers[0]
+        if not notified:
+            police.release()
+        assert await asyncio.wait_for(readers[1], 1) is conn
+        assert list(police._container.values()) == [conn]
+        assert not police._cursors
+        assert not police._signals._furthest_signals
+    finally:
+        police.release()
+        for reader in readers:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+
+
 @pytest.mark.parametrize("held", [False, True])
 @pytest.mark.parametrize("callback_raises", [False, True])
 def test_locate_readiness_releases_connection(

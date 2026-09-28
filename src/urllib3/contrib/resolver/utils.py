@@ -4,6 +4,8 @@ import binascii
 import socket
 import struct
 import typing
+from random import uniform
+from time import monotonic
 
 if typing.TYPE_CHECKING:
 
@@ -14,6 +16,17 @@ if typing.TYPE_CHECKING:
         ipv4hint: list[str]
         ipv6hint: list[str]
         echconfig: bytes
+
+
+_UDP_DEFAULT_TIMEOUT = 7.0
+_UDP_INITIAL_RETRY_DELAY = 1 / 3
+
+
+def _udp_retry_deadlines(deadline: float) -> typing.Iterator[float]:
+    delay = _UDP_INITIAL_RETRY_DELAY
+    while monotonic() < deadline:
+        yield min(monotonic() + delay, deadline)
+        delay *= uniform(1.8, 2.2)
 
 
 def inet4_ntoa(address: bytes) -> str:

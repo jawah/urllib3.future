@@ -250,7 +250,7 @@ class AsyncSignals(typing.Generic[T]):
             any_broadcast_push = True
 
         for signal in self._furthest_signals:
-            if signal.target_obj_id == cursor.obj_id:
+            if signal.target_obj_id is None or signal.target_obj_id == cursor.obj_id:
                 signal.event.set()
                 awoken_signals.append(signal)
 
@@ -310,8 +310,6 @@ class AsyncSignals(typing.Generic[T]):
 
         current_state = traffic_state_of(cursor.conn_or_pool)
         can_write_more: bool = current_state is not TrafficState.SATURATED
-        can_read_anything: bool = current_state is not TrafficState.IDLE
-        can_only_write: bool = current_state is TrafficState.IDLE
 
         if cursor.obj_id in self._saturated_signals:
             event = self._saturated_signals[cursor.obj_id]
@@ -345,16 +343,13 @@ class AsyncSignals(typing.Generic[T]):
             self._refresh_generic_waiters()
             return True
 
-        if (can_only_write and not anything_pending_write) or not can_read_anything:
-            return False
-
         late_signal_elected: AsyncPendingSignal[T] | None = None
 
         for signal in self._furthest_signals:
             if current_state not in signal.states:
                 continue
 
-            if signal.target_obj_id == cursor.obj_id:
+            if signal.target_obj_id is None or signal.target_obj_id == cursor.obj_id:
                 late_signal_elected = signal
                 break
 
@@ -499,21 +494,26 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         signal = self._signals.register(
             None,
+            # A drained connection must also wake readers so they can recheck
+            # whether any matching traffic remains.
+            TrafficState.IDLE,
             TrafficState.USED,
             TrafficState.SATURATED,
         )
 
-        await signal.event.wait()
+        try:
+            await signal.event.wait()
+        except asyncio.CancelledError:
+            self._signals.unregister(signal)
+            raise
 
-        if signal.conn_or_pool is None:
-            return None
+        if signal.conn_or_pool is not None:
+            for mk in self._map.keys_for(signal.conn_or_pool):
+                if self._map_types[mk] is not traffic_type:
+                    continue
+                return signal.conn_or_pool
 
-        for mk in self._map.keys_for(signal.conn_or_pool):
-            if self._map_types[mk] is not traffic_type:
-                continue
-            return signal.conn_or_pool
-
-        self.release()
+            self.release()
 
         any_remaining_eligible_object = (
             next(self._map_types.keys_for(traffic_type).__iter__(), None) is not None

@@ -414,6 +414,8 @@ class AsyncSocket:
 
     def read_ready(self) -> bool:
         reader = self._reader
+        if isinstance(reader, DatagramReader):
+            return bool(reader._buffer or reader._exception or reader.at_eof())
         if not isinstance(reader, asyncio.StreamReader):
             raise OSError("Readiness requires a connected stream")
         ready = bool(

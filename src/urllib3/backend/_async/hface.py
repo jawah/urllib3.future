@@ -48,6 +48,7 @@ from ...exceptions import (
     SSLError,
 )
 from ...util import parse_alt_svc, resolve_cert_reqs, parse_url
+from ...util.ssl_ import _cert_store_stats, _get_ca_certs
 from ...util.socket_state import enable_keepalive
 from ...util.sub_timeout import AsyncSubTimeout
 from .._base import (
@@ -344,7 +345,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         try:
             cert_stats = (
-                ssl_context.cert_store_stats() if ssl_context is not None else None
+                _cert_store_stats(ssl_context) if ssl_context is not None else None
             )
             ssl_ctx_have_certs: bool = (
                 cert_stats is not None
@@ -383,7 +384,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
             if ca_certs is None and ca_cert_dir is None and ca_cert_data is None:
                 try:
-                    ctx_root_certificates: list[bytes] = ssl_context.get_ca_certs(True)
+                    ctx_root_certificates: list[bytes] = _get_ca_certs(ssl_context)
                 except (
                     AttributeError,
                     NotImplementedError,
@@ -825,7 +826,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         """This method should be called by a thread using TrafficPolice when it is idle.
         Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
         or when reaching a WebSocket.
-        This method return True if there is any event ready to unpack for the connection.
+        Return True when input or a connection failure was observed, so the caller
+        can recheck connection state. False means no new state was observed.
         Some server implementation may be aggressive toward "idle" session
         this is especially true when using QUIC.
         For example, google/quiche expect regular ACKs, otherwise will
@@ -836,47 +838,58 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         if self.sock is None or self._protocol is None:
             return False
 
-        bck_timeout = self.sock.gettimeout()
-        # either there is data ready for us, or there's nothing and we stop waiting
-        # almost instantaneously.
-        self.sock.settimeout(0.001 if not expect_frame else 0.1)
-
+        # An empty reader only means the transport has not delivered input yet.
+        # PONG checks retain their bounded wait for the transport callback.
         try:
-            peek_data = await self.sock.recv(self.blocksize)
-        except SocketTimeout:
-            return False
-        except (ConnectionAbortedError, ConnectionResetError):
-            peek_data = b""
-        finally:
-            self.sock.settimeout(bck_timeout)
-
-        if not peek_data:  # connection was lost while idle!
+            if not expect_frame and not self.expect_pong and not self.sock.read_ready():
+                return False
+        except OSError:
             self._protocol.connection_lost()
-            return False
+            return True
+
+        bck_timeout = self.sock.gettimeout()
+        self.sock.settimeout(0.1 if expect_frame else 0.001)
 
         try:
-            if isinstance(peek_data, list):
-                for gro_segment in peek_data:
-                    self._protocol.bytes_received(gro_segment)
-            else:
-                self._protocol.bytes_received(peek_data)
-        except self._protocol.exceptions():
-            return False
+            try:
+                peek_data = await self.sock.recv(self.blocksize)
+            except (SocketTimeout, BlockingIOError):
+                return False
+            except OSError:
+                self._protocol.connection_lost()
+                return True
 
-        while True:
-            data_out = self._protocol.bytes_to_send()
-
-            if not data_out:
-                break
+            if not peek_data:
+                if self.sock.type == SOCK_STREAM:
+                    self._protocol.connection_lost()
+                return True
 
             try:
-                await self.sock.sendall(data_out)
-            except OSError:
-                return False
+                if isinstance(peek_data, list):
+                    self._protocol.many_bytes_received(peek_data)  # type: ignore[union-attr]
+                else:
+                    self._protocol.bytes_received(peek_data)
+            except self._protocol.exceptions():
+                self._protocol.connection_lost()
+                return True
 
-        self._last_used_at = time.monotonic()
+            while True:
+                data_out = self._protocol.bytes_to_send()
 
-        return self._protocol.has_pending_event()
+                if not data_out:
+                    break
+
+                try:
+                    await self.sock.sendall(data_out)
+                except OSError:
+                    self._protocol.connection_lost()
+                    return True
+
+            self._last_used_at = time.monotonic()
+
+            return True
+        finally:
+            self.sock.settimeout(bck_timeout)
 
     async def __exchange_until(
         self,

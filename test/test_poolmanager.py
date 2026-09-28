@@ -10,14 +10,74 @@ import pytest
 
 from urllib3 import connection_from_url
 from urllib3._constant import DEFAULT_BLOCKSIZE
-from urllib3.connectionpool import HTTPSConnectionPool
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.contrib.webextensions import (
+    FastWebSocketExtensionFromHTTP,
+    WebSocketExtensionFromHTTP,
+)
 from urllib3.exceptions import LocationValueError
-from urllib3.poolmanager import PoolKey, PoolManager, key_fn_by_scheme
+from urllib3.poolmanager import PoolKey, PoolManager, ProxyManager, key_fn_by_scheme
+from urllib3.response import HTTPResponse
 from urllib3.util import retry, timeout
 from urllib3.util.url import Url
 
 
 class TestPoolManager:
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    @pytest.mark.parametrize("proxy_host", [None, "proxy", "[fe80::2%25251]"])
+    @pytest.mark.parametrize("zone", ["251", "25ethA"])
+    def test_scoped_ipv6_request_pool(
+        self, scheme: str, proxy_host: str | None, zone: str
+    ) -> None:
+        manager = (
+            ProxyManager(f"http://{proxy_host}:8080") if proxy_host else PoolManager()
+        )
+        with manager:
+            with patch.object(
+                HTTPConnectionPool,
+                "urlopen",
+                autospec=True,
+                return_value=HTTPResponse(status=200),
+            ) as request:
+                response = manager.urlopen("GET", f"{scheme}://[fe80::1%25{zone}]/")
+            assert response.status == 200
+            pool = request.call_args[0][0]
+            if proxy_host and scheme == "http":
+                assert pool.host == (
+                    "proxy" if proxy_host == "proxy" else "fe80::2%251"
+                )
+            else:
+                assert pool.host == f"fe80::1%{zone}"
+                assert pool._tunnel_host == f"[fe80::1%{zone}]"
+
+    @pytest.mark.parametrize("scheme", ["http", "https", "ws", "wss"])
+    @pytest.mark.parametrize("from_url", [False, True])
+    @pytest.mark.parametrize(
+        "zone, other_zone",
+        [("ethA", "etha"), ("251", "1"), ("25ethA", "ethA"), ("25251", "251")],
+    )
+    def test_scoped_ipv6_pool_key_preserves_zone_case(
+        self, scheme: str, from_url: bool, zone: str, other_zone: str
+    ) -> None:
+        if (
+            scheme in ("ws", "wss")
+            and WebSocketExtensionFromHTTP is None
+            and FastWebSocketExtensionFromHTTP is None
+        ):
+            pytest.skip("test requires a WebSocket backend")
+        with PoolManager() as manager:
+            pools = []
+            for host in (f"FE80::1%{zone}", f"fe80::1%{other_zone}", f"fe80::1%{zone}"):
+                if from_url:
+                    url = f"{scheme}://[{host.replace('%', '%25')}]:8080/"
+                    pools.append(manager.connection_from_url(url))
+                else:
+                    pools.append(manager.connection_from_host(host, 8080, scheme))
+            assert pools[0] is not pools[1]
+            assert pools[0] is pools[2]
+            assert pools[0].host == f"fe80::1%{zone}"
+            assert pools[1].host == f"fe80::1%{other_zone}"
+
     @resolvesLocalhostFQDN()
     def test_same_url(self) -> None:
         # Convince ourselves that normally we don't get the same object

@@ -18,7 +18,7 @@ from qh3.quic.events import (
     StreamReset,
 )
 
-from .....util.ssl_ import IS_FIPS, resolve_cert_reqs
+from .....util.ssl_ import IS_FIPS, _get_ca_certs, resolve_cert_reqs
 from .....util.sub_timeout import AsyncSubTimeout
 from ..._cache import (
     ResolutionResult,
@@ -72,7 +72,7 @@ class QUICResolver(PlainResolver):
             try:
                 ctx.load_default_certs()
 
-                for der in ctx.get_ca_certs(binary_form=True):
+                for der in _get_ca_certs(ctx):
                     assert isinstance(der, bytes)
                     kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
 
