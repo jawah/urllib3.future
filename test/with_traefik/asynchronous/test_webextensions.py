@@ -495,7 +495,7 @@ class TestWebExtensions(TraefikTestCase):
                 if resp.extension:
                     await resp.extension.close()
 
-            asyncio.create_task(cancel())
+            cancel_task = asyncio.create_task(cancel())
 
             events = []
 
@@ -503,6 +503,9 @@ class TestWebExtensions(TraefikTestCase):
                 event = await resp.extension.next_payload()
                 if event:
                     events.append(event)
+
+            # A background close failure must not be mistaken for successful EOF.
+            await cancel_task
 
             # add toleration for very slow environments
             # should be 2 events, but we saw flaky 3 due
