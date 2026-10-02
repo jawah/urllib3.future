@@ -892,6 +892,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 block=promise is not None,
                 not_idle_only=True,
             ) as conn:
+                if promise is not None:
+                    # Restore this request's read timeout after other requests used the connection.
+                    conn.timeout = typing.cast(
+                        typing.Optional[float], promise.get_parameter("read_timeout")
+                    )
                 try:
                     response = await conn.getresponse(
                         promise=promise, police_officer=self.pool

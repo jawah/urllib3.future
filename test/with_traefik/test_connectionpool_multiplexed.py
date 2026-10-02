@@ -7,12 +7,64 @@ from time import sleep, time
 import pytest
 
 from urllib3 import HTTPSConnectionPool, ResponsePromise, Retry
-from urllib3.exceptions import MaxRetryError
+from urllib3.backend import HttpVersion
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
+from urllib3.exceptions import MaxRetryError, ReadTimeoutError
+from urllib3.util import Timeout
 
 from . import TraefikTestCase
 
 
 class TestConnectionPoolMultiplexed(TraefikTestCase):
+    @pytest.mark.parametrize("version", [20, 30])
+    @pytest.mark.parametrize("read_timeout", [0.05, None])
+    def test_response_promise_read_timeout(
+        self, version: int, read_timeout: float | None
+    ) -> None:
+        if version == 30 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+            disabled_svn={
+                HttpVersion.h11,
+                HttpVersion.h3 if version == 20 else HttpVersion.h2,
+            },
+            maxsize=1,
+            timeout=5,
+        ) as pool:
+            assert pool.urlopen("GET", "/get").version == version
+            try:
+                promise = pool.urlopen(
+                    "GET",
+                    "/delay/1",
+                    multiplexed=True,
+                    retries=0,
+                    timeout=Timeout(connect=0.75, read=read_timeout),
+                )
+                assert isinstance(promise, ResponsePromise)
+                # Another request must not determine this promise's read timeout.
+                other = pool.urlopen("GET", "/get", multiplexed=True, timeout=0.75)
+                assert isinstance(other, ResponsePromise)
+                if read_timeout is None:
+                    response = pool.get_response(promise=promise)
+                    assert response is not None and response.status == 200
+                else:
+                    with pytest.raises(MaxRetryError) as caught:
+                        pool.get_response(promise=promise)
+                    assert isinstance(caught.value.reason, ReadTimeoutError)
+                    assert "read timeout=0.05" in str(caught.value.reason)
+                response = pool.get_response(promise=other)
+                assert response is not None and response.status == 200
+                assert pool.num_connections == 1
+            finally:
+                # A timed-out promise remains pending; explicitly close its connection.
+                assert pool.pool is not None
+                with pool.pool.borrow() as conn:
+                    conn.close()
+
     @notMacOS()
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with HTTPSConnectionPool(
