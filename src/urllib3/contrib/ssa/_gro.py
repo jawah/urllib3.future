@@ -487,9 +487,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
         self._unregister_writer()
         try:
             self._protocol.connection_lost(exc)
-        except (KeyboardInterrupt, SystemExit):
+        except (
+            KeyboardInterrupt,
+            SystemExit,
+        ):  # Defensive: propagate process-exit signals raised by protocol callbacks.
             raise
-        except BaseException:  # noqa: BLE001 - protocol callbacks must not kill us
+        except BaseException:  # Defensive: a failing protocol callback must not interrupt transport bookkeeping.  # noqa: BLE001
             pass
         finally:
             try:
@@ -715,9 +718,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
             self._protocol_paused = True
             try:
                 self._protocol.pause_writing()
-            except (KeyboardInterrupt, SystemExit):
+            except (
+                KeyboardInterrupt,
+                SystemExit,
+            ):  # Defensive: propagate process-exit signals raised by protocol callbacks.
                 raise
-            except BaseException:  # noqa: BLE001
+            except BaseException:  # Defensive: a failing protocol callback must not interrupt transport bookkeeping.  # noqa: BLE001
                 pass
 
     def _maybe_resume_protocol(self) -> None:
@@ -725,9 +731,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
             self._protocol_paused = False
             try:
                 self._protocol.resume_writing()
-            except (KeyboardInterrupt, SystemExit):
+            except (
+                KeyboardInterrupt,
+                SystemExit,
+            ):  # Defensive: propagate process-exit signals raised by protocol callbacks.
                 raise
-            except BaseException:  # noqa: BLE001
+            except BaseException:  # Defensive: a failing protocol callback must not interrupt transport bookkeeping.  # noqa: BLE001
                 pass
 
     def _on_write_ready(self) -> None:
@@ -756,9 +765,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                 if not _is_msg_too_big(exc):
                     try:
                         self._protocol.error_received(exc)
-                    except (KeyboardInterrupt, SystemExit):
+                    except (
+                        KeyboardInterrupt,
+                        SystemExit,
+                    ):  # Defensive: propagate process-exit signals raised by protocol callbacks.
                         raise
-                    except BaseException:  # noqa: BLE001
+                    except BaseException:  # Defensive: a failing protocol callback must not interrupt transport bookkeeping.  # noqa: BLE001
                         pass
                 if self._closing or self._closed:
                     break
@@ -821,9 +833,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
             except OSError as exc:
                 try:
                     protocol.error_received(exc)
-                except (KeyboardInterrupt, SystemExit):
+                except (
+                    KeyboardInterrupt,
+                    SystemExit,
+                ):  # Defensive: propagate process-exit signals raised by protocol callbacks.
                     raise
-                except BaseException:  # noqa: BLE001
+                except BaseException:  # Defensive: a failing protocol callback must not interrupt transport bookkeeping.  # noqa: BLE001
                     pass
                 return
 
@@ -843,9 +858,12 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                             f"GRO buffer"
                         )
                     )
-                except (KeyboardInterrupt, SystemExit):
+                except (
+                    KeyboardInterrupt,
+                    SystemExit,
+                ):  # Defensive: propagate process-exit signals raised by protocol callbacks.
                     raise
-                except BaseException:  # noqa: BLE001
+                except BaseException:  # Defensive: a failing protocol callback must not interrupt transport bookkeeping.  # noqa: BLE001
                     pass
                 # Grow the buffer for next time, up to the kernel max.
                 if bufsize < _MAX_GRO_BUF:

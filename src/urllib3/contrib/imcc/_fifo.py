@@ -57,7 +57,7 @@ def load_cert_chain(
             try:
                 with open(path, "wb") as f:
                     f.write(data)
-            except BaseException as e:
+            except BaseException as e:  # Defensive: host FIFO write failure.
                 writer_exc = e
 
         cert_thread = threading.Thread(

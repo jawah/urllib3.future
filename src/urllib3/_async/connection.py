@@ -1138,8 +1138,8 @@ async def _ssl_wrap_socket_and_match_hostname(
         ssl_sock.close()
         try:
             await ssl_sock.wait_for_close()
-        except OSError:  # flaky branch on Windows and MacOS
-            pass  # the socket (underlying fd) may be in a released state already.
+        except OSError:  # Defensive: preserve the verification error if transport cleanup also fails.
+            pass
         raise
 
 

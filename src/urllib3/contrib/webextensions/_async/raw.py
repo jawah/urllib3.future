@@ -27,7 +27,7 @@ class AsyncRawExtensionFromHTTP(AsyncExtensionFromHTTP):
 
     @staticmethod
     def implementation() -> str:
-        return "raw"
+        return "raw"  # Defensive: metadata for the implicit raw extension.
 
     @staticmethod
     def supported_schemes() -> set[str]:
@@ -35,7 +35,7 @@ class AsyncRawExtensionFromHTTP(AsyncExtensionFromHTTP):
 
     @staticmethod
     def scheme_to_http_scheme(scheme: str) -> str:
-        return scheme
+        return scheme  # Defensive: raw extensions define no URL scheme.
 
     async def next_payload(self) -> bytes | None:
         if self._police_officer is None or self._dsa is None:

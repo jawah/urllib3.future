@@ -264,7 +264,7 @@ if sys.platform == "wasi":
             )
             try:
                 self._socket = _wasi_tcp_create_socket.create_tcp_socket(address_family)
-            except Err as error:
+            except Err as error:  # Defensive: WASI host socket-allocation failure.
                 raise _socket_error(error.value) from None
 
             self.family = AddressFamily(family)

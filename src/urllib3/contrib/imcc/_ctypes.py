@@ -31,7 +31,7 @@ class _OpenSSL:
         _ssl_options_signed_long_bug = False
 
         if not hasattr(ssl, "_ssl"):
-            raise UnsupportedOperation(
+            raise UnsupportedOperation(  # Defensive: nonstandard ssl module lacks the CPython handle used by ctypes.
                 "Unsupported interpreter due to missing private ssl module"
             )
 
@@ -70,7 +70,7 @@ class _OpenSSL:
                     break
 
             if not ssl_potential_match or not crypto_potential_match:
-                raise UnsupportedOperation(
+                raise UnsupportedOperation(  # Defensive: this interpreter layout exposes no usable OpenSSL DLL pair.
                     "Could not locate OpenSSL DLLs next to Python; "
                     "check your /DLLs folder or your PATH."
                 )
@@ -106,7 +106,7 @@ class _OpenSSL:
             "SSL_CTX_use_PrivateKey",
         ]:
             if not hasattr(self._ssl, required_symbol):
-                raise UnsupportedOperation(
+                raise UnsupportedOperation(  # Defensive: the loaded libssl lacks a required native entry point.
                     f"Python interpreter built against '{self._name}' is unsupported. (libssl) {required_symbol} is not present."
                 )
 
@@ -120,7 +120,7 @@ class _OpenSSL:
             "ERR_error_string",
         ]:
             if not hasattr(self._crypto, required_symbol):
-                raise UnsupportedOperation(
+                raise UnsupportedOperation(  # Defensive: the loaded libcrypto lacks a required native entry point.
                     f"Python interpreter built against '{self._name}' is unsupported. (libcrypto) {required_symbol} is not present."
                 )
 
@@ -204,7 +204,7 @@ class _OpenSSL:
                 ctx, 32, 0, None
             )
         else:
-            raise UnsupportedOperation()
+            raise UnsupportedOperation()  # Defensive: neither supported native options accessor is available.
 
     def pull_error(self) -> typing.NoReturn:
         raise self.ssl.SSLError(
@@ -346,13 +346,17 @@ def load_cert_chain(
     cert_bio = lib.BIO_new_mem_buf(leaf_certificate, len(leaf_certificate))
 
     if not cert_bio:
-        raise MemoryError("Unable to allocate memory to load the client certificate")
+        raise MemoryError(
+            "Unable to allocate memory to load the client certificate"
+        )  # Defensive: native certificate BIO allocation failed.
 
     # Use a BIO to load the key in-memory
     key_bio = lib.BIO_new_mem_buf(keydata, len(keydata))
 
     if not key_bio:
-        raise MemoryError("Unable to allocate memory to load the client key")
+        raise MemoryError(
+            "Unable to allocate memory to load the client key"
+        )  # Defensive: native private-key BIO allocation failed.
 
     # prepare the password
     if callable(password):

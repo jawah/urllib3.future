@@ -100,7 +100,11 @@ def _HAS_HTTP3_SUPPORT() -> bool:
 
     try:
         return importlib.util.find_spec("qh3") is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
+    except (
+        ImportError,
+        ModuleNotFoundError,
+        ValueError,
+    ):  # Defensive: custom import hooks or missing module specs can make discovery fail.
         return False
 
 
