@@ -397,6 +397,7 @@ def test_ssl_large_resources(session: nox.Session) -> None:
         "--strict-config",
         "--strict-markers",
         "test/with_dummyserver/test_socketlevel.py::TestSSL::test_requesting_large_resources_via_ssl",
+        "test/with_dummyserver/asynchronous/test_socketlevel.py::TestSSL::test_requesting_large_resources_via_ssl",
         env={
             "PYTHONWARNINGS": "always::DeprecationWarning",
             "COVERAGE_CORE": "sysmon",

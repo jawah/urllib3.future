@@ -3492,6 +3492,16 @@ class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
 
 
 class TestConnectionUtilities(SocketDummyServerTestCase):
+    def test_early_hints_without_callback(self) -> None:
+        self.start_response_handler(
+            b"HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+        )
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/")
+            assert response.status == 200
+            assert response.data == b"ok"
+
     def test_sse_leading_empty_line(self) -> None:
         # SSE accepts a lone CR as a line separator, including empty field lines.
         body = b"\rdata: first\n\n"

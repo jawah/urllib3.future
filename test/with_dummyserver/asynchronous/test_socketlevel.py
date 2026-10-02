@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import asyncio
 import ssl
 import typing
@@ -27,6 +28,88 @@ from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
 from threading import Event
 import socket
+
+
+@pytest.mark.asyncio
+class TestSSL(SocketDummyServerTestCase):
+    @pytest.mark.parametrize(
+        "content_length,preload_content,read_amt",
+        [
+            pytest.param(8193, False, 2**31, id="oversized-read-small-body"),
+            *[
+                pytest.param(
+                    2**31,
+                    preload_content,
+                    read_amt,
+                    marks=pytest.mark.skipif(
+                        os.environ.get("CI") is not None,
+                        reason="Run the 2 GiB cases in test_ssl_large_resources",
+                    ),
+                )
+                for preload_content, read_amt in (
+                    (True, None),
+                    (False, None),
+                    (False, 2**31),
+                )
+            ],
+        ],
+    )
+    async def test_requesting_large_resources_via_ssl(
+        self, content_length: int, preload_content: bool, read_amt: int | None
+    ) -> None:
+        # Async counterpart of TestSSL.test_requesting_large_resources_via_ssl.
+        # A small body with an oversized read also exercises the Python <3.10 guard.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+
+        def socket_handler(listener: socket.socket) -> None:
+            listener.settimeout(30)
+            with listener.accept()[0] as sock:
+                sock.settimeout(30)
+                with context.wrap_socket(sock, server_side=True) as ssl_sock:
+                    with ssl_sock.makefile("rb") as requests:
+                        for length in (content_length, 5):
+                            while True:
+                                line = requests.readline()
+                                if not line:
+                                    return  # The client may close after a failed assertion.
+                                if line == b"\r\n":
+                                    break
+                            ssl_sock.sendall(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                                + f"Content-Length: {length}\r\n\r\n".encode()
+                            )
+                            # Reuse a small chunk instead of allocating another large body.
+                            chunk = b"Hello" if length == 5 else b"x" * 65536
+                            for offset in range(0, length, len(chunk)):
+                                ssl_sock.sendall(
+                                    chunk[: min(len(chunk), length - offset)]
+                                )
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host, self.port, ca_certs=DEFAULT_CA, retries=False, timeout=30
+        ) as pool:
+            response = await pool.request("GET", "/", preload_content=preload_content)
+            assert response.status == 200
+            if not preload_content:
+                assert await response.read(0) == b""
+            data = (
+                await response.data
+                if preload_content
+                else await response.read(read_amt)
+            )
+            assert len(data) == content_length
+            assert data.count(b"x") == content_length
+            del data
+
+            buffer = bytearray(b"untouched")
+            assert await response.readinto(buffer) == 0
+            assert buffer == b"untouched"
+            response = await pool.request("GET", "/again")
+            assert response.status == 200
+            assert await response.data == b"Hello"
+            assert pool.num_connections == 1
 
 
 @pytest.mark.asyncio
@@ -499,6 +582,53 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             finally:
                 send_body.set()
                 await response.close()
+
+    async def test_early_hints_without_callback(self) -> None:
+        self.start_response_handler(
+            b"HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+        )
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen("GET", "/")
+            assert response.status == 200
+            assert await response.data == b"ok"
+
+    async def test_oversized_read1_from_transport(self) -> None:
+        self.start_response_handler(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody")
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            assert await response.read1(2**31) == b"body"
+            assert await response.read1() == b""
+
+    @pytest.mark.parametrize("chunked", [False, True])
+    async def test_small_reads_of_compressed_transport(self, chunked: bool) -> None:
+        import gzip
+
+        payload = b"decoded body" * 100
+        encoded = gzip.compress(payload)
+        framing = (
+            b"Transfer-Encoding: chunked\r\n"
+            if chunked
+            else f"Content-Length: {len(encoded)}\r\n".encode()
+        )
+        wire = (
+            f"{len(encoded):x}\r\n".encode() + encoded + b"\r\n0\r\n\r\n"
+            if chunked
+            else encoded
+        )
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n" + framing + b"\r\n" + wire
+        )
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, blocksize=1
+        ) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            if chunked:
+                received = b"".join([part async for part in response.read_chunked(-1)])
+            else:
+                assert await response.read(1) == payload[:1]
+                received = payload[:1] + await response.read()
+            assert received == payload
 
     async def test_sse_leading_empty_line(self) -> None:
         body = b"\rdata: first\n\n"
