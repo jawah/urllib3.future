@@ -65,6 +65,55 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 with pool.pool.borrow() as conn:
                     conn.close()
 
+    @pytest.mark.parametrize("version", [20, 30])
+    @pytest.mark.parametrize(
+        "budget, backoff, succeeds",
+        [(0, 0, False), (1, 0, False), (2, 0, False), (2, 1, True)],
+    )
+    def test_response_promise_retry_budget(
+        self, version: int, budget: int, backoff: int, succeeds: bool
+    ) -> None:
+        if version == 30 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+            disabled_svn={
+                HttpVersion.h11,
+                HttpVersion.h3 if version == 20 else HttpVersion.h2,
+            },
+            timeout=5,
+        ) as pool:
+            assert pool.urlopen("GET", "/get").version == version
+            retries = Retry(total=budget, backoff_factor=backoff)
+            try:
+                promise = pool.urlopen(
+                    "GET", "/delay/1", multiplexed=True, retries=retries, timeout=0.05
+                )
+                assert isinstance(promise, ResponsePromise)
+                if succeeds:
+                    # After two timeouts, backoff allows the response to arrive.
+                    response = pool.get_response(promise=promise)
+                    assert response is not None and response.status == 200
+                else:
+                    with pytest.raises(MaxRetryError) as caught:
+                        pool.get_response(promise=promise)
+                    assert isinstance(caught.value.reason, ReadTimeoutError)
+                remaining = promise.get_parameter("retries")
+                assert isinstance(remaining, Retry)
+                assert remaining.total == 0
+                assert len(remaining.history) == budget
+                assert all(
+                    isinstance(h.error, ReadTimeoutError) for h in remaining.history
+                )
+                assert retries.total == budget and retries.history == ()
+            finally:
+                assert pool.pool is not None
+                with pool.pool.borrow() as conn:
+                    conn.close()
+
     @notMacOS()
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with HTTPSConnectionPool(

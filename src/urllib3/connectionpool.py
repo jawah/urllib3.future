@@ -966,6 +966,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 retries = retries.increment(
                     method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
                 )
+                # Carry the remaining budget into the next response wait.
+                promise.set_parameter("retries", retries)
                 retries.sleep()
             else:
                 raise e

@@ -951,6 +951,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 retries = retries.increment(
                     method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
                 )
+                # Carry the remaining budget into the next response wait.
+                promise.set_parameter("retries", retries)
                 await retries.async_sleep()
             else:
                 raise new_e  # we only retry if we were specified a specific promise. we can't blindly assume to retry.
