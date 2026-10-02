@@ -295,6 +295,12 @@ class TrafficPolice(typing.Generic[T]):
                 obj_id = id(conn_or_pool)
 
                 if obj_id in self._container:
+                    # Reserve before unlocking, as we do when handing off to a waiter.
+                    cursor_key = get_ident()
+                    if cursor_key not in self._cursor:
+                        if not self.concurrency:
+                            del self._container[obj_id]
+                        self._cursor[cursor_key] = ActiveCursor(obj_id, conn_or_pool)
                     return conn_or_pool
 
             if not block or not eligible_object_count:
@@ -1004,22 +1010,11 @@ class TrafficPolice(typing.Generic[T]):
 
                     if conn_or_pool:
                         obj_id = id(conn_or_pool)
+                        active_cursor = self._cursor[cursor_key]
 
-                        if self.busy:
-                            active_cursor = self._cursor[cursor_key]
-
-                            if active_cursor.obj_id != obj_id:
-                                raise AtomicTraffic(
-                                    "Seeking to locate a connection when having another one used, did you forget a call to release?"
-                                )
-                        else:
-                            if not self.concurrency:
-                                del self._container[obj_id]
-
-                        if cursor_key not in self._cursor:
-                            self._cursor[cursor_key] = ActiveCursor(
-                                obj_id,
-                                conn_or_pool,
+                        if active_cursor.obj_id != obj_id:
+                            raise AtomicTraffic(
+                                "Seeking to locate a connection when having another one used, did you forget a call to release?"
                             )
                 else:
                     conn_or_pool = self.locate(

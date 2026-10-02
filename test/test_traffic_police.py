@@ -267,7 +267,7 @@ async def test_async_locate_readiness_releases_connection(
         assert available is conn
 
 
-@pytest.mark.parametrize("operation", ["locate", "locate_none", "factory"])
+@pytest.mark.parametrize("operation", ["locate", "locate_none", "factory", "type"])
 @pytest.mark.parametrize(
     "concurrency, held",
     [(False, False), (True, False), (False, True)],
@@ -305,7 +305,10 @@ def test_locate_registers_borrower_or_waiter_before_unlock(
 
     def locate() -> None:
         try:
-            if operation == "factory":
+            if operation == "type":
+                with police.borrow(HTTPResponse) as found:
+                    result.set_result(found)
+            elif operation == "factory":
                 with police.locate_or_hold(indicator) as found:
                     result.set_result(found)
             elif operation == "locate_none":
@@ -327,7 +330,9 @@ def test_locate_registers_borrower_or_waiter_before_unlock(
         if held:
             with lock:
                 assert len(police._signals) == 1
-                assert police._signals[0].target_conn_or_pool is conn
+                assert police._signals[0].target_conn_or_pool is (
+                    None if operation == "type" else conn
+                )
         else:
             with lock:
                 reader_ident = reader.ident
@@ -351,6 +356,44 @@ def test_locate_registers_borrower_or_waiter_before_unlock(
         assert conn.closed
     assert not police._registry
     assert not police._signals
+
+
+@pytest.mark.parametrize("concurrency", [False, True])
+def test_type_borrow_and_beacon_release_ownership(concurrency: bool) -> None:
+    police: TrafficPolice[Any] = TrafficPolice(maxsize=1, concurrency=concurrency)
+    conn, indicator = Connection(saturated=True), HTTPResponse()
+    police.put(conn, indicator)
+
+    assert police.beacon(HTTPResponse)
+    assert not police.busy
+    assert police.qsize() == 1
+    with police.borrow(HTTPResponse) as found:
+        assert found is conn
+        assert police.is_held(conn)
+        assert police.qsize() == int(concurrency)
+        with police.borrow() as nested:
+            assert nested is conn
+        assert police.is_held(conn)
+    assert not police._cursor
+    assert not police._signals
+    assert police.qsize() == 1
+
+
+@pytest.mark.parametrize("concurrency", [False, True])
+def test_type_beacon_preserves_existing_owner(concurrency: bool) -> None:
+    police: TrafficPolice[Any] = TrafficPolice(maxsize=2, concurrency=concurrency)
+    conn, other = Connection(saturated=True), Connection(saturated=True)
+    indicator, other_indicator = HTTPResponse(), HTTPResponse()
+    police.put(conn, indicator)
+    police.put(other, other_indicator)
+
+    with police.borrow(other_indicator):
+        assert police.beacon(HTTPResponse)
+        assert police.is_held(other)
+        assert not police.is_held(conn)
+        assert police.qsize() == 1 + int(concurrency)
+    assert not police._cursor
+    assert police.qsize() == 2
 
 
 @pytest.mark.parametrize("maxsize", [2, 3])
