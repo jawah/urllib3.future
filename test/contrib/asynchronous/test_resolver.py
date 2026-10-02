@@ -1468,6 +1468,88 @@ def test_resolver_factory_unavailable(
 
 
 @pytest.mark.parametrize(
+    "addresses, expected",
+    [
+        (["1.1.1.1", "11.1.1.1", "1.1.1.1"], ["1.1.1.1", "11.1.1.1"]),
+        (
+            ["2001:db8::1", "2001:db8::10", "2001:db8::1"],
+            ["2001:db8::1", "2001:db8::10"],
+        ),
+        (["[::1]", "::1", "[::1]"], ["::1"]),
+        (["[fe80::1%EthA]", "[fe80::1%EthA]"], ["fe80::1%EthA"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_in_memory_registration(
+    addresses: list[str], expected: list[str]
+) -> None:
+    resolver = InMemoryResolver()
+    for address in addresses:
+        resolver.register("example.test", address)
+    records = await resolver.getaddrinfo(
+        "example.test", 80, socket.AF_UNSPEC, socket.SOCK_STREAM
+    )
+    assert [record[4][0] for record in records] == expected
+    assert all(
+        record[0] == (socket.AF_INET6 if ":" in record[4][0] else socket.AF_INET)
+        for record in records
+    )
+    resolver.clear("example.test")
+    resolver.clear("missing.test")
+    assert not resolver.support("example.test")
+    with pytest.raises(socket.gaierror, match="no records found"):
+        await resolver.getaddrinfo(
+            "example.test", 80, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+
+
+@pytest.mark.parametrize("maxsize", [0, 1, 2])
+@pytest.mark.asyncio
+async def test_in_memory_capacity(maxsize: int) -> None:
+    resolver = InMemoryResolver(maxsize=maxsize)
+    for name in ("first.test", "second.test", "third.test"):
+        resolver.register(name, "192.0.2.1")
+    assert not resolver.support("first.test")
+    assert resolver.support("second.test") == (maxsize == 2)
+    assert resolver.support("third.test") == (maxsize > 0)
+    if maxsize:
+        assert (
+            await resolver.getaddrinfo(
+                "third.test", 80, socket.AF_INET, socket.SOCK_STREAM
+            )
+        )[0][4] == ("192.0.2.1", 80)
+
+
+@pytest.mark.parametrize("binary_ech", [False, True])
+@pytest.mark.asyncio
+async def test_in_memory_configuration_and_family_filter(binary_ech: bool) -> None:
+    ech = b"\x00\x05\xff\xff\x00\x01x"
+    resolver = InMemoryResolver(
+        "localhost:192.0.2.1",
+        "localhost:[2001:db8::1]",
+        "ipv4.test:192.0.2.2",
+        "ignored-pattern",
+        server="unused",
+        port=53,
+        ech_config=ech if binary_ech else ech.hex(),
+    )
+    assert resolver.have_constraints()
+    assert resolver.support(None) and resolver.support(b"localhost")
+    assert not resolver.support("ignored-pattern")
+    for family, address in [
+        (socket.AF_INET, ("192.0.2.1", 80)),
+        (socket.AF_INET6, ("2001:db8::1", 80, 0, 0)),
+    ]:
+        assert await resolver.getaddrinfo(
+            "localhost", 80, family, socket.SOCK_DGRAM
+        ) == [(family, socket.SOCK_DGRAM, 17, ech, address)]
+    with pytest.raises(socket.gaierror, match="Name or service not known"):
+        await resolver.getaddrinfo("ipv4.test", 80, socket.AF_INET6, socket.SOCK_STREAM)
+    await resolver.close()
+    assert resolver.is_available() and resolver.recycle() is resolver
+
+
+@pytest.mark.parametrize(
     "specifier, implementation, available",
     [
         (None, None, True),
@@ -1483,6 +1565,23 @@ def test_async_resolver_factory_has(
         AsyncResolverFactory.has(ProtocolResolver.SYSTEM, specifier, implementation)
         is available
     )
+
+
+@pytest.mark.asyncio
+async def test_in_memory_url_host_case_and_ipv6_zone() -> None:
+    resolver = AsyncResolverDescription.from_url(
+        "in-memory://default?hosts=Example.TEST:[fe80::1%25EthA]"
+    ).new()
+    assert isinstance(resolver, InMemoryResolver)
+    assert resolver.support(b"EXAMPLE.test")
+    assert await resolver.getaddrinfo(
+        "example.test", 80, socket.AF_INET6, socket.SOCK_STREAM
+    ) == [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1%EthA", 80, 0, 0)),
+    ]
+    resolver.clear("EXAMPLE.TEST")
+    assert not resolver.support("example.test")
+    await resolver.close()
 
 
 def test_resolver_url_query_path_override() -> None:

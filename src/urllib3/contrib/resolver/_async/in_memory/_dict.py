@@ -57,15 +57,18 @@ class InMemoryResolver(AsyncBaseResolver):
             hostname = "localhost"
         if isinstance(hostname, bytes):
             hostname = hostname.decode("ascii")
-        return hostname in self._hosts
+        return hostname.lower() in self._hosts
 
     def register(self, hostname: str, ipaddr: str) -> None:
+        # Normalize DNS names without altering addresses or their IPv6 zone IDs.
+        hostname = hostname.lower()
         if hostname not in self._hosts:
             self._hosts[hostname] = []
         else:
             for e in self._hosts[hostname]:
                 t, addr = e
-                if addr in ipaddr:
+                # Compare complete addresses, allowing bracketed IPv6 input.
+                if addr == ipaddr or f"[{addr}]" == ipaddr:
                     return
 
         if _IPV6_ADDRZ_RE.match(ipaddr):
@@ -83,6 +86,7 @@ class InMemoryResolver(AsyncBaseResolver):
                 self._hosts.pop(k)
 
     def clear(self, hostname: str) -> None:
+        hostname = hostname.lower()
         if hostname in self._hosts:
             del self._hosts[hostname]
 
@@ -156,6 +160,8 @@ class InMemoryResolver(AsyncBaseResolver):
                     ),
                 )
             ]
+
+        host = host.lower()
 
         results: list[
             tuple[
