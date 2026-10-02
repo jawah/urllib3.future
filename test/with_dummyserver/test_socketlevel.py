@@ -68,6 +68,7 @@ from urllib3.poolmanager import proxy_from_url
 from urllib3.util import ssl_, ssl_wrap_socket
 from urllib3.util.retry import Retry
 from urllib3.util.timeout import Timeout
+from urllib3.util.wait import wait_for_read
 
 from .. import LogRecorder, has_alpn
 
@@ -431,6 +432,56 @@ class TestClientCerts(SocketDummyServerTestCase):
 
 
 class TestSocketClosing(SocketDummyServerTestCase):
+    def test_idle_tls_close_notify_before_reuse(self) -> None:
+        close_first = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # Keep post-handshake TLS 1.3 tickets out of the readiness check.
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            for i in range(2):
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        request = bytearray()
+                        while not request.endswith(b"\r\n\r\n"):
+                            data = sock.recv(65536)
+                            assert data
+                            request.extend(data)
+                        sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                        if i == 0:
+                            assert close_first.wait(5)
+                        # Send close_notify without closing TCP; wait for the client.
+                        try:
+                            sock.unwrap().close()
+                        except (ssl.SSLError, ConnectionResetError):
+                            pass
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            # Exercise stdlib TLS EOF, including when an alternative is installed.
+            ssl_backend="ssl",
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            background_watch_delay=None,
+            retries=False,
+        ) as pool:
+            assert pool.request("GET", "/").status == 200
+            close_first.set()
+            assert pool.pool is not None
+            with pool.pool.borrow() as conn:
+                previous = conn.sock
+                assert previous is not None
+                assert wait_for_read(previous, timeout=5)
+            response = pool.request("GET", "/")
+            assert response.data == b"ok"
+            with pool.pool.borrow() as conn:
+                assert conn.sock is not None and conn.sock is not previous
+
     def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
         # connection pool gets hung up on by the server, then reaches
@@ -3286,3 +3337,27 @@ class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
                     body=_async_body(),
                     chunked=True,
                 )
+
+
+class TestExtensionStartup(SocketDummyServerTestCase):
+    def test_recommended_ciphers_with_real_connection(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    assert tls.recv(1) == b"x"
+                    tls.sendall(b"y")
+
+        self._start_server(handler)
+        with socket.create_connection((self.host, self.port), timeout=5) as raw:
+            with ssl_wrap_socket(
+                raw,
+                ca_certs=DEFAULT_CA,
+                server_hostname="localhost",
+                use_recommended_ciphers=True,
+            ) as tls:
+                tls.sendall(b"x")
+                assert tls.recv(1) == b"y"

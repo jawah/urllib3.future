@@ -25,6 +25,56 @@ import socket
 
 @pytest.mark.asyncio
 class TestSocketClosing(SocketDummyServerTestCase):
+    async def test_idle_tls_close_notify_before_reuse(self) -> None:
+        close_first = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # Keep post-handshake TLS 1.3 tickets out of the readiness check.
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            for i in range(2):
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        request = bytearray()
+                        while not request.endswith(b"\r\n\r\n"):
+                            data = sock.recv(65536)
+                            assert data
+                            request.extend(data)
+                        sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                        if i == 0:
+                            assert close_first.wait(5)
+                        # Send close_notify without closing TCP; wait for the client.
+                        try:
+                            sock.unwrap().close()
+                        except (ssl.SSLError, ConnectionResetError):
+                            pass
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            # Exercise stdlib TLS EOF, including when an alternative is installed.
+            ssl_backend="ssl",
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            background_watch_delay=None,
+            retries=False,
+        ) as pool:
+            assert (await pool.request("GET", "/")).status == 200
+            close_first.set()
+            assert pool.pool is not None
+            async with pool.pool.borrow() as conn:
+                previous = conn.sock
+                assert previous is not None
+                await previous.until_data_available(5)
+            response = await pool.request("GET", "/")
+            assert (await response.data) == b"ok"
+            async with pool.pool.borrow() as conn:
+                assert conn.sock is not None and conn.sock is not previous
+
     async def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
         # connection pool gets hung up on by the server, then reaches

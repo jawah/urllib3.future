@@ -147,6 +147,38 @@ class TestHTTPS(HTTPSDummyServerTestCase):
             r = https_pool.request("GET", "/")
             assert r.status == 200, r.data
 
+    @pytest.mark.skipif(
+        IS_NONSTDLIB, reason="Exercise stdlib in-memory certificate loaders"
+    )
+    @pytest.mark.parametrize("method", ["ctypes", "shm"])
+    def test_in_memory_client_bytes_and_password_callback(self, method: str) -> None:
+        from io import UnsupportedOperation
+
+        loader = _ctypes_load_cert_chain if method == "ctypes" else _shm_load_cert_chain
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(DEFAULT_CA)
+        with open(os.path.join(self.certs_dir, CLIENT_CERT), "rb") as fp:
+            certdata = fp.read()
+        with open(os.path.join(self.certs_dir, PASSWORD_CLIENT_KEYFILE), "rb") as fp:
+            keydata = fp.read()
+        passwords = []
+
+        def password() -> bytes:
+            passwords.append(True)
+            return b"letmein"
+
+        try:
+            loader(context, certdata, keydata, password)
+        except UnsupportedOperation as exc:
+            pytest.skip(str(exc))
+        assert passwords == [True]
+        with HTTPSConnectionPool(
+            self.host, self.port, ssl_context=context, timeout=5, retries=False
+        ) as pool:
+            response = pool.request("GET", "/certificate")
+            assert response.status == 200
+            assert response.json()["organizationalUnitName"].startswith("Testing cert")
+
     @resolvesLocalhostFQDN()
     def test_dotted_fqdn(self) -> None:
         with HTTPSConnectionPool(

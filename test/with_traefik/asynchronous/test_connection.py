@@ -4,11 +4,12 @@ import os
 import socket
 
 import pytest
+import trustme
 
-from urllib3 import HttpVersion
+from urllib3 import HttpVersion, AsyncHTTPSConnectionPool
 from urllib3._async.connection import AsyncHTTPSConnection
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
-from urllib3.exceptions import ResponseNotReady
+from urllib3.exceptions import ResponseNotReady, SSLError
 from urllib3.util import create_urllib3_context
 
 from .. import TraefikTestCase
@@ -16,6 +17,27 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestConnection(TraefikTestCase):
+    @pytest.mark.parametrize("failure", ["fingerprint", "untrusted-ca"])
+    async def test_quic_certificate_rejection(self, failure: str) -> None:
+        if not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        options = (
+            {"assert_fingerprint": "00" * 32, "ca_certs": self.ca_authority}
+            if failure == "fingerprint"
+            else {"ca_cert_data": trustme.CA().cert_pem.bytes().decode()}
+        )
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            resolver=self.test_async_resolver,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+            timeout=5,
+            retries=False,
+            **options,
+        ) as pool:
+            with pytest.raises(SSLError):
+                await pool.request("GET", "/get")
+
     @pytest.mark.parametrize(
         "version, expected_version",
         [(HttpVersion.h11, 11), (HttpVersion.h2, 20), (HttpVersion.h3, 30)],
