@@ -677,7 +677,7 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                     # take the plain ``sendto`` path.
                     if exc.errno in _GSO_UNSUPPORTED_ERRNOS:
                         self._gso_enabled = False
-                    for dgram in group:
+                    for idx, dgram in enumerate(group):
                         try:
                             self._raw_send(dgram, addr)
                         except BlockingIOError:
@@ -685,8 +685,8 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                             self._register_writer()
                             self._queue_write(dgram, addr)
                             # Push the rest of this group + everything after.
-                            idx = group.index(dgram) + 1
-                            for tail in group[idx:]:
+                            # Track position: equal datagrams can occur more than once.
+                            for tail in group[idx + 1 :]:
                                 self._queue_write(tail, addr)
                             for _sz, g in groups[i + 1 :]:
                                 for d in g:

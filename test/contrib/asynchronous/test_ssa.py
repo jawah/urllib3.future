@@ -254,6 +254,39 @@ class TestDatagram:
                 writer.writelines(messages)
                 assert await receive(reader, len(messages)) == messages
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux UDP GSO")
+    @pytest.mark.parametrize("gso_error", [errno.EIO, errno.EMSGSIZE])
+    async def test_gso_fallback_resumes_at_the_unsent_duplicate(
+        self, gso_error: int
+    ) -> None:
+        class RejectedGSOSocket(socket.socket):
+            sends = 0
+
+            def sendmsg(self, *args: typing.Any, **kwargs: typing.Any) -> int:
+                # Model a NIC rejecting GSO; individual sends still use real UDP.
+                raise OSError(gso_error, "GSO rejected")
+
+            def send(self, *args: typing.Any, **kwargs: typing.Any) -> int:
+                self.sends += 1
+                if self.sends == 2:
+                    raise BlockingIOError(errno.EAGAIN, "send buffer full")
+                return super().send(*args, **kwargs)
+
+        with RejectedGSOSocket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            async with datagram_pair(sock) as (_, writer, server_reader, _):
+                transport = typing.cast(
+                    _NativeOptimizedDatagramTransport, writer.transport
+                )
+                if not transport._gso_enabled:
+                    pytest.skip("Kernel does not support UDP_SEGMENT")
+                messages = [b"same", b"same", b"last", b"next group"]
+                writer.writelines(messages)
+                received: list[bytes] = []
+                while not received or received[-1] != messages[-1]:
+                    received.extend(await receive(server_reader, 1))
+                assert received == messages
+                assert transport._gso_enabled == (gso_error != errno.EIO)
+
     @pytest.mark.skipif(
         sys.platform not in ("linux", "darwin", "ios"),
         reason="The Python optimized transport requires a selector event loop",
