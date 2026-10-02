@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
 from random import randint
 from test import notMacOS
 from time import sleep, time
@@ -16,6 +17,54 @@ from . import TraefikTestCase
 
 
 class TestConnectionPoolMultiplexed(TraefikTestCase):
+    @pytest.mark.parametrize("version", [20, 30])
+    @pytest.mark.parametrize("explicit_promise", [False, True])
+    def test_cross_origin_promise_redirect_headers(
+        self,
+        version: int,
+        explicit_promise: bool,
+    ) -> None:
+        if version == 30 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        target = f"https://{self.alt_host}:{self.https_port}/headers"
+        headers = {
+            "Authorization": "Bearer secret",
+            "Cookie": "private=yes",
+            "Proxy-Authorization": "Basic secret",
+            "X-Public": "retained",
+        }
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver,
+            disabled_svn={
+                HttpVersion.h11,
+                HttpVersion.h3 if version == 20 else HttpVersion.h2,
+            },
+            timeout=5,
+        ) as pool:
+            promise = pool.urlopen(
+                "GET",
+                "/redirect-to?" + urlencode({"url": target, "status_code": 302}),
+                headers=headers,
+                multiplexed=True,
+                assert_same_host=False,
+            )
+            assert isinstance(promise, ResponsePromise)
+            response = pool.get_response(promise=promise if explicit_promise else None)
+            assert response is not None and response.status == 200
+            assert response.version == version
+            echoed = {
+                name.lower(): value
+                for name, value in (response.json())["headers"].items()
+            }
+            assert echoed["x-public"] == ["retained"]
+            assert (
+                not {"authorization", "cookie", "proxy-authorization"} & echoed.keys()
+            )
+            assert headers["Authorization"] == "Bearer secret"
+
     @pytest.mark.parametrize("version", [20, 30])
     @pytest.mark.parametrize("read_timeout", [0.05, None])
     def test_response_promise_read_timeout(

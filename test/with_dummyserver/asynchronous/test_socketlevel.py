@@ -1,7 +1,23 @@
-import pytest
-from urllib3 import AsyncHTTPConnectionPool
-from urllib3.exceptions import IncompleteRead, InvalidHeader, ProtocolError
+from __future__ import annotations
 
+import asyncio
+import ssl
+import typing
+
+import pytest
+from jh2.config import H2Configuration  # type: ignore[import-untyped]
+from jh2.connection import H2Connection  # type: ignore[import-untyped]
+from jh2.events import RequestReceived  # type: ignore[import-untyped]
+from urllib3 import HttpVersion, ResponsePromise, AsyncProxyManager
+from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
+from urllib3.exceptions import (
+    IncompleteRead,
+    MaxRetryError,
+    InvalidHeader,
+    ProtocolError,
+)
+
+from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
 from threading import Event
 import socket
@@ -58,6 +74,132 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
     ``"Remote end closed connection without response"`` raise in
     ``src/urllib3/backend/_async/hface.py`` ``__exchange_until``.
     """
+
+    @pytest.mark.parametrize(
+        "error_code, multiplexed",
+        [(0xD, False), (0x8, False), (0x8, True)],
+    )
+    async def test_http2_peer_reset(
+        self,
+        error_code: int,
+        multiplexed: bool,
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    received = False
+                    while not received:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                h2.reset_stream(event.stream_id, error_code=error_code)
+                                received = True
+                        sock.sendall(h2.data_to_send())
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            with pytest.raises(ProtocolError, match="reset by remote peer"):
+                if multiplexed:
+                    result = await pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(result, ResponsePromise)
+                    await pool.get_response()
+                else:
+                    await pool.urlopen("GET", "/")
+
+    async def test_http2_rejects_upload_before_body_is_consumed(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        finished = Event()
+        produced = []
+
+        def body() -> typing.Iterator[bytes]:
+            for i in range(32):
+                produced.append(i)
+                yield b"x" * 16384
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        h2 = H2Connection(config=H2Configuration(client_side=False))
+                        h2.initiate_connection()
+                        sock.sendall(h2.data_to_send())
+                        received = False
+                        while not received:
+                            data = sock.recv(65536)
+                            assert data
+                            for event in h2.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    h2.send_headers(
+                                        event.stream_id,
+                                        [(":status", "413"), ("content-length", "0")],
+                                        end_stream=True,
+                                    )
+                                    received = True
+                            sock.sendall(h2.data_to_send())
+                        # Drain without granting further HTTP/2 flow-control credit.
+                        # The client must notice the response and stop its upload.
+                        try:
+                            while sock.recv(65536):
+                                pass
+                        except (ssl.SSLError, ConnectionResetError):
+                            pass
+            finally:
+                finished.set()
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            response = await pool.request("POST", "/", body=body())
+            assert response.status == 413 and response.version == 20
+            assert (await response.data) == b""
+            assert 0 < len(produced) < 32
+        assert await asyncio.get_running_loop().run_in_executor(None, finished.wait, 5)
+
+    async def test_proxy_connect_rejected(self) -> None:
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                request = bytearray()
+                while not request.endswith(b"\r\n\r\n"):
+                    data = sock.recv(65536)
+                    assert data
+                    request.extend(data)
+                assert request.startswith(b"CONNECT target.invalid:443 ")
+                sock.sendall(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+
+        self._start_server(handler)
+        async with AsyncProxyManager(
+            f"http://{self.host}:{self.port}", timeout=5
+        ) as proxy:
+            with pytest.raises(
+                MaxRetryError, match="Tunnel connection failed: 401 Unauthorized"
+            ):
+                await proxy.request("GET", "https://target.invalid/", retries=0)
 
     async def test_server_closes_socket_before_status_line(self) -> None:
         def socket_handler(listener: socket.socket) -> None:
