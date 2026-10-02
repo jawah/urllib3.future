@@ -13,7 +13,7 @@ import trustme
 
 from urllib3 import AsyncPoolManager, AsyncProxyManager, PoolManager, ProxyManager
 from urllib3.contrib.ssa import AsyncSocket
-from urllib3.exceptions import ReadTimeoutError
+from urllib3.exceptions import ReadTimeoutError, SSLError
 from urllib3.util.wait import wait_for_read
 
 try:
@@ -417,6 +417,24 @@ async def test_message_buffered_with_handshake(
         _,
     ):
         assert await asyncio.wait_for(call(ws.next_payload), 2) == "already here"
+
+
+@pytest.mark.asyncio
+async def test_peer_disconnect_releases_connection(
+    connection: Any, asynchronous: bool, tls: bool
+) -> None:
+    async with connection(asynchronous, tls) as (ws, peer, call, _):
+        assert peer.writer is not None
+        # Close the transport without a WebSocket closing handshake.
+        peer.writer.transport.abort()
+        await asyncio.wait_for(peer.finished.wait(), 2)
+        try:
+            assert await asyncio.wait_for(call(ws.next_payload), 2) is None
+        except SSLError as exc:
+            # Older OpenSSL/Python combinations report missing close_notify as an error.
+            assert tls
+            assert "unexpected eof" in str(exc).lower()
+        assert ws.closed
 
 
 @pytest.mark.asyncio
