@@ -644,30 +644,6 @@ class HfaceBackend(BaseBackend):
                     self.sock.cipher() if hasattr(self.sock, "cipher") else None
                 )
 
-                # Python 3.10+
-                if hasattr(self.sock, "_sslobj") and hasattr(
-                    self.sock._sslobj, "get_verified_chain"
-                ):
-                    chain = self.sock._sslobj.get_verified_chain()
-
-                    # When cert_reqs=0 CPython returns an empty dict for the peer cert.
-                    if not self.conn_info.certificate_dict and chain:
-                        self.conn_info.certificate_dict = chain[0].get_info()
-
-                    if (
-                        len(chain) > 1
-                        and Certificate is not None
-                        and isinstance(chain[1], Certificate)
-                    ):
-                        issuer_public_bytes = chain[1].public_bytes()
-                        if isinstance(issuer_public_bytes, bytes):
-                            self.conn_info.issuer_certificate_der = issuer_public_bytes
-                        elif hasattr(ssl, "PEM_cert_to_DER_cert"):
-                            self.conn_info.issuer_certificate_der = (
-                                ssl.PEM_cert_to_DER_cert(issuer_public_bytes)
-                            )
-                        self.conn_info.issuer_certificate_dict = chain[1].get_info()
-
             if cipher_tuple:
                 self.conn_info.cipher = cipher_tuple[0]
                 if cipher_tuple[1] == "TLSv1.0":
