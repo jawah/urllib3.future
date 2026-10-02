@@ -827,7 +827,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if self.concurrency:
                     self._container[obj_id] = conn_or_pool
                 else:
-                    if non_saturated_only and not self.concurrency:
+                    if non_saturated_only:
                         self._signals.declare_writing()
 
                 return conn_or_pool

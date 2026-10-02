@@ -1179,11 +1179,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 200 <= response.status < 300
                 and (method == "CONNECT" or extension is not None)
             ):
-                if extension is None:
-                    # we defer the import until there to avoid loading wsproto and such early.
-                    from .contrib.webextensions import load_extension
-
-                    extension = load_extension(None)()
                 response.start_extension(extension)
 
         return response

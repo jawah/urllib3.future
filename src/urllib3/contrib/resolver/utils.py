@@ -203,8 +203,6 @@ def read_name(data: bytes, offset: int) -> tuple[str, int]:
         if length == 0:
             offset += 1
             break
-        if length > 63:
-            raise ValueError("DNS label exceeds 63 octets")
         if offset + 1 + length > len(data):
             raise ValueError("DNS label is truncated")
         wire_length += length + 1
