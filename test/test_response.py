@@ -169,12 +169,10 @@ class TestResponse:
         assert r._body == b"foo"  # type: ignore[comparison-overlap]
         assert r.data == b"foo"
 
-    @pytest.mark.parametrize("read_args", ((), (None,)))
+    @pytest.mark.parametrize("read_args", ((), (None,), (-1,), (-2,)))
     def test_cache_content_with_explicit_read_call(
         self, read_args: tuple[typing.Any, ...]
     ) -> None:
-        # todo: investigate how to handle the read(-1, cache_content=True)
-        #       we differ from urllib3 on behavior
         fp = BytesIO(b"foo")
         r = HTTPResponse(fp, preload_content=False)
         assert r.read(*read_args, cache_content=True) == b"foo"  # type: ignore[misc]

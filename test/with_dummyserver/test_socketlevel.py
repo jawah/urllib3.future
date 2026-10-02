@@ -2322,6 +2322,45 @@ class TestStream(SocketDummyServerTestCase):
                 send_body.set()
                 response.close()
 
+    @pytest.mark.parametrize("amt", [-1, -2])
+    @pytest.mark.parametrize("chunked", [False, True])
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_read_negative_amt_reads_entire_body(
+        self, amt: int, chunked: bool, compressed: bool, decode_content: bool
+    ) -> None:
+        payload = bytes(range(256)) * 1024
+        encoded = payload
+        headers = b""
+        if compressed:
+            compressor = zlib.compressobj(wbits=16 + zlib.MAX_WBITS)
+            encoded = compressor.compress(payload) + compressor.flush()
+            headers += b"Content-Encoding: gzip\r\n"
+        if chunked:
+            headers += b"Transfer-Encoding: chunked\r\n"
+            wire_body = b"%x\r\n" % len(encoded) + encoded + b"\r\n0\r\n\r\n"
+        else:
+            headers += b"Content-Length: %d\r\n" % len(encoded)
+            wire_body = encoded
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\n" + headers + b"\r\n" + wire_body)
+
+        self._start_server(socket_handler)
+        # Force the body to span multiple backend reads, even when compressed.
+        with HTTPConnectionPool(self.host, self.port, blocksize=128) as pool:
+            response = pool.request("GET", "/", preload_content=False, timeout=5)
+            try:
+                assert response.read(amt, decode_content=decode_content) == (
+                    payload if decode_content else encoded
+                )
+                assert response.read() == b""
+                assert response.closed
+            finally:
+                response.close()
+
     def test_stream_none_unchunked_response_does_not_hang(self) -> None:
         done_event = Event()
 
@@ -2351,7 +2390,7 @@ class TestStream(SocketDummyServerTestCase):
 
             done_event.set()
 
-    @pytest.mark.parametrize("amt", [4096, 10000])
+    @pytest.mark.parametrize("amt", [-1, 4096, 10000])
     def test_stream_amt_serves_available_data_without_blocking(self, amt: int) -> None:
         # Regression test for https://github.com/jawah/urllib3.future/issues/379
         # SSE-like response: the server sends one 5479 bytes burst, then keeps
@@ -2402,7 +2441,7 @@ class TestStream(SocketDummyServerTestCase):
                 # pre-fix: ReadTimeoutError, the client blocked on the socket
                 # even though data was available (or already buffered).
                 chunk = next(stream)
-                assert 0 < len(chunk) <= amt
+                assert chunk and (amt < 0 or len(chunk) <= amt)
                 received += len(chunk)
 
             assert received == len(payload)

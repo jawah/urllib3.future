@@ -1,6 +1,9 @@
 2.25.902 (2026-10-02)
 =====================
 
+- Fixed synchronous ``HTTPResponse.read()`` returning partial bodies for negative
+  sizes such as ``-1``. These now read the remaining body, matching upstream urllib3.
+  Incremental ``read1()``, ``stream()`` and async reading retain their behavior. (#429)
 - Fixed ``read1(0)`` consuming response data or waiting for network I/O, in both
   sync and async. Backported the zero-byte read guard from upstream
   https://github.com/urllib3/urllib3/pull/3186

@@ -1101,9 +1101,10 @@ class HTTPResponse(io.IOBase):
         parameters: ``decode_content`` and ``cache_content``.
 
         :param amt:
-            How much of the content to read. If specified, caching is skipped
-            because it doesn't make sense to cache partial content as the full
-            response.
+            How much of the content to read. ``None`` or a negative value reads
+            the remaining body. For a non-negative value, caching is skipped
+            because partial content is not the full response. Use :meth:`read1`
+            or :meth:`stream` for incremental reads.
 
         :param decode_content:
             If True, will attempt to decode the body based on the
@@ -1114,8 +1115,15 @@ class HTTPResponse(io.IOBase):
             returned despite of the state of the underlying file object. This
             is useful if you want the ``.data`` property to continue working
             after having ``.read()`` the file object. (Overridden if ``amt`` is
-            set.)
+            non-negative.)
+
+        .. note::
+            ``AsyncHTTPResponse.read()`` retains incremental reads for negative
+            ``amt`` values for backward compatibility.
         """
+        # Normalize only public read(); read1() and stream() share _read().
+        if amt is not None and amt < 0:
+            amt = None
         return self._read(
             amt=amt,
             decode_content=decode_content,
