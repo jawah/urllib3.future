@@ -6,6 +6,7 @@ import sys
 import time
 import typing
 import warnings
+from pathlib import Path
 from test import LONG_TIMEOUT, SHORT_TIMEOUT
 from threading import Event
 from unittest import mock
@@ -1479,6 +1480,31 @@ class TestFileBodiesOnRetryOrRedirect(HTTPDummyServerTestCase):
             )
             assert resp.status == 200
             assert resp.data == data
+
+    @pytest.mark.parametrize("status", [307, 308])
+    @pytest.mark.parametrize("offset", [0, 7])
+    def test_file_redirect_preserves_offset(
+        self,
+        tmp_path: Path,
+        status: int,
+        offset: int,
+    ) -> None:
+        payload = b"prefix:" + b"0123456789abcdef" * 8192 + b"tail"
+        path = tmp_path / "upload.bin"
+        path.write_bytes(payload)
+        with path.open("rb") as file:
+            file.seek(offset)
+            body = file
+            with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+                resp = pool.request(
+                    "PUT", f"/redirect?target=/echo&status={status}", body=body
+                )
+                assert resp.status == 200
+                assert resp.data == payload[offset:]
+                assert resp.retries is not None
+                assert len(resp.retries.history) == 1
+                assert resp.retries.history[0].status == status
+                assert body.tell() == len(payload)
 
     def test_redirect_with_failed_tell(self) -> None:
         """Abort request if failed to get a position from tell()"""

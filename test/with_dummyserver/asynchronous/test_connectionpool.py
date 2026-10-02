@@ -9,6 +9,7 @@ import sys
 import time
 import typing
 import warnings
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 from test import LONG_TIMEOUT, SHORT_TIMEOUT
 from threading import Event
@@ -1543,6 +1544,62 @@ class TestFileBodiesOnRetryOrRedirect(HTTPDummyServerTestCase):
             )
             assert resp.status == 200
             assert await resp.data == data
+
+    @pytest.mark.parametrize("status", [307, 308])
+    @pytest.mark.parametrize("offset", [0, 7])
+    async def test_file_redirect_preserves_offset(
+        self,
+        tmp_path: Path,
+        status: int,
+        offset: int,
+        async_file_wrapper: typing.Callable[[typing.BinaryIO], typing.Any],
+    ) -> None:
+        payload = b"prefix:" + b"0123456789abcdef" * 8192 + b"tail"
+        path = tmp_path / "upload.bin"
+        path.write_bytes(payload)
+        with path.open("rb") as file:
+            file.seek(offset)
+            body = async_file_wrapper(file)
+            async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+                resp = await pool.request(
+                    "PUT", f"/redirect?target=/echo&status={status}", body=body
+                )
+                assert resp.status == 200
+                assert await resp.data == payload[offset:]
+                assert resp.retries is not None
+                assert len(resp.retries.history) == 1
+                assert resp.retries.history[0].status == status
+                assert await body.tell() == len(payload)
+
+    @pytest.mark.parametrize("status", [303, 307, 308])
+    async def test_async_nonseekable_file_redirect(
+        self,
+        status: int,
+        async_file_wrapper: typing.Callable[[typing.BinaryIO], typing.Any],
+    ) -> None:
+        sender, receiver = socket.socketpair()
+        with sender, receiver:
+            sender.settimeout(5)
+            receiver.settimeout(5)
+            sender.sendall(b"nonseekable upload")
+            sender.shutdown(socket.SHUT_WR)
+            with receiver.makefile("rb") as file:
+                body = async_file_wrapper(file)
+                async with AsyncHTTPConnectionPool(
+                    self.host, self.port, timeout=5
+                ) as pool:
+                    url = f"/redirect?target=/echo&status={status}"
+                    if status == 303:
+                        # A 303 drops the body and does not require a rewind.
+                        resp = await pool.request("PUT", url, body=body)
+                        assert resp.status == 200
+                        assert await resp.data == b""
+                    else:
+                        with pytest.raises(
+                            UnrewindableBodyError,
+                            match="Unable to record file position",
+                        ):
+                            await pool.request("PUT", url, body=body)
 
     async def test_redirect_with_failed_tell(self) -> None:
         """Abort request if failed to get a position from tell()"""

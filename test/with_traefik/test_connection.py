@@ -6,6 +6,7 @@ import socket
 import pytest
 
 from urllib3 import HttpVersion
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.connection import HTTPSConnection
 from urllib3.exceptions import ResponseNotReady
 from urllib3.util import create_urllib3_context
@@ -14,6 +15,50 @@ from . import TraefikTestCase
 
 
 class TestConnection(TraefikTestCase):
+    @pytest.mark.parametrize(
+        "version, expected_version",
+        [(HttpVersion.h11, 11), (HttpVersion.h2, 20), (HttpVersion.h3, 30)],
+    )
+    @pytest.mark.parametrize("chunked", [False, True])
+    def test_streamed_request_reuses_connection(
+        self, version: HttpVersion, expected_version: int, chunked: bool
+    ) -> None:
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("Test requires HTTP/3 support")
+
+        conn = HTTPSConnection(
+            self.host,
+            self.https_port,
+            timeout=5,
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+            disabled_svn=set(HttpVersion) - {version},
+        )
+        body = b"a streamed request body"
+        headers = {"Host": self.alt_host, "Content-Type": "text/plain"}
+        if not chunked:
+            headers["Content-Length"] = str(len(body))
+        try:
+            conn.connect()
+            sock = conn.sock
+            for _ in range(2):
+                conn.request(
+                    "POST",
+                    "/post",
+                    body=iter((body[:5], body[5:])),
+                    headers=headers,
+                    chunked=chunked,
+                )
+                response = conn.getresponse()
+                assert response.status == 200
+                assert response.version == expected_version
+                payload = response.json()
+                assert payload["data"] == body.decode()
+                assert payload["headers"]["Host"] == [self.alt_host]
+                assert conn.sock is sock
+        finally:
+            conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     def test_h3_probe_after_close(self) -> None:
         conn = HTTPSConnection(

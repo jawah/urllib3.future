@@ -53,6 +53,74 @@ def select_udp_transport(request: pytest.FixtureRequest) -> None:
         request.getfixturevalue("python_udp_transport")
 
 
+@pytest.fixture
+def async_file_wrapper() -> typing.Callable[[typing.BinaryIO], typing.Any]:
+    """Expose real file operations asynchronously without another I/O dependency."""
+
+    class AsyncFile:
+        def __init__(self, file: typing.BinaryIO) -> None:
+            self.file = file
+
+        async def read(self, size: int = -1) -> bytes:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.file.read, size
+            )
+
+        async def tell(self) -> int:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.file.tell
+            )
+
+        async def seek(self, offset: int) -> int:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.file.seek, offset
+            )
+
+        def __aiter__(self) -> AsyncFile:
+            return self
+
+        async def __anext__(self) -> bytes:
+            data = await self.read(65536)
+            if not data:
+                raise StopAsyncIteration
+            return data
+
+    return AsyncFile
+
+
+@pytest.fixture(
+    params=[
+        "bytes",
+        "text",
+        "bytearray",
+        "memoryview",
+        "typed-memoryview",
+        "strided-memoryview",
+        "iterator",
+    ]
+)
+def upload_body(request: pytest.FixtureRequest) -> tuple[typing.Any, bytes]:
+    """Bodies larger than a protocol frame, with a distinct final tail."""
+    payload = b"0123456789abcdef" * 8192 + b"tail"
+    if request.param == "bytes":
+        return payload, payload
+    if request.param == "text":
+        text = "Unicode: 🚀" + payload.decode()
+        return text, text.encode()
+    if request.param == "bytearray":
+        return bytearray(payload), payload
+    if request.param == "memoryview":
+        return memoryview(payload), payload
+    if request.param == "typed-memoryview":
+        return memoryview(payload).cast("I"), payload
+    if request.param == "strided-memoryview":
+        return memoryview(payload)[::2], payload[::2]
+
+    # The final input chunk must leave bytes to drain after iteration ends.
+    chunks = [b"", "Unicode: 🚀", bytearray(b"prefix"), memoryview(payload), b""]
+    return iter(chunks), "Unicode: 🚀prefix".encode() + payload
+
+
 class DNSUDPServer(typing.NamedTuple):
     address: tuple[str, int]
     requests: list[bytes]
