@@ -3,6 +3,8 @@ from __future__ import annotations
 import socket
 import struct
 from base64 import b64encode
+import time
+from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
 from test import requires_network
@@ -19,8 +21,10 @@ from urllib3.contrib.resolver import (
     ResolverDescription,
 )
 from urllib3.contrib.resolver.doh import HTTPSResolver
+from urllib3.contrib.resolver._cache import AddrInfo
 
 from urllib3.contrib.resolver.factories import ResolverFactory
+
 
 _MISSING_QUIC_SENTINEL = object()
 
@@ -148,8 +152,9 @@ def test_dot_rejects_wrong_tls_hostname(dns_tls_server: DNSTLSServer) -> None:
         ("cloudflare.com", True),
     ],
 )
-def test_null_resolver(hostname: str, expect_error: bool) -> None:
-    null_resolver = ResolverDescription(ProtocolResolver.NULL).new()
+@pytest.mark.parametrize("url", ["null://default", "null://unused.invalid:853"])
+def test_null_resolver(hostname: str, expect_error: bool, url: str) -> None:
+    null_resolver = ResolverDescription.from_url(url).new()
 
     if expect_error:
         with pytest.raises(socket.gaierror):
@@ -440,6 +445,7 @@ def test_short_endurance_sprint(dns_url: str) -> None:
     "dns_url",
     [
         "doh+google://default?rfc8484=true",
+        "doh+google://default?rfc8484=true&disabled_svn=h11,h3",
         "doh+cloudflare://default?rfc8484=true",
         "doh://dns.adguard-dns.com/dns-query?rfc8484=true",
         "doh+adguard://",
@@ -701,6 +707,69 @@ def test_dgram_upgrade(dns_url: str) -> None:
     assert sock_types[1] == socket.SOCK_STREAM
 
     resolver.close()
+
+
+@requires_network()
+@pytest.mark.parametrize("dns_url", [_DOQ_PARAM])
+@pytest.mark.parametrize(
+    "socktype, upgrade",
+    [
+        (socket.SOCK_STREAM, False),
+        (socket.SOCK_STREAM, True),
+        (socket.SOCK_DGRAM, True),
+    ],
+)
+def test_doq_https_records(
+    dns_url: str, socktype: socket.SocketKind, upgrade: bool
+) -> None:
+    resolver = ResolverDescription.from_url(dns_url).new()
+    try:
+        results = resolver.getaddrinfo(
+            "encryptedsni.com",
+            443,
+            socket.AF_UNSPEC,
+            socktype,
+            quic_upgrade_via_dns_rr=upgrade,
+        )
+        assert results
+        assert any(r[1] == socktype for r in results)
+        for family, kind, protocol, ech, address in results:
+            socket.inet_pton(family, address[0])
+            assert address[1] == 443
+            assert protocol == (6 if kind == socket.SOCK_STREAM else 17)
+            if not upgrade or socktype == socket.SOCK_DGRAM:
+                assert kind == socktype
+            # ECH publication and key rotation belong to the remote zone.
+            # When present, preserve its framed bytes for either socket kind.
+            if ech:
+                assert isinstance(ech, bytes)
+                assert len(ech) > 2
+                assert int.from_bytes(ech[:2], "big") == len(ech) - 2
+            else:
+                assert ech == ""
+        assert resolver.is_available()
+    finally:
+        resolver.close()
+    assert not resolver.is_available()
+
+
+@requires_network()
+@pytest.mark.parametrize("dns_url", [_DOQ_PARAM])
+def test_doq_reuse_after_nxdomain(dns_url: str) -> None:
+    resolver = ResolverDescription.from_url(dns_url).new()
+    try:
+        # .invalid is reserved, so this does not depend on a domain registration.
+        with pytest.raises(socket.gaierror, match="DNS returned an error"):
+            resolver.getaddrinfo(
+                "urllib3.invalid", 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+        assert resolver.is_available()
+        results = resolver.getaddrinfo(
+            "one.one.one.one", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert any(r[4][0] in ("1.1.1.1", "1.0.0.1") for r in results)
+    finally:
+        resolver.close()
 
 
 @pytest.mark.parametrize(
@@ -1211,6 +1280,115 @@ def test_ipv6_passthrough_with_af_inet_raises(dns_url: str, ipv6_addr: str) -> N
     resolver.close()
 
 
+@pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6])
+def test_udp_cache_normalizes_host_and_rebinds_port(
+    dns_udp_server: DNSUDPServer, family: socket.AddressFamily
+) -> None:
+    resolver = PlainResolver(*dns_udp_server.address, timeout=5)
+    try:
+        first = resolver.getaddrinfo("CACHE.test", 80, family, socket.SOCK_STREAM)
+        expected_ip = "192.0.2.1" if family == socket.AF_INET else "2001:db8::1"
+        assert first[0][4][:2] == (expected_ip, 80)
+        # Caller mutations must not affect cached records.
+        first.clear()
+        second = resolver.getaddrinfo(b"cache.test", 443, family, socket.SOCK_STREAM)
+        assert second[0][4][:2] == (expected_ip, 443)
+        assert len(dns_udp_server.requests) == 2  # Address and HTTPS queries.
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize(
+    "dns_udp_server, cache_max_ttl, expected_queries",
+    [(60, 60, 1), (0, 60, 2), (2**31, 60, 2), (60, 0, 2)],
+    indirect=["dns_udp_server"],
+)
+def test_udp_cache_respects_ttl(
+    dns_udp_server: DNSUDPServer, cache_max_ttl: int, expected_queries: int
+) -> None:
+    resolver = PlainResolver(
+        *dns_udp_server.address, timeout=5, cache_max_ttl=cache_max_ttl
+    )
+    try:
+        for _ in range(2):
+            result = resolver.getaddrinfo(
+                "ttl.test", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+            assert result[0][4] == ("192.0.2.1", 443)
+        assert len(dns_udp_server.requests) == 2 * expected_queries
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("maxsize, expected_queries", [(0, 6), (1, 6), (2, 4)])
+def test_udp_cache_evicts_least_recently_used(
+    dns_udp_server: DNSUDPServer, maxsize: int, expected_queries: int
+) -> None:
+    resolver = PlainResolver(*dns_udp_server.address, timeout=5, cache_maxsize=maxsize)
+    try:
+        for host in (
+            "first.test",
+            "second.test",
+            "first.test",
+            "third.test",
+            "first.test",
+            "second.test",
+        ):
+            assert resolver.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+        assert len(dns_udp_server.requests) == 2 * expected_queries
+    finally:
+        resolver.close()
+
+
+def test_udp_cache_coalesces_concurrent_lookups(dns_udp_server: DNSUDPServer) -> None:
+    resolver = PlainResolver(*dns_udp_server.address, timeout=5)
+    dns_udp_server.respond.clear()
+    second_started = Event()
+
+    def resolve_second() -> list[AddrInfo]:
+        second_started.set()
+        return resolver.getaddrinfo(
+            "shared.test", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(
+                resolver.getaddrinfo,
+                "shared.test",
+                80,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            try:
+                assert dns_udp_server.received.wait(5)
+                second = executor.submit(resolve_second)
+                assert second_started.wait(5)
+            finally:
+                dns_udp_server.respond.set()
+            assert first.result(timeout=5)[0][4] == ("192.0.2.1", 80)
+            assert second.result(timeout=5)[0][4] == ("192.0.2.1", 443)
+        assert len(dns_udp_server.requests) == 2
+    finally:
+        resolver.close()
+
+
+def test_udp_cache_expires(dns_udp_server: DNSUDPServer) -> None:
+    resolver = PlainResolver(*dns_udp_server.address, timeout=5, cache_max_ttl=1)
+    try:
+        first = resolver.getaddrinfo(
+            "expire.test", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        time.sleep(1.05)
+        assert (
+            resolver.getaddrinfo("expire.test", 443, socket.AF_INET, socket.SOCK_STREAM)
+            == first
+        )
+        assert len(dns_udp_server.requests) == 4
+    finally:
+        resolver.close()
+
+
 @pytest.mark.parametrize("rfc8484", [False, True])
 @pytest.mark.parametrize("via_proxy", [False, True])
 @pytest.mark.parametrize("multiple_headers", [False, True])
@@ -1309,6 +1487,61 @@ def test_doh_local_invalid_configuration(
     # Invalid configuration must fail before any connection is attempted.
     with pytest.raises(ValueError, match=message):
         HTTPSResolver("127.0.0.1", None, **options)
+
+
+@pytest.mark.parametrize(
+    "dns_https_server, rfc8484, message",
+    [
+        ((503, b"DNS service unavailable"), False, "server response status 503"),
+        ((200, {"Status": 3}), False, "Status 3"),
+        (
+            (200, {"Status": 2, "Comment": ["DNSSEC failed", "signature expired"]}),
+            False,
+            "DNSSEC failed, signature expired",
+        ),
+        ((200, {"Status": 0, "Question": []}), False, "Name or service not known"),
+        # SERVFAIL, NXDOMAIN and an unknown RCODE with one example.test A question.
+        *[
+            (
+                (
+                    200,
+                    bytes([0, 0, 0x81, 0x80 | rcode, 0, 1])
+                    + b"\x00" * 6
+                    + b"\x07example\x04test\x00\x00\x01\x00\x01",
+                ),
+                True,
+                message,
+            )
+            for rcode, message in [
+                (2, "DNSSEC validation failure"),
+                (3, "DNS returned an error"),
+                (15, "DNS returned an error: code 15"),
+            ]
+        ],
+    ],
+    indirect=["dns_https_server"],
+)
+def test_doh_local_errors(
+    dns_https_server: DNSHTTPSServer, rfc8484: bool, message: str
+) -> None:
+    server = dns_https_server
+    resolver = HTTPSResolver(
+        server.config.host,
+        server.config.port,
+        rfc8484=rfc8484,
+        ca_certs=server.config.ca_certs,
+        timeout=5,
+        retries=0,
+        disabled_svn="h3",
+    )
+    try:
+        with pytest.raises(socket.gaierror, match=message):
+            resolver.getaddrinfo(
+                "example.test", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+        assert len(server.requests) == 2
+    finally:
+        resolver.close()
 
 
 @pytest.mark.parametrize(
@@ -1634,6 +1867,99 @@ def test_resolver_url_query_path_override() -> None:
     assert description.kwargs["path"] == "/CustomPath"
 
 
+@pytest.mark.parametrize(
+    "hostname, expected",
+    [
+        (b"known.private.test", "198.51.100.8"),
+        ("unknown.private.test", None),
+        (b"public.test", "192.0.2.1"),
+        (None, "127.0.0.2"),
+    ],
+)
+def test_many_resolver_local_routing(
+    dns_https_server: DNSHTTPSServer,
+    hostname: str | bytes | None,
+    expected: str | None,
+) -> None:
+    server = dns_https_server
+    fallback = HTTPSResolver(
+        server.config.host,
+        server.config.port,
+        ca_certs=server.config.ca_certs,
+        timeout=5,
+        retries=0,
+        disabled_svn=["h2", "h3"],
+    )
+    # Constrained resolvers take precedence even when listed after the fallback.
+    resolver = ManyResolver(
+        NullResolver(),
+        fallback,
+        NullResolver("*.private.test"),
+        InMemoryResolver("known.private.test:198.51.100.8", "localhost:127.0.0.2"),
+    )
+    try:
+        if expected is None:
+            with pytest.raises(socket.gaierror, match="Name or service not known"):
+                resolver.getaddrinfo(hostname, 443, socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            results = resolver.getaddrinfo(
+                hostname, 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+            assert [result[-1] for result in results] == [(expected, 443)]
+        if hostname == b"public.test":
+            assert len(server.requests) == 2
+            assert all(
+                req.query_arguments["name"] == [b"public.test"]
+                for req in server.requests
+            )
+        else:
+            # Failed private lookups must not leak to the unrestricted endpoint.
+            assert not server.requests
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize(
+    "dns_https_server, message",
+    [
+        (
+            (200, {"Status": 2, "Comment": "DNSSEC validation failed"}),
+            "DNSSEC validation failed",
+        ),
+        ((200, {"Status": 2, "Comment": "DNSKEY missing"}), "DNSKEY missing"),
+    ],
+    indirect=["dns_https_server"],
+)
+@pytest.mark.parametrize("constrained", [False, True])
+def test_many_resolver_local_dnssec(
+    dns_https_server: DNSHTTPSServer, message: str, constrained: bool
+) -> None:
+    server = dns_https_server
+    children = [
+        HTTPSResolver(
+            server.config.host,
+            server.config.port,
+            *(("*.test",) if constrained else ()),
+            path=path,
+            ca_certs=server.config.ca_certs,
+            timeout=5,
+            retries=0,
+            disabled_svn=["h2", "h3"],
+        )
+        for path in ("/primary", "/fallback")
+    ]
+    resolver = ManyResolver(*children)
+    try:
+        with pytest.raises(socket.gaierror, match=message):
+            resolver.getaddrinfo(
+                "example.test", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+        assert len(server.requests) == 2
+        assert all(req.path == "/primary" for req in server.requests)
+    finally:
+        resolver.close()
+
+
 @pytest.mark.parametrize("recycle_composite", [False, True])
 @pytest.mark.parametrize("constrained", [False, True])
 @pytest.mark.parametrize("rfc8484", [False, True])
@@ -1740,3 +2066,58 @@ def test_many_resolver_local_recycle_during_other_lookup(
     finally:
         dns_udp_server.respond.set()
         resolver.close()
+
+
+@pytest.mark.parametrize("hostname", [None, b"localhost", b"service.example"])
+def test_system_resolver_accepts_bytes_and_default_host(
+    hostname: str | bytes | None,
+) -> None:
+    resolver = SystemResolver("*.example", server="ignored", port=853)
+    assert resolver.support(hostname) is True
+    assert resolver.support("elsewhere.invalid") is False
+
+
+@pytest.mark.parametrize("value", [None, True, -1, "60", 1.5])
+def test_cache_rejects_invalid_ttl(value: object) -> None:
+    from urllib3.contrib.resolver._cache import calculate_effective_ttl, sanitize_ttl
+
+    assert sanitize_ttl(value) is None
+    assert calculate_effective_ttl([60, value, 120]) == 0
+
+
+@pytest.mark.parametrize(
+    "address", ["::192.0.2.1", "::ffff:192.0.2.1", "1:2:3:4:5:6:7:8"]
+)
+def test_dns_ipv6_text_rendering(address: str) -> None:
+    from urllib3.contrib.resolver.utils import inet6_ntoa
+
+    packed = socket.inet_pton(socket.AF_INET6, address)
+    assert inet6_ntoa(packed) == address
+
+
+@pytest.mark.parametrize(
+    "data,offset,error",
+    [
+        (b"", 0, "name is truncated"),
+        (b"\x00", -1, "name is truncated"),
+        (b"\xc0", 0, "pointer is truncated"),
+        (b"\xc0\xff", 0, "pointer is out of range"),
+        (b"\xc0\x00", 0, "pointer cycle"),
+        (b"\x40", 0, "invalid marker bits"),
+        (b"\x03ab", 0, "label is truncated"),
+        ((b"\x3f" + b"a" * 63) * 4 + b"\x00", 0, "exceeds 255"),
+        (
+            b"".join(struct.pack("!H", 0xC000 | (i + 1) * 2) for i in range(129))
+            + b"\x00",
+            0,
+            "too many compression pointers",
+        ),
+    ],
+)
+def test_dns_name_rejects_malformed_wire_data(
+    data: bytes, offset: int, error: str
+) -> None:
+    from urllib3.contrib.resolver.utils import read_name
+
+    with pytest.raises(ValueError, match=error):
+        read_name(data, offset)
