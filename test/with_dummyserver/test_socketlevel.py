@@ -48,12 +48,18 @@ from urllib3 import (
     HTTPConnectionPool,
     HTTPResponse,
     HTTPSConnectionPool,
+    PoolManager,
     ProxyManager,
     util,
 )
 from urllib3._collections import HTTPHeaderDict
 from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.connectionpool import _url_from_pool
+from urllib3.contrib.webextensions.raw import RawExtensionFromHTTP
+from urllib3.contrib.webextensions.sse import (
+    ServerSentEvent,
+    ServerSideEventExtensionFromHTTP,
+)
 from urllib3.exceptions import (
     IncompleteRead,
     InsecureRequestWarning,
@@ -429,6 +435,152 @@ class TestClientCerts(SocketDummyServerTestCase):
                 keyfile=self.password_key_path,
                 password=b"letmei",
             )
+
+
+class TestRawExtension(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("message", ["hello 🚀", b"hello\x00world"])
+    def test_timeout_then_echo(self, message: str | bytes) -> None:
+        expected = message.encode() if isinstance(message, str) else message
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(
+                    b"HTTP/1.1 101 Switching Protocols\r\n"
+                    b"Connection: Upgrade\r\nUpgrade: echo\r\n\r\n"
+                )
+                data = b""
+                while len(data) < len(expected):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    data += chunk
+                assert data == expected
+                sock.sendall(data)
+                assert sock.recv(1) == b""
+
+        self._start_server(socket_handler)
+        with PoolManager(timeout=5) as manager:
+            response = manager.urlopen(
+                "GET",
+                f"http://{self.host}:{self.port}/",
+                headers={"Connection": "Upgrade", "Upgrade": "echo"},
+                extension=RawExtensionFromHTTP(),
+            )
+            assert response.status == 101
+            extension = response.extension
+            assert isinstance(extension, RawExtensionFromHTTP)
+            assert response._police_officer is not None
+            with response._police_officer.borrow(response) as conn:
+                assert conn.sock is not None
+                conn.sock.settimeout(0.05)
+            # The peer sends nothing until we write, so this timeout is deterministic.
+            with pytest.raises(ReadTimeoutError):
+                extension.next_payload()
+            assert not extension.closed
+            with response._police_officer.borrow(response) as conn:
+                assert conn.sock is not None
+                conn.sock.settimeout(5)
+            extension.send_payload(message)
+            received = b""
+            while len(received) < len(expected):
+                chunk = extension.next_payload()
+                assert chunk
+                received += chunk
+            assert received == expected
+            extension.close()
+            extension.close()
+            assert extension.closed
+            with pytest.raises(OSError, match="closed"):
+                extension.next_payload()
+            with pytest.raises(OSError, match="closed"):
+                extension.send_payload(message)
+
+
+class TestServerSentEvents(SocketDummyServerTestCase):
+    def test_extension_request_headers(self) -> None:
+        extension_request_headers = {
+            "Accept": "text/event-stream; charset=utf-8",
+            "X-Client": "preserved",
+        }
+        received = []
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    data = sock.recv(65536)
+                    assert data
+                    headers.extend(data)
+                received.append(bytes(headers))
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                    b"Content-Length: 10\r\n\r\ndata: ok\n\n"
+                )
+
+        self._start_server(handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen(
+                "GET",
+                "/",
+                headers=extension_request_headers,
+                extension=ServerSideEventExtensionFromHTTP(),
+                preload_content=False,
+            )
+            assert response.extension is not None
+            event = response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent) and event.data == "ok"
+            response.extension.close()
+        assert b"Accept: text/event-stream; charset=utf-8\r\n" in received[0]
+        assert b"X-Client: preserved\r\n" in received[0]
+        assert dict(extension_request_headers) == {
+            "Accept": "text/event-stream; charset=utf-8",
+            "X-Client": "preserved",
+        }
+
+    @pytest.mark.parametrize("blocksize", [1, 65536])
+    @pytest.mark.parametrize("raw", [False, True])
+    def test_event_fields_and_boundaries(self, blocksize: int, raw: bool) -> None:
+        events = [
+            'event: update\r\nid: cursor-1\r\nretry: 1500\r\ndata: {"text": "🚀"}\r\n\r\n',
+            "unknown: ignored\nid: bad\x00id\nretry: soon\ndata: second\n\n",
+            "data:third\n\n",
+        ]
+        body = (": heartbeat\r\n\r\n" + "".join(events)).encode()
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+
+        # One-byte reads also split UTF-8 code points and event separators.
+        with PoolManager(blocksize=blocksize, timeout=5) as manager:
+            response = manager.request("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, ServerSideEventExtensionFromHTTP)
+            if raw:
+                assert [extension.next_payload(raw=True) for _ in events] == events
+            else:
+                first, second, third = [extension.next_payload() for _ in events]
+                assert isinstance(first, ServerSentEvent)
+                assert isinstance(second, ServerSentEvent)
+                assert isinstance(third, ServerSentEvent)
+                assert first.event == "update"
+                assert first.json() == {"text": "🚀"}
+                assert first.retry == 1500
+                assert first.id == second.id == third.id == "cursor-1"
+                assert second.event == third.event == "message"
+                assert second.data == "second"
+                assert third.data == "third"
+                assert second.retry is None
+                assert "retry=1500" in repr(first)
+            assert extension.next_payload() is None
+            assert extension.closed
+            extension.close()
+            extension.close()
+            with pytest.raises(OSError, match="closed"):
+                extension.next_payload()
 
 
 class TestSocketClosing(SocketDummyServerTestCase):
@@ -3339,7 +3491,36 @@ class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
                 )
 
 
+class TestConnectionUtilities(SocketDummyServerTestCase):
+    def test_sse_leading_empty_line(self) -> None:
+        # SSE accepts a lone CR as a line separator, including empty field lines.
+        body = b"\rdata: first\n\n"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        assert ServerSideEventExtensionFromHTTP.implementation() == "native"
+        assert ServerSentEvent().data == ""
+        with PoolManager(timeout=5) as manager:
+            response = manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent)
+            assert event.data == "first"
+            response.extension.close()
+            response.close()
+
+
 class TestExtensionStartup(SocketDummyServerTestCase):
+    def test_extension_rejects_plain_response(self) -> None:
+        from io import BytesIO
+
+        response = HTTPResponse(body=BytesIO(b"body"), preload_content=False)
+        with pytest.raises(RuntimeError, match="without direct I/O access"):
+            RawExtensionFromHTTP().start(response)
+        response.close()
+
     def test_recommended_ciphers_with_real_connection(self) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])

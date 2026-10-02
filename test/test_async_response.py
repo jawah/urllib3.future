@@ -1453,3 +1453,13 @@ class TestAsyncResponse:
         await resp.drain_conn()
         # After draining, the fp should be consumed/closed
         assert fp.closed
+
+
+@pytest.mark.asyncio
+async def test_extension_rejects_plain_response() -> None:
+    from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
+
+    response = AsyncHTTPResponse(body=BytesIO(b"body"), preload_content=False)
+    with pytest.raises(OSError, match="closed or uninitialized"):
+        await AsyncRawExtensionFromHTTP().start(response)
+    await response.close()

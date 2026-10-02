@@ -9,18 +9,174 @@ from jh2.config import H2Configuration  # type: ignore[import-untyped]
 from jh2.connection import H2Connection  # type: ignore[import-untyped]
 from jh2.events import RequestReceived  # type: ignore[import-untyped]
 from urllib3 import HttpVersion, ResponsePromise, AsyncProxyManager
-from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool
+from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool, AsyncPoolManager
+from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
+from urllib3.contrib.webextensions._async.sse import (
+    AsyncServerSideEventExtensionFromHTTP,
+)
+from urllib3.contrib.webextensions.sse import ServerSentEvent
 from urllib3.exceptions import (
     IncompleteRead,
     MaxRetryError,
     InvalidHeader,
     ProtocolError,
+    ReadTimeoutError,
 )
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
 from threading import Event
 import socket
+
+
+@pytest.mark.asyncio
+class TestRawExtension(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("message", ["hello 🚀", b"hello\x00world"])
+    async def test_timeout_then_echo(self, message: str | bytes) -> None:
+        expected = message.encode() if isinstance(message, str) else message
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(
+                    b"HTTP/1.1 101 Switching Protocols\r\n"
+                    b"Connection: Upgrade\r\nUpgrade: echo\r\n\r\n"
+                )
+                data = b""
+                while len(data) < len(expected):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    data += chunk
+                assert data == expected
+                sock.sendall(data)
+                assert sock.recv(1) == b""
+
+        self._start_server(socket_handler)
+        async with AsyncPoolManager(timeout=5) as manager:
+            response = await manager.urlopen(
+                "GET",
+                f"http://{self.host}:{self.port}/",
+                headers={"Connection": "Upgrade", "Upgrade": "echo"},
+                extension=AsyncRawExtensionFromHTTP(),
+            )
+            assert response.status == 101
+            extension = response.extension
+            assert isinstance(extension, AsyncRawExtensionFromHTTP)
+            assert response._police_officer is not None
+            async with response._police_officer.borrow(response) as conn:
+                assert conn.sock is not None
+                conn.sock.settimeout(0.05)
+            # The peer sends nothing until we write, so this timeout is deterministic.
+            with pytest.raises(ReadTimeoutError):
+                await extension.next_payload()
+            assert not extension.closed
+            async with response._police_officer.borrow(response) as conn:
+                assert conn.sock is not None
+                conn.sock.settimeout(5)
+            await extension.send_payload(message)
+            received = b""
+            while len(received) < len(expected):
+                chunk = await extension.next_payload()
+                assert chunk
+                received += chunk
+            assert received == expected
+            await extension.close()
+            await extension.close()
+            assert extension.closed
+            with pytest.raises(OSError, match="closed"):
+                await extension.next_payload()
+            with pytest.raises(OSError, match="closed"):
+                await extension.send_payload(message)
+
+
+@pytest.mark.asyncio
+class TestServerSentEvents(SocketDummyServerTestCase):
+    async def test_extension_request_headers(self) -> None:
+        extension_request_headers = {
+            "Accept": "text/event-stream; charset=utf-8",
+            "X-Client": "preserved",
+        }
+        received = []
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    data = sock.recv(65536)
+                    assert data
+                    headers.extend(data)
+                received.append(bytes(headers))
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                    b"Content-Length: 10\r\n\r\ndata: ok\n\n"
+                )
+
+        self._start_server(handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen(
+                "GET",
+                "/",
+                headers=extension_request_headers,
+                extension=AsyncServerSideEventExtensionFromHTTP(),
+                preload_content=False,
+            )
+            assert response.extension is not None
+            event = await response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent) and event.data == "ok"
+            await response.extension.close()
+        assert b"Accept: text/event-stream; charset=utf-8\r\n" in received[0]
+        assert b"X-Client: preserved\r\n" in received[0]
+        assert dict(extension_request_headers) == {
+            "Accept": "text/event-stream; charset=utf-8",
+            "X-Client": "preserved",
+        }
+
+    @pytest.mark.parametrize("blocksize", [1, 65536])
+    @pytest.mark.parametrize("raw", [False, True])
+    async def test_event_fields_and_boundaries(self, blocksize: int, raw: bool) -> None:
+        events = [
+            'event: update\r\nid: cursor-1\r\nretry: 1500\r\ndata: {"text": "🚀"}\r\n\r\n',
+            "unknown: ignored\nid: bad\x00id\nretry: soon\ndata: second\n\n",
+            "data:third\n\n",
+        ]
+        body = (": heartbeat\r\n\r\n" + "".join(events)).encode()
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+
+        # One-byte reads also split UTF-8 code points and event separators.
+        async with AsyncPoolManager(blocksize=blocksize, timeout=5) as manager:
+            response = await manager.request("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, AsyncServerSideEventExtensionFromHTTP)
+            if raw:
+                assert [
+                    await extension.next_payload(raw=True) for _ in events
+                ] == events
+            else:
+                first, second, third = [await extension.next_payload() for _ in events]
+                assert isinstance(first, ServerSentEvent)
+                assert isinstance(second, ServerSentEvent)
+                assert isinstance(third, ServerSentEvent)
+                assert first.event == "update"
+                assert first.json() == {"text": "🚀"}
+                assert first.retry == 1500
+                assert first.id == second.id == third.id == "cursor-1"
+                assert second.event == third.event == "message"
+                assert second.data == "second"
+                assert third.data == "third"
+                assert second.retry is None
+                assert "retry=1500" in repr(first)
+            assert await extension.next_payload() is None
+            assert extension.closed
+            await extension.close()
+            await extension.close()
+            with pytest.raises(OSError, match="closed"):
+                await extension.next_payload()
 
 
 @pytest.mark.asyncio
@@ -343,3 +499,20 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             finally:
                 send_body.set()
                 await response.close()
+
+    async def test_sse_leading_empty_line(self) -> None:
+        body = b"\rdata: first\n\n"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        assert AsyncServerSideEventExtensionFromHTTP.implementation() == "native"
+        async with AsyncPoolManager(timeout=5) as manager:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = await response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent)
+            assert event.data == "first"
+            await response.extension.close()
+            await response.close()
