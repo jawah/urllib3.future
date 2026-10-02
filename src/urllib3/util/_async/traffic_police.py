@@ -862,6 +862,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
                             async with ctx_expire_in(delay=timeout):
                                 await signal.event.wait()
                         except TimeoutError as e:
+                            # A timed-out waiter must not receive a later handoff.
+                            self._signals.unregister(signal)
                             raise UnavailableTraffic(
                                 f"No connection available within {timeout} second(s)"
                             ) from e

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from asyncio import sleep
 from random import randint
 from test import notMacOS
@@ -7,10 +8,10 @@ from time import time
 
 import pytest
 
-from urllib3 import AsyncHTTPSConnectionPool, ResponsePromise, Retry
+from urllib3 import AsyncHTTPSConnectionPool, ConnectionInfo, ResponsePromise, Retry
 from urllib3.backend import HttpVersion
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
-from urllib3.exceptions import MaxRetryError, ReadTimeoutError
+from urllib3.exceptions import EmptyPoolError, MaxRetryError, ReadTimeoutError
 from urllib3.util import Timeout
 
 from .. import TraefikTestCase
@@ -18,6 +19,79 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestConnectionPoolMultiplexed(TraefikTestCase):
+    @pytest.mark.parametrize(
+        "version, expected_version",
+        [(HttpVersion.h11, 11), (HttpVersion.h2, 20), (HttpVersion.h3, 30)],
+    )
+    @pytest.mark.parametrize("cancel", [False, True], ids=["timeout", "cancel"])
+    async def test_pool_recovers_after_abandoned_waiter(
+        self, version: HttpVersion, expected_version: int, cancel: bool
+    ) -> None:
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        held, release = asyncio.Event(), asyncio.Event()
+
+        async def hold_connection(info: ConnectionInfo) -> None:
+            held.set()
+            await release.wait()
+
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2, HttpVersion.h3} - {version},
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            assert (await pool.urlopen("GET", "/get")).version == expected_version
+            assert pool.pool is not None
+            owner = asyncio.create_task(
+                pool.urlopen("GET", "/get", on_post_connection=hold_connection)
+            )
+            requests = [owner]
+            try:
+                await asyncio.wait_for(held.wait(), 5)
+                waiter = asyncio.create_task(
+                    pool.urlopen("GET", "/get", pool_timeout=None if cancel else 1)
+                )
+                requests.append(waiter)
+                # The request reaches the occupied pool before its first suspension.
+                await asyncio.sleep(0)
+                assert len(pool.pool._signals._priority_signals) == 1
+                if cancel:
+                    waiter.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await waiter
+                else:
+                    with pytest.raises(EmptyPoolError):
+                        await asyncio.wait_for(waiter, 5)
+
+                release.set()
+                assert (await asyncio.wait_for(owner, 5)).status == 200
+                # A finished waiter must not receive this connection on release.
+                for _ in range(2):
+                    response = await asyncio.wait_for(
+                        pool.urlopen("GET", "/get", pool_timeout=1), 5
+                    )
+                    assert response.status == 200
+                assert pool.num_connections == 1
+                assert pool.pool.qsize() == 1
+                assert not pool.pool._cursors
+                assert not pool.pool._signals._priority_signals
+                assert not pool.pool._signals._furthest_signals
+            finally:
+                release.set()
+                for request in requests:
+                    if not request.done():
+                        request.cancel()
+                await asyncio.gather(*requests, return_exceptions=True)
+                # Close even if a regression stranded ownership on a finished task.
+                for conn in tuple(pool.pool._registry.values()):
+                    await conn.close()
+
     @pytest.mark.parametrize("version", [20, 30])
     @pytest.mark.parametrize("read_timeout", [0.05, None])
     async def test_response_promise_read_timeout(
