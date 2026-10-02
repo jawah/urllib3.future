@@ -114,6 +114,123 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
             assert not errors
 
 
+class DNSTLSServer(typing.NamedTuple):
+    address: tuple[str, int]
+    ca_certs: str
+    requests: list[bytes]
+    answer_count: int
+
+
+@pytest.fixture
+def dns_tls_server(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> typing.Iterator[DNSTLSServer]:
+    """A TLS peer serving framed DNS replies or an explicit disconnect."""
+    mode = request.param
+    answer_count = 128 if mode == "large" else 1
+    ca = trustme.CA()
+    ca_path = str(tmp_path / "ca.pem")
+    ca.cert_pem.write_to_path(ca_path)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ca.issue_cert("127.0.0.1").configure_cert(context)
+    queries: list[bytes] = []
+    errors: list[Exception] = []
+    stop = threading.Event()
+
+    def reply(query: bytes) -> bytes:
+        query_type, query_class = struct.unpack("!HH", query[-4:])
+        assert query_class == 1 and query_type in (1, 28, 65)
+        records = []
+        for i in range(1, answer_count + 1):
+            if query_type == 1:
+                records.append(socket.inet_pton(socket.AF_INET, f"192.0.2.{i}"))
+            elif query_type == 28:
+                records.append(socket.inet_pton(socket.AF_INET6, f"2001:db8::{i:x}"))
+        body = query[:2] + struct.pack("!HHHHH", 0x8180, 1, len(records), 0, 0)
+        body += query[12:]
+        for data in records:
+            body += (
+                b"\xc0\x0c" + struct.pack("!HHIH", query_type, 1, 60, len(data)) + data
+            )
+        return struct.pack("!H", len(body)) + body
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(5)
+
+        def serve() -> None:
+            try:
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    try:
+                        conn = context.wrap_socket(raw, server_side=True)
+                    except ssl.SSLError:
+                        if mode == "handshake":
+                            return
+                        raise
+                    with conn, conn.makefile("rb") as reader:
+                        replies: list[bytes] = []
+                        while True:
+                            try:
+                                prefix = reader.read(2)
+                            except ConnectionResetError:
+                                # Resolver.close() may reset the idle TLS connection.
+                                if replies:
+                                    raise
+                                return
+                            if not prefix:
+                                return
+                            assert len(prefix) == 2
+                            size = struct.unpack("!H", prefix)[0]
+                            query = reader.read(size)
+                            assert len(query) == size
+                            queries.append(query)
+                            replies.append(reply(query))
+                            # Gather the lookup's A, AAAA and HTTPS questions.
+                            if len(replies) < 3:
+                                continue
+                            if mode in ("empty", "partial-prefix", "partial-body"):
+                                partial = {
+                                    "empty": b"",
+                                    "partial-prefix": b"\x00",
+                                    "partial-body": b"\x00\x64partial",
+                                }[mode]
+                                if partial:
+                                    conn.sendall(partial)
+                                # Send close_notify, then close TCP without waiting
+                                # for the client's reciprocal shutdown alert.
+                                conn.setblocking(False)
+                                with contextlib.suppress(
+                                    ssl.SSLWantReadError,
+                                    ssl.SSLEOFError,
+                                    ConnectionResetError,
+                                ):
+                                    conn.unwrap().close()
+                                return
+                            if mode == "timeout":
+                                assert stop.wait(10), "Timed-out client never closed"
+                                return
+                            # Reverse the replies to exercise transaction-ID matching.
+                            payload = b"".join(reversed(replies))
+                            if mode == "malformed":
+                                payload = b"\x00\x03bad" + payload
+                            conn.sendall(payload)
+                            replies.clear()
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            yield DNSTLSServer(listener.getsockname(), ca_path, queries, answer_count)
+        finally:
+            stop.set()
+            thread.join(10)
+            assert not thread.is_alive(), "DNS TLS peer did not finish"
+            assert not errors, errors
+
+
 class ServerConfig(typing.NamedTuple):
     scheme: str
     host: str

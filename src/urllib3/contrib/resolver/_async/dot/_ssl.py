@@ -36,9 +36,6 @@ class TLSResolver(PlainResolver):
 
         super().__init__(server, port or 853, *patterns, **kwargs)
 
-        # DNS over TLS mandate the size-prefix (unsigned int, 2 bytes)
-        self._rfc1035_prefix_mandated = True
-
     async def _connect(self) -> None:
         assert self.server is not None
         raw_socket = await SystemResolver().create_connection(
@@ -82,10 +79,8 @@ class TLSResolver(PlainResolver):
     ) -> list[DomainNameServerReturn]:
         assert self._socket is not None
         for query in queries:
-            payload = bytes(query)
-            if self._rfc1035_prefix_mandated is True:
-                payload = rfc1035_pack(payload)
-            await self._socket.sendall(payload)
+            # DNS over TLS requires a two-byte length prefix.
+            await self._socket.sendall(rfc1035_pack(bytes(query)))
 
         responses: list[DomainNameServerReturn] = []
         response_ids: set[int] = set()
@@ -101,28 +96,14 @@ class TLSResolver(PlainResolver):
                     continue
 
                 try:
-                    data_in_or_segments = await self._socket.recv(1500)
-
-                    if isinstance(data_in_or_segments, list):
-                        payloads = data_in_or_segments
-                    elif data_in_or_segments:
-                        payloads = [data_in_or_segments]
-                    else:
-                        payloads = []
-
-                    if self._rfc1035_prefix_mandated is True and payloads:
-                        payload = b"".join(payloads)
-                        while rfc1035_should_read(payload):
-                            extra = await self._socket.recv(1500)
-                            if not extra:
-                                payloads = []
-                                break
-                            if isinstance(extra, list):
-                                payload += b"".join(extra)
-                            else:
-                                payload += extra
-                        else:
-                            payloads = [payload]
+                    # AsyncSocket also supports datagrams; TLS reads always return bytes.
+                    payload = typing.cast(bytes, await self._socket.recv(1500))
+                    while rfc1035_should_read(payload):
+                        extra = typing.cast(bytes, await self._socket.recv(1500))
+                        if not extra:
+                            payload = b""
+                            break
+                        payload += extra
                 except (
                     TimeoutError,
                     OSError,
@@ -133,31 +114,25 @@ class TLSResolver(PlainResolver):
                         "Got unexpectedly disconnected while waiting for name resolution"
                     ) from e
 
-                if not payloads:
+                if not payload:
                     await self.close()
                     raise socket.gaierror(
                         "DNS server closed the connection before sending a complete response"
                     )
 
-                for payload in payloads:
-                    if self._rfc1035_prefix_mandated is True:
-                        fragments = rfc1035_unpack(payload)
-                    else:
-                        fragments = (payload,)
-
-                    for fragment in fragments:
-                        try:
-                            dns_resp = DomainNameServerReturn(fragment)
-                        except DomainNameServerParseException:
-                            continue
-                        with self._lock:
-                            pending_query = self._pending.get(dns_resp.id)
-                            if (
-                                pending_query is not None
-                                and dns_resp.matches(pending_query)
-                                and dns_resp.id not in self._completed
-                            ):
-                                self._completed[dns_resp.id] = dns_resp
+                for fragment in rfc1035_unpack(payload):
+                    try:
+                        dns_resp = DomainNameServerReturn(fragment)
+                    except DomainNameServerParseException:
+                        continue
+                    with self._lock:
+                        pending_query = self._pending.get(dns_resp.id)
+                        if (
+                            pending_query is not None
+                            and dns_resp.matches(pending_query)
+                            and dns_resp.id not in self._completed
+                        ):
+                            self._completed[dns_resp.id] = dns_resp
         return responses
 
 

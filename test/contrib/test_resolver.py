@@ -6,11 +6,12 @@ from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
 from test import requires_network
-from test.conftest import DNSHTTPSServer, DNSUDPServer
+from test.conftest import DNSHTTPSServer, DNSTLSServer, DNSUDPServer
 
 import pytest
 
 from urllib3 import ConnectionInfo, HttpVersion
+from urllib3.contrib.anytls import ssl
 from urllib3.contrib.resolver import (
     BaseResolver,
     ManyResolver,
@@ -44,6 +45,98 @@ _DOQ_PARAM = pytest.param(
         ),
     ],
 )
+
+
+@pytest.mark.parametrize(
+    "dns_tls_server", ["coalesced", "large", "malformed"], indirect=True
+)
+def test_dot_framing_and_reuse(dns_tls_server: DNSTLSServer) -> None:
+    server = dns_tls_server
+    resolver = TLSResolver(
+        *server.address,
+        timeout=5,
+        ca_certs=server.ca_certs,
+        source_address="127.0.0.1:0",
+    )
+    try:
+        expected = {
+            (socket.AF_INET, f"192.0.2.{i}") for i in range(1, server.answer_count + 1)
+        }
+        expected.update(
+            (socket.AF_INET6, f"2001:db8::{i:x}")
+            for i in range(1, server.answer_count + 1)
+        )
+        for host, port in (("first.example", 443), ("second.example", 8443)):
+            results = resolver.getaddrinfo(
+                host, port, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+            assert {(r[0], r[4][0]) for r in results} == expected
+            assert len(results) == len(expected)
+            assert all(
+                r[1:4] == (socket.SOCK_STREAM, 6, "") and r[4][1] == port
+                for r in results
+            )
+            assert resolver.is_available()
+        assert sorted(struct.unpack("!H", q[-4:-2])[0] for q in server.requests) == [
+            1,
+            1,
+            28,
+            28,
+            65,
+            65,
+        ]
+    finally:
+        resolver.close()
+    assert not resolver.is_available()
+
+
+@pytest.mark.parametrize(
+    "dns_tls_server", ["empty", "partial-prefix", "partial-body"], indirect=True
+)
+def test_dot_eof_closes_resolver(dns_tls_server: DNSTLSServer) -> None:
+    resolver = TLSResolver(
+        *dns_tls_server.address, timeout=5, ca_certs=dns_tls_server.ca_certs
+    )
+    try:
+        with pytest.raises(
+            socket.gaierror,
+            match="DNS server closed the connection before sending a complete response",
+        ):
+            resolver.getaddrinfo(
+                "first.example", 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+        assert not resolver.is_available()
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("dns_tls_server", ["timeout"], indirect=True)
+def test_dot_response_timeout(dns_tls_server: DNSTLSServer) -> None:
+    resolver = TLSResolver(
+        *dns_tls_server.address, timeout=5, ca_certs=dns_tls_server.ca_certs
+    )
+    try:
+        with pytest.raises(
+            socket.gaierror, match="while waiting for name resolution"
+        ) as exc:
+            resolver.getaddrinfo(
+                "first.example", 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+        assert isinstance(exc.value.__cause__, (socket.timeout, TimeoutError))
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("dns_tls_server", ["handshake"], indirect=True)
+def test_dot_rejects_wrong_tls_hostname(dns_tls_server: DNSTLSServer) -> None:
+    with pytest.raises(ssl.SSLError):
+        TLSResolver(
+            *dns_tls_server.address,
+            timeout=5,
+            ca_certs=dns_tls_server.ca_certs,
+            server_hostname="wrong.example",
+        )
+    assert not dns_tls_server.requests
 
 
 @pytest.mark.parametrize(
