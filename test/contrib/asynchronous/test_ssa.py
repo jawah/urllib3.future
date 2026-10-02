@@ -14,6 +14,7 @@ import trustme
 
 from urllib3._constant import UDP_LINUX_GRO
 from urllib3.contrib.ssa import AsyncSocket, _gro
+from urllib3.contrib.ssa._timeout import timeout
 from urllib3.contrib.ssa._gro import (
     DatagramReader,
     DatagramWriter,
@@ -102,6 +103,42 @@ async def test_tls_close_allows_immediate_descriptor_reuse() -> None:
             transport.close()
         await tls_server.wait_closed()
         await plain_server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_timeout_can_be_disabled_then_rescheduled() -> None:
+    deadline = timeout(None)
+    assert deadline.when() is None
+    assert not deadline.expired()
+    assert "created" in repr(deadline)
+    with pytest.raises(RuntimeError, match="has not been entered"):
+        deadline.reschedule(None)
+
+    disabled_timer_survived = False
+    with pytest.raises(TimeoutError):
+        async with deadline:
+            when = asyncio.get_running_loop().time() + 60
+            deadline.reschedule(when)
+            assert deadline.when() == when
+            assert "active" in repr(deadline)
+            # Even an already scheduled expiry can be withdrawn before it runs.
+            deadline.reschedule(0)
+            deadline.reschedule(None)
+            await asyncio.sleep(0)
+            assert not deadline.expired()
+            assert deadline.when() is None
+            disabled_timer_survived = True
+            deadline.reschedule(0)
+            await asyncio.sleep(0)
+
+    assert disabled_timer_survived
+    assert deadline.expired()
+    assert "expired" in repr(deadline)
+    with pytest.raises(RuntimeError, match="Cannot change state"):
+        deadline.reschedule(None)
+    with pytest.raises(RuntimeError, match="already been entered"):
+        async with deadline:
+            pytest.fail("An expired timeout cannot be entered again")
 
 
 @asynccontextmanager

@@ -3502,6 +3502,25 @@ class TestConnectionUtilities(SocketDummyServerTestCase):
             assert response.status == 200
             assert response.data == b"ok"
 
+    def test_legacy_create_connection_and_udp_socket_options(self) -> None:
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                assert sock.recv(4) == b"ping"
+                sock.sendall(b"pong")
+
+        self._start_server(handler)
+        with util.connection.create_connection(
+            (self.host, self.port), timeout=5
+        ) as sock:
+            sock.sendall(b"ping")
+            assert sock.recv(4) == b"pong"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as datagram:
+            util.connection._set_socket_options(
+                datagram, [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1, "udp")]
+            )
+            assert datagram.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+
     def test_sse_leading_empty_line(self) -> None:
         # SSE accepts a lone CR as a line separator, including empty field lines.
         body = b"\rdata: first\n\n"

@@ -7,6 +7,22 @@ import pytest
 from urllib3._collections import GroupedDict, ReverseKeysView
 
 
+def test_update_from_mapping_protocol_preserves_reverse_index() -> None:
+    class MappingLike:
+        def keys(self) -> list[str]:
+            return ["a", "c"]
+
+        def __getitem__(self, key: str) -> int:
+            return 2
+
+    grouped: GroupedDict[str, int] = GroupedDict({"a": 1, "b": 2})
+    existing = grouped.keys_for(2)
+    grouped.update(MappingLike())
+    assert grouped == {"a": 2, "b": 2, "c": 2}
+    assert set(existing) == {"a", "b", "c"}
+    assert not grouped.keys_for(1)
+
+
 class TestGroupedDictDictParity:
     """The class must remain a fully-functional dict subclass."""
 
