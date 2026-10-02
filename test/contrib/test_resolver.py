@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import socket
+import struct
+from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
 from test import requires_network
@@ -1204,3 +1206,95 @@ def test_doh_local_invalid_configuration(
     # Invalid configuration must fail before any connection is attempted.
     with pytest.raises(ValueError, match=message):
         HTTPSResolver("127.0.0.1", None, **options)
+
+
+@pytest.mark.parametrize(
+    "representation", ["text", "hex", "wire", "invalid-ech", "invalid-hex"]
+)
+@pytest.mark.parametrize("alpn", ["h2", "h3"])
+@pytest.mark.parametrize(
+    "socktype, upgrade",
+    [
+        (socket.SOCK_STREAM, True),
+        (socket.SOCK_STREAM, False),
+        (socket.SOCK_DGRAM, True),
+    ],
+)
+def test_doh_local_https_records(
+    dns_https_server: DNSHTTPSServer,
+    representation: str,
+    alpn: str,
+    socktype: socket.SocketKind,
+    upgrade: bool,
+) -> None:
+    server = dns_https_server
+    # A framed ECHConfigList with an unknown version: resolution preserves opaque bytes.
+    ech = b"\x00\x05\xff\xff\x00\x01x"
+    raw = b"\x00\x01\x00\x00\x01\x00\x03\x02" + alpn.encode()
+    raw += struct.pack("!HH", 5, len(ech)) + ech
+    if representation == "invalid-hex":
+        server.https_records.append("\\# 1 zz")
+    elif representation == "wire":
+        server.https_records.append(raw)
+    elif representation == "hex":
+        server.https_records.append(f"\\# {len(raw)} {raw.hex()}")
+    else:
+        encoded_ech = (
+            "invalid" if representation == "invalid-ech" else b64encode(ech).decode()
+        )
+        server.https_records.append(f"1 . alpn={alpn} ech={encoded_ech}")
+    resolver = HTTPSResolver(
+        server.config.host,
+        server.config.port,
+        rfc8484=representation == "wire",
+        ca_certs=server.config.ca_certs,
+        timeout=5,
+        retries=0,
+        disabled_svn=["h2", "h3"],
+    )
+    try:
+        results = resolver.getaddrinfo(
+            "example.test",
+            443,
+            socket.AF_UNSPEC,
+            socktype,
+            quic_upgrade_via_dns_rr=upgrade,
+        )
+        expected_ech = "" if representation in ("invalid-ech", "invalid-hex") else ech
+        expected = {
+            (
+                socket.AF_INET,
+                socktype,
+                6 if socktype == socket.SOCK_STREAM else 17,
+                expected_ech,
+                ("192.0.2.1", 443),
+            ),
+            (
+                socket.AF_INET6,
+                socktype,
+                6 if socktype == socket.SOCK_STREAM else 17,
+                expected_ech,
+                ("2001:db8::1", 443, 0, 0),
+            ),
+        }
+        if (
+            upgrade
+            and alpn == "h3"
+            and socktype == socket.SOCK_STREAM
+            and representation != "invalid-hex"
+        ):
+            expected |= {(r[0], socket.SOCK_DGRAM, 17, r[3], r[4]) for r in expected}
+        assert set(results) == expected
+        assert len(results) == len(expected)
+        assert len(server.requests) == 3
+        assert all(
+            r.headers["Accept"]
+            == (
+                "application/dns-message"
+                if representation == "wire"
+                else "application/dns-json"
+            )
+            for r in server.requests
+        )
+    finally:
+        resolver.close()

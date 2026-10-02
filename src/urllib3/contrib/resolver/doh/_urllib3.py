@@ -395,6 +395,10 @@ class HTTPSResolver(BaseResolver):
                             except ValueError:
                                 raw_record = b""
 
+                            # Match async: a malformed optional HTTPS record is unusable.
+                            if not raw_record:
+                                continue
+
                             https_record = parse_https_rdata(raw_record)
 
                             if https_record["echconfig"]:
@@ -511,7 +515,8 @@ class HTTPSResolver(BaseResolver):
                 for record in dns_resp.records:
                     if record[0] == SupportedQueryType.HTTPS:
                         assert isinstance(record[-1], dict)
-                        if "h3" in record[-1]["alpn"]:
+                        # Match JSON mode: discovering h3 must respect the opt-in.
+                        if quic_upgrade_via_dns_rr and "h3" in record[-1]["alpn"]:
                             remote_preemptive_quic_rr = True
                         if record[-1]["echconfig"]:
                             ech_config_list = record[-1]["echconfig"]
