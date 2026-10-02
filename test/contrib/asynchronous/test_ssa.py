@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import socket
 import ssl
 import sys
+import typing
+from contextlib import asynccontextmanager
 from unittest.mock import Mock
 
 import pytest
 import trustme
 
-from urllib3.contrib.ssa import AsyncSocket
+from urllib3._constant import UDP_LINUX_GRO
+from urllib3.contrib.ssa import AsyncSocket, _gro
+from urllib3.contrib.ssa._gro import (
+    DatagramReader,
+    DatagramWriter,
+    _NativeOptimizedDatagramTransport,
+    open_dgram_connection,
+)
 
 
 @pytest.mark.asyncio
@@ -92,3 +102,284 @@ async def test_tls_close_allows_immediate_descriptor_reuse() -> None:
             transport.close()
         await tls_server.wait_closed()
         await plain_server.wait_closed()
+
+
+@asynccontextmanager
+async def datagram_pair(
+    client_socket: socket.socket | None = None,
+    *,
+    server_socket: socket.socket | None = None,
+) -> typing.AsyncGenerator[
+    tuple[DatagramReader, DatagramWriter, DatagramReader, DatagramWriter], None
+]:
+    if server_socket is None:
+        server_reader, server_writer = await open_dgram_connection(
+            local_addr=("127.0.0.1", 0), family=socket.AF_INET
+        )
+    else:
+        server_socket.setblocking(False)
+        server_reader, server_writer = await open_dgram_connection(sock=server_socket)
+    try:
+        address = server_writer.get_extra_info("sockname")
+        if client_socket is None:
+            reader, writer = await open_dgram_connection(remote_addr=address)
+        else:
+            client_socket.setblocking(False)
+            await asyncio.get_running_loop().sock_connect(client_socket, address)
+            reader, writer = await open_dgram_connection(sock=client_socket)
+        try:
+            yield reader, writer, server_reader, server_writer
+        finally:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 2)
+    finally:
+        server_writer.close()
+        await asyncio.wait_for(server_writer.wait_closed(), 2)
+
+
+async def receive(reader: DatagramReader, count: int) -> list[bytes]:
+    received: list[bytes] = []
+    while len(received) < count:
+        data = await asyncio.wait_for(reader.read(), 2)
+        assert data, "Datagram transport closed before receiving all messages"
+        received.extend(data if isinstance(data, list) else [data])
+    return received
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("python_udp_transport")
+@pytest.mark.timeout(10)
+class TestDatagram:
+    @pytest.mark.parametrize("body_type", [bytes, bytearray, memoryview, list])
+    async def test_datagram_round_trip(self, body_type: typing.Any) -> None:
+        async with datagram_pair() as (reader, writer, server_reader, server_writer):
+            messages = [b"first message", b"second message"]
+            if body_type is list:
+                writer.write(messages)
+            else:
+                for message in messages:
+                    writer.write(body_type(message))
+            await writer.drain()
+            assert await receive(server_reader, len(messages)) == messages
+
+            server_writer.transport.sendto(b"reply", writer.get_extra_info("sockname"))
+            assert await receive(reader, 1) == [b"reply"]
+
+    async def test_datagram_cancelled_read_can_be_reused(self) -> None:
+        async with datagram_pair() as (reader, writer, server_reader, server_writer):
+            pending = asyncio.create_task(reader.read())
+            await asyncio.sleep(0)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+            writer.writelines([b"after cancellation"])
+            assert await receive(server_reader, 1) == [b"after cancellation"]
+            server_writer.transport.sendto(b"reply", writer.get_extra_info("sockname"))
+            assert await receive(reader, 1) == [b"reply"]
+
+    async def test_concurrent_read_does_not_displace_waiter(self) -> None:
+        async with datagram_pair() as (reader, writer, _, server_writer):
+            pending = asyncio.create_task(reader.read())
+            await asyncio.sleep(0)
+            try:
+                with pytest.raises(RuntimeError, match="called concurrently"):
+                    await reader.read()
+                server_writer.transport.sendto(
+                    b"reply", writer.get_extra_info("sockname")
+                )
+                assert await asyncio.wait_for(pending, 2) == b"reply"
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await pending
+
+    @pytest.mark.parametrize("abort", [False, True])
+    async def test_datagram_close_wakes_reader(self, abort: bool) -> None:
+        async with datagram_pair() as (reader, writer, _, _):
+            pending = asyncio.create_task(reader.read())
+            await asyncio.sleep(0)
+            if abort:
+                writer.transport.abort()
+            else:
+                writer.close()
+            assert writer.is_closing()
+            assert await asyncio.wait_for(pending, 2) == b""
+            await asyncio.wait_for(writer.wait_closed(), 2)
+            assert reader.at_eof()
+            assert await reader.read() == b""
+            writer.write(b"already closed")
+            await writer.drain()
+
+    @pytest.mark.skipif(
+        sys.platform not in ("linux", "darwin", "ios"),
+        reason="The Python optimized transport requires a selector event loop",
+    )
+    async def test_datagram_pause_resume_reading(self) -> None:
+        async with datagram_pair() as (reader, writer, server_reader, server_writer):
+            transport = typing.cast(_NativeOptimizedDatagramTransport, writer.transport)
+            transport.pause_reading()
+            transport.pause_reading()
+            writer.write(b"request")
+            assert await receive(server_reader, 1) == [b"request"]
+            server_writer.transport.sendto(b"reply", writer.get_extra_info("sockname"))
+            transport.resume_reading()
+            transport.resume_reading()
+            assert await receive(reader, 1) == [b"reply"]
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux UDP GSO")
+    async def test_datagram_batch_preserves_message_boundaries(self) -> None:
+        async with datagram_pair() as (_, writer, server_reader, _):
+            # Exercise equal-sized segments, a short final segment, and a new group.
+            messages = [b"a" * 1200, b"b" * 1200, b"c" * 100, b"d" * 1400]
+            writer.writelines(messages)
+            assert await receive(server_reader, len(messages)) == messages
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux UDP GRO/GSO")
+    async def test_gro_preserves_short_final_segment(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            try:
+                sock.setsockopt(_gro._SOL_UDP, UDP_LINUX_GRO, 1)
+            except OSError:
+                pytest.skip("Kernel does not support UDP_GRO")
+            sock.bind(("127.0.0.1", 0))
+            async with datagram_pair(server_socket=sock) as (_, writer, reader, _):
+                transport = typing.cast(
+                    _NativeOptimizedDatagramTransport, writer.transport
+                )
+                if not transport._gso_enabled:
+                    pytest.skip("Kernel does not support UDP_SEGMENT")
+                messages = [b"a" * 1200, b"b" * 1200, b"c" * 100]
+                writer.writelines(messages)
+                assert await receive(reader, len(messages)) == messages
+
+    @pytest.mark.skipif(
+        sys.platform not in ("linux", "darwin", "ios"),
+        reason="The Python optimized transport requires a selector event loop",
+    )
+    @pytest.mark.parametrize("send_error", [errno.EAGAIN, errno.EINTR, errno.EMSGSIZE])
+    async def test_queued_datagram_recovers_from_send_error(
+        self, send_error: int
+    ) -> None:
+        class BusySocket(socket.socket):
+            sends = 0
+
+            def send(self, *args: typing.Any, **kwargs: typing.Any) -> int:
+                self.sends += 1
+                if self.sends == 1:
+                    raise BlockingIOError(errno.EAGAIN, "send buffer full")
+                if self.sends == 2:
+                    raise OSError(send_error, "queued send failed")
+                return super().send(*args, **kwargs)
+
+        with BusySocket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            async with datagram_pair(sock) as (_, writer, reader, _):
+                transport = typing.cast(
+                    _NativeOptimizedDatagramTransport, writer.transport
+                )
+                messages = [b"first", b"second", b"last"]
+                for message in messages:
+                    writer.write(message)
+                assert transport.get_write_buffer_size() == sum(map(len, messages))
+                # Closing must still drain the queue, including after EAGAIN/EINTR.
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), 2)
+                expected = messages[1:] if send_error == errno.EMSGSIZE else messages
+                assert await receive(reader, len(expected)) == expected
+                assert transport.get_write_buffer_size() == 0
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux UDP GSO")
+    @pytest.mark.parametrize("send_error", [errno.EAGAIN, errno.EINTR])
+    async def test_gso_retry_preserves_remaining_groups(self, send_error: int) -> None:
+        class BusyGSOSocket(socket.socket):
+            batches = 0
+
+            def sendmsg(self, *args: typing.Any, **kwargs: typing.Any) -> int:
+                self.batches += 1
+                if self.batches == 1:
+                    raise OSError(send_error, "GSO send temporarily unavailable")
+                return super().sendmsg(*args, **kwargs)
+
+        with BusyGSOSocket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            async with datagram_pair(sock) as (_, writer, reader, _):
+                transport = typing.cast(
+                    _NativeOptimizedDatagramTransport, writer.transport
+                )
+                if not transport._gso_enabled:
+                    pytest.skip("Kernel does not support UDP_SEGMENT")
+                # The first group succeeds. The failing group contains duplicates;
+                # its suffix and subsequent groups must be queued exactly once.
+                messages = [b"a", b"same", b"same", b"tail", b"next group"]
+                writer.writelines(messages)
+                writer.writelines([b"after"])
+                assert await receive(reader, len(messages) + 1) == messages + [b"after"]
+                assert sock.batches == 1
+                assert transport._gso_enabled
+                assert transport.get_write_buffer_size() == 0
+
+    @pytest.mark.skipif(
+        sys.platform not in ("linux", "darwin", "ios"),
+        reason="The Python optimized transport requires a selector event loop",
+    )
+    async def test_datagram_backpressure_drains_in_order(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class BusySocket(socket.socket):
+            busy = True
+
+            def send(self, *args: typing.Any, **kwargs: typing.Any) -> int:
+                if self.busy:
+                    self.busy = False
+                    raise BlockingIOError(errno.EAGAIN, "send buffer full")
+                return super().send(*args, **kwargs)
+
+        # Reach flow control with a few packets instead of flooding the CI network.
+        monkeypatch.setattr(_gro, "_HIGH_WATERMARK", 16)
+        monkeypatch.setattr(_gro, "_LOW_WATERMARK", 8)
+        with BusySocket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            async with datagram_pair(sock) as (_, writer, server_reader, _):
+                transport = typing.cast(
+                    _NativeOptimizedDatagramTransport, writer.transport
+                )
+                messages = [b"a" * 8, b"b" * 8, b"c" * 8, b"d" * 8]
+                writer.write(messages[0])
+                writer.write(messages[1])
+                writer.writelines(messages[2:])
+                assert transport.get_write_buffer_size() == 32
+                await writer.drain()
+                assert transport.get_write_buffer_size() == 0
+                assert await receive(server_reader, len(messages)) == messages
+
+    @pytest.mark.skipif(
+        sys.platform not in ("linux", "darwin", "ios"),
+        reason="The Python optimized transport requires a selector event loop",
+    )
+    @pytest.mark.parametrize("batch", [False, True])
+    async def test_datagram_oversized_probe_does_not_lose_next_packet(
+        self, batch: bool
+    ) -> None:
+        async with datagram_pair() as (_, writer, server_reader, _):
+            messages = [b"x" * 65536, b"last"]
+            if batch:
+                writer.writelines(messages)
+            else:
+                for message in messages:
+                    writer.write(message)
+            assert await receive(server_reader, 1) == [b"last"]
+
+    @pytest.mark.skipif(
+        sys.platform not in ("linux", "darwin", "ios"),
+        reason="The Python optimized transport requires recvmsg",
+    )
+    async def test_datagram_truncated_input_reports_error_and_recovers(self) -> None:
+        async with datagram_pair() as (reader, writer, _, server_writer):
+            address = writer.get_extra_info("sockname")
+            payload = b"x" * 2000
+            server_writer.transport.sendto(payload, address)
+            with pytest.raises(OSError, match="recvmsg payload truncated"):
+                await asyncio.wait_for(reader.read(), 2)
+            # The first datagram was truncated, but the receive buffer grew.
+            server_writer.transport.sendto(payload, address)
+            assert await receive(reader, 1) == [payload]

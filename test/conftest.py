@@ -28,6 +28,31 @@ from urllib3.util import ssl_
 from .tz_stub import stub_timezone_ctx
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--python-udp",
+        action="store_true",
+        help="Exercise the Python UDP transport while retaining qh3 for HTTP/3",
+    )
+
+
+@pytest.fixture
+def python_udp_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    try:
+        from qh3.asyncio import _transport
+    except ImportError:
+        return
+
+    # Exercise the existing import fallback without replacing any socket I/O.
+    monkeypatch.delattr(_transport, "OptimizedDatagramTransport", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def select_udp_transport(request: pytest.FixtureRequest) -> None:
+    if request.config.getoption("--python-udp"):
+        request.getfixturevalue("python_udp_transport")
+
+
 class DNSUDPServer(typing.NamedTuple):
     address: tuple[str, int]
     requests: list[bytes]
