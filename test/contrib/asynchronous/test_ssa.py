@@ -141,6 +141,55 @@ async def test_timeout_can_be_disabled_then_rescheduled() -> None:
             pytest.fail("An expired timeout cannot be entered again")
 
 
+@pytest.mark.skipif(
+    sys.platform == "wasi", reason="Tests the non-WASI compatibility facade"
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listening", [False, True])
+async def test_wasi_compat_create_connection(listening: bool) -> None:
+    from urllib3.contrib.wasi._async import socket as wasi_socket
+
+    finished = asyncio.Event()
+
+    async def connected(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            writer.write(b"ready")
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        address = listener.getsockname()
+        if not listening:
+            # Keep the port bound: it cannot be reused by another test.
+            with pytest.raises(ConnectionRefusedError):
+                await asyncio.wait_for(wasi_socket.create_connection(address), 2)
+            return
+
+        server = await asyncio.start_server(connected, sock=listener)
+        try:
+            client = await asyncio.wait_for(wasi_socket.create_connection(address), 2)
+            try:
+                received = b""
+                while len(received) < 5:
+                    chunk = await asyncio.wait_for(client.recv(5 - len(received)), 2)
+                    assert isinstance(chunk, bytes) and chunk
+                    received += chunk
+                assert received == b"ready"
+                await asyncio.wait_for(finished.wait(), 2)
+            finally:
+                client.close()
+                await client.wait_for_close()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+
 @asynccontextmanager
 async def datagram_pair(
     client_socket: socket.socket | None = None,

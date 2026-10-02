@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import socket
 import unittest
 import warnings
-from typing import cast
+from typing import Any, cast
 
 from urllib3 import (
     AsyncPoolManager,
@@ -20,6 +21,8 @@ from urllib3.contrib.webextensions._async import (
 )
 from urllib3.contrib.webextensions._async.ws import AsyncWebSocketExtensionFromHTTP
 from urllib3.exceptions import InsecureRequestWarning
+from urllib3.util import parse_url
+from urllib3.contrib.wasi._async import socket as wasi_socket
 
 from ..common import (
     CLIENT_CERT,
@@ -266,3 +269,101 @@ class AsyncWasiTests(unittest.TestCase):
             self.assertEqual(len(responses), 32)
             self.assertTrue(all(response.status == 200 for response in responses))
             self.assertTrue(all(response.version == 20 for response in responses))
+
+    async def test_socket_addresses(self) -> None:
+        cases: list[
+            tuple[bytes | str | None, bytes | str | int | None, int, int, str, int]
+        ] = [
+            (b"127.0.0.1", b"80", socket.AF_UNSPEC, 0, "127.0.0.1", 80),
+            ("::1", None, socket.AF_UNSPEC, 0, "::1", 0),
+            (None, "443", socket.AF_INET, 0, "127.0.0.1", 443),
+            (None, 80, socket.AF_INET6, socket.AI_PASSIVE, "::", 80),
+        ]
+        for host, port, family, flags, expected_host, expected_port in cases:
+            with self.subTest(host=host, port=port, flags=flags):
+                records = await wasi_socket.getaddrinfo(host, port, family, flags=flags)
+                self.assertEqual(len(records), 2)
+                self.assertEqual(
+                    {record[1] for record in records},
+                    {socket.SOCK_STREAM, socket.SOCK_DGRAM},
+                )
+                for record in records:
+                    self.assertEqual(record[4][:2], (expected_host, expected_port))
+        records = await wasi_socket.getaddrinfo(
+            "127.0.0.1", 80, type=socket.SOCK_DGRAM, flags=socket.AI_CANONNAME
+        )
+        self.assertEqual(records[0][3], "127.0.0.1")
+        for host, family, flags in [
+            ("not-a-number", socket.AF_UNSPEC, socket.AI_NUMERICHOST),
+            ("::1", socket.AF_INET, 0),
+        ]:
+            with self.assertRaises(socket.gaierror):
+                await wasi_socket.getaddrinfo(host, 80, family, flags=flags)
+
+    async def test_socket_options(self) -> None:
+        # The facade selects a different socket class inside the WASI component.
+        with cast(Any, wasi_socket.socket()) as sock:
+            self.assertIsNone(sock.gettimeout())
+            sock.settimeout(2)
+            self.assertEqual(sock.gettimeout(), 2)
+            with self.assertRaises(ValueError):
+                sock.settimeout(-1)
+            for level, name, value in [
+                (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+                (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30),
+                (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5),
+                (socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3),
+            ]:
+                with self.subTest(option=name):
+                    sock.setsockopt(level, name, value)
+                    self.assertEqual(sock.getsockopt(level, name), value)
+            for name in (socket.SO_SNDBUF, socket.SO_RCVBUF):
+                sock.setsockopt(socket.SOL_SOCKET, name, 16384)
+                self.assertGreaterEqual(sock.getsockopt(socket.SOL_SOCKET, name), 16384)
+            self.assertEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR), 0)
+            with self.assertRaises(OSError):
+                sock.getsockopt(socket.SOL_SOCKET, -1)
+            with self.assertRaises(OSError):
+                sock.setsockopt(socket.SOL_SOCKET, -1, 1)
+        sock.close()
+        self.assertEqual(sock.fileno(), -1)
+        with self.assertRaises(OSError):
+            sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+        with self.assertRaises(OSError):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+    async def test_socket_partial_reads_and_eof(self) -> None:
+        for endpoint in (HTTP_URL, HTTPS_URL):
+            with self.subTest(endpoint=endpoint):
+                url = parse_url(endpoint)
+                assert url.host is not None and url.port is not None
+                sock: Any = await wasi_socket.create_connection((url.host, url.port))
+                try:
+                    if url.scheme == "https":
+                        context = ssl.create_default_context(cafile=ROOT_CA)
+                        context.set_alpn_protocols(["http/1.1"])
+                        sock = await sock.wrap_socket(context, server_hostname=url.host)
+                    self.assertFalse(sock.should_connect())
+                    self.assertEqual(sock.getpeername()[1], url.port)
+                    self.assertGreater(sock.getsockname()[1], 0)
+                    sock.settimeout(2)
+                    self.assertEqual(sock.gettimeout(), 2)
+                    request = f"GET /bytes/64 HTTP/1.1\r\nHost: {url.host}\r\nConnection: close\r\n\r\n".encode()
+                    await sock.write_all(request)
+                    await sock.until_data_available()
+                    data = bytearray(await sock.read_exact(4))
+                    self.assertEqual(data, b"HTTP")
+                    buffer = bytearray(17)
+                    while True:
+                        size = await sock.recv_into(buffer)
+                        if not size:
+                            break
+                        data.extend(buffer[:size])
+                    head, body = data.split(b"\r\n\r\n", 1)
+                    self.assertTrue(head.startswith(b"HTTP/1.1 200"))
+                    self.assertEqual(len(body), 64)
+                    with self.assertRaises(EOFError):
+                        await sock.read_exact(1)
+                finally:
+                    sock.close()
+                    await sock.wait_for_close()
