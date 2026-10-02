@@ -2,7 +2,7 @@ import pytest
 from urllib3 import AsyncHTTPConnectionPool
 from urllib3.exceptions import IncompleteRead, InvalidHeader, ProtocolError
 
-from dummyserver.testcase import SocketDummyServerTestCase
+from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
 from threading import Event
 import socket
 
@@ -120,3 +120,34 @@ class TestPartialBodyClose(SocketDummyServerTestCase):
             resp = await pool.request("GET", "/", preload_content=False, retries=False)
             with pytest.raises((IncompleteRead, ProtocolError)):
                 await resp.read()
+
+
+@pytest.mark.asyncio
+class TestResponseReadEdges(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("decode_content", [False, True])
+    async def test_zero_sized_read1_does_not_wait_for_body(
+        self, decode_content: bool
+    ) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert await response.read1(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert await response.read(cache_content=True) == b"body"
+                assert await response.data == b"body"
+            finally:
+                send_body.set()
+                await response.close()

@@ -169,6 +169,25 @@ class TestAsyncResponse:
         with pytest.raises(DecodeError):
             await r.read()
 
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    async def test_zero_sized_read1_preserves_body(
+        self, compressed: bool, partial_read: bool
+    ) -> None:
+        payload = b"foobar"
+        fp = BytesIO(zlib.compress(payload) if compressed else payload)
+        headers = {"content-encoding": "deflate"} if compressed else None
+        response = AsyncHTTPResponse(fp, headers=headers, preload_content=False)
+        try:
+            if partial_read:
+                assert await response.read1(1) == payload[:1]
+            position = fp.tell()
+            assert await response.read1(0) == b""
+            assert fp.tell() == position
+            assert await response.read() == payload[1 if partial_read else 0 :]
+        finally:
+            await response.close()
+
     async def test_reference_read(self) -> None:
         fp = _make_async_fp(b"foo")
         r = AsyncHTTPResponse(fp, preload_content=False)

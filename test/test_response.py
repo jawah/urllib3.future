@@ -231,6 +231,22 @@ class TestResponse:
         with pytest.raises(DecodeError):
             HTTPResponse(fp, headers={"content-encoding": "deflate"})
 
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    def test_zero_sized_read1_preserves_body(
+        self, compressed: bool, partial_read: bool
+    ) -> None:
+        payload = b"foobar"
+        fp = BytesIO(zlib.compress(payload) if compressed else payload)
+        headers = {"content-encoding": "deflate"} if compressed else None
+        with HTTPResponse(fp, headers=headers, preload_content=False) as response:
+            if partial_read:
+                assert response.read1(1) == payload[:1]
+            position = fp.tell()
+            assert response.read1(0) == b""
+            assert fp.tell() == position
+            assert response.read() == payload[1 if partial_read else 0 :]
+
     def test_reference_read(self) -> None:
         fp = BytesIO(b"foo")
         r = HTTPResponse(fp, preload_content=False)

@@ -2294,6 +2294,34 @@ class TestHEAD(SocketDummyServerTestCase):
 
 
 class TestStream(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_zero_sized_read1_does_not_wait_for_body(
+        self, decode_content: bool
+    ) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert response.read1(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert response.read(cache_content=True) == b"body"
+                assert response.data == b"body"
+            finally:
+                send_body.set()
+                response.close()
+
     def test_stream_none_unchunked_response_does_not_hang(self) -> None:
         done_event = Event()
 
