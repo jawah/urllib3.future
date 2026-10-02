@@ -19,6 +19,8 @@ from urllib3.contrib.resolver._async import (
 )
 from urllib3.contrib.resolver._async.doh import HTTPSResolver
 
+from urllib3.contrib.resolver._async.factories import AsyncResolverFactory
+
 _MISSING_QUIC_SENTINEL = object()
 
 try:
@@ -1326,3 +1328,165 @@ async def test_doh_local_https_records(
         )
     finally:
         await resolver.close()
+
+
+@pytest.mark.parametrize(
+    "userinfo, authorization",
+    [
+        ("User:Pass", "Basic VXNlcjpQYXNz"),
+        ("User:pa:ss", "Basic VXNlcjpwYTpzcw=="),
+        ("Us%65r:p%40ss", "Basic VXNlcjpwQHNz"),
+        ("User:", "Basic VXNlcjo="),
+        ("Token%2FX", "Bearer Token/X"),
+        ("'User':'Pass'", "Basic VXNlcjpQYXNz"),
+    ],
+)
+@pytest.mark.parametrize(
+    "header_query",
+    [
+        "",
+        "&headers=X-Case:MixedValue",
+        "&headers=X-Case:MixedValue&headers=X-Other:OtherValue",
+    ],
+)
+@pytest.mark.asyncio
+async def test_resolver_url_authentication(
+    dns_https_server: DNSHTTPSServer,
+    userinfo: str,
+    authorization: str,
+    header_query: str,
+) -> None:
+    server = dns_https_server
+    description = AsyncResolverDescription.from_url(
+        f"doh://{userinfo}@{server.config.host}:{server.config.port}/resolve"
+        f"?timeout=5&disabled_svn=h2,h3{header_query}"
+    )
+    description["ca_certs"] = server.config.ca_certs
+    assert "ca_certs" in description and "missing" not in description
+    resolver = description.new()
+    try:
+        assert (
+            len(
+                await resolver.getaddrinfo(
+                    "example.test", 443, socket.AF_INET, socket.SOCK_STREAM
+                )
+            )
+            == 1
+        )
+        assert len(server.requests) == 2
+        for request in server.requests:
+            assert request.headers["Authorization"] == authorization
+            if header_query:
+                assert request.headers["X-Case"] == "MixedValue"
+            if "X-Other" in header_query:
+                assert request.headers["X-Other"] == "OtherValue"
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "hosts=*.one.test&hosts=*.two.test,*.three.test",
+        "hosts=*.one.test&HOSTS=*.two.test&HOSTS=*.three.test",
+        "hosts=*.one.test,*.two.test&HOSTS=*.three.test,*.four.test",
+        "hosts=*.one.test&HOSTS=*.two.test&Hosts=*.three.test",
+        "hosts=*.one.test&HOSTS=*.two.test,*.three.test",
+        "hosts=*.one.test,*.two.test&HOSTS=*.three.test",
+        "hosts=*.one.test,*.two.test&HOSTS=*.three.test&HOSTS=*.four.test",
+    ],
+)
+@pytest.mark.asyncio
+async def test_resolver_url_host_constraints(query: str) -> None:
+    description = AsyncResolverDescription.from_url(f"null://default?{query}")
+    resolver = description.new()
+    try:
+        assert resolver.have_constraints()
+        assert resolver.support("a.one.test")
+        assert resolver.support("a.two.test")
+        assert resolver.support("a.three.test")
+        assert resolver.support("a.four.test") == ("four.test" in query)
+        assert not resolver.support("outside.test")
+    finally:
+        await resolver.close()
+
+
+def test_resolver_url_values_preserve_case() -> None:
+    description = AsyncResolverDescription.from_url(
+        "doh://localhost/CustomPath?timeout=0.25&maxsize=2&rfc8484=TRUE&cert_reqs=0"
+        "&ca_certs=/Some/TrustRoot.pem&key_password=Secret&happy_eyeballs=false"
+        "&disabled_svn=H2,H3&headers=X-Key:Value&implementation=urllib3"
+    )
+    assert description.implementation == "urllib3"
+    assert description.kwargs == {
+        "path": "/CustomPath",
+        "timeout": 0.25,
+        "maxsize": 2,
+        "rfc8484": True,
+        "cert_reqs": 0,
+        "ca_certs": "/Some/TrustRoot.pem",
+        "key_password": "Secret",
+        "happy_eyeballs": False,
+        "disabled_svn": ["H2", "H3"],
+        "headers": "X-Key:Value",
+    }
+
+
+@pytest.mark.parametrize(
+    "url, error",
+    [
+        ("localhost", "missing a protocol"),
+        (
+            "doh://localhost?implementation=urllib3&IMPLEMENTATION=other",
+            "Only one implementation",
+        ),
+        (
+            "doh://localhost?implementation=urllib3&implementation=other",
+            "Only one implementation",
+        ),
+        (
+            "doh://localhost?IMPLEMENTATION=urllib3&IMPLEMENTATION=other",
+            "Only one implementation",
+        ),
+    ],
+)
+def test_resolver_url_invalid_description(url: str, error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        AsyncResolverDescription.from_url(url)
+
+
+@pytest.mark.parametrize(
+    "specifier, implementation", [("missing", None), (None, "missing")]
+)
+def test_resolver_factory_unavailable(
+    specifier: str | None, implementation: str | None
+) -> None:
+    with pytest.raises(NotImplementedError, match="cannot be loaded"):
+        AsyncResolverFactory.new(
+            ProtocolResolver.SYSTEM, specifier=specifier, implementation=implementation
+        )
+
+
+@pytest.mark.parametrize(
+    "specifier, implementation, available",
+    [
+        (None, None, True),
+        (None, "socket", True),
+        ("missing", None, False),
+        (None, "missing", False),
+    ],
+)
+def test_async_resolver_factory_has(
+    specifier: str | None, implementation: str | None, available: bool
+) -> None:
+    assert (
+        AsyncResolverFactory.has(ProtocolResolver.SYSTEM, specifier, implementation)
+        is available
+    )
+
+
+def test_resolver_url_query_path_override() -> None:
+    description = AsyncResolverDescription.from_url(
+        "doh://localhost/resolve?path=/CustomPath"
+    )
+    assert description.kwargs["path"] == "/CustomPath"
