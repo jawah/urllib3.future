@@ -6,7 +6,7 @@ from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
 from test import requires_network
-from test.conftest import DNSHTTPSServer
+from test.conftest import DNSHTTPSServer, DNSUDPServer
 
 import pytest
 
@@ -492,7 +492,10 @@ def test_many_resolver_thread_safe() -> None:
         "dou://one.one.one.one",
     ],
 )
-def test_resolver_recycle(dns_url: str) -> None:
+@pytest.mark.parametrize("constrained", [False, True])
+def test_resolver_recycle(dns_url: str, constrained: bool) -> None:
+    if constrained:
+        dns_url += ("&" if "?" in dns_url else "?") + "hosts=*.test"
     resolver = ResolverDescription.from_url(dns_url).new()
 
     resolver.close()
@@ -507,6 +510,11 @@ def test_resolver_recycle(dns_url: str) -> None:
 
     assert resolver.is_available()
     assert not old_resolver.is_available()
+
+    assert resolver.have_constraints() is constrained
+    if constrained:
+        assert resolver.support("example.test") is True
+        assert resolver.support("outside.invalid") is False
 
     resolver.close()
 
@@ -1531,3 +1539,111 @@ def test_resolver_url_query_path_override() -> None:
         "doh://localhost/resolve?path=/CustomPath"
     )
     assert description.kwargs["path"] == "/CustomPath"
+
+
+@pytest.mark.parametrize("recycle_composite", [False, True])
+@pytest.mark.parametrize("constrained", [False, True])
+@pytest.mark.parametrize("rfc8484", [False, True])
+def test_many_resolver_local_recycle(
+    dns_https_server: DNSHTTPSServer,
+    recycle_composite: bool,
+    constrained: bool,
+    rfc8484: bool,
+) -> None:
+    server = dns_https_server
+    child = HTTPSResolver(
+        server.config.host,
+        server.config.port,
+        *(("*.test",) if constrained else ()),
+        path="/custom",
+        headers="Authorization:Bearer CaseSensitive",
+        rfc8484=rfc8484,
+        ca_certs=server.config.ca_certs,
+        timeout=5,
+        retries=0,
+        disabled_svn=["h2", "h3"],
+    )
+    resolver = ManyResolver(child, InMemoryResolver("saved.local:198.51.100.9"))
+    try:
+        before = resolver.getaddrinfo(
+            "before.test", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert [result[-1] for result in before] == [("192.0.2.1", 443)]
+        if recycle_composite:
+            resolver.close()
+            assert not resolver.is_available()
+            recycled = resolver.recycle()
+            assert isinstance(recycled, ManyResolver)
+            assert recycled is not resolver
+            resolver = recycled
+        else:
+            child.close()
+        assert not child.is_available()
+        assert resolver.is_available()
+        after = resolver.getaddrinfo(
+            "after.test", 80, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert [result[-1] for result in after] == [("192.0.2.1", 80)]
+        saved = resolver.getaddrinfo(
+            "saved.local", 80, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert [result[-1] for result in saved] == [("198.51.100.9", 80)]
+        assert len(server.requests) == 4
+        for req in server.requests:
+            assert req.path == "/custom"
+            assert req.headers["Authorization"] == "Bearer CaseSensitive"
+            assert ("dns" in req.query_arguments) is rfc8484
+        if constrained:
+            with pytest.raises(socket.gaierror, match="Name or service not known"):
+                resolver.getaddrinfo(
+                    "outside.invalid", 80, socket.AF_INET, socket.SOCK_STREAM
+                )
+            assert len(server.requests) == 4
+    finally:
+        resolver.close()
+
+
+def test_many_resolver_local_recycle_during_other_lookup(
+    dns_https_server: DNSHTTPSServer, dns_udp_server: DNSUDPServer
+) -> None:
+    server = dns_https_server
+    child = HTTPSResolver(
+        server.config.host,
+        server.config.port,
+        ca_certs=server.config.ca_certs,
+        timeout=5,
+        retries=0,
+        disabled_svn=["h2", "h3"],
+    )
+    child.close()
+    held = PlainResolver(*dns_udp_server.address, "*.private.test", timeout=5)
+    resolver = ManyResolver(child, NullResolver(), held)
+    dns_udp_server.respond.clear()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(
+                resolver.getaddrinfo,
+                "held.private.test",
+                80,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            try:
+                assert dns_udp_server.received.wait(5)
+                # The active constrained lookup rotates this lookup to NullResolver;
+                # falling back must recycle the closed, unrestricted DoH child.
+                result = resolver.getaddrinfo(
+                    "public.test", 443, socket.AF_INET, socket.SOCK_STREAM
+                )
+                assert [entry[-1] for entry in result] == [("192.0.2.1", 443)]
+            finally:
+                dns_udp_server.respond.set()
+            assert [entry[-1] for entry in pending.result(5)] == [("192.0.2.1", 80)]
+        assert not child.is_available()
+        assert len(server.requests) == 2
+        assert all(
+            req.query_arguments["name"] == [b"public.test"] for req in server.requests
+        )
+    finally:
+        dns_udp_server.respond.set()
+        resolver.close()

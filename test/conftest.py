@@ -9,6 +9,7 @@ import os
 import socket
 import ssl
 import struct
+import threading
 import typing
 from pathlib import Path
 
@@ -25,6 +26,67 @@ from urllib3.backend.hface import _HAS_HTTP3_SUPPORT as _SYNC_HAS_HTTP3_SUPPORT
 from urllib3.util import ssl_
 
 from .tz_stub import stub_timezone_ctx
+
+
+class DNSUDPServer(typing.NamedTuple):
+    address: tuple[str, int]
+    requests: list[bytes]
+    received: threading.Event
+    respond: threading.Event
+
+
+@pytest.fixture
+def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServer]:
+    """Answer address/HTTPS queries over loopback with a parametrized TTL."""
+    ttl = getattr(request, "param", 60)
+    queries: list[bytes] = []
+    errors: list[Exception] = []
+    received, respond = threading.Event(), threading.Event()
+    respond.set()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.settimeout(10)
+        address = sock.getsockname()
+
+        def serve() -> None:
+            try:
+                while True:
+                    query, client = sock.recvfrom(4096)
+                    if not query:
+                        return
+                    queries.append(query)
+                    received.set()
+                    assert respond.wait(5), "DNS response was never released"
+                    query_type, query_class = struct.unpack("!HH", query[-4:])
+                    assert query_class == 1 and query_type in (1, 28, 65)
+                    if query_type == 1:
+                        data = socket.inet_pton(socket.AF_INET, "192.0.2.1")
+                    elif query_type == 28:
+                        data = socket.inet_pton(socket.AF_INET6, "2001:db8::1")
+                    else:
+                        data = b"\x00\x01\x00"  # HTTPS ServiceMode, original target.
+                    # Echo the question; the answer name points back to its QNAME.
+                    response = query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
+                    response += query[12:] + b"\xc0\x0c"
+                    response += (
+                        struct.pack("!HHIH", query_type, 1, ttl, len(data)) + data
+                    )
+                    sock.sendto(response, client)
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            yield DNSUDPServer(address, queries, received, respond)
+        finally:
+            respond.set()
+            # Wake recvfrom without depending on cross-thread socket.close semantics.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as wakeup:
+                wakeup.sendto(b"", address)
+            thread.join(5)
+            assert not thread.is_alive()
+            assert not errors
 
 
 class ServerConfig(typing.NamedTuple):
