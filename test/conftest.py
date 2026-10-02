@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+from base64 import urlsafe_b64decode
 from collections import Counter
 import contextlib
 import os
 import socket
 import ssl
+import struct
 import typing
 from pathlib import Path
 
 import pytest
 import trustme
-from tornado import web
+from tornado import httputil, web
 
 from dummyserver.handlers import TestingApp
 from dummyserver.proxy import ProxyHandler
@@ -49,6 +51,113 @@ def _write_cert_to_dir(
     cert.cert_chain_pems[0].write_to_path(cert_path)
     certs = {"keyfile": key_path, "certfile": cert_path}
     return certs
+
+
+class DNSHTTPSServer(typing.NamedTuple):
+    config: ServerConfig
+    proxy_url: str
+    requests: list[httputil.HTTPServerRequest]
+    proxy_requests: list[httputil.HTTPServerRequest]
+    https_records: list[str | bytes]
+
+
+@pytest.fixture
+def dns_https_server(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> typing.Iterator[DNSHTTPSServer]:
+    """Local DoH endpoint, optionally serving a parametrized HTTP status/body."""
+    response = getattr(request, "param", None)
+    requests: list[httputil.HTTPServerRequest] = []
+    proxy_requests: list[httputil.HTTPServerRequest] = []
+    https_records: list[str | bytes] = []
+    ca = trustme.CA()
+    ca_path = str(tmp_path / "ca.pem")
+    ca.cert_pem.write_to_path(ca_path)
+    certs = _write_cert_to_dir(ca.issue_cert("127.0.0.1"), tmp_path)
+
+    class DoHHandler(web.RequestHandler):
+        def get(self) -> None:
+            requests.append(self.request)
+            if response is not None:
+                status, body = response
+                self.set_status(status)
+                self.write(body)
+                return
+            dns = self.get_query_argument("dns", None)
+            if dns is not None:
+                query = urlsafe_b64decode(dns + "=" * (-len(dns) % 4))
+                query_type = struct.unpack("!H", query[-4:-2])[0]
+                self.set_header("Content-Type", "application/dns-message")
+                if query_type == 65:
+                    records = https_records
+                else:
+                    family = socket.AF_INET if query_type == 1 else socket.AF_INET6
+                    address = "192.0.2.1" if query_type == 1 else "2001:db8::1"
+                    records = [socket.inet_pton(family, address)]
+                body = (
+                    query[:2]
+                    + struct.pack("!HHHHH", 0x8180, 1, len(records), 0, 0)
+                    + query[12:]
+                )
+                for data in records:
+                    assert isinstance(data, bytes)
+                    body += (
+                        b"\xc0\x0c"
+                        + struct.pack("!HHIH", query_type, 1, 60, len(data))
+                        + data
+                    )
+                self.write(body)
+            else:
+                name = self.get_query_argument("name")
+                query_type = int(self.get_query_argument("type"))
+                self.set_header("Content-Type", "application/dns-json")
+                records = (
+                    https_records
+                    if query_type == 65
+                    else ["192.0.2.1" if query_type == 1 else "2001:db8::1"]
+                )
+                self.write(
+                    {
+                        "Status": 0,
+                        "Question": [{"name": name, "type": query_type}],
+                        "Answer": [
+                            {
+                                "name": name,
+                                "type": query_type,
+                                "TTL": 60,
+                                "data": data,
+                            }
+                            for data in records
+                        ],
+                    }
+                )
+
+    class RecordingProxy(ProxyHandler):
+        async def connect(self) -> None:
+            proxy_requests.append(self.request)
+            await super().connect()
+
+    with run_loop_in_thread() as io_loop:
+
+        async def run_app() -> tuple[int, int]:
+            _, port = run_tornado_app(
+                web.Application([(r".*", DoHHandler)]), certs, "https", "127.0.0.1"
+            )
+            _, proxy_port = run_tornado_app(
+                web.Application([(r".*", RecordingProxy)]), None, "http", "127.0.0.1"
+            )
+            return port, proxy_port
+
+        port, proxy_port = asyncio.run_coroutine_threadsafe(
+            run_app(), io_loop.asyncio_loop
+        ).result(5)
+        yield DNSHTTPSServer(
+            ServerConfig("https", "127.0.0.1", port, ca_path, None),
+            f"http://127.0.0.1:{proxy_port}",
+            requests,
+            proxy_requests,
+            https_records,
+        )
 
 
 @contextlib.contextmanager

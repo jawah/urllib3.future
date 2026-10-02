@@ -4,10 +4,11 @@ import socket
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
 from test import requires_network
+from test.conftest import DNSHTTPSServer
 
 import pytest
 
-from urllib3 import ConnectionInfo
+from urllib3 import ConnectionInfo, HttpVersion
 from urllib3.contrib.resolver import (
     BaseResolver,
     ManyResolver,
@@ -1103,3 +1104,103 @@ def test_ipv6_passthrough_with_af_inet_raises(dns_url: str, ipv6_addr: str) -> N
         )
 
     resolver.close()
+
+
+@pytest.mark.parametrize("rfc8484", [False, True])
+@pytest.mark.parametrize("via_proxy", [False, True])
+@pytest.mark.parametrize("multiple_headers", [False, True])
+def test_doh_local_configuration(
+    dns_https_server: DNSHTTPSServer,
+    rfc8484: bool,
+    via_proxy: bool,
+    multiple_headers: bool,
+) -> None:
+    server = dns_https_server
+    connections: list[ConnectionInfo] = []
+
+    def on_connection(info: ConnectionInfo) -> None:
+        connections.append(info)
+
+    headers = "Authorization:Bearer DoHSecret"
+    proxy_headers = "Proxy-Authorization:Basic ProxySecret"
+    proxy_options = {}
+    if via_proxy:
+        proxy_options = {
+            "proxy": server.proxy_url,
+            "proxy_headers": [proxy_headers, "X-Proxy:private"]
+            if multiple_headers
+            else proxy_headers,
+        }
+    resolver = HTTPSResolver(
+        server.config.host,
+        server.config.port,
+        path="/dns-query" if rfc8484 else "/custom-resolve",
+        rfc8484=rfc8484,
+        source_address="127.0.0.1:0",
+        headers=[headers, "X-DoH:first", "X-DoH:second", "Accept:ignored"]
+        if multiple_headers
+        else headers,
+        disabled_svn=["h2", "h3"],
+        ca_certs=server.config.ca_certs,
+        timeout=5,
+        retries=0,
+        on_post_connection=on_connection,
+        **proxy_options,
+    )
+    try:
+        assert resolver.is_available()
+        results = resolver.getaddrinfo(
+            "example.test", 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+        assert {(r[0], r[4]) for r in results} == {
+            (socket.AF_INET, ("192.0.2.1", 443)),
+            (socket.AF_INET6, ("2001:db8::1", 443, 0, 0)),
+        }
+        assert connections and all(
+            c.http_version == HttpVersion.h11 for c in connections
+        )
+        assert len(server.requests) == 3
+        for request in server.requests:
+            assert request.headers["Authorization"] == "Bearer DoHSecret"
+            assert request.headers["Accept"] == (
+                "application/dns-message" if rfc8484 else "application/dns-json"
+            )
+            assert request.path == ("/dns-query" if rfc8484 else "/custom-resolve")
+            assert request.remote_ip == "127.0.0.1"
+            assert "Proxy-Authorization" not in request.headers
+            if multiple_headers:
+                assert [
+                    value.strip() for value in request.headers["X-DoH"].split(",")
+                ] == ["first", "second"]
+                assert "X-Proxy" not in request.headers
+        assert bool(server.proxy_requests) is via_proxy
+        for request in server.proxy_requests:
+            assert request.uri == f"{server.config.host}:{server.config.port}"
+            assert request.headers["Proxy-Authorization"] == "Basic ProxySecret"
+            assert "Authorization" not in request.headers
+            if multiple_headers:
+                assert request.headers["X-Proxy"] == "private"
+    finally:
+        resolver.close()
+    assert not resolver.is_available()
+
+
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"source_address": "127.0.0.1:bad"}, "invalid source_address"),
+        ({"source_address": ":0"}, "invalid source_address"),
+        ({"source_address": ("127.0.0.1", 0)}, "invalid source_address"),
+        ({"headers": "MissingSeparator"}, "Passed header is invalid"),
+        (
+            {"proxy": "http://127.0.0.1:1", "proxy_headers": "MissingSeparator"},
+            "Passed header is invalid",
+        ),
+    ],
+)
+def test_doh_local_invalid_configuration(
+    options: dict[str, object], message: str
+) -> None:
+    # Invalid configuration must fail before any connection is attempted.
+    with pytest.raises(ValueError, match=message):
+        HTTPSResolver("127.0.0.1", None, **options)

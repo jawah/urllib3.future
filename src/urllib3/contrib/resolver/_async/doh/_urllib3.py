@@ -95,7 +95,8 @@ class HTTPSResolver(AsyncBaseResolver):
             if not isinstance(kwargs["proxy_headers"], list):
                 kwargs["proxy_headers"] = [kwargs["proxy_headers"]]
 
-            for item in kwargs["proxy_headers"]:
+            # Consume the resolver option; only _proxy_headers belongs to the pool.
+            for item in kwargs.pop("proxy_headers"):
                 if ":" not in item:
                     raise ValueError("Passed header is invalid in DNS parameters")
 
@@ -144,6 +145,11 @@ class HTTPSResolver(AsyncBaseResolver):
             kwargs.pop("on_post_connection")
         else:
             self._connection_callback = None
+
+        # Keep custom headers while selecting the negotiated DNS representation.
+        kwargs.setdefault("headers", HTTPHeaderDict())["Accept"] = (
+            "application/dns-message" if self._rfc8484 else "application/dns-json"
+        )
 
         self._pool = AsyncHTTPSConnectionPool(self._server, self._port, **kwargs)
 
@@ -244,7 +250,6 @@ class HTTPSResolver(AsyncBaseResolver):
                         "GET",
                         self._path,
                         {"name": host, "type": "1"},
-                        headers={"Accept": "application/dns-json"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -261,7 +266,6 @@ class HTTPSResolver(AsyncBaseResolver):
                         {
                             "dns": b64encode(dns_payload).decode().replace("=", ""),
                         },
-                        headers={"Accept": "application/dns-message"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -274,7 +278,6 @@ class HTTPSResolver(AsyncBaseResolver):
                         "GET",
                         self._path,
                         {"name": host, "type": "28"},
-                        headers={"Accept": "application/dns-json"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -292,7 +295,6 @@ class HTTPSResolver(AsyncBaseResolver):
                         {
                             "dns": b64encode(dns_payload).decode().replace("=", ""),
                         },
-                        headers={"Accept": "application/dns-message"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -304,7 +306,6 @@ class HTTPSResolver(AsyncBaseResolver):
                     "GET",
                     self._path,
                     {"name": host, "type": "65"},
-                    headers={"Accept": "application/dns-json"},
                     on_post_connection=self._connection_callback,
                     multiplexed=True,
                 )
@@ -322,7 +323,6 @@ class HTTPSResolver(AsyncBaseResolver):
                     {
                         "dns": b64encode(dns_payload).decode().replace("=", ""),
                     },
-                    headers={"Accept": "application/dns-message"},
                     on_post_connection=self._connection_callback,
                     multiplexed=True,
                 )
