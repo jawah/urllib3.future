@@ -248,7 +248,7 @@ def tests_impl(
             "-m",
             "pytest",
             *(
-                ("-n", "2" if os.environ.get("CI") else "4")
+                ("-n", "2" if os.environ.get("CI") else "4", "--dist=worksteal")
                 if xdist_enable
                 else ("-n", "0")
             ),
