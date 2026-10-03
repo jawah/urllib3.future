@@ -220,6 +220,10 @@ async def _connection(
             retries=False,
         )
         assert response.version == 11
+        # Short read deadlines belong to the WebSocket operation, not its handshake.
+        conn = response._fp.from_promise._conn
+        conn.timeout = timeout
+        conn.sock.settimeout(timeout)
         yield response.extension, peer, call, response
     finally:
         if response is not None:
