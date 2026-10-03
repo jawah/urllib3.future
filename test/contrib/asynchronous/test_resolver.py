@@ -516,10 +516,10 @@ async def test_short_endurance_sprint(dns_url: str) -> None:
 @pytest.mark.parametrize(
     "dns_url",
     [
-        "doh+google://default?rfc8484=true",
-        "doh+google://default?rfc8484=true&disabled_svn=h11,h3",
-        "doh+cloudflare://default?rfc8484=true",
-        "doh://dns.adguard-dns.com/dns-query?rfc8484=true",
+        "doh+google://default?rfc8484=true&timeout=5",
+        "doh+google://default?rfc8484=true&disabled_svn=h11,h3&timeout=5",
+        "doh+cloudflare://default?rfc8484=true&timeout=5",
+        "doh://dns.adguard-dns.com/dns-query?rfc8484=true&timeout=5",
         "doh+adguard://",
     ],
 )
