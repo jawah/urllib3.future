@@ -216,6 +216,8 @@ async def _connection(
             manager.urlopen,
             "GET",
             f"{'wss' if tls else 'ws'}+{implementation}://127.0.0.1:{port}/",
+            timeout=5,
+            retries=False,
         )
         assert response.version == 11
         yield response.extension, peer, call, response
