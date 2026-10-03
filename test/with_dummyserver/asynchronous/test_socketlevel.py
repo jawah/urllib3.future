@@ -290,6 +290,10 @@ class TestSocketClosing(SocketDummyServerTestCase):
                             sock.unwrap().close()
                         except (ssl.SSLError, ConnectionResetError):
                             pass
+                        except OSError as exc:
+                            # OpenSSL 1.0.2 can report the client's TCP close as errno 0.
+                            if exc.errno != 0:
+                                raise
 
         self._start_server(handler)
         async with AsyncHTTPSConnectionPool(
