@@ -1980,6 +1980,8 @@ class TestSSL(SocketDummyServerTestCase):
                     ca_certs=DEFAULT_CA,
                 )
             except ConnectionResetError:
+                # Windows can report the rejected handshake as a TCP reset.
+                server_closed.set()
                 return
             except ssl.SSLError as e:
                 assert "alert unknown ca" in str(e) or "UnknownIssuer" in str(e)
