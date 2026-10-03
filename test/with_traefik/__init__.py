@@ -94,8 +94,8 @@ class TraefikWithProxyTestCase(TraefikTestCase):
             if cls.ca_authority:
                 with open(cls.ca_authority, "rb") as fp:
                     ca_data += fp.read()
-            with open(cls.ca_bundle, "wb") as fp:
-                fp.write(ca_data)
+            with open(cls.ca_bundle, "wb") as bundle:
+                bundle.write(ca_data)
 
             io_loop = stack.enter_context(run_loop_in_thread())
 
