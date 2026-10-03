@@ -55,7 +55,7 @@ def load_cert_chain(
                 get_errno,
                 util,
             )
-        except ImportError as e:
+        except ImportError as e:  # Defensive: Python built without ctypes.
             raise UnsupportedOperation(
                 "Unable to provide support for in-memory client certificate: "
                 "ctypes is not available."
@@ -64,7 +64,7 @@ def load_cert_chain(
         loc = util.find_library("rt") or util.find_library("c")
 
         if not loc:
-            raise UnsupportedOperation(
+            raise UnsupportedOperation(  # Defensive: no usable system shared-memory library was found.
                 "Unable to provide support for in-memory client certificate: libc or librt not found."
             )
 

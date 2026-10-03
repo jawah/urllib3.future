@@ -84,8 +84,8 @@ def _compute_key_ctx_build(
                             default=arg.stat().st_mtime,
                         )
                     )
-                except OSError:
-                    pass  # Defensive: race condition possible
+                except OSError:  # Defensive: CA directory entries can disappear during metadata inspection.
+                    pass
             else:
                 try:
                     key += str(Path(arg).stat().st_mtime)

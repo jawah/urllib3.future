@@ -3,12 +3,14 @@ from __future__ import annotations
 import io
 import os
 import platform
+import typing
 from base64 import b64decode
 from io import BytesIO
 
 import pytest
 
 from urllib3 import AsyncHTTPSConnectionPool
+from urllib3.backend import HttpVersion
 from urllib3.backend._async.hface import _HAS_HTTP3_SUPPORT  # type: ignore
 
 from .. import TraefikTestCase
@@ -184,6 +186,78 @@ class TestPostBody(TraefikTestCase):
                 for key in fields:
                     assert key in payload["form"]
                     assert fields[key] in payload["form"][key]
+
+    @pytest.mark.parametrize("target_http", [20, 30])
+    async def test_upload_body_chunking(
+        self, target_http: int, upload_body: tuple[typing.Any, bytes]
+    ) -> None:
+        if target_http == 30 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("Test requires HTTP/3 support")
+        disabled_svn = {
+            20: {HttpVersion.h11, HttpVersion.h3},
+            30: {HttpVersion.h11, HttpVersion.h2},
+        }[target_http]
+        body, expected = upload_body
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            disabled_svn=disabled_svn,
+            blocksize=4096,
+            timeout=10,
+            retries=False,
+        ) as pool:
+            resp = await pool.request(
+                "POST",
+                "/post",
+                body=body,
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            )
+            assert resp.status == 200
+            assert resp.version == target_http
+            assert (await resp.json())["data"].encode() == expected
+
+    @pytest.mark.parametrize("target_http", [20, 30])
+    @pytest.mark.parametrize("text", [False, True])
+    async def test_upload_async_iterator_tail(
+        self, target_http: int, text: bool
+    ) -> None:
+        if target_http == 30 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("Test requires HTTP/3 support")
+        disabled_svn = {
+            20: {HttpVersion.h11, HttpVersion.h3},
+            30: {HttpVersion.h11, HttpVersion.h2},
+        }[target_http]
+        payload = "0123456789🚀" * 8192 + "tail"
+
+        async def body() -> typing.AsyncIterator[str]:
+            for chunk in ("", "prefix", payload, ""):
+                yield chunk
+
+        async def encoded_body() -> typing.AsyncIterator[bytes]:
+            async for chunk in body():
+                yield chunk.encode()
+
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            disabled_svn=disabled_svn,
+            blocksize=4096,
+            timeout=10,
+            retries=False,
+        ) as pool:
+            resp = await pool.request(
+                "POST",
+                "/post",
+                body=body() if text else encoded_body(),
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            )
+            assert resp.status == 200
+            assert resp.version == target_http
+            assert (await resp.json())["data"].encode() == ("prefix" + payload).encode()
 
     async def test_upload_track_progress(self) -> None:
         progress_track = []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import tempfile
 import threading
 import typing
 from os import environ, path
@@ -9,7 +10,12 @@ from os import environ, path
 import pytest
 from tornado import httpserver, ioloop, web
 
-from dummyserver.server import DEFAULT_CERTS, run_loop_in_thread, run_tornado_app
+from dummyserver.server import (
+    DEFAULT_CA,
+    DEFAULT_CERTS,
+    run_loop_in_thread,
+    run_tornado_app,
+)
 from dummyserver.testcase import ProxyHandler  # type: ignore[attr-defined]
 from urllib3 import AsyncResolverDescription, ResolverDescription
 
@@ -58,6 +64,7 @@ class TraefikTestCase:
 
 class TraefikWithProxyTestCase(TraefikTestCase):
     io_loop: typing.ClassVar[ioloop.IOLoop]
+    ca_bundle: typing.ClassVar[str]
 
     https_certs: typing.ClassVar[dict[str, typing.Any]] = DEFAULT_CERTS
 
@@ -79,6 +86,17 @@ class TraefikWithProxyTestCase(TraefikTestCase):
         super().setup_class()
 
         with contextlib.ExitStack() as stack:
+            # Keep each class's combined trust bundle outside the tracked fixtures.
+            bundle_dir = stack.enter_context(tempfile.TemporaryDirectory())
+            cls.ca_bundle = path.join(bundle_dir, "ca.pem")
+            with open(DEFAULT_CA, "rb") as fp:
+                ca_data = fp.read()
+            if cls.ca_authority:
+                with open(cls.ca_authority, "rb") as fp:
+                    ca_data += fp.read()
+            with open(cls.ca_bundle, "wb") as bundle:
+                bundle.write(ca_data)
+
             io_loop = stack.enter_context(run_loop_in_thread())
 
             async def run_app() -> None:
@@ -87,10 +105,8 @@ class TraefikWithProxyTestCase(TraefikTestCase):
                     app, None, "http", cls.proxy_host
                 )
 
-                upstream_ca_certs = cls.https_certs.get("ca_certs")
-
                 app = web.Application(
-                    [(r".*", ProxyHandler)], upstream_ca_certs=upstream_ca_certs
+                    [(r".*", ProxyHandler)], upstream_ca_certs=cls.ca_bundle
                 )
                 cls.https_proxy_server, cls.https_proxy_port = run_tornado_app(
                     app, cls.https_certs, "https", cls.proxy_host

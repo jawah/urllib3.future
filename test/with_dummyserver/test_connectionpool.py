@@ -6,6 +6,7 @@ import sys
 import time
 import typing
 import warnings
+from pathlib import Path
 from test import LONG_TIMEOUT, SHORT_TIMEOUT
 from threading import Event
 from unittest import mock
@@ -16,9 +17,10 @@ import pytest
 from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
 from dummyserver.testcase import HTTPDummyServerTestCase, SocketDummyServerTestCase
 from urllib3 import HTTPConnectionPool, ResponsePromise, encode_multipart_formdata
+from urllib3 import ResolverDescription
 from urllib3._collections import HTTPHeaderDict
 from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
-from urllib3.connection import _get_default_user_agent
+from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.exceptions import (
     ConnectTimeoutError,
     DecodeError,
@@ -34,6 +36,7 @@ from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS
 from urllib3.util.retry import RequestHistory, Retry
 from urllib3.util.timeout import Timeout
 
+from ..conftest import DNSHTTPSServer
 from .. import INVALID_SOURCE_ADDRESSES, TARPIT_HOST, VALID_SOURCE_ADDRESSES
 from ..port_helpers import find_unused_port
 
@@ -201,6 +204,108 @@ class TestConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 
 class TestConnectionPool(HTTPDummyServerTestCase):
+    @pytest.mark.parametrize("as_list", [False, True])
+    def test_pool_resolver_configuration(self, as_list: bool) -> None:
+        resolver = ["system://default"] if as_list else "system://default"
+        with HTTPConnectionPool(
+            "localhost", self.port, resolver=resolver, timeout=5
+        ) as pool:
+            response = pool.request("GET", "/")
+            assert response.status == 200
+
+    @pytest.mark.parametrize("ca_option", ["ca_certs", "ca_cert_data", "ca_cert_dir"])
+    @pytest.mark.parametrize("override", [False, True])
+    def test_pool_resolver_ca_configuration(
+        self,
+        dns_https_server: DNSHTTPSServer,
+        ca_option: str,
+        override: bool,
+        tmp_path: Path,
+    ) -> None:
+        server = dns_https_server.config
+        assert server.ca_certs is not None
+        pem = Path(server.ca_certs).read_text()
+        trusted = {
+            "ca_certs": server.ca_certs,
+            "ca_cert_data": pem,
+            "ca_cert_dir": str(tmp_path),
+        }[ca_option]
+        rd = ResolverDescription.from_url(
+            f"doh://{server.host}:{server.port}/resolve?timeout=5"
+        )
+        # The directory case also trusts the fixture CA in memory; the directory
+        # still needs to be forwarded without overwriting resolver-specific options.
+        if ca_option == "ca_cert_dir":
+            rd["ca_cert_data"] = pem
+        if override:
+            rd[ca_option] = trusted
+        options: dict[str, typing.Any] = {
+            ca_option: str(tmp_path / "unused") if override else trusted
+        }
+        with HTTPConnectionPool(self.host, self.port, resolver=[rd], **options) as pool:
+            addresses = pool._resolver.getaddrinfo(
+                "pool-config.test", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+            assert addresses[0][-1] == ("192.0.2.1", 443)
+            assert rd.kwargs[ca_option] == trusted
+        assert dns_https_server.requests
+
+    @pytest.mark.parametrize("host", ["example.com", b"example.com", 123])
+    def test_header_value_types(self, host: str | bytes | int) -> None:
+        with HTTPConnectionPool(self.host, self.port, timeout=LONG_TIMEOUT) as pool:
+            response = pool.request(
+                "GET",
+                "/headers",
+                headers={
+                    "Host": host,  # type: ignore[dict-item]
+                    "X-Text": "text",
+                    "X-Bytes": b"bytes",  # type: ignore[dict-item]
+                    "X-Number": 42,  # type: ignore[dict-item]
+                },
+            )
+            assert response.status == 200
+            headers = response.json()
+            assert headers["Host"] == ("123" if host == 123 else "example.com")
+            assert headers["X-Text"] == "text"
+            assert headers["X-Bytes"] == "bytes"
+            assert headers["X-Number"] == "42"
+
+    def test_skip_host_header(self) -> None:
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises(ProtocolError, match="without the `Host` header"):
+                pool.request("GET", "/headers", headers={"Host": SKIP_HEADER})
+
+    def test_request_with_custom_connect(self) -> None:
+        class CustomConnection(HTTPConnection):
+            def connect(self) -> None:
+                # A downstream connect() override may only open the socket.
+                self.sock = self._new_conn()
+
+        conn = CustomConnection(self.host, self.port, timeout=LONG_TIMEOUT)
+        try:
+            conn.request("POST", "/echo", body=b"custom connection")
+            response = conn.getresponse()
+            assert response.status == 200
+            assert response.version == 11
+            assert response.data == b"custom connection"
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("content_length", ["", "invalid"])
+    def test_invalid_content_length(self, content_length: str) -> None:
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises(ProtocolError, match="Invalid content-length"):
+                pool.request(
+                    "POST",
+                    "/echo",
+                    body=b"data",
+                    headers={"Content-Length": content_length},
+                )
+
     def test_get(self) -> None:
         with HTTPConnectionPool(self.host, self.port) as pool:
             r = pool.request("GET", "/specific_method", fields={"method": "GET"})
@@ -1479,6 +1584,31 @@ class TestFileBodiesOnRetryOrRedirect(HTTPDummyServerTestCase):
             )
             assert resp.status == 200
             assert resp.data == data
+
+    @pytest.mark.parametrize("status", [307, 308])
+    @pytest.mark.parametrize("offset", [0, 7])
+    def test_file_redirect_preserves_offset(
+        self,
+        tmp_path: Path,
+        status: int,
+        offset: int,
+    ) -> None:
+        payload = b"prefix:" + b"0123456789abcdef" * 8192 + b"tail"
+        path = tmp_path / "upload.bin"
+        path.write_bytes(payload)
+        with path.open("rb") as file:
+            file.seek(offset)
+            body = file
+            with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+                resp = pool.request(
+                    "PUT", f"/redirect?target=/echo&status={status}", body=body
+                )
+                assert resp.status == 200
+                assert resp.data == payload[offset:]
+                assert resp.retries is not None
+                assert len(resp.retries.history) == 1
+                assert resp.retries.history[0].status == status
+                assert body.tell() == len(payload)
 
     def test_redirect_with_failed_tell(self) -> None:
         """Abort request if failed to get a position from tell()"""

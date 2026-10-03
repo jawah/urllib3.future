@@ -128,33 +128,31 @@ class ResolverDescription:
             kwargs["path"] = parsed_url.path
 
         if parsed_url.auth:
-            kwargs["headers"] = dict()
-            if ":" in parsed_url.auth:
-                username, password = parsed_url.auth.split(":")
-
+            # Decode userinfo once; passwords may themselves contain colons.
+            username, password = parsed_url.auth_decoded
+            assert username is not None
+            if password is not None:
                 username = username.strip("'\"")
                 password = password.strip("'\"")
-
-                kwargs["headers"]["Authorization"] = (
+                authorization = (
                     f"Basic {b64encode(f'{username}:{password}'.encode()).decode()}"
                 )
             else:
-                kwargs["headers"]["Authorization"] = f"Bearer {parsed_url.auth}"
+                authorization = f"Bearer {username}"
+            # Use the same header representation as the URL query parameters.
+            kwargs["headers"] = [f"Authorization:{authorization}"]
 
         if parsed_url.query:
             parameters = parse_qs(parsed_url.query)
 
             for parameter in parameters:
-                if not parameters[parameter]:
-                    continue
-
                 parameter_insensible = parameter.lower()
 
                 if (
                     isinstance(parameters[parameter], list)
                     and len(parameters[parameter]) > 1
                 ):
-                    if parameter == "implementation":
+                    if parameter_insensible == "implementation":
                         raise ValueError("Only one implementation can be passed to URL")
 
                     values = []
@@ -176,10 +174,13 @@ class ResolverDescription:
                     kwargs[parameter_insensible] = values
                     continue
 
-                value: str = parameters[parameter][0].lower().strip(" ")
+                # Values can contain credentials or case-sensitive filesystem paths.
+                value: str = parameters[parameter][0].strip(" ")
 
-                if parameter == "implementation":
-                    implementation = value
+                if parameter_insensible == "implementation":
+                    if implementation is not None:
+                        raise ValueError("Only one implementation can be passed to URL")
+                    implementation = value.lower()
                     continue
 
                 if "," in value:
@@ -190,6 +191,7 @@ class ResolverDescription:
                             kwargs[parameter_insensible].extend(list_of_values)
                         else:
                             list_of_values.append(kwargs[parameter_insensible])
+                            kwargs[parameter_insensible] = list_of_values
                         continue
 
                     kwargs[parameter_insensible] = list_of_values
@@ -197,8 +199,8 @@ class ResolverDescription:
 
                 value_converted: bool | int | float | None = None
 
-                if value in ["false", "true"]:
-                    value_converted = True if value == "true" else False
+                if value.lower() in ["false", "true"]:
+                    value_converted = value.lower() == "true"
                 elif value.isdigit():
                     value_converted = int(value)
                 elif (
@@ -208,9 +210,14 @@ class ResolverDescription:
                 ):
                     value_converted = float(value)
 
-                kwargs[parameter_insensible] = (
-                    value if value_converted is None else value_converted
-                )
+                parsed_value = value if value_converted is None else value_converted
+                # A query path overrides the URL path; other repeated values accumulate.
+                if parameter_insensible != "path" and parameter_insensible in kwargs:
+                    if not isinstance(kwargs[parameter_insensible], list):
+                        kwargs[parameter_insensible] = [kwargs[parameter_insensible]]
+                    kwargs[parameter_insensible].append(parsed_value)
+                else:
+                    kwargs[parameter_insensible] = parsed_value
 
         host_patterns: list[str] = []
 

@@ -264,7 +264,7 @@ if sys.platform == "wasi":
             )
             try:
                 self._socket = _wasi_tcp_create_socket.create_tcp_socket(address_family)
-            except Err as error:
+            except Err as error:  # Defensive: WASI host socket-allocation failure.
                 raise _socket_error(error.value) from None
 
             self.family = AddressFamily(family)
@@ -461,6 +461,9 @@ if sys.platform == "wasi":
         *,
         all_errors: bool = False,
     ) -> socket:
+        if source_address is not None:
+            raise OSError("bind unsupported")
+
         host, port = address
         errors = []
         for family, socket_type, proto, _, socket_address in getaddrinfo(
@@ -471,8 +474,6 @@ if sys.platform == "wasi":
                 sock = socket(family, socket_type, proto)
                 if timeout is not _GLOBAL_DEFAULT_TIMEOUT:
                     sock.settimeout(timeout)  # type: ignore[arg-type]
-                if source_address is not None:
-                    sock.bind(source_address)
                 sock.connect(socket_address)
                 return sock
             except OSError as error:

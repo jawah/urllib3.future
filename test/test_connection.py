@@ -19,6 +19,7 @@ from urllib3._async.connection import AsyncHTTPConnection
 from urllib3.backend import HttpVersion
 from urllib3.backend._async.hface import AsyncHfaceBackend
 from urllib3.backend.hface import HfaceBackend
+from urllib3.contrib.hface import HTTP1Protocol, HTTP2Protocol, HTTPProtocolFactory
 from urllib3.exceptions import HTTPError, ProxyError, ResponseNotReady, SSLError
 from urllib3.util import ssl_
 from urllib3.util.ssl_match_hostname import (
@@ -28,6 +29,21 @@ from urllib3.util.ssl_match_hostname import _dnsname_match, match_hostname
 
 if typing.TYPE_CHECKING:
     from urllib3._typing import _TYPE_PEER_CERT_RET_DICT
+
+
+@pytest.mark.parametrize("implementation", ["h11", "H11", "h2", "H2"])
+def test_protocol_factory_explicit_implementation(implementation: str) -> None:
+    protocol_type = HTTP1Protocol if implementation.lower() == "h11" else HTTP2Protocol
+    default = HTTPProtocolFactory.new(protocol_type)
+    explicit = HTTPProtocolFactory.new(protocol_type, implementation=implementation)
+    assert type(explicit) is type(default)
+    assert explicit is not default
+
+
+def test_protocol_factory_missing_implementation() -> None:
+    with pytest.raises(NotImplementedError, match="cannot be loaded") as exc:
+        HTTPProtocolFactory.new(HTTP1Protocol, implementation="not_installed")  # type: ignore[type-abstract]
+    assert isinstance(exc.value.__cause__, ImportError)
 
 
 class TestConnection:
@@ -392,3 +408,32 @@ class TestConnection:
                 conn.connect()
 
         context.wrap_socket.return_value.close.assert_called_once_with()
+
+
+def test_socket_state_detects_refused_connection() -> None:
+    import errno
+    from urllib3.util.socket_state import is_established
+    from urllib3.util.wait import wait_for_write
+
+    # Keep the destination port reserved without accepting connections.
+    with socket.socket() as destination, socket.socket() as client:
+        destination.bind(("127.0.0.1", 0))
+        client.setblocking(False)
+        result = client.connect_ex(destination.getsockname())
+        assert result != 0
+        if result in (errno.EINPROGRESS, errno.EWOULDBLOCK, 10035):
+            assert wait_for_write(client, 5)
+        assert not is_established(client)
+
+
+def test_socket_state_handles_close_after_descriptor_check() -> None:
+    from urllib3.util.socket_state import is_established
+
+    class ClosingSocket(socket.socket):
+        def fileno(self) -> int:
+            descriptor = super().fileno()
+            self.close()
+            return descriptor
+
+    with ClosingSocket() as sock:
+        assert not is_established(sock)

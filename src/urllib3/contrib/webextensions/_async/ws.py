@@ -256,7 +256,10 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
                         self._ready_socket = None
 
                         try:
-                            self._protocol.receive_data(data)
+                            # EOF must emit wsproto's abnormal-close event.
+                            self._protocol.receive_data(
+                                None if not data and eot else data
+                            )
                         except WebSocketProtocolError as e:
                             await self.close()
                             raise ProtocolError from e

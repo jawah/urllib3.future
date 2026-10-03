@@ -55,6 +55,11 @@ jobs:
           - experimental: false
             traefik-server: true
           - traefik-server: true
+            nox-session: test_udp_fallback-3.14
+            python-version: "3.14"
+            os: ubuntu-24.04
+            experimental: false
+          - traefik-server: true
             nox-session: test_ws_fast-3.14
             python-version: "3.14"
             os: ubuntu-24.04

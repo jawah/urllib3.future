@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from typing import Any
 
 import pytest
 
-from urllib3 import PoolManager, HttpVersion, HTTPResponse
+from urllib3 import (
+    HTTPSConnectionPool,
+    PoolManager,
+    HttpVersion,
+    HTTPResponse,
+    ResponsePromise,
+)
 from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 
 from . import TraefikTestCase
@@ -12,6 +20,54 @@ from .. import onlyCPython
 
 
 class TestThreadSafety(TraefikTestCase):
+    @pytest.mark.parametrize("svn_target", [HttpVersion.h2, HttpVersion.h3])
+    @pytest.mark.parametrize("manager", [False, True])
+    def test_concurrent_multiplexed_response_readers(
+        self, svn_target: HttpVersion, manager: bool
+    ) -> None:
+        if svn_target is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("Test requires http3 support")
+
+        target = f"{self.https_url}/delay/0.1" if manager else "/delay/0.1"
+        ready = Barrier(4)
+        pool_kwargs: dict[str, Any] = {
+            "ca_certs": self.ca_authority,
+            "resolver": self.test_resolver.new(),
+            "disabled_svn": {HttpVersion.h11, HttpVersion.h2, HttpVersion.h3}
+            - {svn_target},
+            "maxsize": 1,
+            "timeout": 5,
+        }
+        with (
+            PoolManager(**pool_kwargs)
+            if manager
+            else HTTPSConnectionPool(self.host, self.https_port, **pool_kwargs)
+        ) as pool:
+            assert pool.urlopen("GET", target).version == (
+                20 if svn_target is HttpVersion.h2 else 30
+            )
+
+            def read() -> HTTPResponse | None:
+                ready.wait(timeout=5)
+                return pool.get_response()
+
+            with ThreadPoolExecutor(max_workers=4) as workers:
+                for _ in range(8):
+                    for _ in range(4):
+                        assert isinstance(
+                            pool.urlopen("GET", target, multiplexed=True),
+                            ResponsePromise,
+                        )
+                    # Propagate worker errors instead of losing them in raw threads.
+                    futures = [workers.submit(read) for _ in range(4)]
+                    responses = [future.result(timeout=10) for future in futures]
+                    assert len({id(response) for response in responses}) == 4
+                    assert all(
+                        response is not None and response.status == 200
+                        for response in responses
+                    )
+            assert pool.get_response() is None
+
     @onlyCPython()
     @pytest.mark.parametrize(
         "svn_target",

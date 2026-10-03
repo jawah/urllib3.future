@@ -94,7 +94,8 @@ class HTTPSResolver(BaseResolver):
             if not isinstance(kwargs["proxy_headers"], list):
                 kwargs["proxy_headers"] = [kwargs["proxy_headers"]]
 
-            for item in kwargs["proxy_headers"]:
+            # Consume the resolver option; only _proxy_headers belongs to the pool.
+            for item in kwargs.pop("proxy_headers"):
                 if ":" not in item:
                     raise ValueError("Passed header is invalid in DNS parameters")
 
@@ -143,6 +144,11 @@ class HTTPSResolver(BaseResolver):
             kwargs.pop("on_post_connection")
         else:
             self._connection_callback = None
+
+        # Keep custom headers while selecting the negotiated DNS representation.
+        kwargs.setdefault("headers", HTTPHeaderDict())["Accept"] = (
+            "application/dns-message" if self._rfc8484 else "application/dns-json"
+        )
 
         self._pool = HTTPSConnectionPool(self._server, self._port, **kwargs)
 
@@ -239,7 +245,6 @@ class HTTPSResolver(BaseResolver):
                         "GET",
                         self._path,
                         {"name": host, "type": "1"},
-                        headers={"Accept": "application/dns-json"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -256,7 +261,6 @@ class HTTPSResolver(BaseResolver):
                         {
                             "dns": b64encode(dns_payload).decode().replace("=", ""),
                         },
-                        headers={"Accept": "application/dns-message"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -269,7 +273,6 @@ class HTTPSResolver(BaseResolver):
                         "GET",
                         self._path,
                         {"name": host, "type": "28"},
-                        headers={"Accept": "application/dns-json"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -287,7 +290,6 @@ class HTTPSResolver(BaseResolver):
                         {
                             "dns": b64encode(dns_payload).decode().replace("=", ""),
                         },
-                        headers={"Accept": "application/dns-message"},
                         on_post_connection=self._connection_callback,
                         multiplexed=True,
                     )
@@ -299,7 +301,6 @@ class HTTPSResolver(BaseResolver):
                     "GET",
                     self._path,
                     {"name": host, "type": "65"},
-                    headers={"Accept": "application/dns-json"},
                     on_post_connection=self._connection_callback,
                     multiplexed=True,
                 )
@@ -317,7 +318,6 @@ class HTTPSResolver(BaseResolver):
                     {
                         "dns": b64encode(dns_payload).decode().replace("=", ""),
                     },
-                    headers={"Accept": "application/dns-message"},
                     on_post_connection=self._connection_callback,
                     multiplexed=True,
                 )
@@ -394,6 +394,10 @@ class HTTPSResolver(BaseResolver):
                                 raw_record = bytes.fromhex(rr)
                             except ValueError:
                                 raw_record = b""
+
+                            # Match async: a malformed optional HTTPS record is unusable.
+                            if not raw_record:
+                                continue
 
                             https_record = parse_https_rdata(raw_record)
 
@@ -511,7 +515,8 @@ class HTTPSResolver(BaseResolver):
                 for record in dns_resp.records:
                     if record[0] == SupportedQueryType.HTTPS:
                         assert isinstance(record[-1], dict)
-                        if "h3" in record[-1]["alpn"]:
+                        # Match JSON mode: discovering h3 must respect the opt-in.
+                        if quic_upgrade_via_dns_rr and "h3" in record[-1]["alpn"]:
                             remote_preemptive_quic_rr = True
                         if record[-1]["echconfig"]:
                             ech_config_list = record[-1]["echconfig"]

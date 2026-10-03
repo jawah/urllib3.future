@@ -4,6 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+      - "Skip Changelog"
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]

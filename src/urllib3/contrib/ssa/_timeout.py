@@ -84,7 +84,9 @@ class Timeout:
             raise RuntimeError("Timeout has already been entered")
         task = tasks.current_task()
         if task is None:
-            raise RuntimeError("Timeout should be used inside a task")
+            raise RuntimeError(  # Defensive: coroutine advanced outside a Task.
+                "Timeout should be used inside a task"
+            )
         self._state = _State.ENTERED
         self._task = task
         self._cancelling = task.cancelling() if _HAS_CANCELLATION_COUNT else 0

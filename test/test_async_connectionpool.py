@@ -15,7 +15,12 @@ from urllib3._async.connectionpool import (
 )
 from urllib3._async.response import AsyncHTTPResponse
 from urllib3.backend import ResponsePromise
-from urllib3.exceptions import UnrewindableBodyError
+from urllib3.exceptions import (
+    ClosedPoolError,
+    HostChangedError,
+    LocationValueError,
+    UnrewindableBodyError,
+)
 
 
 @pytest.mark.asyncio
@@ -340,3 +345,22 @@ async def test_cancelled_connection_waiter_does_not_strand_owner() -> None:
     # A saturation notification must not pretend ownership was handed to the
     # cancelled task. The released connection must remain borrowable.
     await asyncio.wait_for(asyncio.create_task(borrow()), 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pool_cls", [AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool]
+)
+async def test_response_wait_validation_and_closed_pool(pool_cls: typing.Any) -> None:
+    with pytest.raises(LocationValueError):
+        pool_cls("")
+    async with pool_cls("localhost") as pool:
+        assert await pool.get_response() is None
+        with pytest.raises(TypeError, match="ResponsePromise"):
+            await pool.get_response(promise=object())
+        with pytest.raises(HostChangedError):
+            await pool.urlopen("GET", "https://other.invalid/")
+    with pytest.raises(ClosedPoolError):
+        await pool.get_response()
+    with pytest.raises(ClosedPoolError):
+        await pool.urlopen("GET", "/")

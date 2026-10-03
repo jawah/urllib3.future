@@ -13,7 +13,7 @@ import trustme
 
 from urllib3 import AsyncPoolManager, AsyncProxyManager, PoolManager, ProxyManager
 from urllib3.contrib.ssa import AsyncSocket
-from urllib3.exceptions import ReadTimeoutError
+from urllib3.exceptions import ReadTimeoutError, SSLError
 from urllib3.util.wait import wait_for_read
 
 try:
@@ -38,6 +38,7 @@ class Peer:
         )
         self.writer: asyncio.StreamWriter | None = None
         self.received: asyncio.Queue[str | bytes] = asyncio.Queue()
+        self.pongs: asyncio.Queue[bytes] = asyncio.Queue()
         self.finished = asyncio.Event()
         self.initial_message = initial_message
 
@@ -69,6 +70,8 @@ class Peer:
                             (wsproto.events.TextMessage, wsproto.events.BytesMessage),
                         ):
                             self.received.put_nowait(event.data)
+                        elif isinstance(event, wsproto.events.Pong):
+                            self.pongs.put_nowait(event.payload)
                 else:
                     for event in self.protocol.events_received():
                         if isinstance(event, Frame):
@@ -76,6 +79,8 @@ class Peer:
                                 self.received.put_nowait(event.data.decode())
                             elif event.opcode is Opcode.BINARY:
                                 self.received.put_nowait(event.data)
+                            elif event.opcode is Opcode.PONG:
+                                self.pongs.put_nowait(bytes(event.data))
         except ConnectionResetError:
             pass
         finally:
@@ -211,8 +216,14 @@ async def _connection(
             manager.urlopen,
             "GET",
             f"{'wss' if tls else 'ws'}+{implementation}://127.0.0.1:{port}/",
+            timeout=5,
+            retries=False,
         )
         assert response.version == 11
+        # Short read deadlines belong to the WebSocket operation, not its handshake.
+        conn = response._fp.from_promise._conn
+        conn.timeout = timeout
+        conn.sock.settimeout(timeout)
         yield response.extension, peer, call, response
     finally:
         if response is not None:
@@ -417,6 +428,90 @@ async def test_message_buffered_with_handshake(
         _,
     ):
         assert await asyncio.wait_for(call(ws.next_payload), 2) == "already here"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("buffered", [False, True])
+async def test_control_frames_between_messages(
+    connection: Any, asynchronous: bool, tls: bool, buffered: bool
+) -> None:
+    async with connection(asynchronous, tls) as (ws, peer, call, _):
+        assert peer.writer is not None
+        data = peer.encode("first") if buffered else b""
+        # A server ping requires a matching pong; an unsolicited pong is ignored.
+        data += b"\x89\x03abc\x8a\x04pong" + peer.encode("after control frames")
+        peer.writer.write(data)
+        if buffered:
+            assert await asyncio.wait_for(call(ws.next_payload), 2) == "first"
+        assert (
+            await asyncio.wait_for(call(ws.next_payload), 2) == "after control frames"
+        )
+        assert await asyncio.wait_for(peer.pongs.get(), 2) == b"abc"
+        assert not ws.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frames, expected",
+    [
+        (b"\x02\x03one\x80\x03two", b"onetwo"),
+        # The UTF-8 character crosses a WebSocket frame boundary.
+        (b"\x01\x02\xf0\x9f\x80\x02\x9a\x80", "\U0001f680"),
+    ],
+)
+async def test_fragmented_message_followed_by_another_message(
+    connection: Any, asynchronous: bool, tls: bool, frames: bytes, expected: str | bytes
+) -> None:
+    async with connection(asynchronous, tls) as (ws, peer, call, _):
+        assert peer.writer is not None
+        peer.writer.write(frames + peer.encode("next message"))
+        assert await asyncio.wait_for(call(ws.next_payload), 2) == expected
+        assert await asyncio.wait_for(call(ws.next_payload), 2) == "next message"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(b"\x88\x02\x03\xe8", id="normal-close"),
+        pytest.param(b"\x81\x01\xff", id="invalid-utf8"),
+        pytest.param(b"\xc1\x01x", id="unnegotiated-rsv1"),
+        pytest.param(b"\x81\x81\x00\x00\x00\x00x", id="masked-server-frame"),
+    ],
+)
+async def test_peer_close_or_invalid_frame_releases_connection(
+    connection: Any, asynchronous: bool, tls: bool, frame: bytes
+) -> None:
+    async with connection(asynchronous, tls) as (ws, peer, call, _):
+        assert peer.writer is not None
+        peer.writer.write(frame)
+        assert await asyncio.wait_for(call(ws.next_payload), 2) is None
+        assert ws.closed
+        for operation, args in (
+            (ws.next_payload, ()),
+            (ws.send_payload, ("too late",)),
+            (ws.ping, ()),
+        ):
+            with pytest.raises(OSError, match="closed or uninitialized"):
+                await call(operation, *args)
+
+
+@pytest.mark.asyncio
+async def test_peer_disconnect_releases_connection(
+    connection: Any, asynchronous: bool, tls: bool
+) -> None:
+    async with connection(asynchronous, tls) as (ws, peer, call, _):
+        assert peer.writer is not None
+        # Close the transport without a WebSocket closing handshake.
+        peer.writer.transport.abort()
+        await asyncio.wait_for(peer.finished.wait(), 2)
+        try:
+            assert await asyncio.wait_for(call(ws.next_payload), 2) is None
+        except SSLError as exc:
+            # Older OpenSSL/Python combinations report missing close_notify as an error.
+            assert tls
+            assert "unexpected eof" in str(exc).lower()
+        assert ws.closed
 
 
 @pytest.mark.asyncio
@@ -720,3 +815,85 @@ async def test_tls_proxy_duplex_and_close(
         finally:
             await call(ws.close)
             await asyncio.gather(read, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["read", "write"])
+@pytest.mark.parametrize(
+    "failure", ["timeout", "ssl-timeout", "ssl", "socket", "other"]
+)
+async def test_transport_error_translation_and_cleanup(
+    connection: Any,
+    asynchronous: bool,
+    operation: str,
+    failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from socket import timeout as SocketTimeout
+    from urllib3.exceptions import ProtocolError
+
+    errors = {
+        "timeout": SocketTimeout("timed out"),
+        "ssl-timeout": ssl.SSLError("read operation timed out"),
+        "ssl": ssl.SSLError("bad record mac"),
+        "socket": ConnectionResetError("peer reset"),
+        "other": ValueError("unexpected transport failure"),
+    }
+    error = errors[failure]
+    expected = {
+        "timeout": ReadTimeoutError,
+        "ssl-timeout": ReadTimeoutError if operation == "read" else SSLError,
+        "ssl": SSLError,
+        "socket": ProtocolError,
+        "other": ValueError,
+    }[failure]
+    async with connection(asynchronous, False, timeout=5) as (ws, peer, call, response):
+        dsa = ws._dsa
+        method = "recv_extended" if operation == "read" else "sendall"
+        original = getattr(dsa, method)
+
+        def fail_once(*args: Any, **kwargs: Any) -> Any:
+            # Restore before raising so the real close path can still send/close.
+            monkeypatch.setattr(dsa, method, original)
+            raise error
+
+        monkeypatch.setattr(dsa, method, fail_once)
+        if operation == "read":
+            peer.send("still readable")
+        with pytest.raises(expected) as caught:
+            if operation == "read":
+                await call(ws.next_payload)
+            else:
+                await call(ws.send_payload, "outgoing")
+        if expected is not ValueError:
+            assert caught.value.__cause__ is error
+        if operation == "read" and failure in {"timeout", "ssl-timeout"}:
+            assert not ws.closed
+            assert await call(ws.next_payload) == "still readable"
+        else:
+            assert ws.closed
+            assert response._police_officer is None or not response._police_officer.busy
+
+
+@pytest.mark.asyncio
+async def test_response_close_closes_extension_and_rejects_second_start(
+    connection: Any,
+    asynchronous: bool,
+) -> None:
+    async with connection(asynchronous, False, timeout=5) as (ws, _, call, response):
+        with pytest.raises(OSError, match="already plugged in"):
+            await call(response.start_extension, type(ws)())
+        await call(response.close)
+        assert ws.closed
+
+
+@pytest.mark.asyncio
+async def test_message_and_close_in_one_transport_read(
+    connection: Any, asynchronous: bool
+) -> None:
+    async with connection(asynchronous, False, timeout=5) as (ws, peer, call, _):
+        assert peer.writer is not None
+        peer.writer.write(peer.encode("last message") + b"\x88\x02\x03\xe8")
+        assert await call(ws.next_payload) == "last message"
+        assert await call(ws.next_payload) is None
+        assert ws.closed

@@ -827,7 +827,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 if self.concurrency:
                     self._container[obj_id] = conn_or_pool
                 else:
-                    if non_saturated_only and not self.concurrency:
+                    if non_saturated_only:
                         self._signals.declare_writing()
 
                 return conn_or_pool
@@ -862,6 +862,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
                             async with ctx_expire_in(delay=timeout):
                                 await signal.event.wait()
                         except TimeoutError as e:
+                            # A timed-out waiter must not receive a later handoff.
+                            self._signals.unregister(signal)
                             raise UnavailableTraffic(
                                 f"No connection available within {timeout} second(s)"
                             ) from e

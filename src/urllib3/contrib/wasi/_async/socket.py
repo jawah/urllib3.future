@@ -243,7 +243,7 @@ if sys.platform == "wasi":
             )
             try:
                 self._socket = _wasi_sockets.TcpSocket.create(address_family)
-            except Err as error:
+            except Err as error:  # Defensive: WASI host socket-allocation failure.
                 raise _socket_error(error.value) from None
 
             self.family = family
@@ -529,7 +529,8 @@ if sys.platform == "wasi":
                     if not ciphertext:
                         raise _tls.SSLEOFError("EOF occurred during the TLS handshake")
                     self._incoming.write(ciphertext)
-                except _tls.SSLWantWriteError:
+                except _tls.SSLWantWriteError:  # Defensive: unbounded MemoryBIO.
+                    # Retained for TLS-engine compatibility.
                     await self._flush_outgoing()
                 else:
                     await self._flush_outgoing()

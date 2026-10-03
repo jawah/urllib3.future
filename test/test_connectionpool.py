@@ -844,3 +844,19 @@ class TestConnectionPool:
                 assert captured["args"][1] <= 1.5
             finally:
                 pool.close()
+
+
+@pytest.mark.parametrize("pool_cls", [HTTPConnectionPool, HTTPSConnectionPool])
+def test_response_wait_validation_and_closed_pool(pool_cls: typing.Any) -> None:
+    with pytest.raises(LocationValueError):
+        pool_cls("")
+    with pool_cls("localhost") as pool:
+        assert pool.get_response() is None
+        with pytest.raises(TypeError, match="ResponsePromise"):
+            pool.get_response(promise=object())
+        with pytest.raises(HostChangedError):
+            pool.urlopen("GET", "https://other.invalid/")
+    with pytest.raises(ClosedPoolError):
+        pool.get_response()
+    with pytest.raises(ClosedPoolError):
+        pool.urlopen("GET", "/")

@@ -4,7 +4,6 @@ import typing
 from collections import OrderedDict
 from collections.abc import Mapping as _Mapping
 from enum import Enum, auto
-from functools import lru_cache
 from threading import RLock
 
 if typing.TYPE_CHECKING:
@@ -42,12 +41,6 @@ ValidHTTPHeaderSource = typing.Union[
 
 class _Sentinel(Enum):
     not_passed = auto()
-
-
-@lru_cache(maxsize=64)
-def _lower_wrapper(string: str) -> str:
-    """Reasoning: We are often calling lower on repetitive identical header key. This was unnecessary exhausting!"""
-    return string.lower()
 
 
 def ensure_can_construct_http_header_dict(

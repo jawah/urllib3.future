@@ -69,9 +69,7 @@ def _try_import(name: str) -> ModuleType | None:
         return importlib.import_module(_IMPORT_NAME[name])
     except ImportError:
         return None
-    except Exception:
-        # Defensive: a broken backend (e.g. missing native lib) must not
-        # crash urllib3 import; treat as unavailable.
+    except Exception:  # Defensive: broken optional backend.
         return None
 
 

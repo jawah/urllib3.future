@@ -9,6 +9,23 @@ from urllib3.contrib.hface.events import (
 )
 
 
+def test_global_event_count_tracks_consumption() -> None:
+    sm = StreamMatrix()
+    assert sm.count(stream_id=-1) == 0
+    sm.append(HandshakeCompleted("h2"))
+    sm.append(HeadersReceived(1, (), True))
+    sm.append(ConnectionTerminated())
+    assert sm.count(stream_id=-1) == 2
+    assert sm.count(stream_id=1) == 1
+    assert isinstance(sm.popleft(stream_id=1), HandshakeCompleted)
+    assert sm.count(stream_id=-1) == 1
+    assert isinstance(sm.popleft(stream_id=1), HeadersReceived)
+    assert sm.count(stream_id=-1) == 1
+    assert isinstance(sm.popleft(), ConnectionTerminated)
+    assert sm.count(stream_id=-1) == 0
+    assert not sm
+
+
 def test_single_ev_in_matrix() -> None:
     sm = StreamMatrix()
 

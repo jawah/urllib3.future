@@ -910,6 +910,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 block=promise is not None,
                 not_idle_only=True,
             ) as conn:
+                if promise is not None:
+                    # Restore this request's read timeout after other requests used the connection.
+                    conn.timeout = typing.cast(
+                        typing.Optional[float], promise.get_parameter("read_timeout")
+                    )
                 try:
                     response = conn.getresponse(
                         promise=promise, police_officer=self.pool
@@ -961,6 +966,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 retries = retries.increment(
                     method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
                 )
+                # Carry the remaining budget into the next response wait.
+                promise.set_parameter("retries", retries)
                 retries.sleep()
             else:
                 raise e
@@ -1172,11 +1179,6 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 200 <= response.status < 300
                 and (method == "CONNECT" or extension is not None)
             ):
-                if extension is None:
-                    # we defer the import until there to avoid loading wsproto and such early.
-                    from .contrib.webextensions import load_extension
-
-                    extension = load_extension(None)()
                 response.start_extension(extension)
 
         return response

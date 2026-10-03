@@ -4,7 +4,6 @@ import warnings
 
 import pytest
 
-from dummyserver.server import DEFAULT_CA
 from urllib3 import ConnectionInfo, HttpVersion, proxy_from_url
 from urllib3.exceptions import InsecureRequestWarning
 from urllib3.util.ssl_ import _SSLContextCache
@@ -19,20 +18,6 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
 
         cls.proxy_url = f"http://{cls.proxy_host}:{int(cls.proxy_port)}"
         cls.https_proxy_url = f"https://{cls.proxy_host}:{int(cls.https_proxy_port)}"
-
-        if cls.ca_authority:
-            with open(cls.ca_authority, "rb") as fp:
-                trustme_traefik_ca = fp.read()
-        else:
-            trustme_traefik_ca = b""
-
-        with open(DEFAULT_CA, "rb") as fp:
-            trustme_ca = fp.read()
-
-        if trustme_traefik_ca not in trustme_ca:
-            with open(DEFAULT_CA, "wb") as fp:
-                fp.write(trustme_ca)
-                fp.write(trustme_traefik_ca)
 
         _SSLContextCache.clear()
 
@@ -90,7 +75,7 @@ class TestProxyToTraefik(TraefikWithProxyTestCase):
     ) -> None:
         with proxy_from_url(
             getattr(self, proxy_url),
-            ca_certs=DEFAULT_CA,
+            ca_certs=self.ca_bundle,
             disabled_svn={disabled_svn},
             resolver=self.test_resolver,
         ) as http:
