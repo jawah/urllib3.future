@@ -1,4 +1,4 @@
-2.25.902 (2026-10-03)
+2.25.902 (2026-10-04)
 =====================
 
 - Fixed synchronous ``HTTPResponse.read()`` returning partial bodies for negative
