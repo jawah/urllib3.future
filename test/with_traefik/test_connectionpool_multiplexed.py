@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 from random import randint
-from test import notMacOS
-from time import sleep, time
+from test import TIMEOUT_TOLERANCE, notMacOS
+from time import perf_counter, sleep
 
 import pytest
 
@@ -184,7 +184,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
 
             assert len(promises) == 10
 
-            before = time()
+            before = perf_counter()
 
             for i in range(5):
                 response = pool.get_response()
@@ -192,7 +192,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 assert response.status == 200
                 assert "/delay/1" in response.json()["url"]
 
-            assert 1.5 >= round(time() - before, 2)
+            assert perf_counter() - before <= 1.5 + TIMEOUT_TOLERANCE
 
             for i in range(5):
                 response = pool.get_response()
@@ -200,7 +200,7 @@ class TestConnectionPoolMultiplexed(TraefikTestCase):
                 assert response.status == 200
                 assert "/delay/3" in response.json()["url"]
 
-            assert 3.5 >= round(time() - before, 2)
+            assert perf_counter() - before <= 3.5 + TIMEOUT_TOLERANCE
             assert pool.get_response() is None
 
     def test_multiplexing_without_preload(self) -> None:

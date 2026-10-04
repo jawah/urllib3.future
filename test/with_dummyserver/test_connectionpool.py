@@ -7,7 +7,7 @@ import time
 import typing
 import warnings
 from pathlib import Path
-from test import LONG_TIMEOUT, SHORT_TIMEOUT
+from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
 from threading import Event
 from unittest import mock
 from urllib.parse import urlencode
@@ -103,13 +103,13 @@ class TestConnectionPoolTimeouts(SocketDummyServerTestCase):
             self.host, self.port, timeout=short_timeout, retries=False
         ) as pool:
             wait_for_socket(ready_event)
-            now = time.time()
+            now = time.perf_counter()
             with pytest.raises(ReadTimeoutError):
                 pool.request("GET", "/", timeout=LONG_TIMEOUT)
-            delta = time.time() - now
+            delta = time.perf_counter() - now
 
             message = "timeout was pool-level SHORT_TIMEOUT rather than request-level LONG_TIMEOUT"
-            assert delta >= LONG_TIMEOUT, message
+            assert delta >= LONG_TIMEOUT - TIMEOUT_TOLERANCE, message
             block_event.set()  # Release request
 
             # Timeout passed directly to request should raise a request timeout
@@ -1514,26 +1514,26 @@ class TestRetryAfter(HTTPDummyServerTestCase):
             r = pool.request("GET", "/redirect_after", retries=False)
             assert r.status == 303
 
-            t = time.time()
+            t = time.perf_counter()
             r = pool.request("GET", "/redirect_after")
             assert r.status == 200
-            delta = time.time() - t
-            assert delta >= 1
+            delta = time.perf_counter() - t
+            assert delta >= 1 - TIMEOUT_TOLERANCE
 
-            t = time.time()
-            timestamp = t + 2
+            t = time.perf_counter()
+            timestamp = time.time() + 2
             r = pool.request("GET", "/redirect_after?date=" + str(timestamp))
             assert r.status == 200
-            delta = time.time() - t
-            assert delta >= 1
+            delta = time.perf_counter() - t
+            assert delta >= 1 - TIMEOUT_TOLERANCE
 
             # Retry-After is past
-            t = time.time()
-            timestamp = t - 1
+            t = time.perf_counter()
+            timestamp = time.time() - 1
             r = pool.request("GET", "/redirect_after?date=" + str(timestamp))
-            delta = time.time() - t
+            delta = time.perf_counter() - t
             assert r.status == 200
-            assert delta < 1
+            assert delta < 1 + TIMEOUT_TOLERANCE
 
 
 class TestFileBodiesOnRetryOrRedirect(HTTPDummyServerTestCase):

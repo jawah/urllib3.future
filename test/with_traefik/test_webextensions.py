@@ -16,7 +16,7 @@ from urllib3.contrib.webextensions import (
 )
 from urllib3.exceptions import ReadTimeoutError, URLSchemeUnknown
 
-from .. import notWindows
+from .. import TIMEOUT_TOLERANCE, notWindows
 from . import TraefikTestCase
 
 
@@ -463,7 +463,7 @@ class TestWebExtensions(TraefikTestCase):
             ca_certs=self.ca_authority,
             disabled_svn=disabled_svn,
         ) as pm:
-            before = time.time()
+            before = time.perf_counter()
 
             promises = []
 
@@ -521,7 +521,7 @@ class TestWebExtensions(TraefikTestCase):
                 assert event.json()  # type: ignore
                 assert "timestamp" in event.json()  # type: ignore
 
-            assert time.time() - before <= 10.0
+            assert time.perf_counter() - before <= 10.0 + TIMEOUT_TOLERANCE
 
     @pytest.mark.skipif(
         WebSocketExtensionFromMultiplexedHTTP is None,

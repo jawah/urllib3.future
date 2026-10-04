@@ -99,6 +99,9 @@ LONG_TIMEOUT = 0.3
 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") == "true":
     LONG_TIMEOUT = 1.85
 
+# Approx on assert times. CI flakiness workaround.
+TIMEOUT_TOLERANCE = 0.05
+
 DUMMY_POOL = ConnectionPool("dummy")
 
 

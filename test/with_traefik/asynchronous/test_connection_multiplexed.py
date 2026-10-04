@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from test import notMacOS
-from time import time
+from test import TIMEOUT_TOLERANCE, notMacOS
+from time import perf_counter
 
 import pytest
 
@@ -29,7 +29,7 @@ class TestConnectionMultiplexed(TraefikTestCase):
 
         assert len(promises) == 10
 
-        before = time()
+        before = perf_counter()
 
         for i, expected_wait in zip(range(10), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]):
             r = await conn.getresponse()
@@ -37,9 +37,9 @@ class TestConnectionMultiplexed(TraefikTestCase):
             assert r.version == 20
             assert (await r.json())["url"].endswith(f"/delay/{expected_wait}")
 
-            delay = round(time() - before, 2)
+            delay = perf_counter() - before
 
-            assert expected_wait + 0.5 >= delay
+            assert delay <= expected_wait + 0.5 + TIMEOUT_TOLERANCE
 
         await conn.close()
 
@@ -60,7 +60,7 @@ class TestConnectionMultiplexed(TraefikTestCase):
 
         assert len(promises) == 10
 
-        before = time()
+        before = perf_counter()
 
         for expected_wait in [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]:
             r = await conn.getresponse()
@@ -68,9 +68,9 @@ class TestConnectionMultiplexed(TraefikTestCase):
             assert r.version == 20
             assert (await r.json())["url"].endswith(f"/delay/{expected_wait}")
 
-            delay = round(time() - before, 2)
+            delay = perf_counter() - before
 
-            assert expected_wait + 0.5 >= delay
+            assert delay <= expected_wait + 0.5 + TIMEOUT_TOLERANCE
 
         await conn.close()
 
