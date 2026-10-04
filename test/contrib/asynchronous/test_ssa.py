@@ -169,7 +169,9 @@ async def test_wasi_compat_create_connection(listening: bool) -> None:
             # A bound, non-listening socket can silently drop SYNs on macOS/Windows.
             listener.close()
             with pytest.raises(ConnectionRefusedError):
-                await asyncio.wait_for(wasi_socket.create_connection(address), 2)
+                # Windows have a MaxSynRetransmissions, we must set >2s. Otherwise it's going to be
+                # regular TimeoutError.
+                await asyncio.wait_for(wasi_socket.create_connection(address), 10)
             return
 
         server = await asyncio.start_server(connected, sock=listener)
