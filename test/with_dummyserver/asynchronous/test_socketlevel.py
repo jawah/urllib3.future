@@ -560,6 +560,59 @@ class TestPartialBodyClose(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestResponseReadEdges(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("decode_content", [False, True])
+    async def test_read1_size_preserves_remainder(
+        self, compressed: bool, decode_content: bool
+    ) -> None:
+        import zlib
+
+        payload = b"response body" * 100
+        body = zlib.compress(payload) if compressed else payload
+        encoding = b"Content-Encoding: deflate\r\n" if compressed else b""
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\n"
+            + encoding
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            try:
+                received = b""
+                for size in (1, 7, 2, 16):
+                    chunk = await response.read1(size, decode_content=decode_content)
+                    assert len(chunk) <= size
+                    received += chunk
+                received += await response.read(decode_content=decode_content)
+                assert received == (payload if decode_content else body)
+            finally:
+                await response.close()
+
+    @pytest.mark.parametrize("incomplete_utf8", [False, True])
+    async def test_sse_utf8_at_eof(self, incomplete_utf8: bool) -> None:
+        body = "data: first €\n\n".encode()
+        if incomplete_utf8:
+            body += b"data: incomplete \xe2\x82"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        async with AsyncPoolManager(timeout=5) as manager:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = await response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent)
+            assert event.data == "first €"
+            if incomplete_utf8:
+                with pytest.raises(UnicodeDecodeError):
+                    await response.extension.next_payload()
+            else:
+                assert await response.extension.next_payload() is None
+                assert response.extension.closed
+        assert manager.pools.rsize() == 0
+
     @pytest.mark.parametrize("decode_content", [False, True])
     async def test_zero_sized_read1_does_not_wait_for_body(
         self, decode_content: bool

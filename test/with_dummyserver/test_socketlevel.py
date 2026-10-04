@@ -3496,6 +3496,57 @@ class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
 
 
 class TestConnectionUtilities(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_read1_size_preserves_remainder(
+        self, compressed: bool, decode_content: bool
+    ) -> None:
+        payload = b"response body" * 100
+        body = zlib.compress(payload) if compressed else payload
+        encoding = b"Content-Encoding: deflate\r\n" if compressed else b""
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\n"
+            + encoding
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            try:
+                received = b""
+                for size in (1, 7, 2, 16):
+                    chunk = response.read1(size, decode_content=decode_content)
+                    assert len(chunk) <= size
+                    received += chunk
+                received += response.read(decode_content=decode_content)
+                assert received == (payload if decode_content else body)
+            finally:
+                response.close()
+
+    @pytest.mark.parametrize("incomplete_utf8", [False, True])
+    def test_sse_utf8_at_eof(self, incomplete_utf8: bool) -> None:
+        body = "data: first €\n\n".encode()
+        if incomplete_utf8:
+            body += b"data: incomplete \xe2\x82"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        with PoolManager(timeout=5) as manager:
+            response = manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent)
+            assert event.data == "first €"
+            if incomplete_utf8:
+                with pytest.raises(UnicodeDecodeError):
+                    response.extension.next_payload()
+            else:
+                assert response.extension.next_payload() is None
+                assert response.extension.closed
+        assert manager.pools.rsize() == 0
+
     def test_early_hints_without_callback(self) -> None:
         self.start_response_handler(
             b"HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n"
