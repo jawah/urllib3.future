@@ -25,6 +25,8 @@
   parameters are preserved. Applies to both sync and async.
 - Fixed DNS over HTTPS dropping custom request headers and rejecting ``proxy_headers``
   during pool creation, in both sync and async.
+- Fixed duplicate request headers being lost when applying utls fingerprint headers,
+  in both sync and async.
 - Fixed DNS over HTTPS enabling HTTP/3 discovery through HTTPS records despite
   ``quic_upgrade_via_dns_rr=False`` in wire-format mode, in both sync and async.
   Synchronous JSON-mode resolution also ignores malformed hexadecimal HTTPS records
