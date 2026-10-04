@@ -280,7 +280,12 @@ def dns_tls_server(
                                     ssl.SSLSyscallError,
                                     ConnectionResetError,
                                 ):
-                                    conn.unwrap().close()
+                                    try:
+                                        conn.unwrap().close()
+                                    except OSError as exc:
+                                        # OpenSSL 1.0.2 can report peer close as errno 0.
+                                        if exc.errno != 0:
+                                            raise
                                 return
                             if mode == "timeout":
                                 assert stop.wait(10), "Timed-out client never closed"
