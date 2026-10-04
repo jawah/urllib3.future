@@ -12,6 +12,7 @@ import select
 import shutil
 import socket
 import ssl
+import sys
 import tempfile
 import threading
 import time
@@ -341,6 +342,10 @@ class TestClientCerts(SocketDummyServerTestCase):
             assert len(client_certs) == 1
 
     @pytest.mark.skipif(platform.system() != "Linux", reason="Requires Linux /dev/shm")
+    @pytest.mark.skipif(
+        sys.implementation.name == "pypy",
+        reason="PyPy libffi does not implement _shm_open (probable bug)",
+    )
     def test_client_cert_shared_memory_without_proc(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
