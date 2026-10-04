@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from urllib3 import Retry
+from urllib3 import Retry, Timeout
 from urllib3._async.connectionpool import AsyncHTTPConnectionPool
 from urllib3._async.response import AsyncHTTPResponse
 from urllib3.connectionpool import HTTPConnectionPool
@@ -122,7 +122,9 @@ async def test_live_retry_body(asynchronous: bool, cache: bool, scenario: str) -
         retry = BodyRetry(total=1, status_forcelist=[503], cache_response_body=cache)
 
         def run_sync() -> None:
-            with HTTPConnectionPool("127.0.0.1", port, maxsize=1, timeout=0.2) as pool:
+            with HTTPConnectionPool(
+                "127.0.0.1", port, maxsize=1, timeout=Timeout(connect=5, read=0.2)
+            ) as pool:
                 if cache and scenario in errors:
                     with pytest.raises(errors[scenario]):
                         pool.urlopen("GET", "/", retries=retry, preload_content=False)
@@ -140,7 +142,7 @@ async def test_live_retry_body(asynchronous: bool, cache: bool, scenario: str) -
 
         if asynchronous:
             async with AsyncHTTPConnectionPool(
-                "127.0.0.1", port, maxsize=1, timeout=0.2
+                "127.0.0.1", port, maxsize=1, timeout=Timeout(connect=5, read=0.2)
             ) as pool:
                 if cache and scenario in errors:
                     with pytest.raises(errors[scenario]):
