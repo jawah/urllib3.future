@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import typing
 
 import pytest
 import trustme
@@ -16,6 +17,46 @@ from . import TraefikTestCase
 
 
 class TestConnection(TraefikTestCase):
+    @pytest.mark.usefixtures("requires_http3")
+    @pytest.mark.parametrize("allow_upgrade", [False, True])
+    def test_dns_https_record_selects_quic(
+        self, allow_upgrade: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        resolver = self.test_resolver.new()
+        getaddrinfo = resolver.getaddrinfo
+        queries = []
+
+        def https_records(*args: typing.Any, **kwargs: typing.Any) -> list[typing.Any]:
+            assert args[0] == self.host
+            assert args[3] == socket.SOCK_STREAM
+            queries.append(kwargs["quic_upgrade_via_dns_rr"])
+            records = getaddrinfo(*args, **kwargs)
+            if not kwargs["quic_upgrade_via_dns_rr"]:
+                return records
+            # An HTTPS RR advertising h3 adds UDP candidates ahead of TCP.
+            return [
+                (family, socket.SOCK_DGRAM, socket.IPPROTO_UDP, canonname, address)
+                for family, _, _, canonname, address in records
+            ] + records
+
+        monkeypatch.setattr(resolver, "getaddrinfo", https_records)
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            resolver=resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn=set() if allow_upgrade else {HttpVersion.h3},
+            preemptive_quic_cache={},
+            timeout=5,
+            retries=False,
+        ) as pool:
+            for _ in range(2):
+                response = pool.request("GET", "/get")
+                assert response.status == 200
+                assert response.version == (30 if allow_upgrade else 20)
+            assert pool.num_connections == 1
+        assert queries == [allow_upgrade]
+
     @pytest.mark.parametrize("failure", ["fingerprint", "untrusted-ca"])
     def test_quic_certificate_rejection(self, failure: str) -> None:
         if not _HAS_HTTP3_SUPPORT():
