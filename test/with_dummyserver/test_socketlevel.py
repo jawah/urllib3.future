@@ -3388,6 +3388,33 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
             ):
                 pool.request("GET", "/")
 
+    def test_remote_close_cause_does_not_retry_post(self) -> None:
+        body = b"already processed"
+        received = []
+
+        def socket_handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                with sock.makefile("rb") as request:
+                    assert request.readline().startswith(b"POST / ")
+                    while request.readline() not in (b"\r\n", b""):
+                        pass
+                    received.append(request.read(len(body)))
+                # The request was delivered; close without acknowledging it.
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5, retries=1) as pool:
+            with pytest.raises(
+                ProtocolError, match="Remote end closed connection without response"
+            ) as caught:
+                pool.request("POST", "/", body=body)
+
+            assert isinstance(caught.value.__cause__, ConnectionResetError)
+            assert str(caught.value.__cause__) == str(caught.value)
+            assert pool.num_requests == pool.num_connections == 1
+        assert received == [body]
+
 
 class TestInvalidHTTPResponse(SocketDummyServerTestCase):
     """Covers the h11 ``RemoteProtocolError`` -> ``InvalidHeader`` translation

@@ -1,6 +1,9 @@
 2.25.902 (2026-10-04)
 =====================
 
+- Fixed missing exception causes when a connection closes before sending a response,
+  preventing downstream clients such as ClickHouse Connect from recognizing remote
+  closes for their retry policy.
 - Fixed synchronous ``HTTPResponse.read()`` returning partial bodies for negative
   sizes such as ``-1``. These now read the remaining body, matching upstream urllib3.
   Incremental ``read1()``, ``stream()`` and async reading retain their behavior. (#429)
