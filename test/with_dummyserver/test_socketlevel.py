@@ -348,7 +348,8 @@ class TestClientCerts(SocketDummyServerTestCase):
 
         if not os.path.isdir("/dev/shm") or not os.access("/dev/shm", os.W_OK):
             pytest.skip("Requires writable /dev/shm")
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        # Converting a stdlib context to utls/rtls cannot copy its client identity.
+        ctx = ssl_.create_urllib3_context()
         ctx.load_verify_locations(self.ca_path)
         exists = os.path.exists
         shared_paths: set[str] = set()
