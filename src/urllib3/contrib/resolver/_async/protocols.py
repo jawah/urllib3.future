@@ -181,7 +181,10 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                         sock.setsockopt(
                             socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
                         )
-                    except (OSError, AttributeError):
+                    except (
+                        OSError,
+                        AttributeError,
+                    ):  # Defensive: the platform may not support SO_LINGER.
                         pass
 
                 # attempt to leverage GRO when under Linux
