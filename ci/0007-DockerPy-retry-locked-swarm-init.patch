@@ -1,0 +1,22 @@
+diff --git a/tests/integration/api_swarm_test.py b/tests/integration/api_swarm_test.py
+--- a/tests/integration/api_swarm_test.py
++++ b/tests/integration/api_swarm_test.py
+@@ -88,7 +88,17 @@
+             node_cert_expiry=7776000000000000, ca_force_rotate=6000000000000
+         )
+ 
+-        assert self.init_swarm(swarm_spec=spec)
++        try:
++            initialized = self.init_swarm(swarm_spec=spec)
++        except docker.errors.APIError as exc:
++            if exc.status_code != 503 or not (exc.explanation or '').startswith(
++                'Swarm is encrypted and needs to be unlocked'
++            ):
++                raise
++            # https://github.com/moby/moby/issues/53048
++            # Failed normal init clears stale credentials; retry only once.
++            initialized = self.init_swarm(swarm_spec=spec)
++        assert initialized
+         swarm_info = self.client.inspect_swarm()
+         assert swarm_info['Spec']['CAConfig']['NodeCertExpiry'] == (
+             spec['CAConfig']['NodeCertExpiry']
