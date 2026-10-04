@@ -5,8 +5,27 @@ import sqlite3  # noqa: F401
 import sys
 import traceback
 import unittest
+from contextlib import contextmanager
+from typing import Iterator
 
 from coverage import Coverage
+
+
+# componentize-py executes and snapshots imports before any test starts.
+# Preserve that measured execution; runtime tracing cannot see it again.
+_IMPORT_LINES: dict[str, list[int]] = {}
+
+
+@contextmanager
+def measure_imports() -> Iterator[None]:
+    coverage = Coverage(
+        include=["*/urllib3/*"], data_file=None, config_file=False, timid=True
+    )
+    with coverage.collect():
+        yield
+    data = coverage.get_data()
+    for filename in data.measured_files():
+        _IMPORT_LINES[filename] = data.lines(filename) or []
 
 
 def case_ids(case_class: type[unittest.TestCase]) -> list[str]:
@@ -36,6 +55,7 @@ def _coverage(kind: str, case_id: str) -> Coverage:
         timid=True,
     )
     coverage.set_option("run:disable_warnings", ["already-imported"])
+    coverage.get_data().add_lines(_IMPORT_LINES)
     return coverage
 
 

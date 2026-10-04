@@ -13,6 +13,35 @@ from . import TraefikTestCase
 
 
 class TestStreamResponse(TraefikTestCase):
+    @pytest.mark.parametrize("target_http", [20, 30])
+    @pytest.mark.parametrize("amt", [-1, -2])
+    def test_read_negative_amt_reads_entire_body(
+        self, target_http: int, amt: int
+    ) -> None:
+        if target_http == 30 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("Test requires http3 support")
+        disabled_svn = (
+            {HttpVersion.h11, HttpVersion.h3}
+            if target_http == 20
+            else {HttpVersion.h11, HttpVersion.h2}
+        )
+        with HTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=[self.test_resolver_raw],
+            disabled_svn=disabled_svn,
+        ) as pool:
+            response = pool.request("GET", "/bytes/131072", preload_content=False)
+            try:
+                assert response.version == target_http
+                expected_length = int(response.headers["Content-Length"])
+                assert expected_length > 65536
+                assert len(response.read(amt)) == expected_length
+                assert response.read() == b""
+            finally:
+                response.close()
+
     @pytest.mark.parametrize(
         "amt",
         [

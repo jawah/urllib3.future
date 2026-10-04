@@ -55,6 +55,11 @@ jobs:
           - experimental: false
             traefik-server: true
           - traefik-server: true
+            nox-session: test_udp_fallback-3.14
+            python-version: "3.14"
+            os: ubuntu-24.04
+            experimental: false
+          - traefik-server: true
             nox-session: test_ws_fast-3.14
             python-version: "3.14"
             os: ubuntu-24.04
@@ -143,7 +148,8 @@ jobs:
             experimental: false
             nox-session: test-pypy
             traefik-server: true
-          - python-version: "pypy-3.11"
+          # PyPy 8.0 is incompatible. we'll unpin this after fix land.
+          - python-version: "pypy-3.11-v7.3.23"
             os: ubuntu-24.04
             experimental: false
             nox-session: test-pypy
@@ -413,7 +419,7 @@ jobs:
         run: |
           python -m coverage combine
           python -m coverage html --skip-covered --skip-empty
-          python -m coverage report --ignore-errors --show-missing --fail-under=84
+          python -m coverage report --ignore-errors --show-missing --fail-under=93
 
       - name: "Upload report"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f

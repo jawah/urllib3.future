@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+from base64 import urlsafe_b64decode
 from collections import Counter
 import contextlib
 import os
 import socket
 import ssl
+import struct
+import threading
 import typing
 from pathlib import Path
 
 import pytest
 import trustme
-from tornado import web
+from tornado import httputil, web
 
 from dummyserver.handlers import TestingApp
 from dummyserver.proxy import ProxyHandler
@@ -23,6 +26,289 @@ from urllib3.backend.hface import _HAS_HTTP3_SUPPORT as _SYNC_HAS_HTTP3_SUPPORT
 from urllib3.util import ssl_
 
 from .tz_stub import stub_timezone_ctx
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--python-udp",
+        action="store_true",
+        help="Exercise the Python UDP transport while retaining qh3 for HTTP/3",
+    )
+
+
+@pytest.fixture
+def python_udp_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    try:
+        from qh3.asyncio import _transport
+    except ImportError:
+        return
+
+    # Exercise the existing import fallback without replacing any socket I/O.
+    monkeypatch.delattr(_transport, "OptimizedDatagramTransport", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def select_udp_transport(request: pytest.FixtureRequest) -> None:
+    if request.config.getoption("--python-udp"):
+        request.getfixturevalue("python_udp_transport")
+
+
+@pytest.fixture
+def async_file_wrapper() -> typing.Callable[[typing.BinaryIO], typing.Any]:
+    """Expose real file operations asynchronously without another I/O dependency."""
+
+    class AsyncFile:
+        def __init__(self, file: typing.BinaryIO) -> None:
+            self.file = file
+
+        async def read(self, size: int = -1) -> bytes:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.file.read, size
+            )
+
+        async def tell(self) -> int:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.file.tell
+            )
+
+        async def seek(self, offset: int) -> int:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.file.seek, offset
+            )
+
+        def __aiter__(self) -> AsyncFile:
+            return self
+
+        async def __anext__(self) -> bytes:
+            data = await self.read(65536)
+            if not data:
+                raise StopAsyncIteration
+            return data
+
+    return AsyncFile
+
+
+@pytest.fixture(
+    params=[
+        "bytes",
+        "text",
+        "bytearray",
+        "memoryview",
+        "typed-memoryview",
+        "strided-memoryview",
+        "iterator",
+    ]
+)
+def upload_body(request: pytest.FixtureRequest) -> tuple[typing.Any, bytes]:
+    """Bodies larger than a protocol frame, with a distinct final tail."""
+    payload = b"0123456789abcdef" * 8192 + b"tail"
+    if request.param == "bytes":
+        return payload, payload
+    if request.param == "text":
+        text = "Unicode: 🚀" + payload.decode()
+        return text, text.encode()
+    if request.param == "bytearray":
+        return bytearray(payload), payload
+    if request.param == "memoryview":
+        return memoryview(payload), payload
+    if request.param == "typed-memoryview":
+        return memoryview(payload).cast("I"), payload
+    if request.param == "strided-memoryview":
+        return memoryview(payload)[::2], payload[::2]
+
+    # The final input chunk must leave bytes to drain after iteration ends.
+    chunks = [b"", "Unicode: 🚀", bytearray(b"prefix"), memoryview(payload), b""]
+    return iter(chunks), "Unicode: 🚀prefix".encode() + payload
+
+
+class DNSUDPServer(typing.NamedTuple):
+    address: tuple[str, int]
+    requests: list[bytes]
+    received: threading.Event
+    respond: threading.Event
+
+
+@pytest.fixture
+def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServer]:
+    """Answer address/HTTPS queries over loopback with a parametrized TTL."""
+    ttl = getattr(request, "param", 60)
+    queries: list[bytes] = []
+    errors: list[Exception] = []
+    received, respond = threading.Event(), threading.Event()
+    respond.set()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.settimeout(10)
+        address = sock.getsockname()
+
+        def serve() -> None:
+            try:
+                while True:
+                    query, client = sock.recvfrom(4096)
+                    if not query:
+                        return
+                    queries.append(query)
+                    received.set()
+                    assert respond.wait(5), "DNS response was never released"
+                    query_type, query_class = struct.unpack("!HH", query[-4:])
+                    assert query_class == 1 and query_type in (1, 28, 65)
+                    if query_type == 1:
+                        data = socket.inet_pton(socket.AF_INET, "192.0.2.1")
+                    elif query_type == 28:
+                        data = socket.inet_pton(socket.AF_INET6, "2001:db8::1")
+                    else:
+                        data = b"\x00\x01\x00"  # HTTPS ServiceMode, original target.
+                    # Echo the question; the answer name points back to its QNAME.
+                    response = query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
+                    response += query[12:] + b"\xc0\x0c"
+                    response += (
+                        struct.pack("!HHIH", query_type, 1, ttl, len(data)) + data
+                    )
+                    sock.sendto(response, client)
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            yield DNSUDPServer(address, queries, received, respond)
+        finally:
+            respond.set()
+            # Wake recvfrom without depending on cross-thread socket.close semantics.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as wakeup:
+                wakeup.sendto(b"", address)
+            thread.join(5)
+            assert not thread.is_alive()
+            assert not errors
+
+
+class DNSTLSServer(typing.NamedTuple):
+    address: tuple[str, int]
+    ca_certs: str
+    requests: list[bytes]
+    answer_count: int
+
+
+@pytest.fixture
+def dns_tls_server(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> typing.Iterator[DNSTLSServer]:
+    """A TLS peer serving framed DNS replies or an explicit disconnect."""
+    mode = request.param
+    answer_count = 128 if mode == "large" else 1
+    ca = trustme.CA()
+    ca_path = str(tmp_path / "ca.pem")
+    ca.cert_pem.write_to_path(ca_path)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ca.issue_cert("127.0.0.1").configure_cert(context)
+    queries: list[bytes] = []
+    errors: list[Exception] = []
+    stop = threading.Event()
+
+    def reply(query: bytes) -> bytes:
+        query_type, query_class = struct.unpack("!HH", query[-4:])
+        assert query_class == 1 and query_type in (1, 28, 65)
+        records = []
+        for i in range(1, answer_count + 1):
+            if query_type == 1:
+                records.append(socket.inet_pton(socket.AF_INET, f"192.0.2.{i}"))
+            elif query_type == 28:
+                records.append(socket.inet_pton(socket.AF_INET6, f"2001:db8::{i:x}"))
+        body = query[:2] + struct.pack("!HHHHH", 0x8180, 1, len(records), 0, 0)
+        body += query[12:]
+        for data in records:
+            body += (
+                b"\xc0\x0c" + struct.pack("!HHIH", query_type, 1, 60, len(data)) + data
+            )
+        return struct.pack("!H", len(body)) + body
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(5)
+
+        def serve() -> None:
+            try:
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    try:
+                        conn = context.wrap_socket(raw, server_side=True)
+                    except OSError as exc:
+                        # A rejected certificate can surface as a TCP reset or
+                        # errno 0 rather than an SSL error on some runtimes.
+                        if mode == "handshake" and (
+                            isinstance(exc, (ssl.SSLError, ConnectionResetError))
+                            or exc.errno == 0
+                        ):
+                            return
+                        raise
+                    with conn, conn.makefile("rb") as reader:
+                        replies: list[bytes] = []
+                        while True:
+                            try:
+                                prefix = reader.read(2)
+                            except ConnectionResetError:
+                                # Resolver.close() may reset the idle TLS connection.
+                                if replies:
+                                    raise
+                                return
+                            if not prefix:
+                                return
+                            assert len(prefix) == 2
+                            size = struct.unpack("!H", prefix)[0]
+                            query = reader.read(size)
+                            assert len(query) == size
+                            queries.append(query)
+                            replies.append(reply(query))
+                            # Gather the lookup's A, AAAA and HTTPS questions.
+                            if len(replies) < 3:
+                                continue
+                            if mode in ("empty", "partial-prefix", "partial-body"):
+                                partial = {
+                                    "empty": b"",
+                                    "partial-prefix": b"\x00",
+                                    "partial-body": b"\x00\x64partial",
+                                }[mode]
+                                if partial:
+                                    conn.sendall(partial)
+                                # Send close_notify, then close TCP without waiting
+                                # for the client's reciprocal shutdown alert.
+                                conn.setblocking(False)
+                                with contextlib.suppress(
+                                    ssl.SSLWantReadError,
+                                    BlockingIOError,  # Older LibreSSL reports would-block directly.
+                                    ssl.SSLEOFError,
+                                    ssl.SSLSyscallError,
+                                    ConnectionResetError,
+                                ):
+                                    try:
+                                        conn.unwrap().close()
+                                    except OSError as exc:
+                                        # OpenSSL 1.0.2 can report peer close as errno 0.
+                                        if exc.errno != 0:
+                                            raise
+                                return
+                            if mode == "timeout":
+                                assert stop.wait(10), "Timed-out client never closed"
+                                return
+                            # Reverse the replies to exercise transaction-ID matching.
+                            payload = b"".join(reversed(replies))
+                            if mode == "malformed":
+                                payload = b"\x00\x03bad" + payload
+                            conn.sendall(payload)
+                            replies.clear()
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            yield DNSTLSServer(listener.getsockname(), ca_path, queries, answer_count)
+        finally:
+            stop.set()
+            thread.join(10)
+            assert not thread.is_alive(), "DNS TLS peer did not finish"
+            assert not errors, errors
 
 
 class ServerConfig(typing.NamedTuple):
@@ -49,6 +335,113 @@ def _write_cert_to_dir(
     cert.cert_chain_pems[0].write_to_path(cert_path)
     certs = {"keyfile": key_path, "certfile": cert_path}
     return certs
+
+
+class DNSHTTPSServer(typing.NamedTuple):
+    config: ServerConfig
+    proxy_url: str
+    requests: list[httputil.HTTPServerRequest]
+    proxy_requests: list[httputil.HTTPServerRequest]
+    https_records: list[str | bytes]
+
+
+@pytest.fixture
+def dns_https_server(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> typing.Iterator[DNSHTTPSServer]:
+    """Local DoH endpoint, optionally serving a parametrized HTTP status/body."""
+    response = getattr(request, "param", None)
+    requests: list[httputil.HTTPServerRequest] = []
+    proxy_requests: list[httputil.HTTPServerRequest] = []
+    https_records: list[str | bytes] = []
+    ca = trustme.CA()
+    ca_path = str(tmp_path / "ca.pem")
+    ca.cert_pem.write_to_path(ca_path)
+    certs = _write_cert_to_dir(ca.issue_cert("127.0.0.1"), tmp_path)
+
+    class DoHHandler(web.RequestHandler):
+        def get(self) -> None:
+            requests.append(self.request)
+            if response is not None:
+                status, body = response
+                self.set_status(status)
+                self.write(body)
+                return
+            dns = self.get_query_argument("dns", None)
+            if dns is not None:
+                query = urlsafe_b64decode(dns + "=" * (-len(dns) % 4))
+                query_type = struct.unpack("!H", query[-4:-2])[0]
+                self.set_header("Content-Type", "application/dns-message")
+                if query_type == 65:
+                    records = https_records
+                else:
+                    family = socket.AF_INET if query_type == 1 else socket.AF_INET6
+                    address = "192.0.2.1" if query_type == 1 else "2001:db8::1"
+                    records = [socket.inet_pton(family, address)]
+                body = (
+                    query[:2]
+                    + struct.pack("!HHHHH", 0x8180, 1, len(records), 0, 0)
+                    + query[12:]
+                )
+                for data in records:
+                    assert isinstance(data, bytes)
+                    body += (
+                        b"\xc0\x0c"
+                        + struct.pack("!HHIH", query_type, 1, 60, len(data))
+                        + data
+                    )
+                self.write(body)
+            else:
+                name = self.get_query_argument("name")
+                query_type = int(self.get_query_argument("type"))
+                self.set_header("Content-Type", "application/dns-json")
+                records = (
+                    https_records
+                    if query_type == 65
+                    else ["192.0.2.1" if query_type == 1 else "2001:db8::1"]
+                )
+                self.write(
+                    {
+                        "Status": 0,
+                        "Question": [{"name": name, "type": query_type}],
+                        "Answer": [
+                            {
+                                "name": name,
+                                "type": query_type,
+                                "TTL": 60,
+                                "data": data,
+                            }
+                            for data in records
+                        ],
+                    }
+                )
+
+    class RecordingProxy(ProxyHandler):
+        async def connect(self) -> None:
+            proxy_requests.append(self.request)
+            await super().connect()
+
+    with run_loop_in_thread() as io_loop:
+
+        async def run_app() -> tuple[int, int]:
+            _, port = run_tornado_app(
+                web.Application([(r".*", DoHHandler)]), certs, "https", "127.0.0.1"
+            )
+            _, proxy_port = run_tornado_app(
+                web.Application([(r".*", RecordingProxy)]), None, "http", "127.0.0.1"
+            )
+            return port, proxy_port
+
+        port, proxy_port = asyncio.run_coroutine_threadsafe(
+            run_app(), io_loop.asyncio_loop
+        ).result(5)
+        yield DNSHTTPSServer(
+            ServerConfig("https", "127.0.0.1", port, ca_path, None),
+            f"http://127.0.0.1:{proxy_port}",
+            requests,
+            proxy_requests,
+            https_records,
+        )
 
 
 @contextlib.contextmanager

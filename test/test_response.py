@@ -169,12 +169,10 @@ class TestResponse:
         assert r._body == b"foo"  # type: ignore[comparison-overlap]
         assert r.data == b"foo"
 
-    @pytest.mark.parametrize("read_args", ((), (None,)))
+    @pytest.mark.parametrize("read_args", ((), (None,), (-1,), (-2,)))
     def test_cache_content_with_explicit_read_call(
         self, read_args: tuple[typing.Any, ...]
     ) -> None:
-        # todo: investigate how to handle the read(-1, cache_content=True)
-        #       we differ from urllib3 on behavior
         fp = BytesIO(b"foo")
         r = HTTPResponse(fp, preload_content=False)
         assert r.read(*read_args, cache_content=True) == b"foo"  # type: ignore[misc]
@@ -230,6 +228,22 @@ class TestResponse:
         fp = BytesIO(b"\x00" * 10)
         with pytest.raises(DecodeError):
             HTTPResponse(fp, headers={"content-encoding": "deflate"})
+
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    def test_zero_sized_read1_preserves_body(
+        self, compressed: bool, partial_read: bool
+    ) -> None:
+        payload = b"foobar"
+        fp = BytesIO(zlib.compress(payload) if compressed else payload)
+        headers = {"content-encoding": "deflate"} if compressed else None
+        with HTTPResponse(fp, headers=headers, preload_content=False) as response:
+            if partial_read:
+                assert response.read1(1) == payload[:1]
+            position = fp.tell()
+            assert response.read1(0) == b""
+            assert fp.tell() == position
+            assert response.read() == payload[1 if partial_read else 0 :]
 
     def test_reference_read(self) -> None:
         fp = BytesIO(b"foo")

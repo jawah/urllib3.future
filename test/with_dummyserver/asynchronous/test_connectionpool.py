@@ -9,8 +9,9 @@ import sys
 import time
 import typing
 import warnings
+from pathlib import Path
 from tempfile import NamedTemporaryFile
-from test import LONG_TIMEOUT, SHORT_TIMEOUT
+from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
 from threading import Event
 from unittest import mock
 from urllib.parse import urlencode
@@ -21,6 +22,8 @@ import pytest
 from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
 from dummyserver.testcase import HTTPDummyServerTestCase, SocketDummyServerTestCase
 from urllib3 import AsyncHTTPConnectionPool, ResponsePromise, encode_multipart_formdata
+from urllib3._async.connection import AsyncHTTPConnection
+from urllib3 import AsyncResolverDescription
 from urllib3._collections import HTTPHeaderDict
 from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
 from urllib3.connection import _get_default_user_agent
@@ -31,6 +34,7 @@ from urllib3.exceptions import (
     MaxRetryError,
     NameResolutionError,
     NewConnectionError,
+    ProtocolError,
     TimeoutError,
     UnrewindableBodyError,
 )
@@ -38,6 +42,7 @@ from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS
 from urllib3.util.retry import RequestHistory, Retry
 from urllib3.util.timeout import Timeout
 
+from ...conftest import DNSHTTPSServer
 from ... import INVALID_SOURCE_ADDRESSES, TARPIT_HOST, VALID_SOURCE_ADDRESSES
 from ...port_helpers import find_unused_port
 
@@ -119,13 +124,13 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
             self.host, self.port, timeout=short_timeout, retries=False
         ) as pool:
             wait_for_socket(ready_event)
-            now = time.time()
+            now = time.perf_counter()
             with pytest.raises(TimeoutError):
                 await pool.request("GET", "/", timeout=LONG_TIMEOUT)
-            delta = time.time() - now
+            delta = time.perf_counter() - now
 
             message = "timeout was pool-level SHORT_TIMEOUT rather than request-level LONG_TIMEOUT"
-            assert delta >= LONG_TIMEOUT, message
+            assert delta >= LONG_TIMEOUT - TIMEOUT_TOLERANCE, message
             block_event.set()  # Release request
 
             # Timeout passed directly to request should raise a request timeout
@@ -229,6 +234,112 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestConnectionPool(HTTPDummyServerTestCase):
+    @pytest.mark.parametrize("as_list", [False, True])
+    async def test_pool_resolver_configuration(self, as_list: bool) -> None:
+        resolver = ["system://default"] if as_list else "system://default"
+        async with AsyncHTTPConnectionPool(
+            "localhost", self.port, resolver=resolver, timeout=5
+        ) as pool:
+            response = await pool.request("GET", "/")
+            assert response.status == 200
+
+    @pytest.mark.parametrize("ca_option", ["ca_certs", "ca_cert_data", "ca_cert_dir"])
+    @pytest.mark.parametrize("override", [False, True])
+    async def test_pool_resolver_ca_configuration(
+        self,
+        dns_https_server: DNSHTTPSServer,
+        ca_option: str,
+        override: bool,
+        tmp_path: Path,
+    ) -> None:
+        server = dns_https_server.config
+        assert server.ca_certs is not None
+        pem = Path(server.ca_certs).read_text()
+        trusted = {
+            "ca_certs": server.ca_certs,
+            "ca_cert_data": pem,
+            "ca_cert_dir": str(tmp_path),
+        }[ca_option]
+        rd = AsyncResolverDescription.from_url(
+            f"doh://{server.host}:{server.port}/resolve?timeout=5"
+        )
+        # The directory case also trusts the fixture CA in memory; the directory
+        # still needs to be forwarded without overwriting resolver-specific options.
+        if ca_option == "ca_cert_dir":
+            rd["ca_cert_data"] = pem
+        if override:
+            rd[ca_option] = trusted
+        options: dict[str, typing.Any] = {
+            ca_option: str(tmp_path / "unused") if override else trusted
+        }
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, resolver=[rd], **options
+        ) as pool:
+            addresses = await pool._resolver.getaddrinfo(
+                "pool-config.test", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+            assert addresses[0][-1] == ("192.0.2.1", 443)
+            assert rd.kwargs[ca_option] == trusted
+        assert dns_https_server.requests
+
+    @pytest.mark.parametrize("host", ["example.com", b"example.com", 123])
+    async def test_header_value_types(self, host: str | bytes | int) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT
+        ) as pool:
+            response = await pool.request(
+                "GET",
+                "/headers",
+                headers={
+                    "Host": host,  # type: ignore[dict-item]
+                    "X-Text": "text",
+                    "X-Bytes": b"bytes",  # type: ignore[dict-item]
+                    "X-Number": 42,  # type: ignore[dict-item]
+                },
+            )
+            assert response.status == 200
+            headers = await response.json()
+            assert headers["Host"] == ("123" if host == 123 else "example.com")
+            assert headers["X-Text"] == "text"
+            assert headers["X-Bytes"] == "bytes"
+            assert headers["X-Number"] == "42"
+
+    async def test_skip_host_header(self) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises(ProtocolError, match="without the `Host` header"):
+                await pool.request("GET", "/headers", headers={"Host": SKIP_HEADER})
+
+    async def test_request_with_custom_connect(self) -> None:
+        class CustomConnection(AsyncHTTPConnection):
+            async def connect(self) -> None:
+                # A downstream connect() override may only open the socket.
+                self.sock = await self._new_conn()
+
+        conn = CustomConnection(self.host, self.port, timeout=LONG_TIMEOUT)
+        try:
+            await conn.request("POST", "/echo", body=b"custom connection")
+            response = await conn.getresponse()
+            assert response.status == 200
+            assert response.version == 11
+            assert await response.data == b"custom connection"
+        finally:
+            await conn.close()
+
+    @pytest.mark.parametrize("content_length", ["", "invalid"])
+    async def test_invalid_content_length(self, content_length: str) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
+        ) as pool:
+            with pytest.raises(ProtocolError, match="Invalid content-length"):
+                await pool.request(
+                    "POST",
+                    "/echo",
+                    body=b"data",
+                    headers={"Content-Length": content_length},
+                )
+
     async def test_get(self) -> None:
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
             r = await pool.request("GET", "/specific_method", fields={"method": "GET"})
@@ -1472,26 +1583,26 @@ class TestRetryAfter(HTTPDummyServerTestCase):
             r = await pool.request("GET", "/redirect_after", retries=False)
             assert r.status == 303
 
-            t = time.time()
+            t = time.perf_counter()
             r = await pool.request("GET", "/redirect_after")
             assert r.status == 200
-            delta = time.time() - t
-            assert delta >= 1
+            delta = time.perf_counter() - t
+            assert delta >= 1 - TIMEOUT_TOLERANCE
 
-            t = time.time()
-            timestamp = t + 2
+            t = time.perf_counter()
+            timestamp = time.time() + 2
             r = await pool.request("GET", "/redirect_after?date=" + str(timestamp))
             assert r.status == 200
-            delta = time.time() - t
-            assert delta >= 1
+            delta = time.perf_counter() - t
+            assert delta >= 1 - TIMEOUT_TOLERANCE
 
             # Retry-After is past
-            t = time.time()
-            timestamp = t - 1
+            t = time.perf_counter()
+            timestamp = time.time() - 1
             r = await pool.request("GET", "/redirect_after?date=" + str(timestamp))
-            delta = time.time() - t
+            delta = time.perf_counter() - t
             assert r.status == 200
-            assert delta < 1
+            assert delta < 1 + TIMEOUT_TOLERANCE
 
 
 @pytest.mark.asyncio
@@ -1543,6 +1654,62 @@ class TestFileBodiesOnRetryOrRedirect(HTTPDummyServerTestCase):
             )
             assert resp.status == 200
             assert await resp.data == data
+
+    @pytest.mark.parametrize("status", [307, 308])
+    @pytest.mark.parametrize("offset", [0, 7])
+    async def test_file_redirect_preserves_offset(
+        self,
+        tmp_path: Path,
+        status: int,
+        offset: int,
+        async_file_wrapper: typing.Callable[[typing.BinaryIO], typing.Any],
+    ) -> None:
+        payload = b"prefix:" + b"0123456789abcdef" * 8192 + b"tail"
+        path = tmp_path / "upload.bin"
+        path.write_bytes(payload)
+        with path.open("rb") as file:
+            file.seek(offset)
+            body = async_file_wrapper(file)
+            async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+                resp = await pool.request(
+                    "PUT", f"/redirect?target=/echo&status={status}", body=body
+                )
+                assert resp.status == 200
+                assert await resp.data == payload[offset:]
+                assert resp.retries is not None
+                assert len(resp.retries.history) == 1
+                assert resp.retries.history[0].status == status
+                assert await body.tell() == len(payload)
+
+    @pytest.mark.parametrize("status", [303, 307, 308])
+    async def test_async_nonseekable_file_redirect(
+        self,
+        status: int,
+        async_file_wrapper: typing.Callable[[typing.BinaryIO], typing.Any],
+    ) -> None:
+        sender, receiver = socket.socketpair()
+        with sender, receiver:
+            sender.settimeout(5)
+            receiver.settimeout(5)
+            sender.sendall(b"nonseekable upload")
+            sender.shutdown(socket.SHUT_WR)
+            with receiver.makefile("rb") as file:
+                body = async_file_wrapper(file)
+                async with AsyncHTTPConnectionPool(
+                    self.host, self.port, timeout=5
+                ) as pool:
+                    url = f"/redirect?target=/echo&status={status}"
+                    if status == 303:
+                        # A 303 drops the body and does not require a rewind.
+                        resp = await pool.request("PUT", url, body=body)
+                        assert resp.status == 200
+                        assert await resp.data == b""
+                    else:
+                        with pytest.raises(
+                            UnrewindableBodyError,
+                            match="Unable to record file position",
+                        ):
+                            await pool.request("PUT", url, body=body)
 
     async def test_redirect_with_failed_tell(self) -> None:
         """Abort request if failed to get a position from tell()"""

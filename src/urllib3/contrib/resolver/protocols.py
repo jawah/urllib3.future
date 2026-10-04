@@ -101,6 +101,14 @@ class BaseResolver(metaclass=ABCMeta):
             kwargs_cpy["port"] = self._port
 
         if "patterns" in args and "kwargs" in args:
+            if args[:2] == ["server", "port"]:
+                # Explicit server/port parameters must precede hostname patterns.
+                return self.__class__(
+                    kwargs_cpy.pop("server", None),
+                    kwargs_cpy.pop("port", None),
+                    *self._host_patterns,
+                    **kwargs_cpy,
+                )
             return self.__class__(*self._host_patterns, **kwargs_cpy)  # type: ignore[arg-type]
         elif "kwargs" in args:
             return self.__class__(**kwargs_cpy)

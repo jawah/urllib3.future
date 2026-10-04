@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from random import Random
 
 import pytest
 
@@ -16,7 +17,7 @@ from urllib3.contrib.webextensions._async import (
 )
 from urllib3.exceptions import ReadTimeoutError, URLSchemeUnknown
 
-from ... import notWindows
+from ... import TIMEOUT_TOLERANCE, notWindows
 from .. import TraefikTestCase
 
 
@@ -495,7 +496,7 @@ class TestWebExtensions(TraefikTestCase):
                 if resp.extension:
                     await resp.extension.close()
 
-            asyncio.create_task(cancel())
+            cancel_task = asyncio.create_task(cancel())
 
             events = []
 
@@ -503,6 +504,9 @@ class TestWebExtensions(TraefikTestCase):
                 event = await resp.extension.next_payload()
                 if event:
                     events.append(event)
+
+            # A background close failure must not be mistaken for successful EOF.
+            await cancel_task
 
             # add toleration for very slow environments
             # should be 2 events, but we saw flaky 3 due
@@ -552,7 +556,7 @@ class TestWebExtensions(TraefikTestCase):
             ca_certs=self.ca_authority,
             disabled_svn=disabled_svn,
         ) as pm:
-            before = time.time()
+            before = time.perf_counter()
 
             await asyncio.gather(
                 *[
@@ -603,7 +607,7 @@ class TestWebExtensions(TraefikTestCase):
                 assert event.json()  # type: ignore
                 assert "timestamp" in event.json()  # type: ignore
 
-            assert time.time() - before <= 10.0
+            assert time.perf_counter() - before <= 10.0 + TIMEOUT_TOLERANCE
 
     @pytest.mark.skipif(
         AsyncWebSocketExtensionFromMultiplexedHTTP is None,
@@ -647,3 +651,64 @@ class TestWebExtensions(TraefikTestCase):
 
             # gracefully close the sub protocol.
             await resp.extension.close()
+
+    @pytest.mark.skipif(
+        AsyncWebSocketExtensionFromMultiplexedHTTP is None,
+        reason="RFC 8441 requires wsproto",
+    )
+    @notWindows()
+    @pytest.mark.parametrize("text", [False, True], ids=["binary", "text"])
+    async def test_websocket_rfc8441_flow_control_and_reuse(self, text: bool) -> None:
+        target_url = self.https_haproxy_url.replace("https://", "wss+rfc8441://")
+        random = Random(0)
+        # Distinct payloads keep compression from collapsing the transfer.
+        data = [
+            bytes(random.getrandbits(8) for _ in range(6 * 1024)) for _ in range(32)
+        ]
+        payloads = [payload.hex() for payload in data] if text else data
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+        ) as pm:
+            pool = await pm.connection_from_url(self.https_haproxy_url)
+            assert await pm.connection_from_url(target_url) is pool
+            resp = await pm.urlopen(
+                "GET", target_url + "/websocket/echo", pool_timeout=5
+            )
+            assert resp.status == 200 and resp.version == 20
+            ws = resp.extension
+            assert isinstance(ws, AsyncWebSocketExtensionFromMultiplexedHTTP)
+            try:
+                # Send beyond the initial HTTP/2 window before consuming echoes.
+                for payload in payloads:
+                    await ws.send_payload(payload)
+
+                # Read another stream while the WebSocket echoes are pending.
+                other = await pm.urlopen(
+                    "GET", self.https_haproxy_url + "/get", pool_timeout=5
+                )
+                assert other.status == 200 and other.version == 20
+                assert (await other.json())["url"].endswith("/get")
+                assert pool.num_connections == 1
+                assert not ws.closed
+
+                for payload in payloads:
+                    assert await ws.next_payload() == payload
+                await ws.send_payload("after the batch")
+                assert await ws.next_payload() == "after the batch"
+            finally:
+                await ws.close()
+
+            assert ws.closed
+            other = await pm.urlopen(
+                "GET", self.https_haproxy_url + "/get", pool_timeout=5
+            )
+            assert other.status == 200 and other.version == 20
+            assert (await other.json())["url"].endswith("/get")
+            assert pool.num_connections == 1

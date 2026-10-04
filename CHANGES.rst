@@ -1,3 +1,49 @@
+2.25.902 (2026-10-04)
+=====================
+
+- Fixed missing exception causes when a connection closes before sending a response,
+  preventing downstream clients such as ClickHouse Connect from recognizing remote
+  closes for their retry policy.
+- Fixed synchronous ``HTTPResponse.read()`` returning partial bodies for negative
+  sizes such as ``-1``. These now read the remaining body, matching upstream urllib3.
+  Incremental ``read1()``, ``stream()`` and async reading retain their behavior. (#429)
+- Fixed ``read1(0)`` consuming response data or waiting for network I/O, in both
+  sync and async. Backported the zero-byte read guard from upstream
+  https://github.com/urllib3/urllib3/pull/3186
+- Fixed ``get_response(promise=...)`` using another request's read timeout when
+  sharing an HTTP/2 or HTTP/3 connection. The promise's original read timeout is
+  now restored before waiting, in both sync and async.
+- Fixed repeated deferred-response waits resetting the retry budget, allowing
+  retries to exceed the configured limit, in both sync and async.
+- Fixed a rare connection acquisition race that could raise ``KeyError`` during
+  concurrent synchronous ``get_response()`` calls when ``multiplexed=True``.
+- Fixed timed-out async pool waiters receiving later connection handoffs, which
+  could leave subsequent requests blocked.
+- Fixed closing an async SSE extension with a pending read propagating its internal
+  ``CancelledError`` and interrupting cleanup. Caller cancellation is still propagated.
+- Fixed WebSocket connections remaining open after transport EOF when using
+  ``wsproto``, in both sync and async.
+- Fixed resolver URL parsing altering case-sensitive credentials, headers and paths.
+  Credentials are now percent-decoded once, passwords may contain colons, and repeated
+  parameters are preserved. Applies to both sync and async.
+- Fixed DNS over HTTPS dropping custom request headers and rejecting ``proxy_headers``
+  during pool creation, in both sync and async.
+- Fixed duplicate request headers being lost when applying utls fingerprint headers,
+  in both sync and async.
+- Fixed DNS over HTTPS enabling HTTP/3 discovery through HTTPS records despite
+  ``quic_upgrade_via_dns_rr=False`` in wire-format mode, in both sync and async.
+  Synchronous JSON-mode resolution also ignores malformed hexadecimal HTTPS records
+  instead of failing an otherwise usable lookup.
+- Fixed in-memory resolver hostname matching to ignore case, and address registration
+  incorrectly treating substring matches as duplicates. IPv6 zone identifiers retain
+  their case. Applies to both sync and async.
+- Fixed resolver recycling with hostname constraints passing server and port arguments
+  in the wrong position, in both sync and async.
+- Fixed duplicate datagrams being queued during async UDP GSO fallback when the send
+  buffer fills and a batch contains repeated payloads.
+- Fixed an ``AttributeError`` when passing ``source_address`` to synchronous WASI
+  ``create_connection()``. Unsupported binding now raises ``OSError("bind unsupported")``.
+
 2.25.901 (2026-09-28)
 =====================
 

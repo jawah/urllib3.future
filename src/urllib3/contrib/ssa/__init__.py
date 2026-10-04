@@ -345,7 +345,7 @@ class AsyncSocket:
                 "_start_tls_compatible",
                 True,
             )
-        except AttributeError:
+        except AttributeError:  # Defensive: nonstandard asyncio implementations may omit the private TLS transport.
             pass
 
         # CPython < 3.11 bug: _SSLProtocolTransport lacks _force_close(),
@@ -365,7 +365,7 @@ class AsyncSocket:
                             self._ssl_protocol._abort()
 
                 _ssl_tp._force_close = _force_close
-        except AttributeError:
+        except AttributeError:  # Defensive: nonstandard asyncio implementations may omit the private TLS transport.
             pass
 
         if self.type == socket.SOCK_STREAM:

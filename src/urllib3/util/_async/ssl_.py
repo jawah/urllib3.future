@@ -23,22 +23,6 @@ from ..ssl_ import (
 )
 
 
-class DummyLock:
-    def __enter__(self) -> DummyLock:
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
-        pass
-
-
-class _NoLock_CacheableSSLContext(_CacheableSSLContext):
-    """Deprecated: we no longer avoid the lock in the async part because we want to allow many loop within many thread..."""
-
-    def __init__(self, maxsize: int | None = 32):
-        super().__init__(maxsize=maxsize)
-        self._lock = DummyLock()  # type: ignore[assignment]
-
-
 _SSLContextCache = _CacheableSSLContext()
 
 

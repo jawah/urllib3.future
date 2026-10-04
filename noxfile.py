@@ -248,7 +248,7 @@ def tests_impl(
             "-m",
             "pytest",
             *(
-                ("-n", "2" if os.environ.get("CI") else "4")
+                ("-n", "2" if os.environ.get("CI") else "4", "--dist=worksteal")
                 if xdist_enable
                 else ("-n", "0")
             ),
@@ -295,6 +295,20 @@ def tests_impl(
     ]
 )
 def test(session: nox.Session) -> None:
+    tests_impl(session)
+
+
+@nox.session(python=["3.14"])
+def test_udp_fallback(session: nox.Session) -> None:
+    """Run real HTTP/3 traffic through the Python UDP transport."""
+    if not session.posargs:
+        session.posargs.extend(
+            [
+                "test/contrib/asynchronous/test_ssa.py",
+                "test/with_traefik/asynchronous/",
+            ]
+        )
+    session.posargs.append("--python-udp")
     tests_impl(session)
 
 
@@ -383,6 +397,7 @@ def test_ssl_large_resources(session: nox.Session) -> None:
         "--strict-config",
         "--strict-markers",
         "test/with_dummyserver/test_socketlevel.py::TestSSL::test_requesting_large_resources_via_ssl",
+        "test/with_dummyserver/asynchronous/test_socketlevel.py::TestSSL::test_requesting_large_resources_via_ssl",
         env={
             "PYTHONWARNINGS": "always::DeprecationWarning",
             "COVERAGE_CORE": "sysmon",
@@ -659,6 +674,7 @@ def downstream_docker(session: nox.Session) -> None:
     for patch in [
         "0005-DockerPy-FixBadChunk.patch",
         "0006-DockerPy-xfail-flaky-attach-no-stream.patch",
+        "0007-DockerPy-retry-locked-swarm-init.patch",
     ]:
         session.run("git", "apply", f"{root}/ci/{patch}", external=True)
 

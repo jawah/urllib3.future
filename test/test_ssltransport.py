@@ -3,6 +3,7 @@ from __future__ import annotations
 import select
 import socket
 import ssl
+import sys
 import typing
 from unittest import mock
 
@@ -10,6 +11,7 @@ import pytest
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from urllib3.exceptions import ProxySchemeUnsupported
 from urllib3.util import ssl_
 from urllib3.util.ssltransport import SSLTransport
 
@@ -127,7 +129,7 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
         context = ssl.create_default_context()
         sock.close()
         with pytest.raises(OSError):
-            SSLTransport(sock, context)
+            SSLTransport(sock, context, server_hostname="localhost")
 
     @pytest.mark.timeout(PER_TEST_TIMEOUT)
     def test_close_after_handshake(self) -> None:
@@ -155,6 +157,37 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
             ssock.send(sample_request())
             response = consume_socket(ssock)
             validate_response(response)
+
+    def test_socket_options_and_ragged_eof(self) -> None:
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with self.server_context.wrap_socket(raw, server_side=True) as tls:
+                    assert tls.recv(1) == b"x"
+                    tls.sendall(b"y")
+                    # close() drops TCP without sending TLS close_notify.
+
+        self.start_dummy_server(handler)
+        with socket.create_connection((self.host, self.port), timeout=5) as raw:
+            with SSLTransport(
+                raw, self.client_context, server_hostname="localhost"
+            ) as tls:
+                tls.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                assert tls.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
+                if sys.platform == "win32":
+                    tls.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 1000, 1000))
+                tls.sendall(b"x")
+                assert tls.recv(1) == b"y"
+                buffer = bytearray(b"unchanged")
+                try:
+                    assert tls.recv_into(buffer) == 0
+                except ssl.SSLError as exc:
+                    # Older CPython reports OpenSSL 3's unexpected EOF as a generic
+                    # SSLError, rather than the SSL_ERROR_EOF handled by the adapter.
+                    assert sys.version_info < (3, 10)
+                    assert ssl.OPENSSL_VERSION_INFO >= (3, 0)
+                    assert "unexpected eof" in str(exc).lower()
+                assert buffer == b"unchanged"
 
     @pytest.mark.timeout(PER_TEST_TIMEOUT)
     def test_unwrap_existing_socket(self) -> None:
@@ -434,6 +467,22 @@ class TlsInTlsTestCase(SocketDummyServerTestCase):
 
 
 class TestSSLTransportWithMock:
+    def test_context_without_wrap_bio(self) -> None:
+        context = mock.Mock(spec=[])
+        with pytest.raises(
+            ProxySchemeUnsupported, match=r"requires SSLContext\.wrap_bio"
+        ):
+            SSLTransport._validate_ssl_context_for_tls_in_tls(context)
+
+    def test_context_rejects_available_memory_bios(self) -> None:
+        context = mock.create_autospec(ssl_.SSLContext)
+        context.wrap_bio.side_effect = TypeError("incompatible MemoryBIO")
+        with socket.socket() as sock:
+            with pytest.raises(
+                TypeError, match="could not find a compatible MemoryBIO"
+            ):
+                SSLTransport(sock, context, server_hostname="localhost")
+
     def test_constructor_params(self) -> None:
         server_hostname = "example-domain.com"
         sock = mock.Mock()

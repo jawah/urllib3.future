@@ -409,6 +409,34 @@ class TestProtocolLevel(TraefikTestCase):
 
         assert p._background_monitoring is None
 
+    async def test_goaway_with_streamed_response(self) -> None:
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_alt_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            background_watch_delay=None,
+            timeout=10,
+            retries=False,
+        ) as pool:
+            response = await pool.request("GET", "/get")
+            assert response.status == 200 and response.version == 20
+            assert pool.pool is not None
+            async with pool.pool.borrow() as conn:
+                original_socket = conn.sock
+                assert original_socket is not None
+            # The next request exceeds alt-https's five-second connection age.
+            await asyncio.sleep(8)
+            response = await pool.request("GET", "/bytes/131072", preload_content=False)
+            assert response.status == 200 and response.version == 20
+            assert len(await response.read()) == 131072
+            response = await pool.request("GET", "/get")
+            assert response.status == 200 and response.version == 20
+            async with pool.pool.borrow() as conn:
+                assert conn.sock is not None and conn.sock is not original_socket
+            assert pool.num_requests == 3
+
     async def test_goaway_handled_properly(self) -> None:
         async with AsyncHTTPSConnectionPool(
             self.host,

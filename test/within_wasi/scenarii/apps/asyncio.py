@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import urllib3  # noqa: F401
 from wit_world import exports  # type: ignore[import-not-found]
 
-from ..cases.asyncio import AsyncWasiTests
-from ..unittest_runner import run_async_case, selected_case
+from ..unittest_runner import measure_imports, run_async_case, selected_case
+
+with measure_imports():
+    import urllib3  # noqa: F401
+    from ..cases.asyncio import AsyncWasiTests
 
 
 class Run(exports.Run):  # type: ignore[misc]

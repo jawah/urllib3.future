@@ -258,7 +258,7 @@ def is_established(sock: socket.socket | AsyncSocket | SSLTransport) -> bool:
             # 10 = Time Wait
             # 11 = Max?
             return tcp_info.State == 4  # type: ignore[no-any-return]
-        elif WSAGetLastError_Fn is not None:
+        elif WSAGetLastError_Fn is not None:  # Defensive: failed native TCP probe.
             err = WSAGetLastError_Fn()
 
             if err in (
@@ -343,7 +343,7 @@ def enable_keepalive(
             except OSError:  # Defensive: edge OSes
                 pass  # likely pre-1709 Windows; fall through to ioctl
         if not modern_ok and hasattr(socket, "SIO_KEEPALIVE_VALS"):
-            try:
+            try:  # Defensive: legacy Windows keepalive API.
                 sock.ioctl(  # type: ignore[union-attr]
                     socket.SIO_KEEPALIVE_VALS,
                     (1, idle * 1000, interval * 1000),

@@ -36,13 +36,20 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
 
     async def close(self) -> None:
         if self._stream is not None and self._response is not None:
+            stream = self._stream
             if self._next_value_task is not None:
-                self._next_value_task.cancel()
-                await self._next_value_task
+                task = self._next_value_task
+                task.cancel()
+                # Consume our read cancellation without suppressing caller cancellation.
+                await asyncio.wait([task])
+                if not task.cancelled():
+                    task.result()
 
-            await self._stream.aclose()
+            await stream.aclose()
             if (
                 self._response._fp is not None
+                # Cancelling the read may already have closed the response.
+                and not self._response._fp.closed
                 and self._police_officer is not None
                 and hasattr(self._response._fp, "abort")
             ):
@@ -90,13 +97,12 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
                 except asyncio.CancelledError:
                     return None
                 except StopAsyncIteration:
-                    last_chunk = self._decoder.decode(b"", final=True)
-                    if not last_chunk:
-                        await self._stream.aclose()
-                        self._stream = None
-                        self._decoder.reset()
-                        return None
-                    self._buffer += last_chunk
+                    # Strict UTF-8 finalization returns no text or raises on an incomplete character.
+                    self._decoder.decode(b"", final=True)
+                    # The exhausted generator may already be detached by close().
+                    self._stream = None
+                    self._decoder.reset()
+                    return None
                 finally:
                     self._next_value_task = None
 

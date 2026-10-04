@@ -169,6 +169,25 @@ class TestAsyncResponse:
         with pytest.raises(DecodeError):
             await r.read()
 
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("partial_read", [False, True])
+    async def test_zero_sized_read1_preserves_body(
+        self, compressed: bool, partial_read: bool
+    ) -> None:
+        payload = b"foobar"
+        fp = BytesIO(zlib.compress(payload) if compressed else payload)
+        headers = {"content-encoding": "deflate"} if compressed else None
+        response = AsyncHTTPResponse(fp, headers=headers, preload_content=False)
+        try:
+            if partial_read:
+                assert await response.read1(1) == payload[:1]
+            position = fp.tell()
+            assert await response.read1(0) == b""
+            assert fp.tell() == position
+            assert await response.read() == payload[1 if partial_read else 0 :]
+        finally:
+            await response.close()
+
     async def test_reference_read(self) -> None:
         fp = _make_async_fp(b"foo")
         r = AsyncHTTPResponse(fp, preload_content=False)
@@ -1434,3 +1453,90 @@ class TestAsyncResponse:
         await resp.drain_conn()
         # After draining, the fp should be consumed/closed
         assert fp.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [None, BytesIO(b"body")])
+async def test_response_without_transport_has_no_trailers(body: typing.Any) -> None:
+    response = AsyncHTTPResponse(body=body, preload_content=False)
+    assert response.trailers is None
+    await response.close()
+
+
+@pytest.mark.asyncio
+async def test_response_rejects_extension_without_direct_stream() -> None:
+    from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
+    from urllib3.exceptions import ResponseNotReady
+
+    response = AsyncHTTPResponse(body=BytesIO(b"body"), preload_content=False)
+    with pytest.raises(ResponseNotReady):
+        await response.start_extension(AsyncRawExtensionFromHTTP())
+    await response.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_and_zero_sized_streams() -> None:
+    response = AsyncHTTPResponse()
+    assert [chunk async for chunk in response.stream()] == []
+    response = AsyncHTTPResponse(body=BytesIO(b"body"), preload_content=False)
+    assert [chunk async for chunk in response.stream(0)] == []
+    assert await response.read() == b"body"
+    await response.close()
+
+
+@pytest.mark.asyncio
+async def test_chunked_read_requires_transport() -> None:
+    from urllib3.exceptions import BodyNotHttplibCompatible
+
+    response = AsyncHTTPResponse(
+        body=BytesIO(b"body"),
+        headers={"transfer-encoding": "chunked"},
+        preload_content=False,
+    )
+    with pytest.raises(BodyNotHttplibCompatible):
+        await response.read_chunked().__anext__()
+    await response.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collect", [False, True])
+async def test_explicit_close_without_auto_close(collect: bool) -> None:
+    import gc
+
+    body = BytesIO(b"body")
+    response = AsyncHTTPResponse(body=body, preload_content=False, auto_close=False)
+    if collect:
+        del response
+        gc.collect()
+    else:
+        await response.close()
+        assert response.closed
+    assert body.closed
+
+
+@pytest.mark.asyncio
+async def test_oversized_read_from_file_body() -> None:
+    response = AsyncHTTPResponse(body=BytesIO(b"body"), preload_content=False)
+    assert await response.read(2**31) == b"body"
+    await response.close()
+
+
+@pytest.mark.asyncio
+async def test_extension_rejects_plain_response() -> None:
+    from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
+
+    response = AsyncHTTPResponse(body=BytesIO(b"body"), preload_content=False)
+    with pytest.raises(OSError, match="closed or uninitialized"):
+        await AsyncRawExtensionFromHTTP().start(response)
+    await response.close()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_file_body_raises_protocol_error(tmp_path: typing.Any) -> None:
+    with (tmp_path / "write-only").open("wb") as body:
+        response = AsyncHTTPResponse(body=body, preload_content=False)
+        with pytest.raises(ProtocolError) as caught:
+            await response.read()
+        assert isinstance(caught.value.__cause__, OSError)
+        await response.close()
+        assert body.closed

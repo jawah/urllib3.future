@@ -431,16 +431,16 @@ class AsyncHTTPResponse(HTTPResponse):
             'content-encoding' header.
         """
 
+        # A zero-byte read must not consume data or change response state.
+        if amt == 0:
+            return b""
+
         data = await self._read(
             amt=amt or -1,
             decode_content=decode_content,
             read1=True,
         )
         self._uncached_read_occurred = True
-
-        if amt is not None and amt >= 0 and len(data) > amt:
-            self._decoded_buffer.put(data)
-            return self._decoded_buffer.get(amt)  # type: ignore[no-any-return]
 
         return data
 

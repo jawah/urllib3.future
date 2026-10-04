@@ -892,6 +892,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 block=promise is not None,
                 not_idle_only=True,
             ) as conn:
+                if promise is not None:
+                    # Restore this request's read timeout after other requests used the connection.
+                    conn.timeout = typing.cast(
+                        typing.Optional[float], promise.get_parameter("read_timeout")
+                    )
                 try:
                     response = await conn.getresponse(
                         promise=promise, police_officer=self.pool
@@ -946,6 +951,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 retries = retries.increment(
                     method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
                 )
+                # Carry the remaining budget into the next response wait.
+                promise.set_parameter("retries", retries)
                 await retries.async_sleep()
             else:
                 raise new_e  # we only retry if we were specified a specific promise. we can't blindly assume to retry.
@@ -1406,8 +1413,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
                     if headers is not None:
                         # user specified headers always win.
-                        for k, v in headers.items():
-                            prefixed_headers[k] = v
+                        if isinstance(headers, HTTPHeaderDict):
+                            # Preserve duplicate values and the preset header order.
+                            prefixed_headers._copy_from(headers)
+                        else:
+                            for k, v in headers.items():
+                                prefixed_headers[k] = v
 
                     headers = prefixed_headers
                 except ValueError:  # We can forbid it entirely

@@ -4,14 +4,32 @@ import ssl
 import datetime
 import threading
 import typing
+from io import UnsupportedOperation
 from unittest import mock
 
 import pytest
 import trustme
 
 from urllib3._constant import MOZ_INTERMEDIATE_CIPHERS
+from urllib3.contrib.anytls import ssl as active_ssl
 from urllib3.exceptions import ProxySchemeUnsupported, SSLError
 from urllib3.util import ssl_
+
+
+def test_in_memory_client_certificate_without_available_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib3.contrib import imcc
+
+    ca = trustme.CA()
+    client = ca.issue_cert("client.example")
+    monkeypatch.setattr(imcc, "SUPPORTED_METHODS", [])
+    with pytest.raises(UnsupportedOperation, match="unable to initialize mTLS"):
+        imcc.load_cert_chain(
+            ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+            client.cert_chain_pems[0].bytes(),
+            client.private_key_pem.bytes(),
+        )
 
 
 @pytest.fixture
@@ -75,6 +93,40 @@ def tls_reader() -> ssl.SSLObject:
 
 
 class TestSSL:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (" STDLIB_SSL ", ["ssl", "rtls", "utls"]),
+            ("boring-ssl", ["utls", "rtls", "ssl"]),
+            ("AWS_LC", ["rtls", "utls", "ssl"]),
+            ("  ", ["rtls", "utls", "ssl"]),
+        ],
+    )
+    def test_backend_preference(self, value: str, expected: list[str]) -> None:
+        from urllib3.contrib.anytls._backend import _parse_pref
+
+        assert _parse_pref(value) == expected
+
+    def test_unknown_backend_preference_warns(self) -> None:
+        from urllib3.contrib.anytls._backend import _parse_pref
+
+        with pytest.warns(UserWarning, match="Unknown value.*not-a-backend"):
+            assert _parse_pref("not-a-backend") == ["rtls", "utls", "ssl"]
+
+    def test_context_cache_requires_lock_and_distinguishes_dict_options(self) -> None:
+        cache = ssl_._CacheableSSLContext()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        with pytest.raises(OSError, match="WITH lock"):
+            cache.get()
+        with pytest.raises(OSError, match="WITH lock"):
+            cache.save(context)
+        with cache.lock({"option": "one"}):
+            cache.save(context)
+        with cache.lock({"option": "one"}):
+            assert cache.get() is context
+        with cache.lock({"option": "two"}):
+            assert cache.get() is None
+
     @pytest.mark.parametrize("fallback", [False, True])
     def test_cert_store_error_queue_isolation(
         self, malformed_ca: str, fallback: bool, monkeypatch: pytest.MonkeyPatch
@@ -486,3 +538,84 @@ class TestSSL:
 
         with pytest.raises(AttributeError):
             anytls.does_not_exist
+
+
+@pytest.mark.parametrize("disabled_version", ["TLSv1_2", "TLSv1_3"])
+@pytest.mark.filterwarnings(
+    "ignore:ssl.OP_NO_SSL.*options are deprecated:DeprecationWarning"
+)
+def test_context_conversion_preserves_disabled_versions(disabled_version: str) -> None:
+    from urllib3.contrib.anytls import IS_NONSTDLIB
+
+    if not IS_NONSTDLIB:
+        pytest.skip("Requires an alternative TLS backend")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.options |= getattr(ssl, "OP_NO_" + disabled_version)
+    converted = ssl_.convert_ssl_ctx_nonstdlib(context)
+    assert converted is not context
+    assert not converted.check_hostname
+    assert converted.verify_mode == active_ssl.CERT_REQUIRED
+    assert int(converted.options) & int(
+        getattr(active_ssl, "OP_NO_" + disabled_version)
+    )
+    assert converted.cert_store_stats()["x509_ca"] > 0
+
+
+def test_tls12_context_disables_quic() -> None:
+    context = ssl_.create_urllib3_context()
+    context.maximum_version = active_ssl.TLSVersion.TLSv1_2
+    assert not ssl_.is_capable_for_quic(context, None)
+
+
+def test_unknown_legacy_tls_version_uses_maximum_supported() -> None:
+    assert (
+        ssl_.resolve_ssl_version(-123, mitigate_tls_version=True)
+        == active_ssl.TLSVersion.MAXIMUM_SUPPORTED
+    )
+
+
+def test_client_chain_ignores_trailing_comment() -> None:
+    from urllib3.contrib.imcc._ctypes import _split_client_cert
+
+    ca = trustme.CA()
+    cert = ca.issue_cert("client.example").cert_chain_pems[0].bytes()
+    assert _split_client_cert(cert + b"# trailing comment\n") == [cert]
+
+
+@pytest.mark.asyncio
+async def test_async_tls_missing_ca_file(tmp_path: typing.Any) -> None:
+    from urllib3.contrib.ssa import AsyncSocket
+    from urllib3.util._async.ssl_ import ssl_wrap_socket
+
+    sock = AsyncSocket()
+    try:
+        with pytest.raises(SSLError) as caught:
+            await ssl_wrap_socket(sock, ca_certs=str(tmp_path / "missing.pem"))
+        assert isinstance(caught.value.__cause__, OSError)
+    finally:
+        sock.close()
+
+
+@pytest.mark.asyncio
+async def test_async_in_memory_certificate_unavailable_warns(
+    san_server: typing.Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib3 import AsyncPoolManager
+    from urllib3.contrib import imcc
+    from urllib3.contrib.anytls import IS_NONSTDLIB
+
+    if IS_NONSTDLIB:
+        pytest.skip("Alternative backends support in-memory certificates natively")
+    client = trustme.CA().issue_cert("client.example")
+    monkeypatch.setattr(imcc, "SUPPORTED_METHODS", [])
+    async with AsyncPoolManager(
+        ca_certs=san_server.ca_certs,
+        cert_data=client.cert_chain_pems[0].bytes(),
+        key_data=client.private_key_pem.bytes(),
+        timeout=5,
+        retries=False,
+    ) as manager:
+        with pytest.warns(UserWarning, match="in-memory.*unsupported on your platform"):
+            response = await manager.request("GET", san_server.base_url)
+        assert response.status == 200

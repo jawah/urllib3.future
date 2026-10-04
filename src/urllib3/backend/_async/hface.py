@@ -1092,9 +1092,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         )
                         and not any(isinstance(e, HeadersReceived) for e in events)
                     ):
-                        raise ProtocolError(
-                            "Remote end closed connection without response"
-                        )
+                        # Let downstream retry handlers recognize the remote close.
+                        message = "Remote end closed connection without response"
+                        raise ProtocolError(message) from ConnectionResetError(message)
 
                     if (
                         event.error_code == 400

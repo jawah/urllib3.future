@@ -84,8 +84,8 @@ def _compute_key_ctx_build(
                             default=arg.stat().st_mtime,
                         )
                     )
-                except OSError:
-                    pass  # Defensive: race condition possible
+                except OSError:  # Defensive: CA directory entries can disappear during metadata inspection.
+                    pass
             else:
                 try:
                     key += str(Path(arg).stat().st_mtime)
@@ -275,7 +275,7 @@ try:  # Do we have ssl at all?
     # not necessarily declared in version string
     if IS_FIPS is False:
         if hasattr(ssl, "FIPS_mode") and callable(ssl.FIPS_mode):
-            IS_FIPS = bool(ssl.FIPS_mode())
+            IS_FIPS = bool(ssl.FIPS_mode())  # Defensive: legacy FIPS detection hook.
         else:  # messy detection
             try:
                 from _hashlib import openssl_md5
@@ -1027,10 +1027,10 @@ def convert_ssl_ctx_nonstdlib(ctx: ssl.SSLContext) -> ssl.SSLContext:
     opt_match_no_tls: bool = False
 
     try:
-        if stdlib_ssl.OP_NO_TLSv1_3 in ctx.options:
+        if stdlib_ssl.OP_NO_TLSv1_3 in ctx.options:  # Defensive: legacy TLS options.
             new_ctx.options |= ssl.OP_NO_TLSv1_3
             opt_match_no_tls = True
-        if stdlib_ssl.OP_NO_TLSv1_2 in ctx.options:
+        if stdlib_ssl.OP_NO_TLSv1_2 in ctx.options:  # Defensive: legacy TLS options.
             new_ctx.options |= ssl.OP_NO_TLSv1_2
             opt_match_no_tls = True
     except TypeError:

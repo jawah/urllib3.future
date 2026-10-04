@@ -192,7 +192,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     @property
     def max_stream_count(self) -> int:
-        return 1
+        return 1  # Defensive: protocol contract; HTTP/1 does not multiplex streams.
 
     def is_idle(self) -> bool:
         return self._connection.their_state in _IDLE_STATES

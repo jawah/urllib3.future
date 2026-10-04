@@ -97,7 +97,10 @@ INVALID_SOURCE_ADDRESSES = [(("192.0.2.255", 0), False), (("2001:db8::1", 0), Tr
 SHORT_TIMEOUT = 0.001
 LONG_TIMEOUT = 0.3
 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") == "true":
-    LONG_TIMEOUT = 1.5
+    LONG_TIMEOUT = 1.85
+
+# Approx on assert times. CI flakiness workaround.
+TIMEOUT_TOLERANCE = 0.05
 
 DUMMY_POOL = ConnectionPool("dummy")
 

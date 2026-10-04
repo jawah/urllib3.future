@@ -4,8 +4,8 @@ import asyncio
 import typing
 from asyncio import sleep
 from random import randint
-from test import notMacOS
-from time import time
+from test import TIMEOUT_TOLERANCE, notMacOS
+from time import perf_counter
 
 import pytest
 
@@ -114,7 +114,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
 
             assert len(promises) == 10
 
-            before = time()
+            before = perf_counter()
 
             for i in range(5):
                 response = await pool.get_response()
@@ -122,7 +122,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
                 assert response.status == 200
                 assert "/delay/1" in (await response.json())["url"]
 
-            assert 1.5 >= round(time() - before, 2)
+            assert perf_counter() - before <= 1.5 + TIMEOUT_TOLERANCE
 
             for i in range(5):
                 response = await pool.get_response()
@@ -130,7 +130,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
                 assert response.status == 200
                 assert "/delay/3" in (await response.json())["url"]
 
-            assert 3.5 >= round(time() - before, 2)
+            assert perf_counter() - before <= 3.5 + TIMEOUT_TOLERANCE
             assert await pool.get_response() is None
 
     async def test_multiplexing_without_preload(self) -> None:

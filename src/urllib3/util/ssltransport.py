@@ -208,7 +208,7 @@ class SSLTransport:
             return self.socket.getsockopt(__level, __optname)
         return self.socket.getsockopt(__level, __optname, buflen)
 
-    def _decref_socketios(self) -> None:
+    def _decref_socketios(self) -> None:  # Defensive: SocketIO compatibility.
         self.socket._decref_socketios()  # type: ignore[attr-defined]
 
     def _wrap_ssl_read(self, len: int, buffer: bytearray | None = None) -> int | bytes:
@@ -261,7 +261,7 @@ class SSLTransport:
             except ssl_module.SSLWantReadError:
                 want_read = True
             except ssl_module.SSLWantWriteError:
-                want_read = False
+                want_read = False  # Defensive: MemoryBIO output grows on demand; retain for alternate TLS backends.
 
             buf = self.outgoing.read()
             self.socket.sendall(buf)

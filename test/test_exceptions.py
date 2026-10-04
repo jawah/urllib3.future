@@ -50,6 +50,27 @@ class TestPickle:
 
 
 class TestFormat:
+    def test_incomplete_read_without_expected_length(self) -> None:
+        from urllib3.exceptions import IncompleteRead
+
+        assert repr(IncompleteRead(17, None)) == "IncompleteRead(17 bytes read)"
+
+    def test_invalid_chunk_length(self) -> None:
+        from io import BytesIO
+        from urllib3 import HTTPResponse
+        from urllib3.exceptions import InvalidChunkLength
+
+        response = HTTPResponse(body=BytesIO(b"hello"), preload_content=False)
+        assert response.read(2) == b"he"
+        error = InvalidChunkLength(response, b"not-hex\r\n")
+        assert error.response is response
+        assert error.partial == 2
+        assert error.expected is None
+        assert (
+            repr(error)
+            == "InvalidChunkLength(got length b'not-hex\\r\\n', 2 bytes read)"
+        )
+
     def test_header_parsing_errors(self) -> None:
         hpe = HeaderParsingError([MessageDefect("defects")], "unparsed_data")
 

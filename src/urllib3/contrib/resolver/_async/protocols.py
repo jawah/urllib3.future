@@ -92,7 +92,7 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
         """
 
         if not _HAS_WASI_SOCKET_BINDINGS:
-            raise RuntimeError(
+            raise RuntimeError(  # Defensive: component built without the required WASI socket interfaces.
                 "Async networking on WASI requires the Preview 3 socket "
                 "interfaces. Componentize with "
                 "'-w wasi:cli/command@0.3.0', or import "
@@ -181,7 +181,10 @@ class AsyncBaseResolver(BaseResolver, metaclass=ABCMeta):
                         sock.setsockopt(
                             socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
                         )
-                    except (OSError, AttributeError):
+                    except (
+                        OSError,
+                        AttributeError,
+                    ):  # Defensive: the platform may not support SO_LINGER.
                         pass
 
                 # attempt to leverage GRO when under Linux

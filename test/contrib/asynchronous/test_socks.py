@@ -200,13 +200,19 @@ def handle_socks4_negotiation(
     sock.sendall(response)
 
 
+def test_invalid_socks_version_is_valueerror() -> None:
+    with pytest.raises(ValueError, match="Unable to determine SOCKS version"):
+        socks.AsyncSOCKSProxyManager(proxy_url="http://example.org")
+
+
 @pytest.mark.asyncio
 class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
     """
     Test the SOCKS proxy in SOCKS5 mode.
     """
 
-    async def test_basic_request(self) -> None:
+    @pytest.mark.parametrize("custom_socket_options", [False, True])
+    async def test_basic_request(self, custom_socket_options: bool) -> None:
         def request_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
 
@@ -233,7 +239,19 @@ class TestSocks5Proxy(IPV4SocketDummyServerTestCase):
 
         self._start_server(request_handler)
         proxy_url = f"socks5://{self.host}:{self.port}"
-        async with socks.AsyncSOCKSProxyManager(proxy_url) as pm:
+        options = (
+            [
+                (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+                (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1, "tcp"),
+                # Invalid for a TCP socket: SOCKS must filter this UDP option.
+                (socket.IPPROTO_UDP, -1, 0, "udp"),
+            ]
+            if custom_socket_options
+            else socks.AsyncSOCKSConnection.default_socket_options
+        )
+        async with socks.AsyncSOCKSProxyManager(
+            proxy_url, socket_options=options
+        ) as pm:
             response = await pm.request("GET", "http://16.17.18.19")
 
             assert response.status == 200

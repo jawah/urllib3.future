@@ -12,6 +12,7 @@ import select
 import shutil
 import socket
 import ssl
+import sys
 import tempfile
 import threading
 import time
@@ -31,6 +32,10 @@ from threading import Event
 from unittest import mock
 
 import pytest
+from jh2.config import H2Configuration  # type: ignore[import-untyped]
+from jh2.connection import H2Connection  # type: ignore[import-untyped]
+from jh2.events import RequestReceived  # type: ignore[import-untyped]
+from urllib3 import HttpVersion, ResponsePromise
 import trustme
 
 from dummyserver.server import (
@@ -44,12 +49,18 @@ from urllib3 import (
     HTTPConnectionPool,
     HTTPResponse,
     HTTPSConnectionPool,
+    PoolManager,
     ProxyManager,
     util,
 )
 from urllib3._collections import HTTPHeaderDict
 from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.connectionpool import _url_from_pool
+from urllib3.contrib.webextensions.raw import RawExtensionFromHTTP
+from urllib3.contrib.webextensions.sse import (
+    ServerSentEvent,
+    ServerSideEventExtensionFromHTTP,
+)
 from urllib3.exceptions import (
     IncompleteRead,
     InsecureRequestWarning,
@@ -64,6 +75,7 @@ from urllib3.poolmanager import proxy_from_url
 from urllib3.util import ssl_, ssl_wrap_socket
 from urllib3.util.retry import Retry
 from urllib3.util.timeout import Timeout
+from urllib3.util.wait import wait_for_read
 
 from .. import LogRecorder, has_alpn
 
@@ -329,6 +341,63 @@ class TestClientCerts(SocketDummyServerTestCase):
 
             assert len(client_certs) == 1
 
+    @pytest.mark.skipif(platform.system() != "Linux", reason="Requires Linux /dev/shm")
+    @pytest.mark.skipif(
+        sys.implementation.name == "pypy",
+        reason="PyPy libffi does not implement _shm_open (probable bug)",
+    )
+    def test_client_cert_shared_memory_without_proc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3.contrib.imcc import _shm
+
+        if not os.path.isdir("/dev/shm") or not os.access("/dev/shm", os.W_OK):
+            pytest.skip("Requires writable /dev/shm")
+        # Converting a stdlib context to utls/rtls cannot copy its client identity.
+        ctx = ssl_.create_urllib3_context()
+        ctx.load_verify_locations(self.ca_path)
+        exists = os.path.exists
+        shared_paths: set[str] = set()
+
+        def without_proc(path: str) -> bool:
+            if path.startswith("/proc/self/fd/"):
+                return False
+            if path.startswith("/dev/shm/"):
+                shared_paths.add(path)
+            return exists(path)
+
+        with monkeypatch.context() as patch:
+            patch.delattr(os, "memfd_create", raising=False)
+            patch.setattr(os.path, "exists", without_proc)
+            _shm.load_cert_chain(
+                ctx, Path(self.cert_path).read_bytes(), Path(self.key_path).read_bytes()
+            )
+        assert len(shared_paths) == 1
+        assert all(not exists(path) for path in shared_paths)
+
+        client_certs = []
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                with self._wrap_in_ssl(sock) as tls:
+                    client_certs.append(tls.getpeercert(binary_form=True))
+                    headers = bytearray()
+                    while not headers.endswith(b"\r\n\r\n"):
+                        chunk = tls.recv(65536)
+                        assert chunk
+                        headers.extend(chunk)
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host, self.port, ssl_context=ctx, timeout=5, retries=False
+        ) as pool:
+            assert pool.request("GET", "/").data == b"ok"
+        expected = ssl.PEM_cert_to_DER_cert(Path(self.cert_path).read_text())
+        assert client_certs == [expected]
+
     def test_missing_client_certs_raises_error(self) -> None:
         """
         Having client certs not be present causes an error.
@@ -426,7 +495,208 @@ class TestClientCerts(SocketDummyServerTestCase):
             )
 
 
+class TestRawExtension(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("message", ["hello 🚀", b"hello\x00world"])
+    def test_timeout_then_echo(self, message: str | bytes) -> None:
+        expected = message.encode() if isinstance(message, str) else message
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(
+                    b"HTTP/1.1 101 Switching Protocols\r\n"
+                    b"Connection: Upgrade\r\nUpgrade: echo\r\n\r\n"
+                )
+                data = b""
+                while len(data) < len(expected):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    data += chunk
+                assert data == expected
+                sock.sendall(data)
+                assert sock.recv(1) == b""
+
+        self._start_server(socket_handler)
+        with PoolManager(timeout=5) as manager:
+            response = manager.urlopen(
+                "GET",
+                f"http://{self.host}:{self.port}/",
+                headers={"Connection": "Upgrade", "Upgrade": "echo"},
+                extension=RawExtensionFromHTTP(),
+            )
+            assert response.status == 101
+            extension = response.extension
+            assert isinstance(extension, RawExtensionFromHTTP)
+            assert response._police_officer is not None
+            with response._police_officer.borrow(response) as conn:
+                assert conn.sock is not None
+                conn.sock.settimeout(0.05)
+            # The peer sends nothing until we write, so this timeout is deterministic.
+            with pytest.raises(ReadTimeoutError):
+                extension.next_payload()
+            assert not extension.closed
+            with response._police_officer.borrow(response) as conn:
+                assert conn.sock is not None
+                conn.sock.settimeout(5)
+            extension.send_payload(message)
+            received = b""
+            while len(received) < len(expected):
+                chunk = extension.next_payload()
+                assert chunk
+                received += chunk
+            assert received == expected
+            extension.close()
+            extension.close()
+            assert extension.closed
+            with pytest.raises(OSError, match="closed"):
+                extension.next_payload()
+            with pytest.raises(OSError, match="closed"):
+                extension.send_payload(message)
+
+
+class TestServerSentEvents(SocketDummyServerTestCase):
+    def test_extension_request_headers(self) -> None:
+        extension_request_headers = {
+            "Accept": "text/event-stream; charset=utf-8",
+            "X-Client": "preserved",
+        }
+        received = []
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    data = sock.recv(65536)
+                    assert data
+                    headers.extend(data)
+                received.append(bytes(headers))
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                    b"Content-Length: 10\r\n\r\ndata: ok\n\n"
+                )
+
+        self._start_server(handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen(
+                "GET",
+                "/",
+                headers=extension_request_headers,
+                extension=ServerSideEventExtensionFromHTTP(),
+                preload_content=False,
+            )
+            assert response.extension is not None
+            event = response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent) and event.data == "ok"
+            response.extension.close()
+        assert b"Accept: text/event-stream; charset=utf-8\r\n" in received[0]
+        assert b"X-Client: preserved\r\n" in received[0]
+        assert dict(extension_request_headers) == {
+            "Accept": "text/event-stream; charset=utf-8",
+            "X-Client": "preserved",
+        }
+
+    @pytest.mark.parametrize("blocksize", [1, 65536])
+    @pytest.mark.parametrize("raw", [False, True])
+    def test_event_fields_and_boundaries(self, blocksize: int, raw: bool) -> None:
+        events = [
+            'event: update\r\nid: cursor-1\r\nretry: 1500\r\ndata: {"text": "🚀"}\r\n\r\n',
+            "unknown: ignored\nid: bad\x00id\nretry: soon\ndata: second\n\n",
+            "data:third\n\n",
+        ]
+        body = (": heartbeat\r\n\r\n" + "".join(events)).encode()
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+
+        # One-byte reads also split UTF-8 code points and event separators.
+        with PoolManager(blocksize=blocksize, timeout=5) as manager:
+            response = manager.request("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, ServerSideEventExtensionFromHTTP)
+            if raw:
+                assert [extension.next_payload(raw=True) for _ in events] == events
+            else:
+                first, second, third = [extension.next_payload() for _ in events]
+                assert isinstance(first, ServerSentEvent)
+                assert isinstance(second, ServerSentEvent)
+                assert isinstance(third, ServerSentEvent)
+                assert first.event == "update"
+                assert first.json() == {"text": "🚀"}
+                assert first.retry == 1500
+                assert first.id == second.id == third.id == "cursor-1"
+                assert second.event == third.event == "message"
+                assert second.data == "second"
+                assert third.data == "third"
+                assert second.retry is None
+                assert "retry=1500" in repr(first)
+            assert extension.next_payload() is None
+            assert extension.closed
+            extension.close()
+            extension.close()
+            with pytest.raises(OSError, match="closed"):
+                extension.next_payload()
+
+
 class TestSocketClosing(SocketDummyServerTestCase):
+    def test_idle_tls_close_notify_before_reuse(self) -> None:
+        close_first = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # Keep post-handshake TLS 1.3 tickets out of the readiness check.
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            for i in range(2):
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        request = bytearray()
+                        while not request.endswith(b"\r\n\r\n"):
+                            data = sock.recv(65536)
+                            assert data
+                            request.extend(data)
+                        sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                        if i == 0:
+                            assert close_first.wait(5)
+                        # Send close_notify without closing TCP; wait for the client.
+                        try:
+                            sock.unwrap().close()
+                        except (ssl.SSLError, ConnectionResetError, BlockingIOError):
+                            # Older LibreSSL can report EAGAIN after the peer closes.
+                            pass
+                        except OSError as exc:
+                            # OpenSSL 1.0.2 can report the client's TCP close as errno 0.
+                            if exc.errno != 0:
+                                raise
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            # Exercise stdlib TLS EOF, including when an alternative is installed.
+            ssl_backend="ssl",
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            background_watch_delay=None,
+            retries=False,
+        ) as pool:
+            assert pool.request("GET", "/").status == 200
+            close_first.set()
+            assert pool.pool is not None
+            with pool.pool.borrow() as conn:
+                previous = conn.sock
+                assert previous is not None
+                assert wait_for_read(previous, timeout=5)
+            response = pool.request("GET", "/")
+            assert response.data == b"ok"
+            with pool.pool.borrow() as conn:
+                assert conn.sock is not None and conn.sock is not previous
+
     def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
         # connection pool gets hung up on by the server, then reaches
@@ -1769,6 +2039,8 @@ class TestSSL(SocketDummyServerTestCase):
                     ca_certs=DEFAULT_CA,
                 )
             except ConnectionResetError:
+                # Windows can report the rejected handshake as a TCP reset.
+                server_closed.set()
                 return
             except ssl.SSLError as e:
                 assert "alert unknown ca" in str(e) or "UnknownIssuer" in str(e)
@@ -2294,6 +2566,73 @@ class TestHEAD(SocketDummyServerTestCase):
 
 
 class TestStream(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_zero_sized_read1_does_not_wait_for_body(
+        self, decode_content: bool
+    ) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert response.read1(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert response.read(cache_content=True) == b"body"
+                assert response.data == b"body"
+            finally:
+                send_body.set()
+                response.close()
+
+    @pytest.mark.parametrize("amt", [-1, -2])
+    @pytest.mark.parametrize("chunked", [False, True])
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_read_negative_amt_reads_entire_body(
+        self, amt: int, chunked: bool, compressed: bool, decode_content: bool
+    ) -> None:
+        payload = bytes(range(256)) * 1024
+        encoded = payload
+        headers = b""
+        if compressed:
+            compressor = zlib.compressobj(wbits=16 + zlib.MAX_WBITS)
+            encoded = compressor.compress(payload) + compressor.flush()
+            headers += b"Content-Encoding: gzip\r\n"
+        if chunked:
+            headers += b"Transfer-Encoding: chunked\r\n"
+            wire_body = b"%x\r\n" % len(encoded) + encoded + b"\r\n0\r\n\r\n"
+        else:
+            headers += b"Content-Length: %d\r\n" % len(encoded)
+            wire_body = encoded
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\n" + headers + b"\r\n" + wire_body)
+
+        self._start_server(socket_handler)
+        # Force the body to span multiple backend reads, even when compressed.
+        with HTTPConnectionPool(self.host, self.port, blocksize=128) as pool:
+            response = pool.request("GET", "/", preload_content=False, timeout=5)
+            try:
+                assert response.read(amt, decode_content=decode_content) == (
+                    payload if decode_content else encoded
+                )
+                assert response.read() == b""
+                assert response.closed
+            finally:
+                response.close()
+
     def test_stream_none_unchunked_response_does_not_hang(self) -> None:
         done_event = Event()
 
@@ -2323,7 +2662,7 @@ class TestStream(SocketDummyServerTestCase):
 
             done_event.set()
 
-    @pytest.mark.parametrize("amt", [4096, 10000])
+    @pytest.mark.parametrize("amt", [-1, 4096, 10000])
     def test_stream_amt_serves_available_data_without_blocking(self, amt: int) -> None:
         # Regression test for https://github.com/jawah/urllib3.future/issues/379
         # SSE-like response: the server sends one 5479 bytes burst, then keeps
@@ -2374,7 +2713,7 @@ class TestStream(SocketDummyServerTestCase):
                 # pre-fix: ReadTimeoutError, the client blocked on the socket
                 # even though data was available (or already buffered).
                 chunk = next(stream)
-                assert 0 < len(chunk) <= amt
+                assert chunk and (amt < 0 or len(chunk) <= amt)
                 received += len(chunk)
 
             assert received == len(payload)
@@ -2883,20 +3222,17 @@ class TestContentFraming(SocketDummyServerTestCase):
 
         def socket_handler(listener: socket.socket) -> None:
             nonlocal buffer
-            sock = listener.accept()[0]
-            sock.settimeout(0)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                # Wait for the complete request, including its two-byte body.
+                while not buffer.endswith(b"\r\n\r\n{}"):
+                    data = sock.recv(65536)
+                    assert data, "Client closed before sending the complete request"
+                    buffer += data
 
-            start = time.time()
-            while time.time() - start < (LONG_TIMEOUT / 2):
-                try:
-                    buffer += sock.recv(65536)
-                except OSError:
-                    continue
-
-            sock.sendall(
-                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
-            )
-            sock.close()
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
+                )
 
         self._start_server(socket_handler)
 
@@ -2987,6 +3323,111 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
     raise (and async mirror).
     """
 
+    @pytest.mark.parametrize(
+        "error_code, multiplexed",
+        [(0xD, False), (0x8, False), (0x8, True)],
+    )
+    def test_http2_peer_reset(
+        self,
+        error_code: int,
+        multiplexed: bool,
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    received = False
+                    while not received:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                h2.reset_stream(event.stream_id, error_code=error_code)
+                                received = True
+                        sock.sendall(h2.data_to_send())
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            with pytest.raises(ProtocolError, match="reset by remote peer"):
+                if multiplexed:
+                    result = pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(result, ResponsePromise)
+                    pool.get_response()
+                else:
+                    pool.urlopen("GET", "/")
+
+    def test_http2_rejects_upload_before_body_is_consumed(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        finished = Event()
+        produced = []
+
+        def body() -> typing.Iterator[bytes]:
+            for i in range(32):
+                produced.append(i)
+                yield b"x" * 16384
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        h2 = H2Connection(config=H2Configuration(client_side=False))
+                        h2.initiate_connection()
+                        sock.sendall(h2.data_to_send())
+                        received = False
+                        while not received:
+                            data = sock.recv(65536)
+                            assert data
+                            for event in h2.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    h2.send_headers(
+                                        event.stream_id,
+                                        [(":status", "413"), ("content-length", "0")],
+                                        end_stream=True,
+                                    )
+                                    received = True
+                            sock.sendall(h2.data_to_send())
+                        # Drain without granting further HTTP/2 flow-control credit.
+                        # The client must notice the response and stop its upload.
+                        try:
+                            while sock.recv(65536):
+                                pass
+                        except (ssl.SSLError, ConnectionResetError):
+                            pass
+            finally:
+                finished.set()
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            response = pool.request("POST", "/", body=body())
+            assert response.status == 413 and response.version == 20
+            assert (response.data) == b""
+            assert 0 < len(produced) < 32
+        assert finished.wait(5)
+
     def test_server_closes_socket_before_status_line(self) -> None:
         def socket_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
@@ -3004,6 +3445,33 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
                 ProtocolError, match="Remote end closed connection without response"
             ):
                 pool.request("GET", "/")
+
+    def test_remote_close_cause_does_not_retry_post(self) -> None:
+        body = b"already processed"
+        received = []
+
+        def socket_handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                with sock.makefile("rb") as request:
+                    assert request.readline().startswith(b"POST / ")
+                    while request.readline() not in (b"\r\n", b""):
+                        pass
+                    received.append(request.read(len(body)))
+                # The request was delivered; close without acknowledging it.
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5, retries=1) as pool:
+            with pytest.raises(
+                ProtocolError, match="Remote end closed connection without response"
+            ) as caught:
+                pool.request("POST", "/", body=body)
+
+            assert isinstance(caught.value.__cause__, ConnectionResetError)
+            assert str(caught.value.__cause__) == str(caught.value)
+            assert pool.num_requests == pool.num_connections == 1
+        assert received == [body]
 
 
 class TestInvalidHTTPResponse(SocketDummyServerTestCase):
@@ -3110,3 +3578,136 @@ class TestSyncRejectsAsyncIterableBody(SocketDummyServerTestCase):
                     body=_async_body(),
                     chunked=True,
                 )
+
+
+class TestConnectionUtilities(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("compressed", [False, True])
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_read1_size_preserves_remainder(
+        self, compressed: bool, decode_content: bool
+    ) -> None:
+        payload = b"response body" * 100
+        body = zlib.compress(payload) if compressed else payload
+        encoding = b"Content-Encoding: deflate\r\n" if compressed else b""
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\n"
+            + encoding
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            try:
+                received = b""
+                for size in (1, 7, 2, 16):
+                    chunk = response.read1(size, decode_content=decode_content)
+                    assert len(chunk) <= size
+                    received += chunk
+                received += response.read(decode_content=decode_content)
+                assert received == (payload if decode_content else body)
+            finally:
+                response.close()
+
+    @pytest.mark.parametrize("incomplete_utf8", [False, True])
+    def test_sse_utf8_at_eof(self, incomplete_utf8: bool) -> None:
+        body = "data: first €\n\n".encode()
+        if incomplete_utf8:
+            body += b"data: incomplete \xe2\x82"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        with PoolManager(timeout=5) as manager:
+            response = manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent)
+            assert event.data == "first €"
+            if incomplete_utf8:
+                with pytest.raises(UnicodeDecodeError):
+                    response.extension.next_payload()
+            else:
+                assert response.extension.next_payload() is None
+                assert response.extension.closed
+        assert manager.pools.rsize() == 0
+
+    def test_early_hints_without_callback(self) -> None:
+        self.start_response_handler(
+            b"HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+        )
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/")
+            assert response.status == 200
+            assert response.data == b"ok"
+
+    def test_legacy_create_connection_and_udp_socket_options(self) -> None:
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                assert sock.recv(4) == b"ping"
+                sock.sendall(b"pong")
+
+        self._start_server(handler)
+        with util.connection.create_connection(
+            (self.host, self.port), timeout=5
+        ) as sock:
+            sock.sendall(b"ping")
+            assert sock.recv(4) == b"pong"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as datagram:
+            util.connection._set_socket_options(
+                datagram, [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1, "udp")]
+            )
+            assert datagram.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+
+    def test_sse_leading_empty_line(self) -> None:
+        # SSE accepts a lone CR as a line separator, including empty field lines.
+        body = b"\rdata: first\n\n"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        assert ServerSideEventExtensionFromHTTP.implementation() == "native"
+        assert ServerSentEvent().data == ""
+        with PoolManager(timeout=5) as manager:
+            response = manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent)
+            assert event.data == "first"
+            response.extension.close()
+            response.close()
+
+
+class TestExtensionStartup(SocketDummyServerTestCase):
+    def test_extension_rejects_plain_response(self) -> None:
+        from io import BytesIO
+
+        response = HTTPResponse(body=BytesIO(b"body"), preload_content=False)
+        with pytest.raises(RuntimeError, match="without direct I/O access"):
+            RawExtensionFromHTTP().start(response)
+        response.close()
+
+    def test_recommended_ciphers_with_real_connection(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    assert tls.recv(1) == b"x"
+                    tls.sendall(b"y")
+
+        self._start_server(handler)
+        with socket.create_connection((self.host, self.port), timeout=5) as raw:
+            with ssl_wrap_socket(
+                raw,
+                ca_certs=DEFAULT_CA,
+                server_hostname="localhost",
+                use_recommended_ciphers=True,
+            ) as tls:
+                tls.sendall(b"x")
+                assert tls.recv(1) == b"y"

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import os
 import socket
+import typing
 
 import pytest
+import trustme
 
-from urllib3 import HttpVersion
+from urllib3 import HttpVersion, AsyncHTTPSConnectionPool
 from urllib3._async.connection import AsyncHTTPSConnection
-from urllib3.exceptions import ResponseNotReady
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
+from urllib3.exceptions import ResponseNotReady, SSLError
 from urllib3.util import create_urllib3_context
 
 from .. import TraefikTestCase
@@ -15,6 +18,113 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestConnection(TraefikTestCase):
+    @pytest.mark.usefixtures("requires_http3")
+    @pytest.mark.parametrize("allow_upgrade", [False, True])
+    async def test_dns_https_record_selects_quic(
+        self, allow_upgrade: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        resolver = self.test_async_resolver.new()
+        getaddrinfo = resolver.getaddrinfo
+        queries = []
+
+        async def https_records(
+            *args: typing.Any, **kwargs: typing.Any
+        ) -> list[typing.Any]:
+            assert args[0] == self.host
+            assert args[3] == socket.SOCK_STREAM
+            queries.append(kwargs["quic_upgrade_via_dns_rr"])
+            records = await getaddrinfo(*args, **kwargs)
+            if not kwargs["quic_upgrade_via_dns_rr"]:
+                return records
+            # An HTTPS RR advertising h3 adds UDP candidates ahead of TCP.
+            return [
+                (family, socket.SOCK_DGRAM, socket.IPPROTO_UDP, canonname, address)
+                for family, _, _, canonname, address in records
+            ] + records
+
+        monkeypatch.setattr(resolver, "getaddrinfo", https_records)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            resolver=resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn=set() if allow_upgrade else {HttpVersion.h3},
+            preemptive_quic_cache={},
+            timeout=5,
+            retries=False,
+        ) as pool:
+            for _ in range(2):
+                response = await pool.request("GET", "/get")
+                assert response.status == 200
+                assert response.version == (30 if allow_upgrade else 20)
+            assert pool.num_connections == 1
+        assert queries == [allow_upgrade]
+
+    @pytest.mark.parametrize("failure", ["fingerprint", "untrusted-ca"])
+    async def test_quic_certificate_rejection(self, failure: str) -> None:
+        if not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        options = (
+            {"assert_fingerprint": "00" * 32, "ca_certs": self.ca_authority}
+            if failure == "fingerprint"
+            else {"ca_cert_data": trustme.CA().cert_pem.bytes().decode()}
+        )
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            resolver=self.test_async_resolver,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+            timeout=5,
+            retries=False,
+            **options,
+        ) as pool:
+            with pytest.raises(SSLError):
+                await pool.request("GET", "/get")
+
+    @pytest.mark.parametrize(
+        "version, expected_version",
+        [(HttpVersion.h11, 11), (HttpVersion.h2, 20), (HttpVersion.h3, 30)],
+    )
+    @pytest.mark.parametrize("chunked", [False, True])
+    async def test_streamed_request_reuses_connection(
+        self, version: HttpVersion, expected_version: int, chunked: bool
+    ) -> None:
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("Test requires HTTP/3 support")
+
+        conn = AsyncHTTPSConnection(
+            self.host,
+            self.https_port,
+            timeout=5,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
+            disabled_svn=set(HttpVersion) - {version},
+        )
+        body = b"a streamed request body"
+        headers = {"Host": self.alt_host, "Content-Type": "text/plain"}
+        if not chunked:
+            headers["Content-Length"] = str(len(body))
+        try:
+            await conn.connect()
+            sock = conn.sock
+            for _ in range(2):
+                await conn.request(
+                    "POST",
+                    "/post",
+                    body=iter((body[:5], body[5:])),
+                    headers=headers,
+                    chunked=chunked,
+                )
+                response = await conn.getresponse()
+                assert response.status == 200
+                assert response.version == expected_version
+                payload = await response.json()
+                assert payload["data"] == body.decode()
+                assert payload["headers"]["Host"] == [self.alt_host]
+                assert conn.sock is sock
+        finally:
+            await conn.close()
+
     @pytest.mark.usefixtures("requires_http3")
     async def test_h3_probe_after_close(self) -> None:
         conn = AsyncHTTPSConnection(

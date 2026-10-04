@@ -130,7 +130,7 @@ class PlainResolver(BaseResolver):
                         self._pending[query_id] = query
                         queries.append(query)
                         break
-                else:  # pragma: no cover - guarded by the capacity check
+                else:  # Defensive: the capacity check under this lock guarantees a free transaction ID.
                     raise socket.gaierror("DNS transaction ID space exhausted")
             return queries
 
