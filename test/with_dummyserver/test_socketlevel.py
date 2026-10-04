@@ -340,6 +340,58 @@ class TestClientCerts(SocketDummyServerTestCase):
 
             assert len(client_certs) == 1
 
+    @pytest.mark.skipif(platform.system() != "Linux", reason="Requires Linux /dev/shm")
+    def test_client_cert_shared_memory_without_proc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3.contrib.imcc import _shm
+
+        if not os.path.isdir("/dev/shm") or not os.access("/dev/shm", os.W_OK):
+            pytest.skip("Requires writable /dev/shm")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(self.ca_path)
+        exists = os.path.exists
+        shared_paths: set[str] = set()
+
+        def without_proc(path: str) -> bool:
+            if path.startswith("/proc/self/fd/"):
+                return False
+            if path.startswith("/dev/shm/"):
+                shared_paths.add(path)
+            return exists(path)
+
+        with monkeypatch.context() as patch:
+            patch.delattr(os, "memfd_create", raising=False)
+            patch.setattr(os.path, "exists", without_proc)
+            _shm.load_cert_chain(
+                ctx, Path(self.cert_path).read_bytes(), Path(self.key_path).read_bytes()
+            )
+        assert len(shared_paths) == 1
+        assert all(not exists(path) for path in shared_paths)
+
+        client_certs = []
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                with self._wrap_in_ssl(sock) as tls:
+                    client_certs.append(tls.getpeercert(binary_form=True))
+                    headers = bytearray()
+                    while not headers.endswith(b"\r\n\r\n"):
+                        chunk = tls.recv(65536)
+                        assert chunk
+                        headers.extend(chunk)
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host, self.port, ssl_context=ctx, timeout=5, retries=False
+        ) as pool:
+            assert pool.request("GET", "/").data == b"ok"
+        expected = ssl.PEM_cert_to_DER_cert(Path(self.cert_path).read_text())
+        assert client_certs == [expected]
+
     def test_missing_client_certs_raises_error(self) -> None:
         """
         Having client certs not be present causes an error.
