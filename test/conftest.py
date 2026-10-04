@@ -276,6 +276,7 @@ def dns_tls_server(
                                 conn.setblocking(False)
                                 with contextlib.suppress(
                                     ssl.SSLWantReadError,
+                                    BlockingIOError,  # Older LibreSSL reports would-block directly.
                                     ssl.SSLEOFError,
                                     ssl.SSLSyscallError,
                                     ConnectionResetError,
