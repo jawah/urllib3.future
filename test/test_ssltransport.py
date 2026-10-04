@@ -11,6 +11,7 @@ import pytest
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from urllib3.exceptions import ProxySchemeUnsupported
 from urllib3.util import ssl_
 from urllib3.util.ssltransport import SSLTransport
 
@@ -466,6 +467,22 @@ class TlsInTlsTestCase(SocketDummyServerTestCase):
 
 
 class TestSSLTransportWithMock:
+    def test_context_without_wrap_bio(self) -> None:
+        context = mock.Mock(spec=[])
+        with pytest.raises(
+            ProxySchemeUnsupported, match=r"requires SSLContext\.wrap_bio"
+        ):
+            SSLTransport._validate_ssl_context_for_tls_in_tls(context)
+
+    def test_context_rejects_available_memory_bios(self) -> None:
+        context = mock.create_autospec(ssl_.SSLContext)
+        context.wrap_bio.side_effect = TypeError("incompatible MemoryBIO")
+        with socket.socket() as sock:
+            with pytest.raises(
+                TypeError, match="could not find a compatible MemoryBIO"
+            ):
+                SSLTransport(sock, context, server_hostname="localhost")
+
     def test_constructor_params(self) -> None:
         server_hostname = "example-domain.com"
         sock = mock.Mock()
