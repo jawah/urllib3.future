@@ -1413,8 +1413,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
                     if headers is not None:
                         # user specified headers always win.
-                        for k, v in headers.items():
-                            prefixed_headers[k] = v
+                        if isinstance(headers, HTTPHeaderDict):
+                            # Preserve duplicate values and the preset header order.
+                            prefixed_headers._copy_from(headers)
+                        else:
+                            for k, v in headers.items():
+                                prefixed_headers[k] = v
 
                     headers = prefixed_headers
                 except ValueError:  # We can forbid it entirely
