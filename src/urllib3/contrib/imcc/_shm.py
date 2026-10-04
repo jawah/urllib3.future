@@ -87,7 +87,7 @@ def load_cert_chain(
             )
 
         if fd == -1:
-            raise UnsupportedOperation(
+            raise UnsupportedOperation(  # Defensive: the OS could not create the shared-memory object.
                 f"Unable to provide support for in-memory client certificate: {os.strerror(get_errno())}"
             )
 
@@ -100,7 +100,7 @@ def load_cert_chain(
     if os.path.exists(path) is False:
         if os.path.exists(shm_path):
             path = shm_path
-        else:
+        else:  # Defensive: neither filesystem exposes the allocated shared-memory object.
             os.fdopen(fd).close()
 
             raise UnsupportedOperation(
@@ -126,7 +126,7 @@ def load_cert_chain(
         os.unlink(shm_path)
 
     if os.path.exists(path) or os.path.exists(shm_path):
-        warnings.warn(
+        warnings.warn(  # Defensive: unexpected remnants after closing and unlinking shared memory.
             "In-memory client certificate: The kernel leaked a file descriptor outside of its expected lifetime.",
             ResourceWarning,
         )
