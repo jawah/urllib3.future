@@ -1084,10 +1084,6 @@ class HTTPResponse(io.IOBase):
         )
         self._uncached_read_occurred = True
 
-        if amt is not None and amt >= 0 and len(data) > amt:
-            self._decoded_buffer.put(data)
-            return self._decoded_buffer.get(amt)  # type: ignore[no-any-return]
-
         return data
 
     def read(
