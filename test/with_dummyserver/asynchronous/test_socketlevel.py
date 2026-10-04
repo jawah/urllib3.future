@@ -288,7 +288,8 @@ class TestSocketClosing(SocketDummyServerTestCase):
                         # Send close_notify without closing TCP; wait for the client.
                         try:
                             sock.unwrap().close()
-                        except (ssl.SSLError, ConnectionResetError):
+                        except (ssl.SSLError, ConnectionResetError, BlockingIOError):
+                            # Older LibreSSL can report EAGAIN after the peer closes.
                             pass
                         except OSError as exc:
                             # OpenSSL 1.0.2 can report the client's TCP close as errno 0.

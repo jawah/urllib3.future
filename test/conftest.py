@@ -233,8 +233,13 @@ def dns_tls_server(
                     raw.settimeout(5)
                     try:
                         conn = context.wrap_socket(raw, server_side=True)
-                    except ssl.SSLError:
-                        if mode == "handshake":
+                    except OSError as exc:
+                        # A rejected certificate can surface as a TCP reset or
+                        # errno 0 rather than an SSL error on some runtimes.
+                        if mode == "handshake" and (
+                            isinstance(exc, (ssl.SSLError, ConnectionResetError))
+                            or exc.errno == 0
+                        ):
                             return
                         raise
                     with conn, conn.makefile("rb") as reader:
@@ -272,6 +277,7 @@ def dns_tls_server(
                                 with contextlib.suppress(
                                     ssl.SSLWantReadError,
                                     ssl.SSLEOFError,
+                                    ssl.SSLSyscallError,
                                     ConnectionResetError,
                                 ):
                                     conn.unwrap().close()

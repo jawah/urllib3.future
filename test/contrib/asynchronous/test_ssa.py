@@ -166,7 +166,8 @@ async def test_wasi_compat_create_connection(listening: bool) -> None:
         listener.bind(("127.0.0.1", 0))
         address = listener.getsockname()
         if not listening:
-            # Keep the port bound: it cannot be reused by another test.
+            # A bound, non-listening socket can silently drop SYNs on macOS/Windows.
+            listener.close()
             with pytest.raises(ConnectionRefusedError):
                 await asyncio.wait_for(wasi_socket.create_connection(address), 2)
             return

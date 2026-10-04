@@ -415,11 +415,13 @@ def test_socket_state_detects_refused_connection() -> None:
     from urllib3.util.socket_state import is_established
     from urllib3.util.wait import wait_for_write
 
-    # Keep the destination port reserved without accepting connections.
     with socket.socket() as destination, socket.socket() as client:
         destination.bind(("127.0.0.1", 0))
+        address = destination.getsockname()
+        # A bound, non-listening socket can silently drop SYNs on macOS/Windows.
+        destination.close()
         client.setblocking(False)
-        result = client.connect_ex(destination.getsockname())
+        result = client.connect_ex(address)
         assert result != 0
         if result in (errno.EINPROGRESS, errno.EWOULDBLOCK, 10035):
             assert wait_for_write(client, 5)

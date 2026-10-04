@@ -608,7 +608,8 @@ class TestSocketClosing(SocketDummyServerTestCase):
                         # Send close_notify without closing TCP; wait for the client.
                         try:
                             sock.unwrap().close()
-                        except (ssl.SSLError, ConnectionResetError):
+                        except (ssl.SSLError, ConnectionResetError, BlockingIOError):
+                            # Older LibreSSL can report EAGAIN after the peer closes.
                             pass
                         except OSError as exc:
                             # OpenSSL 1.0.2 can report the client's TCP close as errno 0.
@@ -3522,7 +3523,7 @@ class TestConnectionUtilities(SocketDummyServerTestCase):
             util.connection._set_socket_options(
                 datagram, [(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1, "udp")]
             )
-            assert datagram.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+            assert datagram.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
 
     def test_sse_leading_empty_line(self) -> None:
         # SSE accepts a lone CR as a line separator, including empty field lines.

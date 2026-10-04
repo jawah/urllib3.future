@@ -1420,7 +1420,14 @@ def test_doh_local_configuration(
         path="/dns-query" if rfc8484 else "/custom-resolve",
         rfc8484=rfc8484,
         source_address="127.0.0.1:0",
-        headers=[headers, "X-DoH:first", "X-DoH:second", "Accept:ignored"]
+        headers=[
+            headers,
+            "X-DoH:first",
+            "X-DoH:second",
+            "User-Agent:first",
+            "User-Agent:second",
+            "Accept:ignored",
+        ]
         if multiple_headers
         else headers,
         disabled_svn=["h2", "h3"],
@@ -1454,6 +1461,10 @@ def test_doh_local_configuration(
             if multiple_headers:
                 assert [
                     value.strip() for value in request.headers["X-DoH"].split(",")
+                ] == ["first", "second"]
+                # Also replace a fingerprint preset without losing either value.
+                assert [
+                    value.strip() for value in request.headers["User-Agent"].split(",")
                 ] == ["first", "second"]
                 assert "X-Proxy" not in request.headers
         assert bool(server.proxy_requests) is via_proxy

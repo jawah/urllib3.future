@@ -128,7 +128,7 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
         context = ssl.create_default_context()
         sock.close()
         with pytest.raises(OSError):
-            SSLTransport(sock, context)
+            SSLTransport(sock, context, server_hostname="localhost")
 
     @pytest.mark.timeout(PER_TEST_TIMEOUT)
     def test_close_after_handshake(self) -> None:
@@ -172,7 +172,7 @@ class SingleTLSLayerTestCase(SocketDummyServerTestCase):
                 raw, self.client_context, server_hostname="localhost"
             ) as tls:
                 tls.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                assert tls.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
+                assert tls.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
                 if sys.platform == "win32":
                     tls.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 1000, 1000))
                 tls.sendall(b"x")

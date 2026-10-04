@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from urllib3 import ConnectionInfo, HttpVersion
-from urllib3.contrib.anytls import BACKEND, ssl
+from urllib3.contrib.anytls import ssl
 from urllib3.contrib.resolver import ProtocolResolver
 from urllib3.contrib.resolver._async import (
     AsyncBaseResolver,
@@ -85,12 +85,6 @@ async def test_dot_framing_and_reuse(dns_tls_server: DNSTLSServer) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "dns_tls_server", ["empty", "partial-prefix", "partial-body"], indirect=True
-)
-@pytest.mark.xfail(
-    BACKEND == "utls",
-    reason="utls SSLObject.read raises on close_notify; see UTLS_SSL_OBJECT_CLEAN_EOF.md",
-    raises=AssertionError,
-    strict=True,
 )
 async def test_dot_eof_closes_resolver(dns_tls_server: DNSTLSServer) -> None:
     resolver = TLSResolver(
@@ -1478,7 +1472,14 @@ async def test_doh_local_configuration(
         path="/dns-query" if rfc8484 else "/custom-resolve",
         rfc8484=rfc8484,
         source_address="127.0.0.1:0",
-        headers=[headers, "X-DoH:first", "X-DoH:second", "Accept:ignored"]
+        headers=[
+            headers,
+            "X-DoH:first",
+            "X-DoH:second",
+            "User-Agent:first",
+            "User-Agent:second",
+            "Accept:ignored",
+        ]
         if multiple_headers
         else headers,
         disabled_svn=["h2", "h3"],
@@ -1512,6 +1513,10 @@ async def test_doh_local_configuration(
             if multiple_headers:
                 assert [
                     value.strip() for value in request.headers["X-DoH"].split(",")
+                ] == ["first", "second"]
+                # Also replace a fingerprint preset without losing either value.
+                assert [
+                    value.strip() for value in request.headers["User-Agent"].split(",")
                 ] == ["first", "second"]
                 assert "X-Proxy" not in request.headers
         assert bool(server.proxy_requests) is via_proxy
@@ -2220,11 +2225,14 @@ async def test_cancelled_cache_fill_can_be_retried() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_connection_rejects_port_overflow() -> None:
+async def test_create_connection_rejects_source_port_overflow() -> None:
     resolver = InMemoryResolver()
     resolver.register("local.example", "127.0.0.1")
+    # bind() validates ports consistently; Windows ConnectEx uses different errors.
     with pytest.raises(OverflowError):
-        await resolver.create_connection(("local.example", 65536), timeout=1)
+        await resolver.create_connection(
+            ("local.example", 443), timeout=1, source_address=("127.0.0.1", 65536)
+        )
 
 
 @pytest.mark.asyncio
