@@ -148,7 +148,8 @@ jobs:
             experimental: false
             nox-session: test-pypy
             traefik-server: true
-          - python-version: "pypy-3.11"
+          # PyPy 8.0 is incompatible. we'll unpin this after fix land.
+          - python-version: "pypy-3.11-v7.3.23"
             os: ubuntu-24.04
             experimental: false
             nox-session: test-pypy
