@@ -97,13 +97,12 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
                 except asyncio.CancelledError:
                     return None
                 except StopAsyncIteration:
-                    last_chunk = self._decoder.decode(b"", final=True)
-                    if not last_chunk:
-                        # The exhausted generator may already be detached by close().
-                        self._stream = None
-                        self._decoder.reset()
-                        return None
-                    self._buffer += last_chunk
+                    # Strict UTF-8 finalization returns no text or raises on an incomplete character.
+                    self._decoder.decode(b"", final=True)
+                    # The exhausted generator may already be detached by close().
+                    self._stream = None
+                    self._decoder.reset()
+                    return None
                 finally:
                     self._next_value_task = None
 

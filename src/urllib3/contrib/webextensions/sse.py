@@ -132,12 +132,11 @@ class ServerSideEventExtensionFromHTTP(ExtensionFromHTTP):
                     try:
                         self._buffer += self._decoder.decode(next(self._stream))
                     except StopIteration:
-                        last_chunk = self._decoder.decode(b"", final=True)
-                        if not last_chunk:
-                            self._stream = None
-                            self._decoder.reset()
-                            return None
-                        self._buffer += last_chunk
+                        # Strict UTF-8 finalization returns no text or raises on an incomplete character.
+                        self._decoder.decode(b"", final=True)
+                        self._stream = None
+                        self._decoder.reset()
+                        return None
 
                 # Locate the first event boundary.
                 lf = self._buffer.find("\n\n")
