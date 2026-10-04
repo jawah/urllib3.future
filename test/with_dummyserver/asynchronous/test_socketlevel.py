@@ -175,6 +175,31 @@ class TestRawExtension(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestServerSentEvents(SocketDummyServerTestCase):
+    async def test_close_with_completed_read(self) -> None:
+        body = b"data: ready\n\n"
+        self.start_response_handler(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        async with AsyncPoolManager(timeout=5) as manager:
+            response = await manager.request("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, AsyncServerSideEventExtensionFromHTTP)
+            assert extension._stream is not None
+            # Hold the real read at completion, before next_payload() could resume
+            # and clear its task reference. This makes the close race deterministic.
+            read = asyncio.create_task(extension._stream.__anext__())
+            extension._next_value_task = read
+            done, _ = await asyncio.wait([read], timeout=5)
+            assert read in done
+            await asyncio.wait_for(extension.close(), 5)
+            assert not read.cancelled()
+            assert read.result() == body
+            assert extension.closed
+            await extension.close()
+            await response.close()
+
     async def test_extension_request_headers(self) -> None:
         extension_request_headers = {
             "Accept": "text/event-stream; charset=utf-8",
