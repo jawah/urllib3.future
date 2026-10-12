@@ -570,3 +570,18 @@ class TestPoolManager:
 
         # Connection should be closed, because reference to pool_1 is gone.
         assert conn_queue.qsize() == 0
+
+    @pytest.mark.parametrize("scheme", ["ws", "wss"])
+    def test_extension_scheme_does_not_change_disabled_svn(self, scheme: str) -> None:
+        if (
+            WebSocketExtensionFromHTTP is None
+            and FastWebSocketExtensionFromHTTP is None
+        ):
+            pytest.skip("test requires a WebSocket backend")
+
+        with PoolManager(disabled_svn=set()) as manager:
+            pool = manager.connection_from_url("https://a.example/")
+            manager.connection_from_url(f"{scheme}://b.example/")
+
+            assert manager.connection_pool_kw["disabled_svn"] == set()
+            assert manager.connection_from_url("https://a.example/") is pool

@@ -190,3 +190,20 @@ async def test_get_response_none_path_yields_control() -> None:
 
         # without the checkpoint the heartbeat task never runs (beats <= 1)
         assert beats > 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["ws", "wss"])
+async def test_extension_scheme_does_not_change_disabled_svn(scheme: str) -> None:
+    if (
+        AsyncWebSocketExtensionFromHTTP is None
+        and AsyncFastWebSocketExtensionFromHTTP is None
+    ):
+        pytest.skip("test requires a WebSocket backend")
+
+    async with AsyncPoolManager(disabled_svn=set()) as manager:
+        pool = await manager.connection_from_url("https://a.example/")
+        await manager.connection_from_url(f"{scheme}://b.example/")
+
+        assert manager.connection_pool_kw["disabled_svn"] == set()
+        assert await manager.connection_from_url("https://a.example/") is pool

@@ -1,0 +1,1 @@
+Fixed ``connection_from_context`` changing the manager-wide ``disabled_svn`` set when handling an extension scheme such as ``wss``, which forced HTTP/1.1 on later pools and created a second pool for the same host.
