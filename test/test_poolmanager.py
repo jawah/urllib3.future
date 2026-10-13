@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from urllib3 import connection_from_url
+from urllib3 import HttpVersion, connection_from_url
 from urllib3._constant import DEFAULT_BLOCKSIZE
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.contrib.webextensions import (
@@ -23,6 +23,57 @@ from urllib3.util.url import Url
 
 
 class TestPoolManager:
+    @pytest.mark.parametrize("scheme", ["ws", "wss"])
+    @pytest.mark.parametrize("disabled_svn", [(), (HttpVersion.h3,)])
+    @pytest.mark.parametrize("override", [False, True])
+    @pytest.mark.parametrize("http_first", [False, True])
+    def test_extension_protocol_restrictions_are_local(
+        self,
+        scheme: str,
+        disabled_svn: tuple[HttpVersion, ...],
+        override: bool,
+        http_first: bool,
+    ) -> None:
+        if (
+            WebSocketExtensionFromHTTP is None
+            and FastWebSocketExtensionFromHTTP is None
+        ):
+            pytest.skip("test requires a WebSocket backend")
+        caller_options = set(disabled_svn)
+        manager_options = {HttpVersion.h11} if override else caller_options
+        expected_options = manager_options.copy()
+        pool_kwargs = {"disabled_svn": caller_options} if override else None
+        http_scheme = "https" if scheme == "wss" else "http"
+        url = f"{http_scheme}://example.test/"
+
+        with PoolManager(disabled_svn=manager_options) as manager:
+            existing = manager.connection_from_url(url) if http_first else None
+            websocket = manager.connection_from_url(
+                f"{scheme}://example.test/", pool_kwargs=pool_kwargs
+            )
+            assert caller_options == set(disabled_svn)
+            assert manager.connection_pool_kw["disabled_svn"] == expected_options
+            assert websocket.conn_kw["disabled_svn"] == set(disabled_svn) | {
+                HttpVersion.h2,
+                HttpVersion.h3,
+            }
+            normal = manager.connection_from_url(url)
+            assert normal is not websocket
+            assert normal.conn_kw["disabled_svn"] == expected_options
+            if existing is not None:
+                assert normal is existing
+                assert existing.conn_kw["disabled_svn"] == expected_options
+            assert manager.connection_from_url(url) is normal
+            assert (
+                manager.connection_from_url(
+                    f"{scheme}://example.test/", pool_kwargs=pool_kwargs
+                )
+                is websocket
+            )
+            other = manager.connection_from_url(f"{http_scheme}://other.test/")
+            assert other.conn_kw["disabled_svn"] == expected_options
+            assert manager.pools.rsize() == 3
+
     @pytest.mark.parametrize("scheme", ["http", "https"])
     @pytest.mark.parametrize("proxy_host", [None, "proxy", "[fe80::2%25251]"])
     @pytest.mark.parametrize("zone", ["251", "25ethA"])

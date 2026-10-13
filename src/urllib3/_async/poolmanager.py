@@ -344,8 +344,9 @@ class AsyncPoolManager(AsyncRequestMethods):
 
                 supported_svn = extension.supported_svn()
 
+                # Keep extension restrictions local to this pool.
                 disabled_svn = (
-                    request_context["disabled_svn"]
+                    set(request_context["disabled_svn"])
                     if "disabled_svn" in request_context
                     else set()
                 )
