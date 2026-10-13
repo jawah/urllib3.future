@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+import contextlib
 import ssl
 import typing
 
@@ -11,6 +12,7 @@ from jh2.connection import H2Connection  # type: ignore[import-untyped]
 from jh2.events import RequestReceived  # type: ignore[import-untyped]
 from urllib3 import HttpVersion, ResponsePromise, AsyncProxyManager
 from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool, AsyncPoolManager
+from urllib3._async.connection import AsyncHTTPConnection
 from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
 from urllib3.contrib.webextensions._async.sse import (
     AsyncServerSideEventExtensionFromHTTP,
@@ -289,6 +291,272 @@ class TestServerSentEvents(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestSocketClosing(SocketDummyServerTestCase):
+    async def test_close_before_response_headers_releases_socket(self) -> None:
+        from urllib3.exceptions import HTTPError
+
+        request_received, peer_closed = Event(), Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    headers.extend(chunk)
+                request_received.set()
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        loop = asyncio.get_running_loop()
+        async with AsyncPoolManager(timeout=5, retries=False) as manager:
+            request = asyncio.create_task(
+                manager.request("GET", f"http://{self.host}:{self.port}/")
+            )
+            try:
+                assert await loop.run_in_executor(None, request_received.wait, 5)
+                await manager.clear()
+                with pytest.raises((HTTPError, asyncio.CancelledError)):
+                    await asyncio.wait_for(request, 5)
+                assert await loop.run_in_executor(None, peer_closed.wait, 5)
+                assert manager.pools.rsize() == 0
+            finally:
+                request.cancel()
+                await asyncio.gather(request, return_exceptions=True)
+
+    async def test_manager_clear_reaches_busy_child_pool(self) -> None:
+        finish_body, first_closed, second_closed = Event(), Event(), Event()
+
+        def read_request(sock: socket.socket) -> None:
+            sock.settimeout(5)
+            headers = bytearray()
+            while not headers.endswith(b"\r\n\r\n"):
+                chunk = sock.recv(65536)
+                assert chunk
+                headers.extend(chunk)
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as first:
+                read_request(first)
+                first.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\naa")
+                with listener.accept()[0] as second:
+                    read_request(second)
+                    second.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nb")
+                    try:
+                        assert first.recv(1) == b""
+                    except ConnectionResetError:
+                        pass
+                    first_closed.set()
+                    assert finish_body.wait(5)
+                    try:
+                        second.sendall(b"b")
+                        assert second.recv(1) == b""
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass
+                    second_closed.set()
+
+        self._start_server(handler)
+        connections: list[AsyncHTTPConnection] = []
+        loop = asyncio.get_running_loop()
+        try:
+            async with AsyncPoolManager(timeout=5, retries=False) as manager:
+                url = f"http://{self.host}:{self.port}/"
+                first = await manager.request("GET", url, preload_content=False)
+                assert isinstance(first.connection, AsyncHTTPConnection)
+                connections.append(first.connection)
+                second = await manager.request("GET", url, preload_content=False)
+                assert isinstance(second.connection, AsyncHTTPConnection)
+                connections.append(second.connection)
+                assert connections[0] is not connections[1]
+                first_sock, second_sock = [conn.sock for conn in connections]
+                assert first_sock is not None and second_sock is not None
+                police = second._police_officer
+                assert police is not None
+                assert await first.read() == b"aa"
+                assert first_sock.fileno() >= 0
+                await manager.clear()
+                assert police._shutdown
+                assert first_sock.fileno() == -1
+                assert await loop.run_in_executor(None, first_closed.wait, 5)
+                assert second_sock.fileno() >= 0
+                finish_body.set()
+                assert await second.read() == b"bb"
+                assert second_sock.fileno() == -1
+                assert await loop.run_in_executor(None, second_closed.wait, 5)
+                assert not police._shutdown
+        finally:
+            finish_body.set()
+            for conn in connections:
+                await conn.close()
+
+    async def test_manager_clear_during_request_cleans_up(self) -> None:
+        from urllib3.exceptions import HTTPError
+
+        headers_sent, finish_body, peer_closed = Event(), Event(), Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    headers.extend(chunk)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\no")
+                headers_sent.set()
+                assert finish_body.wait(5)
+                try:
+                    sock.sendall(b"k")
+                    assert sock.recv(1) == b""
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                peer_closed.set()
+
+        self._start_server(handler)
+        loop = asyncio.get_running_loop()
+        async with AsyncPoolManager(timeout=5, retries=False) as manager:
+            future = asyncio.create_task(
+                manager.request("GET", f"http://{self.host}:{self.port}/")
+            )
+            try:
+                assert await loop.run_in_executor(None, headers_sent.wait, 5)
+                police = next(iter(manager.pools._registry.values())).pool
+                assert police is not None
+                await manager.clear()
+                finish_body.set()
+                try:
+                    response = await asyncio.wait_for(future, 5)
+                except HTTPError:
+                    pass  # Closure may win before the client forms its response.
+                else:
+                    assert await response.data == b"ok"
+                assert await loop.run_in_executor(None, peer_closed.wait, 5)
+                assert police.rsize() == 0
+                assert manager.pools.rsize() == 0
+            finally:
+                finish_body.set()
+                if not future.done():
+                    future.cancel()
+                await asyncio.gather(future, return_exceptions=True)
+
+    @pytest.mark.parametrize(
+        "owner_kind", ["pool", "manager", "direct-child", "adapter"]
+    )
+    @pytest.mark.parametrize("close_owner", [False, True])
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_streamed_response_outlives_owner(
+        self, owner_kind: str, close_owner: bool, stream: bool
+    ) -> None:
+        finish_body, peer_closed = Event(), Event()
+        body = b"first" + b"x" * 1024
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                for index in range(1 if close_owner else 2):
+                    headers = bytearray()
+                    while not headers.endswith(b"\r\n\r\n"):
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            return
+                        headers.extend(chunk)
+                    sock.sendall(
+                        f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+                        + body[:5]
+                    )
+                    if index == 0:
+                        assert finish_body.wait(5)
+                    sock.sendall(body[5:])
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        owner = (
+            AsyncPoolManager(timeout=5, retries=False)
+            if owner_kind != "pool"
+            else AsyncHTTPConnectionPool(self.host, self.port, timeout=5, retries=False)
+        )
+        url = f"http://{self.host}:{self.port}/" if owner_kind != "pool" else "/"
+        conn = None
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                await stack.enter_async_context(owner)
+                requester = owner
+                if owner_kind in ("direct-child", "adapter"):
+                    assert isinstance(owner, AsyncPoolManager)
+                    # Requests gets a child pool directly instead of calling manager.urlopen().
+                    requester = await owner.connection_from_url(url)
+                    url = "/"
+                response = await requester.request("GET", url, preload_content=False)
+                if owner_kind == "adapter":
+                    assert isinstance(owner, AsyncPoolManager)
+                    assert isinstance(requester, AsyncHTTPConnectionPool)
+                    # Niquests returns the parent checkout before reading the body.
+                    owner.pools.memorize(response, requester)
+                    owner.pools.release()
+                    assert not owner.pools.busy
+                candidate = response.connection
+                assert isinstance(candidate, AsyncHTTPConnection)
+                conn = candidate
+                assert conn.sock is not None
+                http_pool = response._pool
+                assert http_pool is not None
+                watcher = http_pool._background_monitoring
+                assert watcher is not None
+                # Keep strong references: GC must not close this socket.
+                sock = conn.sock
+                if close_owner:
+                    await stack.aclose()
+                    assert http_pool.pool is None
+                    assert watcher.done()
+                assert sock.fileno() >= 0
+                assert await response.read(1) == body[:1]
+                assert sock.fileno() >= 0
+                finish_body.set()
+                remaining = (
+                    b"".join([chunk async for chunk in response.stream(17)])
+                    if stream
+                    else await response.read()
+                )
+                assert remaining == body[1:]
+                if isinstance(owner, AsyncPoolManager):
+                    assert id(response) not in owner.pools._map
+                if close_owner:
+                    assert sock.fileno() == -1
+                    if isinstance(owner, AsyncPoolManager):
+                        assert owner.pools.rsize() == 0
+                else:
+                    assert conn.sock is sock and sock.fileno() >= 0
+                await response.close()
+                if not close_owner:
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, AsyncPoolManager)
+                        requester = await owner.connection_from_url(
+                            f"http://{self.host}:{self.port}/"
+                        )
+                    followup = await requester.request(
+                        "GET", url, preload_content=False
+                    )
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, AsyncPoolManager)
+                        assert isinstance(requester, AsyncHTTPConnectionPool)
+                        owner.pools.memorize(followup, requester)
+                        owner.pools.release()
+                    assert await followup.data == body
+                    assert conn.sock is sock
+            assert await asyncio.get_running_loop().run_in_executor(
+                None, peer_closed.wait, 5
+            ), "Client did not close the retired connection"
+        finally:
+            finish_body.set()
+            if conn is not None:
+                await conn.close()
+
     async def test_idle_tls_close_notify_before_reuse(self) -> None:
         close_first = Event()
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

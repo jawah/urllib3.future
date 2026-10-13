@@ -68,6 +68,7 @@ from .exceptions import (
 )
 from .util.response import is_fp_closed
 from .util.retry import Retry
+from .util.traffic_police import UnavailableTraffic
 
 try:
     from jh2._hazmat import _BytesQueueBuffer as BytesQueueBuffer  # type: ignore[import-untyped]
@@ -1374,11 +1375,33 @@ class HTTPResponse(io.IOBase):
         if self.extension is not None and self.extension.closed is False:
             self.extension.close()
 
-        if not self.closed and self._fp:
+        if isinstance(self._fp, LowLevelResponse) and self._police_officer is not None:
+            police = self._police_officer
+            try:
+                with police.borrow(self) as conn:
+                    try:
+                        self._fp.abort()
+                    except (OSError, BaseSSLError):
+                        # A failed reset write makes the transport unusable.
+                        conn.close()
+                    finally:
+                        self._fp.close()
+                        self._connection = None
+            except UnavailableTraffic:
+                self._fp.close()
+                self._connection = None
+            finally:
+                if self._fp.closed:
+                    police.forget(self)
+                    self._police_officer = None
+        elif isinstance(self._fp, LowLevelResponse) and self._fp._eot:
             self._fp.close()
-
-        if self._connection:
-            self._connection.close()
+            self._connection = None
+        else:
+            if not self.closed and self._fp:
+                self._fp.close()
+            if self._connection:
+                self._connection.close()
 
         if not self.auto_close:
             io.IOBase.close(self)

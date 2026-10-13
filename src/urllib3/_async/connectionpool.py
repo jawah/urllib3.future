@@ -180,8 +180,9 @@ async def idle_conn_watch_task(
 
             if pool.pool is None:
                 return
+            connections = pool.pool.iter_idle()
             try:
-                async for conn in pool.pool.iter_idle():
+                async for conn in connections:
                     now = time.monotonic()
                     last_used = conn.last_used_at
                     idle_delay = now - last_used
@@ -208,6 +209,12 @@ async def idle_conn_watch_task(
                                     await conn.peek_and_react(expect_frame=True)
             except AttributeError:
                 return
+            finally:
+                # `async for` does not await generator cleanup on early exit.
+                # Close iter_idle() here so its finally runs in this task.
+                # Deferred finalization may run in another task, which cannot
+                # release the watcher's TrafficPolice checkout.
+                await connections.aclose()
     except asyncio.CancelledError:
         raise
     except ReferenceError:
@@ -875,7 +882,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
-        if self.pool is None:
+        police = self.pool
+        if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
         if promise is not None and not isinstance(promise, ResponsePromise):
@@ -887,7 +895,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         clean_exit = True
 
         try:
-            async with self.pool.borrow(
+            async with police.borrow(
                 promise or ResponsePromise,
                 block=promise is not None,
                 not_idle_only=True,
@@ -899,7 +907,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     )
                 try:
                     response = await conn.getresponse(
-                        promise=promise, police_officer=self.pool
+                        promise=promise, police_officer=police
                     )
                 except (BaseSSLError, OSError) as e:
                     if promise is not None:
@@ -1472,19 +1480,22 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 )
             conn.timeout = read_timeout
 
-        can_shelve_conn = (
-            conn.is_multiplexed is True and self.pool is not None and rp is not None
-        )
+        police = self.pool
+        if police is None:
+            raise ClosedPoolError(self, "Pool is closed")
+
+        can_shelve_conn = conn.is_multiplexed is True and rp is not None
 
         if can_shelve_conn:
-            self.pool.memorize(rp, conn)  # type: ignore[union-attr,arg-type]
+            assert rp is not None
+            police.memorize(rp, conn)
             await self._put_conn(conn)
 
             # Receive the response from the server
-            async with self.pool.borrow(rp) as conn:  # type: ignore[union-attr]
+            async with police.borrow(rp) as conn:
                 try:
                     response = await conn.getresponse(
-                        police_officer=self.pool,
+                        police_officer=police,
                         early_response_callback=on_early_response,
                         promise=rp,
                     )
@@ -1492,11 +1503,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
                     raise
                 finally:
-                    self.pool.forget(rp)  # type: ignore[union-attr,arg-type]
+                    police.forget(rp)
         else:
             try:
                 response = await conn.getresponse(
-                    police_officer=self.pool,
+                    police_officer=police,
                     early_response_callback=on_early_response,
                     promise=rp,
                 )
@@ -1539,16 +1550,16 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
     async def close(self) -> None:
         """
-        Close all pooled connections and disable the pool.
+        Close the pool while allowing returned responses to finish reading.
+
+        New requests and retrieval of uncollected promises are no longer supported.
         """
         if self.pool is None:
             return
 
-        # Disable access to the pool
+        # Returned responses retain old_pool through their police officer.
         old_pool, self.pool = self.pool, None
-
-        # Close all the HTTPConnections in the pool.
-        await old_pool.clear()
+        old_pool.parent = None
 
         if self._background_monitoring is not None:
             self._background_monitoring.cancel()
@@ -1558,6 +1569,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 pass
             finally:
                 self._background_monitoring = None
+
+        # The watcher has returned its checkout; only user responses remain to drain.
+        await old_pool.clear()
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
@@ -1946,6 +1960,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             RecoverableError,
             UnavailableTraffic,
         ) as e:
+            if isinstance(e, UnavailableTraffic) and self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -1983,6 +1999,14 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # Keep track of the error for the retry warning.
             err = e
 
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Closing before a response is formed invalidates the backend state.
+            if self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
+            raise
+
         finally:
             if not clean_exit:
                 # We hit some kind of exception, handled or otherwise. We need
@@ -1993,6 +2017,15 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     await conn.close()
                     conn = None
                 release_this_conn = True
+
+            if (
+                self.pool is None
+                and clean_exit
+                and conn is not None
+                and isinstance(response, ResponsePromise)
+            ):
+                await conn.close()
+                raise ClosedPoolError(self, "Pool is closed")
 
             if self.pool is not None:
                 if (

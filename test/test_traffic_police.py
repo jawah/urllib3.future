@@ -32,6 +32,208 @@ class AsyncConnection(Connection):
         super().close()
 
 
+def test_kill_returned_target_preserves_unrelated_cursor() -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    target, other = Connection(), Connection(saturated=True)
+    police.put(target, immediately_unavailable=True)
+    police.release()
+    police.put(other, immediately_unavailable=True)
+    assert police.kill(target, idle_only=True)
+    assert target.closed and not other.closed
+    assert police.is_held(other)
+    assert id(target) not in police._registry and id(target) not in police._container
+    assert not police.kill(target, idle_only=True)
+    police.kill_cursor()
+    assert other.closed and not police.busy
+    assert police.rsize() == police.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_async_kill_returned_target_preserves_unrelated_cursor() -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    target, other = AsyncConnection(), AsyncConnection(saturated=True)
+    await police.put(target, immediately_unavailable=True)
+    police.release()
+    await police.put(other, immediately_unavailable=True)
+    assert await police.kill(target, idle_only=True)
+    assert target.closed and not other.closed
+    assert police.is_held(other)
+    assert id(target) not in police._registry and id(target) not in police._container
+    assert not await police.kill(target, idle_only=True)
+    await police.kill_cursor()
+    assert other.closed and not police.busy
+    assert police.rsize() == police.qsize() == 0
+    assert not police._signals._writing_tasks
+
+
+def test_kill_idle_waits_for_nested_borrows() -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    target, indicator = Connection(), HTTPResponse()
+    police.put(target, indicator, immediately_unavailable=True)
+    police.release()
+    with police.borrow(indicator):
+        with police.borrow(indicator):
+            assert not police.kill(target, idle_only=True)
+        assert not police.kill(target, idle_only=True)
+        assert not target.closed
+    assert police.kill(target, idle_only=True)
+    assert target.closed and not police._map
+
+
+@pytest.mark.asyncio
+async def test_async_kill_idle_waits_for_nested_borrows() -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    target, indicator = AsyncConnection(), AsyncHTTPResponse()
+    await police.put(target, indicator, immediately_unavailable=True)
+    police.release()
+    async with police.borrow(indicator):
+        async with police.borrow(indicator):
+            assert not await police.kill(target, idle_only=True)
+        assert not await police.kill(target, idle_only=True)
+        assert not target.closed
+    assert await police.kill(target, idle_only=True)
+    assert target.closed and not police._map
+
+
+@pytest.mark.parametrize("concurrency", [False, True])
+@pytest.mark.parametrize("wire_finished", [False, True])
+def test_shutdown_waits_for_last_borrow(concurrency: bool, wire_finished: bool) -> None:
+    police: TrafficPolice[Any] = TrafficPolice(concurrency=concurrency)
+    target, indicator = Connection(saturated=True), HTTPResponse()
+    police.put(target, indicator, immediately_unavailable=True)
+    if wire_finished:
+        setattr(target, "_pending_responses", {1: indicator})
+    police.release()
+    acquired, release = Event(), Event()
+    finished: Future[None] = Future()
+
+    def borrow() -> None:
+        try:
+            with police.borrow(indicator):
+                with police.borrow(indicator):
+                    acquired.set()
+                    assert release.wait(5)
+                assert not target.closed
+            finished.set_result(None)
+        except BaseException as exc:
+            finished.set_exception(exc)
+
+    worker = Thread(target=borrow)
+    worker.start()
+    try:
+        assert acquired.wait(5)
+        police.clear()
+        target.is_saturated, target.is_idle = False, True
+        if wire_finished:
+            # The backend has received EOF, but the response still owns its borrow.
+            setattr(target, "_pending_responses", {})
+        police.clear()
+        assert not target.closed
+        release.set()
+        finished.result(5)
+        assert target.closed
+        assert police.rsize() == police.qsize() == 0
+        assert not police._shutdown
+    finally:
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", [False, True])
+@pytest.mark.parametrize("wire_finished", [False, True])
+async def test_async_shutdown_waits_for_last_borrow(
+    concurrency: bool, wire_finished: bool
+) -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice(concurrency=concurrency)
+    target, indicator = AsyncConnection(saturated=True), AsyncHTTPResponse()
+    await police.put(target, indicator, immediately_unavailable=True)
+    if wire_finished:
+        setattr(target, "_pending_responses", {1: indicator})
+    police.release()
+    acquired, release = asyncio.Event(), asyncio.Event()
+
+    async def borrow() -> None:
+        async with police.borrow(indicator):
+            async with police.borrow(indicator):
+                acquired.set()
+                await release.wait()
+            assert not target.closed
+
+    worker = asyncio.create_task(borrow())
+    try:
+        await asyncio.wait_for(acquired.wait(), 5)
+        await police.clear()
+        target.is_saturated, target.is_idle = False, True
+        if wire_finished:
+            # The backend has received EOF, but the response still owns its borrow.
+            setattr(target, "_pending_responses", {})
+        await police.clear()
+        assert not target.closed
+        release.set()
+        await asyncio.wait_for(worker, 5)
+        assert target.closed
+        assert police.rsize() == police.qsize() == 0
+        assert not police._shutdown
+    finally:
+        release.set()
+        await asyncio.wait_for(worker, 5)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_borrow_during_shutdown_preserves_cancellation() -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    target, indicator = AsyncConnection(saturated=True), AsyncHTTPResponse()
+    await police.put(target, indicator, immediately_unavailable=True)
+    await police.clear()
+
+    async def borrow() -> None:
+        async with police.borrow(indicator):
+            pytest.fail("The connection is still held by another task")
+
+    worker = asyncio.create_task(borrow())
+    try:
+        await asyncio.sleep(0)
+        assert police._signals._furthest_signals
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        await police.kill_cursor()
+
+
+def test_shutdown_disposes_idle_target_after_borrow_error() -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    target, indicator = Connection(saturated=True), HTTPResponse()
+    police.put(target, indicator, immediately_unavailable=True)
+    police.release()
+    with pytest.raises(ValueError, match="response processing failed"):
+        with police.borrow(indicator):
+            police.clear()
+            target.is_saturated, target.is_idle = False, True
+            raise ValueError("response processing failed")
+    assert target.closed
+    assert police.rsize() == police.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_async_shutdown_disposes_idle_target_after_borrow_error() -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    target, indicator = AsyncConnection(saturated=True), AsyncHTTPResponse()
+    await police.put(target, indicator, immediately_unavailable=True)
+    police.release()
+    with pytest.raises(ValueError, match="response processing failed"):
+        async with police.borrow(indicator):
+            await police.clear()
+            target.is_saturated, target.is_idle = False, True
+            raise ValueError("response processing failed")
+    assert target.closed
+    assert police.rsize() == police.qsize() == 0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish", ["release", "drain", "close"])
 async def test_async_borrow_by_type_wakes_queued_readers(

@@ -227,18 +227,11 @@ class AsyncSignals(typing.Generic[T]):
 
         return False
 
-    def kill(self) -> bool:
-        current_task = _current_task_or_die()
-
-        if current_task not in self._cursors:
-            raise AtomicTraffic
-
-        cursor = self._cursors[current_task]
-
+    def kill(self, obj_id: int) -> bool:
         any_broadcast_push: bool = False
 
-        if cursor.obj_id in self._saturated_signals:
-            condition = self._saturated_signals[cursor.obj_id]
+        if obj_id in self._saturated_signals:
+            condition = self._saturated_signals.pop(obj_id)
             condition.set()
             any_broadcast_push = True
 
@@ -250,14 +243,20 @@ class AsyncSignals(typing.Generic[T]):
             any_broadcast_push = True
 
         for signal in self._furthest_signals:
-            if signal.target_obj_id is None or signal.target_obj_id == cursor.obj_id:
+            if signal.target_obj_id is None or signal.target_obj_id == obj_id:
                 signal.event.set()
                 awoken_signals.append(signal)
 
         for awoken_signal in awoken_signals:
             self._furthest_signals.remove(awoken_signal)
 
-        del self._cursors[current_task]
+        tasks = [
+            task for task, cursor in self._cursors.items() if cursor.obj_id == obj_id
+        ]
+        for task in tasks:
+            del self._cursors[task]
+            self._writing_tasks.discard(task)
+        self._refresh_generic_waiters()
 
         if awoken_signals:
             return True
@@ -528,29 +527,43 @@ class AsyncTrafficPolice(typing.Generic[T]):
         )
 
     async def kill_cursor(self) -> None:
-        """In case there is no other way, a conn or pool may be unusable and should be destroyed.
-        This make the scheduler forget about it."""
-        current_task = _current_task_or_die()
-        active_cursor = self._cursors.get(current_task)
+        """Dispose of the object held by the current task after a failure."""
+        active_cursor = self._cursor
+        if active_cursor is not None:
+            await self.kill(active_cursor.conn_or_pool)
 
-        if active_cursor is None:
-            return
+    async def kill(self, target: T, *, idle_only: bool = False) -> bool:
+        """Dispose of a registered target, independently of the current cursor."""
+        obj_id = id(target)
+        if obj_id not in self._registry:
+            return False
+        pending_responses = getattr(target, "_pending_responses", None)
+        if idle_only:
+            # On shutdown, only formed responses may keep the connection alive.
+            busy = (
+                bool(pending_responses)
+                if self._shutdown and pending_responses is not None
+                else traffic_state_of(target) is not TrafficState.IDLE
+            )
+            if busy or any(
+                cursor.obj_id == obj_id for cursor in self._cursors.values()
+            ):
+                return False
 
-        self._map_clear(active_cursor.conn_or_pool)
-
-        del self._registry[active_cursor.obj_id]
-
-        if not self.concurrency:
-            if self._signals.kill():
-                await asyncio.sleep(0)
-        else:
-            del self._container[active_cursor.obj_id]
-            del self._cursors[current_task]
-
+        # Detach before awaiting close so the target cannot be borrowed again.
+        self._map_clear(target)
+        del self._registry[obj_id]
+        self._container.pop(obj_id, None)
+        if not self._registry:
+            self._shutdown = False
+        signalled = self._signals.kill(obj_id)
         try:
-            await active_cursor.conn_or_pool.close()
+            await target.close()
         except Exception:
             pass
+        if signalled:
+            await asyncio.sleep(0)
+        return True
 
     async def _sacrifice_first_idle(self, block: bool = True) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
@@ -671,11 +684,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
         current_task = _current_task_or_die()
 
         # clear was called, each conn/pool that gets back must be destroyed appropriately.
-        if self._shutdown:
-            await self.kill_cursor()
-            # Cleanup was completed, no need to act like this anymore.
-            if not self._registry:
-                self._shutdown = False
+        if self._shutdown and not immediately_unavailable:
+            if self.is_held(conn_or_pool) and self.release():
+                await asyncio.sleep(0)
+            await self.kill(conn_or_pool, idle_only=True)
             return
 
         if (
@@ -923,11 +935,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
             else id(traffic_indicator)
         )
 
-        if key not in self._map:
-            return
-
-        del self._map[key]
-        del self._map_types[key]
+        if key in self._map:
+            del self._map[key]
+            del self._map_types[key]
 
         if self.parent is not None:
             try:
@@ -1224,6 +1234,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
             elif self.release():
                 await asyncio.sleep(0)
 
+            if self._shutdown and conn_or_pool is not None:
+                # release_conn() may have already returned ownership while reading.
+                await self.kill(conn_or_pool, idle_only=True)
+
     def release(self) -> bool:
         current_task = _current_task_or_die()
         active_cursor = self._cursors.get(current_task)
@@ -1263,36 +1277,36 @@ class AsyncTrafficPolice(typing.Generic[T]):
         return cursor_transferred
 
     async def clear(self) -> None:
-        """Shutdown traffic pool."""
-        planned_removal = []
+        """Close child pools immediately; let their formed responses drain."""
+        from ..._async.response import AsyncHTTPResponse
 
-        for obj_id in self._container:
-            if traffic_state_of(self._container[obj_id]) is TrafficState.IDLE:
-                planned_removal.append(obj_id)
-
-        for obj_id in planned_removal:
-            del self._container[obj_id]
-
-        # if we can't shut down them all, we need to toggle the shutdown bit to collect and close remaining connections.
-        if len(self._registry) > len(planned_removal):
-            self._shutdown = True
-
-        for obj_id in planned_removal:
-            conn_or_pool = self._registry.pop(obj_id)
-
-            try:
-                await conn_or_pool.close()
-            except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
-                pass
-
-            self._map_clear(conn_or_pool)
-
+        self._shutdown = True
         current_task = _current_task_or_die()
-        active_cursor = self._cursors.get(current_task)
-
-        if active_cursor is not None:
-            if active_cursor.obj_id in planned_removal:
-                del self._cursors[current_task]
+        targets = list(self._registry.items())
+        for obj_id, target in targets:
+            pending_responses = getattr(target, "_pending_responses", None)
+            if (
+                isinstance(getattr(target, "pool", None), AsyncTrafficPolice)
+                or (
+                    pending_responses is not None
+                    and not pending_responses
+                    # EOF can precede release of a formed response's borrow.
+                    and not any(
+                        issubclass(self._map_types[key], AsyncHTTPResponse)
+                        for key in self._map.keys_for(target)
+                    )
+                )
+                or (
+                    traffic_state_of(target) is TrafficState.IDLE
+                    and not any(
+                        task is not current_task and cursor.obj_id == obj_id
+                        for task, cursor in self._cursors.items()
+                    )
+                )
+            ):
+                await self.kill(target)
+        # New pools created while close() awaited are not part of this shutdown.
+        self._shutdown = any(obj_id in self._registry for obj_id, _ in targets)
 
     def qsize(self) -> int:
         return len(self._container)

@@ -893,7 +893,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
-        if self.pool is None:
+        police = self.pool
+        if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
         if promise is not None and not isinstance(promise, ResponsePromise):
@@ -905,7 +906,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         clean_exit = True
 
         try:
-            with self.pool.borrow(
+            with police.borrow(
                 promise or ResponsePromise,
                 block=promise is not None,
                 not_idle_only=True,
@@ -916,9 +917,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                         typing.Optional[float], promise.get_parameter("read_timeout")
                     )
                 try:
-                    response = conn.getresponse(
-                        promise=promise, police_officer=self.pool
-                    )
+                    response = conn.getresponse(promise=promise, police_officer=police)
                 except (BaseSSLError, OSError) as e:
                     if promise is not None:
                         url = typing.cast(str, promise.get_parameter("url"))
@@ -1011,7 +1010,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
 
-        self.pool.forget(from_promise)
+        police.forget(from_promise)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -1482,6 +1481,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 )
             conn.timeout = read_timeout
 
+        police = self.pool
+        if police is None:
+            raise ClosedPoolError(self, "Pool is closed")
+
         can_shelve_conn: bool = conn.is_multiplexed and not conn.is_saturated
 
         # Receive the response from the server
@@ -1492,7 +1495,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if not can_shelve_conn:
             try:
                 response = conn.getresponse(
-                    police_officer=self.pool,
+                    police_officer=police,
                     early_response_callback=on_early_response,
                     promise=rp,
                 )
@@ -1500,16 +1503,15 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
                 raise
         else:
-            assert self.pool is not None
             assert rp is not None
 
-            self.pool.memorize(rp, conn)
+            police.memorize(rp, conn)
             self._put_conn(conn)
 
-            with self.pool.borrow(rp) as conn:
+            with police.borrow(rp) as conn:
                 try:
                     response = conn.getresponse(
-                        police_officer=self.pool,
+                        police_officer=police,
                         early_response_callback=on_early_response,
                         promise=rp,
                     )
@@ -1517,7 +1519,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
                     raise
                 finally:
-                    self.pool.forget(rp)
+                    police.forget(rp)
 
         # Set properties that are used by the pooling layer.
         response.retries = retries
@@ -1550,14 +1552,17 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
     def close(self) -> None:
         """
-        Close all pooled connections and disable the pool.
+        Close the pool while allowing returned responses to finish reading.
+
+        New requests and retrieval of uncollected promises are no longer supported.
         """
         with self._background_monitoring_lock:
             if self.pool is None:
                 return
 
-            # Disable the pool and prevent the watcher from starting after close.
+            # Returned responses retain old_pool through their police officer.
             old_pool, self.pool = self.pool, None
+            old_pool.parent = None
             self._background_monitoring_stop.set()
             self._background_monitoring = None
 
@@ -1933,6 +1938,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             RecoverableError,
             UnavailableTraffic,
         ) as e:
+            if isinstance(e, UnavailableTraffic) and self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -1970,6 +1977,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             # Keep track of the error for the retry warning.
             err = e
 
+        except Exception as e:
+            # Closing before a response is formed invalidates the backend state.
+            if self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
+            raise
+
         finally:
             if not clean_exit:
                 # We hit some kind of exception, handled or otherwise. We need
@@ -1977,7 +1990,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 # Close the connection, set the variable to None, and make sure
                 # we put the None back in the pool to avoid leaking it.
                 if conn:
-                    self.pool.kill_cursor()  # type: ignore[union-attr]
+                    police = self.pool
+                    if police is None:
+                        conn.close()
+                    else:
+                        police.kill_cursor()
                     conn = None
 
                 release_this_conn = True
@@ -1987,9 +2004,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 and conn is not None
                 and isinstance(response, ResponsePromise)
             ):
-                self.pool.memorize(response, conn)  # type: ignore[union-attr]
-                if self.pool.parent is not None:  # type: ignore[union-attr]
-                    self.pool.parent.memorize(response, self)  # type: ignore[union-attr]
+                police = self.pool
+                if police is None:
+                    conn.close()
+                    raise ClosedPoolError(self, "Pool is closed")
+                police.memorize(response, conn)
+                if police.parent is not None:
+                    police.parent.memorize(response, self)
 
             if (
                 release_this_conn and self.pool is not None

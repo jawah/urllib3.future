@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 from random import randint
 from test import TIMEOUT_TOLERANCE, notMacOS
 from threading import Thread
@@ -7,13 +8,140 @@ from time import perf_counter, sleep
 
 import pytest
 
-from urllib3 import PoolManager, ResponsePromise, Retry
-from urllib3.exceptions import MaxRetryError
+from urllib3 import (
+    HTTPConnectionPool,
+    HTTPSConnectionPool,
+    HttpVersion,
+    PoolManager,
+    ResponsePromise,
+    Retry,
+)
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
+from urllib3.exceptions import ClosedPoolError, MaxRetryError
 
 from . import TraefikTestCase
 
 
 class TestPoolManagerMultiplexed(TraefikTestCase):
+    @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
+    def test_clear_invalidates_uncollected_promise(self, version: HttpVersion) -> None:
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        conn = None
+        try:
+            with PoolManager(
+                ca_certs=self.ca_authority,
+                resolver=self.test_resolver.new(),
+                disabled_svn=set(HttpVersion) - {version},
+                timeout=5,
+                retries=False,
+            ) as manager:
+                promise = manager.urlopen(
+                    "GET", f"{self.https_url}/bytes/4096", multiplexed=True
+                )
+                assert isinstance(promise, ResponsePromise)
+                conn = promise._conn
+                sock = conn.sock
+                assert sock is not None
+                old_pool = next(iter(manager.pools._registry.values()))
+                watcher = old_pool._background_monitoring
+                assert watcher is not None
+                manager.clear()
+                assert old_pool.pool is None
+                watcher.join(1)
+                assert not watcher.is_alive()
+                with pytest.raises(ClosedPoolError):
+                    old_pool.request("GET", "/bytes/1")
+                assert sock.fileno() == -1
+                assert manager.pools.rsize() == 0
+                assert manager.get_response(promise=promise) is None
+                with pytest.raises(ClosedPoolError):
+                    old_pool.get_response(promise=promise)
+                followup = manager.request("GET", f"{self.https_url}/bytes/7")
+                assert len(followup.data) == 7
+                assert id(old_pool) not in manager.pools._registry
+                assert manager.pools.rsize() == 1
+                assert not manager.pools._shutdown
+        finally:
+            if conn is not None:
+                conn.close()
+
+    @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
+    @pytest.mark.parametrize("owner_kind", ["pool", "manager", "adapter"])
+    @pytest.mark.parametrize("pending_promise", [False, True])
+    def test_closed_owner_preserves_other_streams(
+        self, version: HttpVersion, owner_kind: str, pending_promise: bool
+    ) -> None:
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        options: dict[str, typing.Any] = dict(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+            disabled_svn=set(HttpVersion) - {version},
+            timeout=5,
+            retries=False,
+        )
+        owner = (
+            PoolManager(**options)
+            if owner_kind != "pool"
+            else HTTPSConnectionPool(self.host, self.https_port, **options)
+        )
+        prefix = self.https_url if owner_kind != "pool" else ""
+        conn = None
+        try:
+            with owner:
+                promises = []
+                for size in (4096, 8192):
+                    requester: PoolManager | HTTPConnectionPool = owner
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, PoolManager)
+                        requester = owner.connection_from_url(self.https_url)
+                    promise = requester.urlopen(
+                        "GET",
+                        f"{prefix}/bytes/{size}",
+                        multiplexed=True,
+                        preload_content=False,
+                    )
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, PoolManager)
+                        assert isinstance(requester, HTTPConnectionPool)
+                        owner.pools.memorize(promise, requester)
+                        owner.pools.release()
+                    promises.append(promise)
+                assert all(isinstance(p, ResponsePromise) for p in promises)
+                first = owner.get_response(promise=promises[0])
+                second = owner.get_response(promise=promises[1])
+                assert first is not None and second is not None
+                assert first.status == second.status == 200
+                assert (
+                    first.version
+                    == second.version
+                    == (20 if version is HttpVersion.h2 else 30)
+                )
+                conn = first.connection
+                assert conn is not None and second.connection is conn
+                sock = conn.sock
+                assert sock is not None
+                if pending_promise:
+                    pending = owner.urlopen(
+                        "GET",
+                        f"{prefix}/bytes/7",
+                        multiplexed=True,
+                        preload_content=False,
+                    )
+                    assert isinstance(pending, ResponsePromise)
+                    assert pending._conn is conn
+            assert sock.fileno() >= 0
+            assert len(first.read()) == 4096
+            first.close()
+            assert conn.sock is sock and sock.fileno() >= 0
+            assert len(second.read()) == 8192
+            assert sock.fileno() == -1
+            second.close()
+        finally:
+            if conn is not None:
+                conn.close()
+
     @notMacOS()
     def test_multiplexing_fastest_to_slowest(self) -> None:
         with PoolManager(

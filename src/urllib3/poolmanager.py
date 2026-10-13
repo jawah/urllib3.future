@@ -411,8 +411,9 @@ class PoolManager(RequestMethods):
         """
         Empty our store of pools and direct them all to close.
 
-        This will not affect in-flight connections, but they will not be
-        reused after completion.
+        Returned responses remain readable, but uncollected promises can no
+        longer be retrieved and requests still in progress may fail. This
+        manager remains usable for new requests.
         """
         self.pools.clear()
 

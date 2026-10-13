@@ -150,6 +150,13 @@ class StreamMatrix:
             else [e for e in self._matrix[stream_id] if not isinstance(e, excl_event)]
         )
 
+    def discard(self, stream_id: int) -> None:
+        """Drop a stream's events without consuming connection-level events."""
+        events = self._matrix.pop(stream_id, None)
+        if events is not None:
+            self._count -= len(events)
+            self._stream_count -= 1
+
     def has(
         self,
         stream_id: int | None = None,

@@ -310,16 +310,17 @@ class AsyncLowLevelResponse:
         return data
 
     async def abort(self) -> None:
-        if self._stream_abort is not None:
-            if self._eot is False:
+        try:
+            if self._stream_abort is not None and not self._eot:
                 if self._stream_id is not None:
                     await self._stream_abort(self._stream_id)
-                self._eot = True
-                self._stream_abort = None
-                self.closed = True
-                self._dsa = None
+        finally:
+            self._eot = True
+            self.close()
 
     def close(self) -> None:
+        self._stream_abort = None
+        self.__buffer_excess = BytesQueueBuffer()
         self.__internal_read_st = None
         self.closed = True
         self._dsa = None

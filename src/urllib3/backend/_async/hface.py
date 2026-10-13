@@ -1504,8 +1504,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
     async def __abort_st(self, __stream_id: int) -> None:
         """Kill a stream properly."""
-        assert self._protocol is not None
-        assert self.sock is not None
+        self._pending_responses.pop(__stream_id, None)
+        if self._protocol is None or self.sock is None:
+            return
 
         self._protocol.submit_stream_reset(stream_id=__stream_id)
 
@@ -1516,11 +1517,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 break
 
             await self.sock.sendall(data_out)
-
-        try:
-            del self._pending_responses[__stream_id]
-        except KeyError:
-            pass  # Hmm... this should be impossible.
 
         # remote can refuse future inquiries, so no need to go further with this conn.
         if self._protocol.has_expired():

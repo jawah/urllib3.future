@@ -32,6 +32,7 @@ from ..exceptions import (
 from ..response import ContentDecoder, HTTPResponse
 from ..util.response import is_fp_closed
 from ..util.retry import Retry
+from ..util.traffic_police import UnavailableTraffic
 from .connection import AsyncHTTPConnection
 
 try:
@@ -122,7 +123,7 @@ class AsyncHTTPResponse(HTTPResponse):
             self._body = body
 
         self._pool: AsyncHTTPConnectionPool = pool  # type: ignore[assignment]
-        self._connection: AsyncHTTPConnection = connection  # type: ignore[assignment]
+        self._connection: AsyncHTTPConnection | None = connection  # type: ignore[assignment]
 
         if hasattr(body, "read"):
             self._fp = body  # type: ignore[assignment]
@@ -685,11 +686,36 @@ class AsyncHTTPResponse(HTTPResponse):
         if self.extension is not None and not self.extension.closed:
             await self.extension.close()
 
-        if not self.closed and self._fp:
+        if (
+            isinstance(self._fp, AsyncLowLevelResponse)
+            and self._police_officer is not None
+        ):
+            police = self._police_officer
+            try:
+                async with police.borrow(self) as conn:
+                    try:
+                        await self._fp.abort()
+                    except (OSError, BaseSSLError):
+                        # A failed reset write makes the transport unusable.
+                        await conn.close()
+                    finally:
+                        self._fp.close()
+                        self._connection = None
+            except UnavailableTraffic:
+                self._fp.close()
+                self._connection = None
+            finally:
+                if self._fp.closed:
+                    police.forget(self)
+                    self._police_officer = None
+        elif isinstance(self._fp, AsyncLowLevelResponse) and self._fp._eot:
             self._fp.close()
-
-        if self._connection:
-            await self._connection.close()
+            self._connection = None
+        else:
+            if not self.closed and self._fp:
+                self._fp.close()
+            if self._connection:
+                await self._connection.close()
 
         if not self.auto_close:
             io.IOBase.close(self)
