@@ -300,11 +300,13 @@ def test(session: nox.Session) -> None:
 
 @nox.session(python=["3.14"])
 def test_udp_fallback(session: nox.Session) -> None:
-    """Run real HTTP/3 traffic through the Python UDP transport."""
+    """Run real HTTP/3 and DNS traffic through the Python UDP transport."""
     if not session.posargs:
         session.posargs.extend(
             [
                 "test/contrib/asynchronous/test_ssa.py",
+                "test/contrib/test_resolver.py",
+                "test/contrib/asynchronous/test_resolver.py",
                 "test/with_traefik/asynchronous/",
             ]
         )
