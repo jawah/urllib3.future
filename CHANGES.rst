@@ -21,6 +21,8 @@
   data is discarded, allowing connection reuse, in both sync and async.
 - Fixed cancellation of the async idle connection watcher leaving a connection
   checked out and preventing its cleanup during pool shutdown.
+- Fixed the synchronous idle connection watcher retaining its checkout and lock
+  after an early exit when generator cleanup is delayed, notably on PyPy.
 - Fixed concurrent synchronous connection cleanup raising ``AttributeError``
   when another thread closed the same connection.
 - Fixed oversized QUIC probes aborting synchronous HTTP/3 sends or causing

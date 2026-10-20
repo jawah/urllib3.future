@@ -191,8 +191,10 @@ def idle_conn_watch_task(
             if pool.pool is None:
                 return
 
+            connections = None
             try:
-                for conn in pool.pool.iter_idle():
+                connections = pool.pool.iter_idle()
+                for conn in connections:
                     now = time.monotonic()
                     last_used = conn.last_used_at
 
@@ -221,6 +223,11 @@ def idle_conn_watch_task(
                                     conn.peek_and_react(expect_frame=True)
             except AttributeError:
                 return
+            finally:
+                # Finish the generator in the thread that owns its checkout and
+                # lock; delayed GC may otherwise finalize it in another thread.
+                if connections is not None:
+                    connections.close()
     except ReferenceError:
         return
 
