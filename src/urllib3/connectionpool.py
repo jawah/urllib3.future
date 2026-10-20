@@ -366,7 +366,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             self.pool: TrafficPolice[HTTPConnection] | None = self.QueueCls(
                 maxsize, concurrency=False, strict_maxsize=not self.block
             )
-        except TypeError:
+        except (
+            TypeError
+        ):  # Defensive: best-effort compatibility with legacy QueueCls constructors.
             self.pool = self.QueueCls(maxsize)
 
         self.proxy = _proxy
@@ -796,7 +798,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             except AttributeError:
                 # self.pool is None.
                 pass
-            except queue.Full:
+            except queue.Full:  # Defensive: legacy queues may reject a blocking put; TrafficPolice waits for capacity.
                 # Connection never got put back into the pool, close it.
                 if conn:
                     if conn.is_idle:

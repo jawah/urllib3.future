@@ -792,7 +792,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             except AttributeError:
                 # self.pool is None.
                 pass
-            except queue.Full:
+            except queue.Full:  # Defensive: legacy queues may reject a blocking put; TrafficPolice waits for capacity.
                 # Connection never got put back into the pool, close it.
                 if conn:
                     if conn.is_idle:
