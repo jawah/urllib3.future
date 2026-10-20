@@ -59,7 +59,7 @@ from ..exceptions import (
     ReadTimeoutError,
     RecoverableError,
     SSLError,
-    TimeoutError,
+    TimeoutError as _TimeoutError,
 )
 from ..util._async.traffic_police import (  # type: ignore[attr-defined]
     AsyncTrafficPolice,
@@ -922,7 +922,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             await asyncio.sleep(0)
             return None
         except (
-            TimeoutError,
+            _TimeoutError,
             OSError,
             ProtocolError,
             BaseSSLError,
@@ -942,7 +942,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 (
                     OSError,
                     NewConnectionError,
-                    TimeoutError,
+                    _TimeoutError,
                     SSLError,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
@@ -1337,7 +1337,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         except (
             OSError,
             NewConnectionError,
-            TimeoutError,
+            _TimeoutError,
             BaseSSLError,
             CertificateError,
             SSLError,
@@ -1348,7 +1348,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # If the connection didn't successfully connect to it's proxy
             # then there
             if isinstance(
-                new_e, (OSError, NewConnectionError, TimeoutError, SSLError)
+                new_e, (OSError, NewConnectionError, _TimeoutError, SSLError)
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
                 new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
             raise new_e
@@ -1951,7 +1951,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             raise
 
         except (
-            TimeoutError,
+            _TimeoutError,
             OSError,
             ProtocolError,
             BaseSSLError,
@@ -1974,7 +1974,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 (
                     OSError,
                     NewConnectionError,
-                    TimeoutError,
+                    _TimeoutError,
                     SSLError,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
