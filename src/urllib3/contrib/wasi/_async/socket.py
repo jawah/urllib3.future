@@ -318,6 +318,9 @@ if sys.platform == "wasi":
                 self._read_buffer = await self.recv(65536)
 
         async def recv(self, bufsize: int) -> bytes:
+            # Zero-length component-stream reads wait for readiness.
+            if bufsize == 0:
+                return b""
             if self._receive_error is not None:
                 raise self._receive_error
             if self._reader is None:
@@ -599,6 +602,9 @@ if sys.platform == "wasi":
                 self._read_buffer = await self.recv(65536)
 
         async def recv(self, bufsize: int) -> bytes:
+            # Zero-length component-stream reads wait for readiness.
+            if bufsize == 0:
+                return b""
             if self._read_buffer:
                 data = self._read_buffer[:bufsize]
                 self._read_buffer = self._read_buffer[bufsize:]
