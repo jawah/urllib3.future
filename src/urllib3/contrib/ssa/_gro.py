@@ -1215,6 +1215,9 @@ class _DatagramBridgeProtocol(asyncio.DatagramProtocol):
         self._reader.feed_datagrams(data, addr)
 
     def error_received(self, exc: Exception) -> None:
+        # Standard asyncio transports report rejected sends here (e.g. Windows).
+        if isinstance(exc, OSError) and _is_msg_too_big(exc):
+            return
         # Surface to the reader so callers awaiting read() see it, but
         # do NOT mark EOF -- UDP errors are usually transient (ICMP
         # unreachable etc.) and the connection may recover.

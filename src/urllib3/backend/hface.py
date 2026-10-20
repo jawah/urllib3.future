@@ -955,7 +955,10 @@ class HfaceBackend(BaseBackend):
                     break
 
                 try:
-                    self.sock.sendall(data_out)
+                    if self._svn is HttpVersion.h3:
+                        sync_send_dgram(self.sock, data_out)
+                    else:
+                        self.sock.sendall(data_out)
                 except OSError:
                     self._protocol.connection_lost()
                     return True
@@ -1607,7 +1610,10 @@ class HfaceBackend(BaseBackend):
                 data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
                 if not data_out:
                     break
-                self.sock.sendall(data_out)  # type: ignore[union-attr]
+                if self._svn is HttpVersion.h3:
+                    sync_send_dgram(self.sock, data_out)  # type: ignore[arg-type]
+                else:
+                    self.sock.sendall(data_out)  # type: ignore[union-attr]
 
         while (
             self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
@@ -1644,7 +1650,10 @@ class HfaceBackend(BaseBackend):
             if not data_out:
                 break
 
-            self.sock.sendall(data_out)
+            if self._svn is HttpVersion.h3:
+                sync_send_dgram(self.sock, data_out)
+            else:
+                self.sock.sendall(data_out)
 
         self._last_used_at = time.monotonic()
 
@@ -1662,7 +1671,10 @@ class HfaceBackend(BaseBackend):
             if not data_out:
                 break
 
-            self.sock.sendall(data_out)
+            if self._svn is HttpVersion.h3:
+                sync_send_dgram(self.sock, data_out)
+            else:
+                self.sock.sendall(data_out)
 
         # remote can refuse future inquiries, so no need to go further with this conn.
         if self._protocol.has_expired():
@@ -1946,7 +1958,10 @@ class HfaceBackend(BaseBackend):
                 data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
                 if not data_out:
                     break
-                self.sock.sendall(data_out)  # type: ignore[union-attr]
+                if self._svn is HttpVersion.h3:
+                    sync_send_dgram(self.sock, data_out)  # type: ignore[arg-type]
+                else:
+                    self.sock.sendall(data_out)  # type: ignore[union-attr]
 
         try:
             while (
@@ -2082,7 +2097,10 @@ class HfaceBackend(BaseBackend):
                 break
 
             try:
-                self.sock.sendall(ping_frame)
+                if self._svn is HttpVersion.h3:
+                    sync_send_dgram(self.sock, ping_frame)
+                else:
+                    self.sock.sendall(ping_frame)
             except (
                 OSError,
                 ssl.SSLError,
@@ -2105,7 +2123,10 @@ class HfaceBackend(BaseBackend):
                         if not goodbye_frame:
                             break
                         try:
-                            self.sock.sendall(goodbye_frame)
+                            if self._svn is HttpVersion.h3:
+                                sync_send_dgram(self.sock, goodbye_frame)
+                            else:
+                                self.sock.sendall(goodbye_frame)
                         except (
                             OSError,
                             ssl.SSLEOFError,
