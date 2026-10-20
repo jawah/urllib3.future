@@ -1235,6 +1235,9 @@ class HTTPResponse(io.IOBase):
 
             if amt is None:
                 data = self._decode(data, decode_content, flush_decoder)
+                # A previous bounded read may have left decoded output buffered.
+                if self._decoded_buffer:
+                    data = self._decoded_buffer.get(len(self._decoded_buffer)) + data
                 if cache_content and not self._uncached_read_occurred:
                     self._body = data
             else:
