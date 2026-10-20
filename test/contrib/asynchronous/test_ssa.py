@@ -283,6 +283,19 @@ class RecordingDatagramProtocol(asyncio.DatagramProtocol):
 @pytest.mark.usefixtures("python_udp_transport")
 @pytest.mark.timeout(10)
 class TestDatagram:
+    async def test_standard_transport_oversized_send_does_not_poison_reader(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Exercise the stdlib transport used on Windows, with real UDP sockets.
+        monkeypatch.setattr(_gro, "_IS_LINUX", False)
+        monkeypatch.setattr(_gro, "_IS_DARWIN", False)
+        async with datagram_pair() as (reader, writer, peer_reader, peer_writer):
+            writer.write(b"x" * 65536)
+            writer.write(b"valid")
+            assert await receive(peer_reader, 1) == [b"valid"]
+            peer_writer.transport.sendto(b"reply", writer.get_extra_info("sockname"))
+            assert await receive(reader, 1) == [b"reply"]
+
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux UDP GRO/GSO")
     async def test_gro_preserves_datagrams_after_protocol_replacement(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
