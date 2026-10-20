@@ -1137,6 +1137,9 @@ class HTTPResponse(io.IOBase):
     ) -> bytes:
         """We need this private method to restore BC with urllib3 fast-path for streaming/chunks.
         see https://github.com/jawah/urllib3.future/issues/379"""
+        # Zero-byte reads must not advance the transport or the decoder.
+        if amt == 0:
+            return b""
         try:
             self._init_decoder()
             if decode_content is None:

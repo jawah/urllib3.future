@@ -465,6 +465,9 @@ class AsyncHTTPResponse(HTTPResponse):
         *,
         read1: bool = False,
     ) -> bytes:
+        # Zero-byte reads must not advance the transport or the decoder.
+        if amt == 0:
+            return b""
         try:
             self._init_decoder()
             if decode_content is None:
