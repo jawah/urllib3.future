@@ -14,9 +14,16 @@
 - Fixed protocol restrictions for a web extension leaking into other connection
   pools through shared settings, in both sync and async. (#433)
 - Fixed incomplete pool shutdown leaving connections open after their last
-  response was consumed or closed. Returned responses remain readable and
-  outstanding promises remain retrievable after shutdown, in both sync and
-  async. (#432)
+  response was consumed or closed. Responses and promises returned before
+  shutdown remain readable and retrievable, in both sync and async. (#432)
+- Fixed closing an HTTP/2 or HTTP/3 response interrupting other responses on
+  the shared connection. Unfinished streams are cancelled and their queued
+  data is discarded, allowing connection reuse, in both sync and async.
+- Fixed cancellation of the async idle connection watcher leaving a connection
+  checked out and preventing its cleanup during pool shutdown.
+- Fixed oversized QUIC probes aborting synchronous HTTP/3 sends or causing
+  subsequent async UDP reads to fail, including on Windows. Rejected oversized
+  datagrams are now consistently discarded so valid traffic can continue.
 - Fixed unrestricted response reads losing buffered decompressed data after a
   partial read. Zero-byte reads also leave the transport and decoder untouched,
   in both sync and async.
