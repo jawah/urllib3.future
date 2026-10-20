@@ -253,8 +253,12 @@ class TestClientCerts(SocketDummyServerTestCase):
             timeout=5,
             retries=False,
         ) as pool:
-            with pytest.raises(SSLError):
+            with pytest.raises((SSLError, ProtocolError)) as caught:
                 pool.request("GET", "/")
+            if isinstance(caught.value, ProtocolError):
+                # The FIPS build wraps the native SSL error as a connection abort.
+                assert len(caught.value.args) == 2
+                assert isinstance(caught.value.args[1], ssl.SSLError)
         assert peer_closed.wait(5)
 
     """
