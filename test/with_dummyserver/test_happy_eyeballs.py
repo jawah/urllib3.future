@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from test.conftest import DNSUDPServer
 
 from urllib3 import PoolManager
 from urllib3.connectionpool import log as cp_logger
@@ -11,6 +12,47 @@ from ..conftest import ServerConfig
 
 
 class TestHappyEyeballsOverHTTPS:
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    @pytest.mark.parametrize("dns_udp_server", ["timeout"], indirect=True)
+    def test_happy_eyeballs_dns_timeout(
+        self, scheme: str, dns_udp_server: DNSUDPServer
+    ) -> None:
+        from urllib3 import ResolverDescription, Timeout
+        from urllib3.exceptions import ProtocolError
+
+        host, port = dns_udp_server.address
+        resolver = ResolverDescription.from_url(f"dou://{host}:{port}?timeout=1").new()
+        try:
+            with PoolManager(
+                resolver=resolver,
+                happy_eyeballs=True,
+                timeout=Timeout(connect=1, read=5),
+                retries=False,
+            ) as manager:
+                with pytest.raises(ProtocolError, match="DNS resolution timed out"):
+                    manager.request("GET", f"{scheme}://unresponsive.example/")
+            assert dns_udp_server.requests
+        finally:
+            resolver.close()
+
+    @pytest.mark.parametrize("loopback_host", ["127.0.0.1"], indirect=True)
+    def test_happy_eyeballs_with_source_address(self, san_server: ServerConfig) -> None:
+        from urllib3 import HttpVersion
+
+        with PoolManager(
+            resolver="in-memory://default?hosts=dummy.io:127.0.0.2,dummy.io:127.0.0.1",
+            happy_eyeballs=True,
+            source_address=("127.0.0.1", 0),
+            disabled_svn={HttpVersion.h2, HttpVersion.h3},
+            cert_reqs=0,
+            timeout=5,
+        ) as manager:
+            with pytest.warns(InsecureRequestWarning):
+                response = manager.request(
+                    "GET", f"https://dummy.io:{san_server.port}/"
+                )
+            assert response.status == 200
+
     def test_fallback_without_threads(
         self, ipv6_san_server: ServerConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
