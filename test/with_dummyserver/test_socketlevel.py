@@ -214,6 +214,48 @@ def original_ssl_wrap_socket(
 
 
 class TestClientCerts(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("invalid", ["certificate", "key", "mismatch"])
+    def test_native_client_identity_failure_closes_socket(self, invalid: str) -> None:
+        from io import UnsupportedOperation
+        from urllib3.contrib.anytls import BACKEND
+        from urllib3.contrib.imcc._ctypes import _OpenSSL
+
+        if BACKEND != "ssl":
+            pytest.skip("This regression targets the stdlib OpenSSL certificate loader")
+        try:
+            _OpenSSL()
+        except UnsupportedOperation:
+            pytest.skip("The native ctypes certificate loader is unavailable")
+        cert = Path(self.cert_path).read_bytes()
+        key = Path(self.key_path).read_bytes()
+        if invalid == "certificate":
+            cert = b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n"
+        elif invalid == "key":
+            key = b"-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n"
+        else:
+            key = Path(DEFAULT_CERTS["keyfile"]).read_bytes()
+        peer_closed = Event()
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=self.ca_path,
+            cert_data=cert,
+            key_data=key,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            with pytest.raises(SSLError):
+                pool.request("GET", "/")
+        assert peer_closed.wait(5)
+
     """
     Tests for client certificate support.
     """
