@@ -13,6 +13,7 @@ from jh2.events import RequestReceived  # type: ignore[import-untyped]
 from urllib3 import HttpVersion, ResponsePromise, AsyncProxyManager
 from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool, AsyncPoolManager
 from urllib3._async.connection import AsyncHTTPConnection
+from urllib3.contrib.ssa import AsyncSocket
 from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
 from urllib3.contrib.webextensions._async.sse import (
     AsyncServerSideEventExtensionFromHTTP,
@@ -1024,6 +1025,58 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
                 assert response.extension.closed
         assert manager.pools.rsize() == 0
 
+    @pytest.mark.parametrize("partial", [False, True])
+    @pytest.mark.parametrize("chunked", [False, True])
+    async def test_compressed_response_read_boundaries(
+        self,
+        compressed_payload: tuple[str, bytes, bytes],
+        partial: bool,
+        chunked: bool,
+    ) -> None:
+        encoding, encoded, plain = compressed_payload
+        headers = f"HTTP/1.1 200 OK\r\nContent-Encoding: {encoding}\r\nConnection: close\r\n".encode()
+        if chunked:
+            wire = (
+                headers
+                + b"Transfer-Encoding: chunked\r\n\r\n"
+                + f"{len(encoded):x}\r\n".encode()
+                + encoded
+                + b"\r\n0\r\n\r\n"
+            )
+        else:
+            wire = (
+                headers + f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded
+            )
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(wire)
+
+        self._start_server(handler)
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            from urllib3.backend._async._base import AsyncLowLevelResponse
+
+            assert isinstance(response._fp, AsyncLowLevelResponse)
+            assert response._fp.from_promise is not None
+            assert response.is_from_promise(response._fp.from_promise)
+            prefix = await response.read(64) if partial else b""
+            assert prefix == (plain[:64] if partial else b"")
+            assert await response.read(0) == b""
+            assert await response.read1(0) == b""
+            assert [part async for part in response.stream(0)] == []
+            if chunked:
+                remainder = b"".join([part async for part in response.read_chunked(-1)])
+            else:
+                remainder = await response.read()
+            assert len(prefix + remainder) == len(plain)
+            assert prefix + remainder == plain
+            await response.close()
+
     @pytest.mark.parametrize("decode_content", [False, True])
     async def test_zero_sized_read1_does_not_wait_for_body(
         self, decode_content: bool
@@ -1068,6 +1121,34 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             response = await pool.urlopen("GET", "/", preload_content=False)
             assert await response.read1(2**31) == b"body"
             assert await response.read1() == b""
+
+    @pytest.mark.parametrize("decode_content", [False, True])
+    async def test_zero_sized_read_does_not_wait_for_body(
+        self, decode_content: bool
+    ) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert await response.read(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert await response.read(cache_content=True) == b"body"
+                assert await response.data == b"body"
+            finally:
+                send_body.set()
+                await response.close()
 
     @pytest.mark.parametrize("chunked", [False, True])
     async def test_small_reads_of_compressed_transport(self, chunked: bool) -> None:

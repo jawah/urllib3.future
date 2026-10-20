@@ -2903,6 +2903,63 @@ class TestHEAD(SocketDummyServerTestCase):
 
 
 class TestStream(SocketDummyServerTestCase):
+    def test_oversized_read1_from_transport(self) -> None:
+        self.start_response_handler(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody")
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            assert response.read1(2**31) == b"body"
+            assert response.read1() == b""
+
+    @pytest.mark.parametrize("partial", [False, True])
+    @pytest.mark.parametrize("chunked", [False, True])
+    def test_compressed_response_read_boundaries(
+        self,
+        compressed_payload: tuple[str, bytes, bytes],
+        partial: bool,
+        chunked: bool,
+    ) -> None:
+        encoding, encoded, plain = compressed_payload
+        headers = f"HTTP/1.1 200 OK\r\nContent-Encoding: {encoding}\r\nConnection: close\r\n".encode()
+        if chunked:
+            wire = (
+                headers
+                + b"Transfer-Encoding: chunked\r\n\r\n"
+                + f"{len(encoded):x}\r\n".encode()
+                + encoded
+                + b"\r\n0\r\n\r\n"
+            )
+        else:
+            wire = (
+                headers + f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded
+            )
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(wire)
+
+        self._start_server(handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5, retries=False) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            from urllib3.backend import LowLevelResponse
+
+            assert isinstance(response._fp, LowLevelResponse)
+            assert response._fp.from_promise is not None
+            assert response.is_from_promise(response._fp.from_promise)
+            prefix = response.read(64) if partial else b""
+            assert prefix == (plain[:64] if partial else b"")
+            assert response.read(0) == b""
+            assert response.read1(0) == b""
+            assert list(response.stream(0)) == []
+            if chunked:
+                remainder = b"".join(response.read_chunked(-1))
+            else:
+                remainder = response.read()
+            assert len(prefix + remainder) == len(plain)
+            assert prefix + remainder == plain
+            response.close()
+
     @pytest.mark.parametrize("decode_content", [False, True])
     def test_zero_sized_read1_does_not_wait_for_body(
         self, decode_content: bool
@@ -2922,6 +2979,32 @@ class TestStream(SocketDummyServerTestCase):
             try:
                 # The server sends the body only after the zero-byte read returns.
                 assert response.read1(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert response.read(cache_content=True) == b"body"
+                assert response.data == b"body"
+            finally:
+                send_body.set()
+                response.close()
+
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_zero_sized_read_does_not_wait_for_body(self, decode_content: bool) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert response.read(0, decode_content=decode_content) == b""
                 assert response.tell() == 0
                 assert response.length_remaining == 4
                 send_body.set()
