@@ -46,6 +46,7 @@ from dummyserver.server import (
     get_unreachable_address,
 )
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from test.conftest import ServerConfig
 from urllib3 import (
     HTTPConnectionPool,
     HTTPResponse,
@@ -3944,6 +3945,75 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
             assert "GOAWAY" in message
             assert error_name in message
             assert hex(error_code) in message
+
+    @pytest.mark.parametrize(
+        "error_code,frame_type,reason,error_name,error_type",
+        [
+            (0x107, None, "too many requests", "H3_EXCESSIVE_LOAD", ProtocolError),
+            (
+                0x200,
+                None,
+                "invalid QPACK data",
+                "QPACK_DECOMPRESSION_FAILED",
+                ProtocolError,
+            ),
+            # The same number belongs to different namespaces on the wire.
+            (0x10A, None, "", "H3_MISSING_SETTINGS", ProtocolError),
+            (
+                0x10A,
+                0x6,
+                "unexpected handshake message",
+                "TLS_UNEXPECTED_MESSAGE",
+                SSLError,
+            ),
+            (0x12A, None, "custom application error", "UNKNOWN_ERROR", ProtocolError),
+            (
+                0x12A,
+                0x6,
+                "peer rejected client certificate",
+                "TLS_BAD_CERTIFICATE",
+                SSLError,
+            ),
+            (0x128, 0x6, "no compatible cipher", "TLS_HANDSHAKE_FAILURE", SSLError),
+            (0x3, 0x8, "flow control exceeded", "FLOW_CONTROL_ERROR", ProtocolError),
+            (0xFFFF, None, "custom application error", "UNKNOWN_ERROR", ProtocolError),
+            (0x1FF, 0x6, "", "UNKNOWN_ERROR", SSLError),
+            # TLS classification must precede the legacy code-400/header heuristic.
+            (0x190, 0x6, "invalid header", "UNKNOWN_ERROR", SSLError),
+        ],
+    )
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    def test_http3_close_error_message(
+        self,
+        http3_error_server: ServerConfig,
+        error_code: int,
+        frame_type: int | None,
+        reason: str,
+        error_name: str,
+        error_type: type[Exception],
+        multiplexed: bool,
+    ) -> None:
+        with HTTPSConnectionPool(
+            http3_error_server.host,
+            http3_error_server.port,
+            ca_certs=http3_error_server.ca_certs,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+            retries=False,
+        ) as pool:
+            with pytest.raises(error_type) as caught:
+                if multiplexed:
+                    promise = pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(promise, ResponsePromise)
+                    pool.get_response(promise=promise)
+                else:
+                    pool.urlopen("GET", "/")
+            message = str(caught.value)
+            assert "HTTP/3" in message
+            assert error_name in message
+            assert hex(error_code) in message
+            if reason:
+                assert reason in message
 
     @pytest.mark.parametrize(
         "error_code, multiplexed",

@@ -671,6 +671,92 @@ class ServerConfig(typing.NamedTuple):
         return f"{self.scheme}://{host}:{self.port}"
 
 
+@pytest.fixture
+def http3_error_server(
+    tmp_path: Path, error_code: int, frame_type: int | None, reason: str
+) -> typing.Iterator[ServerConfig]:
+    """Send a QUIC close frame after receiving an actual HTTP/3 request."""
+    if not (_SYNC_HAS_HTTP3_SUPPORT() and _ASYNC_HAS_HTTP3_SUPPORT()):
+        pytest.skip("HTTP/3 unavailable")
+    from qh3 import H3Connection, QuicConfiguration, h3_events
+    from qh3.asyncio import QuicConnectionProtocol
+    from qh3.asyncio.server import QuicServer
+
+    ca = trustme.CA()
+    cert = ca.issue_cert("127.0.0.1")
+    ca_path = tmp_path / "ca.pem"
+    ca.cert_pem.write_to_path(ca_path)
+    certs = _write_cert_to_dir(cert, tmp_path)
+    errors: list[Exception] = []
+    received = threading.Event()
+    pending: list[asyncio.Task[None]] = []
+
+    class Protocol(QuicConnectionProtocol):
+        def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.http = H3Connection(self._quic)
+
+        def quic_event_received(self, event: typing.Any) -> None:
+            try:
+                for http_event in self.http.handle_event(event):
+                    if isinstance(http_event, h3_events.HeadersReceived):
+                        received.set()
+                        pending.append(asyncio.create_task(self.close_after_setup()))
+            except Exception as exc:
+                errors.append(exc)
+                self.close()
+
+        async def close_after_setup(self) -> None:
+            # Confirm delivery of the server's SETTINGS before closing, so the
+            # client does not have to finish HTTP/3 setup on an already closed QUIC.
+            await self.ping()
+            self._quic.close(
+                error_code=error_code, frame_type=frame_type, reason_phrase=reason
+            )
+            self.transmit()
+
+    async def start() -> typing.Any:
+        configuration = QuicConfiguration(
+            is_client=False, alpn_protocols=["h3"], max_datagram_frame_size=65536
+        )
+        configuration.load_cert_chain(certs["certfile"], certs["keyfile"])
+        _, server = await asyncio.get_running_loop().create_datagram_endpoint(
+            lambda: QuicServer(configuration=configuration, create_protocol=Protocol),
+            local_addr=("127.0.0.1", 0),
+        )
+        return server
+
+    with run_loop_in_thread() as io_loop:
+        loop = io_loop.asyncio_loop
+        server = asyncio.run_coroutine_threadsafe(start(), loop).result(10)
+        host, port = server._transport.get_extra_info("sockname")
+        try:
+            yield ServerConfig("https", host, port, str(ca_path), None)
+        finally:
+
+            async def stop() -> None:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+                results = await asyncio.gather(*pending, return_exceptions=True)
+                errors.extend(
+                    result for result in results if isinstance(result, Exception)
+                )
+                peers = set(server._protocols.values())
+                for peer in peers:
+                    peer.close()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*(peer.wait_closed() for peer in peers)), 5
+                    )
+                finally:
+                    server.close()
+
+            asyncio.run_coroutine_threadsafe(stop(), loop).result(10)
+            assert not errors, errors
+            assert received.is_set(), "The HTTP/3 peer did not receive the request"
+
+
 def _write_cert_to_dir(
     cert: trustme.LeafCert, tmpdir: Path, file_prefix: str = "server"
 ) -> dict[str, str]:

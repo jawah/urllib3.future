@@ -40,7 +40,10 @@ from qh3 import (
     h3_events,
     quic_events,
 )
+from qh3.h3.connection import ErrorCode as H3ErrorCode
 from qh3.quic.connection import QuicConnectionState
+from qh3.quic.packet import QuicErrorCode
+from qh3.tls import AlertDescription
 
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
@@ -393,11 +396,28 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if event_type is quic_events.ConnectionTerminated:
             self._terminated = True
-            return ConnectionTerminated(
-                quic_event.error_code,  # type: ignore[attr-defined]
-                quic_event.reason_phrase  # type: ignore[attr-defined]
-                or "Remote end closed connection (not gracefully)",
+            termination = typing.cast(quic_events.ConnectionTerminated, quic_event)
+            error_code = termination.error_code
+            is_tls_error = (
+                termination.frame_type is not None and 0x100 <= error_code < 0x200
             )
+            try:
+                # Application closes omit the triggering frame type. Transport
+                # closes use a separate namespace, including TLS alerts at 0x100.
+                if termination.frame_type is None:
+                    error_name = H3ErrorCode(error_code).name
+                elif is_tls_error:
+                    error_name = (
+                        f"TLS_{AlertDescription(error_code - 0x100).name.upper()}"
+                    )
+                else:
+                    error_name = QuicErrorCode(error_code).name
+            except ValueError:
+                error_name = "UNKNOWN_ERROR"
+            message = f"HTTP/3 connection terminated with error {error_name} ({error_code:#x})."
+            if termination.reason_phrase:
+                message += f" {termination.reason_phrase}"
+            return ConnectionTerminated(error_code, message, is_tls_error=is_tls_error)
 
         if event_type is quic_events.StreamReset:
             stream_id = quic_event.stream_id  # type: ignore[attr-defined]
