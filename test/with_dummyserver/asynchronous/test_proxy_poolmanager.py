@@ -50,6 +50,18 @@ def assert_is_verified(pm: AsyncProxyManager, *, proxy: bool, target: bool) -> N
 
 @pytest.mark.asyncio
 class TestAsyncHTTPProxyManager(HTTPDummyProxyTestCase):
+    async def test_proxy_repr_with_live_and_cleared_pool(self) -> None:
+        async with AsyncProxyManager(
+            self.proxy_url, ca_certs=DEFAULT_CA, timeout=5
+        ) as manager:
+            assert self.proxy_url in repr(manager)
+            response = await manager.request("GET", self.http_url + "/")
+            assert response.status == 200
+            assert await response.data == b"Dummy server!"
+            assert "AsyncHTTPConnection" in repr(manager)
+            await manager.clear()
+            assert self.proxy_url in repr(manager)
+
     @classmethod
     def setup_class(cls) -> None:
         super().setup_class()

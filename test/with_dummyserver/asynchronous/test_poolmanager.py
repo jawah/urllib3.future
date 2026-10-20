@@ -24,6 +24,41 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
         cls.base_url = f"http://{cls.host}:{cls.port}"
         cls.base_url_alt = f"http://{cls.host_alt}:{cls.port}"
 
+    async def test_resolver_options_recycle_and_http1_fallback(self) -> None:
+        from pathlib import Path
+        from dummyserver.server import DEFAULT_CA
+        from urllib3 import HttpVersion, AsyncHTTPResponse
+
+        ca_data = Path(DEFAULT_CA).read_text()
+        async with AsyncPoolManager(
+            resolver=["system://default"],
+            ca_cert_data=ca_data,
+            disabled_svn={HttpVersion.h2, HttpVersion.h3},
+            timeout=5,
+            retries=False,
+        ) as manager:
+            for _ in range(2):
+                response = await manager.urlopen(
+                    "GET", self.base_url + "/", multiplexed=True
+                )
+                assert isinstance(response, AsyncHTTPResponse)
+                assert response.status == 200 and response.version == 11
+                assert await response.data == b"Dummy server!"
+                assert "PoolManager" in repr(manager)
+                with pytest.raises(TypeError, match="ResponsePromise"):
+                    await manager.get_response(promise=response)
+                assert await manager.get_response() is None
+                await manager.clear()
+            pool = await manager.connection_from_context(
+                {
+                    "scheme": "http",
+                    "host": self.host,
+                    "port": self.port,
+                    "strict": True,
+                }
+            )
+            assert (await pool.request("GET", "/", timeout=5)).status == 200
+
     @pytest.mark.parametrize(
         "pool_manager_kwargs",
         ({}, {"retries": None}, {"retries": 1}, {"retries": Retry(1)}),
