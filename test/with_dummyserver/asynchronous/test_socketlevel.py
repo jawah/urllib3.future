@@ -753,6 +753,71 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
     """
 
     @pytest.mark.parametrize(
+        "error_code,error_name",
+        [
+            (0xB, "ENHANCE_YOUR_CALM"),
+            (0x1, "PROTOCOL_ERROR"),
+            (0xFFFF, "UNKNOWN_ERROR"),
+        ],
+    )
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    async def test_http2_goaway_error_message(
+        self, error_code: int, error_name: str, multiplexed: bool
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    received = False
+                    while not received:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                h2.close_connection(
+                                    error_code=error_code,
+                                    last_stream_id=event.stream_id,
+                                )
+                                received = True
+                        sock.sendall(h2.data_to_send())
+                    # Keep TCP open until the client processes the actual GOAWAY.
+                    try:
+                        while sock.recv(65536):
+                            pass
+                    except (ssl.SSLError, ConnectionResetError):
+                        pass
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            with pytest.raises(ProtocolError) as caught:
+                if multiplexed:
+                    promise = await pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(promise, ResponsePromise)
+                    await pool.get_response(promise=promise)
+                else:
+                    await pool.urlopen("GET", "/")
+            message = str(caught.value)
+            assert "HTTP/2" in message
+            assert "GOAWAY" in message
+            assert error_name in message
+            assert hex(error_code) in message
+
+    @pytest.mark.parametrize(
         "error_code, multiplexed",
         [(0xD, False), (0x8, False), (0x8, True)],
     )

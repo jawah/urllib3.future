@@ -317,7 +317,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     yield GoawayReceived(e.last_stream_id, e.error_code)
                 else:
                     self._terminated = True
-                    yield ConnectionTerminated(e.error_code, None)
+                    error_name = getattr(e.error_code, "name", "UNKNOWN_ERROR")
+                    yield ConnectionTerminated(
+                        e.error_code,
+                        f"HTTP/2 peer sent GOAWAY with error {error_name} ({e.error_code:#x}).",
+                    )
             elif ev_type in SETTINGS_EVENT_SET:
                 yield HandshakeCompleted(alpn_protocol="h2")
             elif ev_type is jh2.events.PingAckReceived:
