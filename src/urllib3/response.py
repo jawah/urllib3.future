@@ -449,7 +449,10 @@ def _get_decoder(mode: str) -> ContentDecoder:
     if zlib is not None:
         return DeflateDecoder()
 
-    raise DecodeError(f"Unsupported content encoding: {mode}")
+    # Normal responses filter unsupported encodings before calling this factory.
+    raise DecodeError(
+        f"Unsupported content encoding: {mode}"
+    )  # Defensive: no matching decoder and zlib is unavailable.
 
 
 class HTTPResponse(io.IOBase):
