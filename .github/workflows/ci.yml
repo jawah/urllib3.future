@@ -258,7 +258,10 @@ jobs:
           NOX_SESSION: ${{ matrix.nox-session }}
           # Older PyPy builds segfault during pytest assertion rewriting in CI.
           # Plain mode keeps assertions enabled, without the rewritten AST.
-          PYTEST_ADDOPTS: ${{ (matrix.python-version == 'pypy-3.7' || matrix.python-version == 'pypy-3.9-v7.3.13') && '--assert=plain' || '' }}
+          # Dump all thread stacks and stop stalled PyPy tests before the job timeout.
+          PYTEST_ADDOPTS: >-
+            ${{ (matrix.python-version == 'pypy-3.7' || matrix.python-version == 'pypy-3.9-v7.3.13') && '--assert=plain' || '' }}
+            ${{ startsWith(matrix.python-version, 'pypy-') && '-o faulthandler_timeout=60 --timeout=120 --timeout-method=thread' || '' }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
           TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && steps.colima-ip.outputs.autodiscover || '127.0.0.1' }}
 

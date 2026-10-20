@@ -751,8 +751,10 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 manager_cleared.set()
             with pytest.raises(HTTPError) as caught:
                 request.result(5)
-            # EOF handling may wrap a cleanup failure in ClosedPoolError.
-            assert not isinstance(caught.value.__cause__, AttributeError)
+            if overlap_close:
+                # The forced overlap must not hide a cleanup failure. An arbitrary
+                # pre-headers close may invalidate other request state instead.
+                assert not isinstance(caught.value.__cause__, AttributeError)
             assert peer_closed.wait(5)
             assert manager.pools.rsize() == 0
 
