@@ -18,7 +18,9 @@ from urllib3.util.wait import wait_for_read
 
 
 @pytest.fixture
-def quic_echo_server(tmp_path: Path) -> typing.Iterator[tuple[int, str]]:
+def quic_echo_server(
+    tmp_path: Path,
+) -> typing.Iterator[tuple[int, str, typing.Callable[[], None]]]:
     if not _HAS_HTTP3_SUPPORT():
         pytest.skip("HTTP/3 unavailable")
     from qh3 import H3Connection, QuicConfiguration, h3_events
@@ -92,9 +94,19 @@ def quic_echo_server(tmp_path: Path) -> typing.Iterator[tuple[int, str]]:
         loop = typing.cast(AsyncIOLoop, io_loop).asyncio_loop
         server = asyncio.run_coroutine_threadsafe(start(), loop).result(5)
         try:
+
+            def peer_ping() -> None:
+                async def send() -> None:
+                    for peer in set(server._protocols.values()):
+                        peer._quic.send_ping(0)
+                        peer.transmit()
+
+                asyncio.run_coroutine_threadsafe(send(), loop).result(5)
+
             yield (
                 server._transport.get_extra_info("sockname")[1],
                 ca.cert_pem.bytes().decode(),
+                peer_ping,
             )
         finally:
 
@@ -117,7 +129,9 @@ def quic_echo_server(tmp_path: Path) -> typing.Iterator[tuple[int, str]]:
     ["ping", "peek", "abort", "close", "upload", "raw-write", "raw-flow-control"],
 )
 def test_oversized_quic_packet_does_not_stop_following_packets(
-    quic_echo_server: tuple[int, str], operation: str, monkeypatch: pytest.MonkeyPatch
+    quic_echo_server: tuple[int, str, typing.Callable[[], None]],
+    operation: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with HTTPSConnectionPool(
         "localhost",
@@ -149,7 +163,10 @@ def test_oversized_quic_packet_does_not_stop_following_packets(
             )
             assert response.extension is not None
         elif operation == "peek":
-            conn.ping()
+            # Two unacknowledged client PINGs trigger our expiry heuristic.
+            # Use the peer to make the socket readable, keeping one client PING
+            # queued to exercise the send path after the oversized datagram.
+            quic_echo_server[2]()
             assert wait_for_read(sock, timeout=5)
             protocol.ping()
 

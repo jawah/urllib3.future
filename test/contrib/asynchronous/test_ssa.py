@@ -283,6 +283,10 @@ class RecordingDatagramProtocol(asyncio.DatagramProtocol):
 @pytest.mark.usefixtures("python_udp_transport")
 @pytest.mark.timeout(10)
 class TestDatagram:
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Proactor strands queued datagrams after a send error: https://github.com/python/cpython/issues/156698",
+    )
     async def test_standard_transport_oversized_send_does_not_poison_reader(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
