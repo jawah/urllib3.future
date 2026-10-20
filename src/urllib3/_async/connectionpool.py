@@ -365,6 +365,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             strict_maxsize=not self.block,
         )
 
+        self._draining_pool: AsyncTrafficPolice[AsyncHTTPConnection] | None = None
+
         self.proxy = _proxy
         self.proxy_headers = _proxy_headers or {}
         self.proxy_config = _proxy_config
@@ -455,7 +457,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
     @property
     def is_idle(self) -> bool:
-        return self.pool is None or self.pool.bag_only_idle
+        police = self.pool
+        if police is not None:
+            return police.bag_only_idle
+        police = self._draining_pool
+        # Formed responses own their registry; only promises still need pool routing.
+        return police is None or not police._has_pending_promises
 
     @property
     def is_saturated(self) -> bool:
@@ -884,6 +891,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         """
         police = self.pool
         if police is None:
+            police = self._draining_pool
+        if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
         if promise is not None and not isinstance(promise, ResponsePromise):
@@ -931,6 +940,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             ProxyError,
             RecoverableError,
         ) as e:
+            if self.pool is None and not police._has_pending_promises:
+                self._draining_pool = None
+                if police.parent is not None:
+                    police.parent._map_clear(self)
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -1003,6 +1016,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             raise ValueError(
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
+
+        # Once collected, the response replaces the promise as registry owner.
+        if self.pool is None and not police._has_pending_promises:
+            self._draining_pool = None
+        from_promise.set_parameter("police_officer", None)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -1552,14 +1570,15 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         """
         Close the pool while allowing returned responses to finish reading.
 
-        New requests and retrieval of uncollected promises are no longer supported.
+        New requests are rejected; returned promises remain retrievable.
         """
         if self.pool is None:
             return
 
-        # Returned responses retain old_pool through their police officer.
-        old_pool, self.pool = self.pool, None
-        old_pool.parent = None
+        # Retain routing for blind collection until all returned promises are collected.
+        old_pool = self.pool
+        self._draining_pool = old_pool
+        self.pool = None
 
         if self._background_monitoring is not None:
             self._background_monitoring.cancel()
@@ -1572,6 +1591,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         # The watcher has returned its checkout; only user responses remain to drain.
         await old_pool.clear()
+        if not old_pool._has_pending_promises:
+            self._draining_pool = None
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
@@ -2034,6 +2055,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     and conn is not None
                     and isinstance(response, ResponsePromise)
                 ):
+                    response.set_parameter("police_officer", self.pool)
                     self.pool.memorize(response, conn)
                     # we can always use ConnectionPool without PoolManager!
                     if self.pool.parent is not None:

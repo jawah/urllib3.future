@@ -4066,6 +4066,65 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
                 else:
                     pool.urlopen("GET", "/")
 
+    @pytest.mark.parametrize("through_manager", [False, True])
+    @pytest.mark.parametrize("by_promise", [False, True])
+    def test_retired_pool_connection_error_releases_registry(
+        self, through_manager: bool, by_promise: bool
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        terminate = Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    while True:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                assert terminate.wait(5)
+                                h2.close_connection(
+                                    error_code=0x2, last_stream_id=event.stream_id
+                                )
+                                sock.sendall(h2.data_to_send())
+                                return
+                        sock.sendall(h2.data_to_send())
+
+        self._start_server(handler)
+        try:
+            with PoolManager(
+                ca_certs=DEFAULT_CA,
+                disabled_svn={HttpVersion.h11, HttpVersion.h3},
+                timeout=5,
+                retries=False,
+            ) as manager:
+                promise = manager.urlopen(
+                    "GET", f"https://{self.host}:{self.port}/", multiplexed=True
+                )
+                assert isinstance(promise, ResponsePromise)
+                old_pool = next(iter(manager.pools._registry.values()))
+                police = old_pool.pool
+                assert police is not None
+                sock = promise._conn.sock
+                assert sock is not None
+                manager.clear()
+                terminate.set()
+                reader = manager if through_manager else old_pool
+                with pytest.raises(ProtocolError, match="GOAWAY"):
+                    reader.get_response(promise=promise if by_promise else None)
+                assert sock.fileno() == -1
+                assert police.rsize() == 0
+                assert manager.pools.rsize() == 0
+        finally:
+            terminate.set()
+
     def test_http2_rejects_upload_before_body_is_consumed(self) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])

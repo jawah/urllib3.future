@@ -268,8 +268,8 @@ class AsyncPoolManager(AsyncRequestMethods):
         """
         Empty our store of pools and direct them all to close.
 
-        Returned responses remain readable, but uncollected promises can no
-        longer be retrieved and requests still in progress may fail. This
+        Returned responses remain readable and returned promises remain
+        retrievable. Requests that have not returned either may fail. This
         manager remains usable for new requests.
         """
         await self.pools.clear()

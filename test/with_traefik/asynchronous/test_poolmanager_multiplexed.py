@@ -29,48 +29,93 @@ from .. import TraefikTestCase
 @pytest.mark.asyncio
 class TestPoolManagerMultiplexed(TraefikTestCase):
     @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
-    async def test_clear_invalidates_uncollected_promise(
-        self, version: HttpVersion
+    @pytest.mark.parametrize("by_promise", [False, True])
+    async def test_clear_preserves_uncollected_promises(
+        self, version: HttpVersion, by_promise: bool
     ) -> None:
+        import gc
+        from weakref import ref
+
         if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
             pytest.skip("HTTP/3 requires qh3")
         conn = None
+        conn_ref = None
         try:
             async with AsyncPoolManager(
+                num_pools=1,
                 ca_certs=self.ca_authority,
                 resolver=self.test_async_resolver.new(),
                 disabled_svn=set(HttpVersion) - {version},
                 timeout=5,
                 retries=False,
             ) as manager:
-                promise = await manager.urlopen(
-                    "GET", f"{self.https_url}/bytes/4096", multiplexed=True
-                )
-                assert isinstance(promise, ResponsePromise)
-                candidate = promise._conn
+                promises: list[ResponsePromise] = []
+                for size in (4096, 8192):
+                    promise = await manager.urlopen(
+                        "GET",
+                        f"{self.https_url}/bytes/{size}",
+                        multiplexed=True,
+                        preload_content=False,
+                    )
+                    assert isinstance(promise, ResponsePromise)
+                    promises.append(promise)
+                candidate = promises[0]._conn
                 assert isinstance(candidate, AsyncHTTPConnection)
                 conn = candidate
+                del candidate
+                assert promises[1]._conn is conn
+                conn_ref = ref(conn)
                 sock = conn.sock
                 assert sock is not None
                 old_pool = next(iter(manager.pools._registry.values()))
+                police = old_pool.pool
+                assert police is not None
+                police_ref = ref(police)
                 watcher = old_pool._background_monitoring
                 assert watcher is not None
                 await manager.clear()
-                assert old_pool.pool is None
+                await manager.clear()
                 assert watcher.done()
                 with pytest.raises(ClosedPoolError):
                     await old_pool.request("GET", "/bytes/1")
-                assert sock.fileno() == -1
-                assert manager.pools.rsize() == 0
-                assert await manager.get_response(promise=promise) is None
-                with pytest.raises(ClosedPoolError):
-                    await old_pool.get_response(promise=promise)
+                assert sock.fileno() >= 0
+                # Niquests checks this before attempting even explicit retrieval.
+                assert await manager.pools.beacon(ResponsePromise)
+
+                # New requests must get an active pool while the old one drains.
                 followup = await manager.request("GET", f"{self.https_url}/bytes/7")
                 assert len(await followup.data) == 7
+                assert followup._pool is not old_pool
+
+                if not by_promise:
+                    # Blind retrieval must survive without caller-held promises.
+                    promises.clear()
+                    del promise
+                    conn = police = None
+                    gc.collect()
+                sizes = []
+                for index in range(2):
+                    response = await manager.get_response(
+                        promise=promises[index] if by_promise else None
+                    )
+                    assert response is not None
+                    assert response.status == 200
+                    sizes.append(len(await response.read()))
+                    await response.close()
+                assert sorted(sizes) == [4096, 8192]
+                assert sock.fileno() == -1
+                police = police_ref()
+                assert police is None or police.rsize() == 0
                 assert id(old_pool) not in manager.pools._registry
                 assert manager.pools.rsize() == 1
-                assert not manager.pools._shutdown
+                assert all(pool is not old_pool for pool in manager.pools._map.values())
+                again = await manager.request("GET", f"{self.https_url}/bytes/3")
+                assert len(await again.data) == 3
+                assert again._pool is followup._pool
+                assert not await manager.pools.beacon(ResponsePromise)
         finally:
+            if conn is None and conn_ref is not None:
+                conn = conn_ref()
             if conn is not None:
                 await conn.close()
 
@@ -146,6 +191,12 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             await first.close()
             assert conn.sock is sock and sock.fileno() >= 0
             assert len(await second.read()) == 8192
+            if pending_promise:
+                assert sock.fileno() >= 0
+                remaining = await owner.get_response(promise=pending)
+                assert remaining is not None
+                assert len(await remaining.read()) == 7
+                await remaining.close()
             assert sock.fileno() == -1
             await second.close()
         finally:

@@ -152,8 +152,10 @@ class AsyncHTTPResponse(HTTPResponse):
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
             # we can utilize a ConnectionPool without level-0 PoolManager!
-            if self._police_officer.parent is not None:
-                self._police_officer.parent.memorize(self, self._pool)
+            # Direct collection after pool close need not hold a parent checkout.
+            parent = self._police_officer.parent
+            if parent is not None and (self._pool is not None or parent.busy):
+                parent.memorize(self, self._pool)
 
     async def readinto(self, b: bytearray) -> int:  # type: ignore[override]
         temp = await self.read(len(b))

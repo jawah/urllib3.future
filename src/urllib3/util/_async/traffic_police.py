@@ -15,6 +15,7 @@ from ..traffic_police import (
     UnavailableTraffic,
     traffic_state_of,
     ItemPlaceholder,
+    _has_response_owner,
 )
 from ...contrib.ssa._timeout import timeout as ctx_expire_in
 from ..._collections import GroupedDict
@@ -464,11 +465,6 @@ class AsyncTrafficPolice(typing.Generic[T]):
         return len(self._registry)
 
     def _map_clear(self, value: T) -> None:
-        obj_id = id(value)
-
-        if obj_id not in self._registry:
-            return
-
         outdated_keys = list(self._map.keys_for(value))
 
         for key in outdated_keys:
@@ -485,7 +481,9 @@ class AsyncTrafficPolice(typing.Generic[T]):
             conn_or_pool = self._map[tk]
             obj_id = id(conn_or_pool)
 
-            if obj_id in self._container:
+            if obj_id in self._container or (
+                self.concurrency and getattr(conn_or_pool, "pool", False) is None
+            ):
                 return conn_or_pool
 
         if not block or not eligible_object_count:
@@ -535,13 +533,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
     async def kill(self, target: T, *, idle_only: bool = False) -> bool:
         """Dispose of a registered target, independently of the current cursor."""
         obj_id = id(target)
-        if obj_id not in self._registry:
+        if (
+            obj_id not in self._registry
+            and not self._map.keys_for(target)
+            and not self.is_held(target)
+        ):
             return False
         pending_responses = getattr(target, "_pending_responses", None)
         if idle_only:
-            # On shutdown, only formed responses may keep the connection alive.
+            # Returned promises and formed responses both keep the connection alive.
             busy = (
-                bool(pending_responses)
+                _has_response_owner(target, self)
                 if self._shutdown and pending_responses is not None
                 else traffic_state_of(target) is not TrafficState.IDLE
             )
@@ -552,7 +554,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         # Detach before awaiting close so the target cannot be borrowed again.
         self._map_clear(target)
-        del self._registry[obj_id]
+        self._registry.pop(obj_id, None)
         self._container.pop(obj_id, None)
         if not self._registry:
             self._shutdown = False
@@ -626,6 +628,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
             self._signals.unregister(signal)
             raise
 
+        if self.maxsize is not None and len(self._registry) < self.maxsize:
+            return
         await self._sacrifice_first_idle(block=block)
 
     async def iter_idle(self) -> typing.AsyncGenerator[T, None]:
@@ -914,11 +918,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
         else:
             obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
 
-            if obj_id not in self._registry:
-                # we raised an exception before
-                # after consideration, it's best just
-                # to ignore!
-                return
+        if obj_id not in self._registry:
+            # we raised an exception before
+            # after consideration, it's best just
+            # to ignore!
+            return
 
         if isinstance(traffic_indicator, tuple):
             self._map[traffic_indicator] = conn_or_pool
@@ -1088,8 +1092,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             if (
                 obj_id not in self._container
-                or self._signals.should_queue_read_operation(conn_or_pool)
-            ):
+                and not (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                )
+            ) or self._signals.should_queue_read_operation(conn_or_pool):
                 if not block:
                     raise UnavailableTraffic("Unavailable connection")
 
@@ -1276,20 +1282,43 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
         return cursor_transferred
 
+    @property
+    def _has_pending_promises(self) -> bool:
+        """Inspect promise routes without borrowing a connection."""
+        from ...backend import ResponsePromise
+
+        return bool(self._map_types.keys_for(ResponsePromise))
+
     async def clear(self) -> None:
-        """Close child pools immediately; let their formed responses drain."""
+        """Close child pools, retaining routes for returned promises until collected."""
+        from ...backend import ResponsePromise
         from ..._async.response import AsyncHTTPResponse
 
         self._shutdown = True
         current_task = _current_task_or_die()
         targets = list(self._registry.items())
         for obj_id, target in targets:
+            child = getattr(target, "pool", None)
+            if isinstance(child, AsyncTrafficPolice) and any(
+                self._map_types[key] is ResponsePromise
+                for key in self._map.keys_for(target)
+            ):
+                # Keep promise routes, but free the active cache slot before closing.
+                self._registry.pop(obj_id, None)
+                self._container.pop(obj_id, None)
+                for key in list(self._map.keys_for(target)):
+                    if self._map_types[key] is not ResponsePromise:
+                        del self._map[key]
+                        del self._map_types[key]
+                with contextlib.suppress(Exception):
+                    await target.close()
+                continue
             pending_responses = getattr(target, "_pending_responses", None)
             if (
-                isinstance(getattr(target, "pool", None), AsyncTrafficPolice)
+                isinstance(child, AsyncTrafficPolice)
                 or (
                     pending_responses is not None
-                    and not pending_responses
+                    and not _has_response_owner(target, self)
                     # EOF can precede release of a formed response's borrow.
                     and not any(
                         issubclass(self._map_types[key], AsyncHTTPResponse)
@@ -1305,8 +1334,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 )
             ):
                 await self.kill(target)
-        # New pools created while close() awaited are not part of this shutdown.
         self._shutdown = any(obj_id in self._registry for obj_id, _ in targets)
+        if self.concurrency:
+            for signal in tuple(self._signals._priority_signals):
+                if signal.target_conn_or_pool is None and signal.states == (
+                    TrafficState.IDLE,
+                ):
+                    self._signals.unregister(signal, unblock=True)
 
     def qsize(self) -> int:
         return len(self._container)

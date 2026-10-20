@@ -30,6 +30,14 @@ else:
     T = typing.TypeVar("T")
 
 
+def _has_response_owner(conn: object, police: object) -> bool:
+    """A formed response or returned promise still owns this connection."""
+    return bool(getattr(conn, "_pending_responses", None)) or any(
+        promise.get_parameter("police_officer") is police
+        for promise in tuple(getattr(conn, "_promises", {}).values())
+    )
+
+
 class TrafficState(int, Enum):
     #: can be used to issue new request
     IDLE = 0
@@ -272,11 +280,6 @@ class TrafficPolice(typing.Generic[T]):
             return len(self._registry)
 
     def _map_clear(self, value: T) -> None:
-        obj_id = id(value)
-
-        if obj_id not in self._registry:
-            return
-
         outdated_keys = list(self._map.keys_for(value))
 
         for key in outdated_keys:
@@ -294,7 +297,9 @@ class TrafficPolice(typing.Generic[T]):
                 conn_or_pool = self._map[kt]
                 obj_id = id(conn_or_pool)
 
-                if obj_id in self._container:
+                if obj_id in self._container or (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                ):
                     # Reserve before unlocking, as we do when handing off to a waiter.
                     cursor_key = get_ident()
                     if cursor_key not in self._cursor:
@@ -349,13 +354,17 @@ class TrafficPolice(typing.Generic[T]):
         """Dispose of a registered target, independently of the current cursor."""
         with self._lock:
             obj_id = id(target)
-            if obj_id not in self._registry:
+            if (
+                obj_id not in self._registry
+                and not self._map.keys_for(target)
+                and not self.is_held(target)
+            ):
                 return False
             pending_responses = getattr(target, "_pending_responses", None)
             if idle_only:
-                # On shutdown, only formed responses may keep the connection alive.
+                # Returned promises and formed responses both keep the connection alive.
                 busy = (
-                    bool(pending_responses)
+                    _has_response_owner(target, self)
                     if self._shutdown and pending_responses is not None
                     else traffic_state_of(target) is not TrafficState.IDLE
                 )
@@ -365,7 +374,7 @@ class TrafficPolice(typing.Generic[T]):
                     return False
 
             self._map_clear(target)
-            del self._registry[obj_id]
+            self._registry.pop(obj_id, None)
             self._container.pop(obj_id, None)
             keys = [
                 key for key, cursor in self._cursor.items() if cursor.obj_id == obj_id
@@ -399,7 +408,7 @@ class TrafficPolice(typing.Generic[T]):
 
         while True:
             with self._lock:
-                if self.busy:
+                if self.busy and self._cursor[get_ident()].obj_id in self._registry:
                     cursor_key = get_ident()
                     active_cursor = self._cursor[cursor_key]
 
@@ -455,6 +464,9 @@ class TrafficPolice(typing.Generic[T]):
                 signal = self._register_signal(None, TrafficState.IDLE)
 
             signal.event.wait()
+            with self._lock:
+                if self.maxsize is not None and len(self._registry) < self.maxsize:
+                    return
 
         raise OverwhelmedTraffic(
             "Cannot select a disposable connection to ease the charge. "
@@ -725,11 +737,11 @@ class TrafficPolice(typing.Generic[T]):
             else:
                 obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
 
-                if obj_id not in self._registry:
-                    # we raised an exception before
-                    # after consideration, it's best just
-                    # to ignore!
-                    return
+            if obj_id not in self._registry:
+                # we raised an exception before
+                # after consideration, it's best just
+                # to ignore!
+                return
 
             if isinstance(traffic_indicator, tuple):
                 self._map[traffic_indicator] = conn_or_pool
@@ -914,7 +926,9 @@ class TrafficPolice(typing.Generic[T]):
             # Keep lookup and borrower/waiter registration atomic.
             try:
                 cursor_key = get_ident()
-                if obj_id not in self._registry:
+                if obj_id not in self._registry and not (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                ):
                     raise UnavailableTraffic(
                         "The connection was closed before acquisition"
                     )
@@ -928,7 +942,9 @@ class TrafficPolice(typing.Generic[T]):
                         "Seeking to locate a connection when having another one used, did you forget a call to release?"
                     )
 
-                if obj_id not in self._container:
+                if obj_id not in self._container and not (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                ):
                     if not block:
                         raise UnavailableTraffic("Unavailable connection")
                 else:
@@ -1103,8 +1119,17 @@ class TrafficPolice(typing.Generic[T]):
                                 self._signals.remove(signal)
                                 signal.event.set()
 
+    @property
+    def _has_pending_promises(self) -> bool:
+        """Inspect promise routes without borrowing a connection."""
+        from ..backend import ResponsePromise
+
+        with self._lock:
+            return bool(self._map_types.keys_for(ResponsePromise))
+
     def clear(self) -> None:
-        """Close child pools immediately; let their formed responses drain."""
+        """Close child pools, retaining routes for returned promises until collected."""
+        from ..backend import ResponsePromise
         from ..response import HTTPResponse
 
         with self._lock:
@@ -1112,12 +1137,27 @@ class TrafficPolice(typing.Generic[T]):
             cursor_key = get_ident()
             targets = list(self._registry.items())
             for obj_id, target in targets:
+                child = getattr(target, "pool", None)
+                if isinstance(child, TrafficPolice) and any(
+                    self._map_types[key] is ResponsePromise
+                    for key in self._map.keys_for(target)
+                ):
+                    # Keep promise routes, but free the active cache slot before closing.
+                    self._registry.pop(obj_id, None)
+                    self._container.pop(obj_id, None)
+                    for key in list(self._map.keys_for(target)):
+                        if self._map_types[key] is not ResponsePromise:
+                            del self._map[key]
+                            del self._map_types[key]
+                    with contextlib.suppress(Exception):
+                        target.close()
+                    continue
                 pending_responses = getattr(target, "_pending_responses", None)
                 if (
-                    isinstance(getattr(target, "pool", None), TrafficPolice)
+                    isinstance(child, TrafficPolice)
                     or (
                         pending_responses is not None
-                        and not pending_responses
+                        and not _has_response_owner(target, self)
                         # EOF can precede release of a formed response's borrow.
                         and not any(
                             issubclass(self._map_types[key], HTTPResponse)
@@ -1134,6 +1174,13 @@ class TrafficPolice(typing.Generic[T]):
                 ):
                     self.kill(target)
             self._shutdown = any(obj_id in self._registry for obj_id, _ in targets)
+            if self.concurrency:
+                for signal in tuple(self._signals):
+                    if signal.target_conn_or_pool is None and signal.states == (
+                        TrafficState.IDLE,
+                    ):
+                        self._signals.remove(signal)
+                        signal.event.set()
 
     def qsize(self) -> int:
         with self._lock:
