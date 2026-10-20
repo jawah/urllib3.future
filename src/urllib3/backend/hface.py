@@ -2110,23 +2110,25 @@ class HfaceBackend(BaseBackend):
         self._last_used_at = time.monotonic()
 
     def close(self) -> None:
-        if self.sock:
-            if self._protocol is not None:
+        # Another thread may clear these attributes while this close is in progress.
+        sock, protocol = self.sock, self._protocol
+        if sock:
+            if protocol is not None:
                 try:
-                    self._protocol.submit_close()
-                except self._protocol.exceptions() as e:  # Defensive:
+                    protocol.submit_close()
+                except protocol.exceptions() as e:  # Defensive:
                     # overly protective, made in case of possible exception leak.
                     raise ProtocolError(e) from e  # Defensive:
                 else:
                     while True:
-                        goodbye_frame = self._protocol.bytes_to_send()
+                        goodbye_frame = protocol.bytes_to_send()
                         if not goodbye_frame:
                             break
                         try:
                             if self._svn is HttpVersion.h3:
-                                sync_send_dgram(self.sock, goodbye_frame)
+                                sync_send_dgram(sock, goodbye_frame)
                             else:
-                                self.sock.sendall(goodbye_frame)
+                                sock.sendall(goodbye_frame)
                         except (
                             OSError,
                             ssl.SSLEOFError,
@@ -2134,12 +2136,12 @@ class HfaceBackend(BaseBackend):
                             break
 
             try:
-                self.sock.shutdown(0)
+                sock.shutdown(0)
             except (OSError, AttributeError):
                 pass
 
             try:
-                self.sock.close()
+                sock.close()
             except OSError:
                 pass
 

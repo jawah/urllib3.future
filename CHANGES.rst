@@ -21,6 +21,8 @@
   data is discarded, allowing connection reuse, in both sync and async.
 - Fixed cancellation of the async idle connection watcher leaving a connection
   checked out and preventing its cleanup during pool shutdown.
+- Fixed concurrent synchronous connection cleanup raising ``AttributeError``
+  when another thread closed the same connection.
 - Fixed oversized QUIC probes aborting synchronous HTTP/3 sends or causing
   subsequent async UDP reads to fail, including on Windows. Rejected oversized
   datagrams are now consistently discarded so valid traffic can continue.
