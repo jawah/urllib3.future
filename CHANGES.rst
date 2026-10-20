@@ -1,3 +1,36 @@
+2.25.903 (2026-10-20)
+=====================
+
+- The ``python-socks`` dependency will be removed in a future release. We are
+  evaluating alternatives. Version 3 is incompatible with our SOCKS integration
+  and must not be installed. The dependency remains capped at <=2.8.1 (#437)
+- Fixed HTTP/2 GOAWAY errors reporting ``None`` instead of the error code.
+  Errors now include the code and its name when known, in both sync and async. (#436)
+- Improved HTTP/3 connection close errors to include the error code and its name
+  when known, while preserving the peer's explanation, in both sync and async.
+- Fixed QUIC TLS alerts other than ``bad_certificate`` being reported as
+  ``ProtocolError`` instead of ``SSLError``, in both sync and async. HTTP/3
+  application errors with overlapping codes remain ``ProtocolError``.
+- Fixed protocol restrictions for a web extension leaking into other connection
+  pools through shared settings, in both sync and async. (#433)
+- Fixed incomplete pool shutdown leaving connections open after their last
+  response was consumed or closed. Returned responses remain readable after
+  shutdown, in both sync and async. (#432)
+- Fixed unrestricted response reads losing buffered decompressed data after a
+  partial read. Zero-byte reads also leave the transport and decoder untouched,
+  in both sync and async.
+- Fixed DNS over QUIC sockets remaining open after protocol termination, in both
+  sync and async, and when synchronous setup fails during the handshake or
+  because no default CA certificates are available.
+- Fixed async Happy Eyeballs DNS timeouts being reported as ``ProtocolError``
+  instead of ``NameResolutionError``.
+- Fixed zero-byte receives waiting for input on native async WASI sockets,
+  including TLS connections.
+- Fixed address queries on closed native WASI sockets raising ``AttributeError``
+  instead of ``OSError``, in both sync and async.
+- Fixed requests with custom header mappings lacking a ``copy()`` method raising
+  ``AttributeError`` before connection setup, in both sync and async.
+
 2.25.902 (2026-10-04)
 =====================
 
