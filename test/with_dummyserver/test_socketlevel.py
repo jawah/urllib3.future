@@ -948,6 +948,92 @@ class TestSocketClosing(SocketDummyServerTestCase):
             with pool.pool.borrow() as conn:
                 assert conn.sock is not None and conn.sock is not previous
 
+    @pytest.mark.parametrize("peer_event", ["goaway", "invalid-ping"])
+    def test_idle_http2_event_before_reuse(self, peer_event: str) -> None:
+        send_event = Event()
+        event_sent = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            for index in range(2):
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        h2 = H2Connection(config=H2Configuration(client_side=False))
+                        h2.initiate_connection()
+                        sock.sendall(h2.data_to_send())
+                        responded = False
+                        while not responded:
+                            data = sock.recv(65536)
+                            assert data
+                            for event in h2.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    h2.send_headers(
+                                        event.stream_id,
+                                        [
+                                            (b":status", b"200"),
+                                            (b"content-length", b"2"),
+                                        ],
+                                    )
+                                    h2.send_data(
+                                        event.stream_id, b"ok", end_stream=True
+                                    )
+                                    responded = True
+                            sock.sendall(h2.data_to_send())
+                        if index == 0:
+                            assert send_event.wait(5)
+                            if peer_event == "goaway":
+                                h2.close_connection(last_stream_id=1)
+                                sock.sendall(h2.data_to_send())
+                            else:
+                                # PING requires eight payload bytes; send seven.
+                                sock.sendall(
+                                    b"\x00\x00\x07\x06\x00\x00\x00\x00\x00invalid"
+                                )
+                            event_sent.set()
+                        # Keep TCP open: the client must act on the HTTP/2 event.
+                        try:
+                            while sock.recv(65536):
+                                pass
+                        except ConnectionResetError:
+                            pass
+                        except ssl.SSLError as error:
+                            # Older Python can expose ragged EOF as a generic SSLError.
+                            if (
+                                not isinstance(error, ssl.SSLEOFError)
+                                and "unexpected eof" not in str(error).lower()
+                            ):
+                                raise
+
+        self._start_server(handler)
+        with PoolManager(
+            ssl_backend="ssl",
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h3},
+            background_watch_delay=None,
+            retries=False,
+        ) as manager:
+            url = f"https://{self.host}:{self.port}/"
+            first = manager.urlopen("GET", url, preload_content=False)
+            conn = first.connection
+            assert first.version == 20 and conn is not None
+            previous = conn.sock
+            assert previous is not None
+            assert first.read() == b"ok"
+            send_event.set()
+            assert event_sent.wait(5)
+            assert wait_for_read(previous, timeout=5)
+            second = manager.urlopen("GET", url, preload_content=False)
+            assert second.version == 20 and second.connection is not None
+            assert previous.fileno() == -1
+            assert second.connection.sock is not previous
+            assert second.read() == b"ok"
+
     def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
         # connection pool gets hung up on by the server, then reaches
