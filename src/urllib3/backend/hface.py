@@ -1224,25 +1224,14 @@ class HfaceBackend(BaseBackend):
                         message = "Remote end closed connection without response"
                         raise ProtocolError(message) from ConnectionResetError(message)
 
+                    if event.is_tls_error:
+                        raise SSLError(event.message)
                     if (
                         event.error_code == 400
                         and event.message
                         and "header" in event.message
                     ):
                         raise InvalidHeader(event.message)
-                    # QUIC operate TLS verification outside native capabilities
-                    # We have to forward the error so that users aren't caught off guard when the connection
-                    # unexpectedly close.
-                    elif event.error_code == 298 and self._svn == HttpVersion.h3:
-                        if event.message and "Fingerprint" in event.message:
-                            raise SSLError(
-                                f"TLS over QUIC did not succeed. {event.message}"
-                            )
-                        else:
-                            raise SSLError(
-                                "TLS over QUIC did not succeed. Chain certificate verification failed "
-                                "or client cert validation failed."
-                            )
 
                     # we shall convert the ProtocolError to IncompleteRead
                     # so that users aren't caught off guard.

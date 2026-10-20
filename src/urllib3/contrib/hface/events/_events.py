@@ -50,6 +50,9 @@ class ConnectionTerminated(Event):
     #: Optional message with more information
     message: str | None = field(default=None, compare=False)
 
+    #: TLS failures must remain distinguishable from HTTP application errors.
+    is_tls_error: bool = False
+
     def __repr__(self) -> str:  # Defensive: debug purposes only
         cls = type(self).__name__
         return f"{cls}(error_code={self.error_code!r}, message={self.message!r})"
