@@ -32,7 +32,8 @@ if sys.platform == "wasi":
         if isinstance(error, _wasi_ip_name_lookup.ErrorCode_NameUnresolvable):
             code = _stdlib_socket.EAI_NONAME
         elif isinstance(error, _wasi_ip_name_lookup.ErrorCode_TemporaryResolverFailure):
-            code = _stdlib_socket.EAI_AGAIN
+            # Wasmtime 47 collapses lookup failures to name-unresolvable.
+            code = _stdlib_socket.EAI_AGAIN  # Defensive: WASI spec compatibility.
         else:
             code = _stdlib_socket.EAI_FAIL
         return _stdlib_socket.gaierror(code, type(error).__name__)
@@ -445,12 +446,16 @@ if sys.platform == "wasi":
             raise OSError(errno.ENOPROTOOPT, "protocol option not available")
 
         def getsockname(self) -> tuple[str, int] | tuple[str, int, int, int]:
+            if self._closed:
+                raise OSError(errno.EBADF, "bad file descriptor")
             try:
                 return _python_socket_address(self._socket.get_local_address())
             except Err as error:
                 raise _socket_error(error.value) from None
 
         def getpeername(self) -> tuple[str, int] | tuple[str, int, int, int]:
+            if self._closed:
+                raise OSError(errno.EBADF, "bad file descriptor")
             try:
                 return _python_socket_address(self._socket.get_remote_address())
             except Err as error:
