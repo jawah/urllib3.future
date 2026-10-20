@@ -256,6 +256,9 @@ jobs:
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
           NOX_SESSION: ${{ matrix.nox-session }}
+          # PyPy 7.3.13 segfaults during pytest assertion rewriting in CI.
+          # Plain mode keeps assertions enabled, without the rewritten AST.
+          PYTEST_ADDOPTS: ${{ matrix.python-version == 'pypy-3.9-v7.3.13' && '--assert=plain' || '' }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
           TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && steps.colima-ip.outputs.autodiscover || '127.0.0.1' }}
 

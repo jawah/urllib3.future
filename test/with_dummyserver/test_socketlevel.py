@@ -690,7 +690,10 @@ class TestServerSentEvents(SocketDummyServerTestCase):
 
 
 class TestSocketClosing(SocketDummyServerTestCase):
-    def test_close_before_response_headers_releases_socket(self) -> None:
+    @pytest.mark.parametrize("overlap_close", [False, True])
+    def test_close_before_response_headers_releases_socket(
+        self, monkeypatch: pytest.MonkeyPatch, overlap_close: bool
+    ) -> None:
         from urllib3.exceptions import HTTPError
 
         request_received, peer_closed = Event(), Event()
@@ -716,7 +719,32 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 manager.request, "GET", f"http://{self.host}:{self.port}/"
             )
             assert request_received.wait(5)
-            manager.clear()
+            manager_cleared, cleanup_started = Event(), Event()
+            if overlap_close:
+                pool = next(iter(manager.pools._registry.values()))
+                assert pool.pool is not None
+                conn = next(iter(pool.pool._registry.values()))
+                client_sock = conn.sock
+                closing_thread = threading.get_ident()
+                shutdown = socket.socket.shutdown
+
+                def synchronized_shutdown(sock: socket.socket, how: int) -> None:
+                    if sock is client_sock:
+                        if threading.get_ident() == closing_thread:
+                            shutdown(sock, how)
+                            # Wake the request, then wait for its error cleanup
+                            # to enter close() before this thread finishes close().
+                            assert cleanup_started.wait(5)
+                            return
+                        cleanup_started.set()
+                        assert manager_cleared.wait(5)
+                    shutdown(sock, how)
+
+                monkeypatch.setattr(socket.socket, "shutdown", synchronized_shutdown)
+            try:
+                manager.clear()
+            finally:
+                manager_cleared.set()
             with pytest.raises(HTTPError):
                 request.result(5)
             assert peer_closed.wait(5)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import socket
+import time
 import typing
 from pathlib import Path
 
@@ -246,6 +247,13 @@ def test_oversized_quic_packet_does_not_stop_following_packets(
         }
         assert sent, "The valid packet following the rejected one was not sent"
         if operation != "close":
+            # Pool checkout expects a keepalive reply to have arrived already.
+            # Finish our freshly issued PING before checking connection reuse.
+            deadline = time.monotonic() + 5
+            while conn.expect_pong:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and wait_for_read(sock, timeout=remaining)
+                conn.peek_and_react(expect_frame=True)
             assert conn.sock is sock and not conn.is_closed
             if response is not None and response.extension is not None:
                 response.extension.close()
