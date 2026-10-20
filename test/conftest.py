@@ -341,6 +341,8 @@ def dns_quic_server(
     request: pytest.FixtureRequest, tmp_path: Path
 ) -> typing.Iterator[DNSQUICServer]:
     """A real DoQ peer with explicit control over DNS framing and stream failures."""
+    if ssl_.IS_FIPS:
+        pytest.skip("DNS-over-QUIC is disabled with a FIPS-compliant ssl module")
     pytest.importorskip("urllib3.contrib.resolver.doq._qh3")
     from qh3.asyncio import QuicConnectionProtocol
     from qh3.asyncio.server import QuicServer
