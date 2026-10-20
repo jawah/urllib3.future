@@ -90,6 +90,8 @@ class QUICResolver(PlainResolver):
                 "cert_reqs" not in kwargs
                 or resolve_cert_reqs(kwargs["cert_reqs"]) == ssl.CERT_REQUIRED
             ):
+                # Construction fails before the caller can close the resolver.
+                self._socket.close()
                 raise ssl.SSLError(
                     "DoQ requires at least one CA loaded in order to verify the remote peer certificate. "
                     "Add ?cert_reqs=0 to disable certificate checks."
@@ -136,7 +138,12 @@ class QUICResolver(PlainResolver):
         self._peer_addr = self._socket.getpeername()
 
         self._quic.connect(self._peer_addr, monotonic())
-        self.__exchange_until(HandshakeCompleted, receive_first=False)
+        try:
+            self.__exchange_until(HandshakeCompleted, receive_first=False)
+        except BaseException:
+            # A failed constructor leaves the caller no resolver to close.
+            self._socket.close()
+            raise
 
         self._terminated: bool = False
         self._should_disconnect: bool = False
@@ -151,8 +158,8 @@ class QUICResolver(PlainResolver):
         self._stream_failures: dict[int, str] = {}
 
     def close(self) -> None:
-        if not self._terminated:
-            with self._lock:
+        with self._lock:
+            if not self._terminated:
                 self._quic.close()
 
                 while True:
@@ -172,8 +179,9 @@ class QUICResolver(PlainResolver):
                         for datagram in datagrams:
                             sync_send_dgram(self._socket, datagram[0])
 
-                self._socket.close()
-                self._terminated = True
+            # Protocol termination does not close the underlying UDP socket.
+            self._socket.close()
+            self._terminated = True
 
     def is_available(self) -> bool:
         self._quic.handle_timer(monotonic())

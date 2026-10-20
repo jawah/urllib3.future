@@ -170,11 +170,11 @@ class QUICResolver(PlainResolver):
                     data, addr = datagram
                     await self._socket.sendall(data)
 
+        # Protocol termination does not close the underlying UDP socket.
+        if self._socket is not None:
             self._socket.close()
             await self._socket.wait_for_close()
-            self._terminated = True
-        if self._socket is None or self._socket.should_connect():
-            self._terminated = True
+        self._terminated = True
 
     def is_available(self) -> bool:
         if self._terminated:
