@@ -244,6 +244,8 @@ async def test_retry_exhaustion_drains_body_and_reuses_connection(
     async with retry_server(scenario, http2=http2) as (port, _, _, requests):
         url = f"{'https' if http2 else 'http'}://localhost:{port}/"
         options: dict[str, typing.Any] = dict(
+            # The fixture listens on IPv4; localhost's IPv6 port may belong to another test.
+            resolver="in-memory://default?hosts=localhost:127.0.0.1",
             maxsize=1,
             block=True,
             timeout=5,

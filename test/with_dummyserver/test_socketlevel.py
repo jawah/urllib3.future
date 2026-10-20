@@ -787,10 +787,20 @@ class TestSocketClosing(SocketDummyServerTestCase):
             for conn in connections:
                 conn.close()
 
-    def test_manager_clear_during_request_cleans_up(self) -> None:
-        from urllib3.exceptions import HTTPError
+    def test_manager_clear_during_request_cleans_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reading_body, finish_body, peer_closed = Event(), Event(), Event()
+        raw_read = HTTPResponse._raw_read
 
-        headers_sent, finish_body, peer_closed = Event(), Event(), Event()
+        def read_body(
+            response: HTTPResponse, *args: typing.Any, **kwargs: typing.Any
+        ) -> bytes:
+            # Signal once the response exists and the client starts reading its body.
+            reading_body.set()
+            return raw_read(response, *args, **kwargs)
+
+        monkeypatch.setattr(HTTPResponse, "_raw_read", read_body)
 
         def handler(listener: socket.socket) -> None:
             listener.settimeout(5)
@@ -802,7 +812,6 @@ class TestSocketClosing(SocketDummyServerTestCase):
                     assert chunk
                     headers.extend(chunk)
                 sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\no")
-                headers_sent.set()
                 assert finish_body.wait(5)
                 try:
                     sock.sendall(b"k")
@@ -819,18 +828,14 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 manager.request, "GET", f"http://{self.host}:{self.port}/"
             )
             try:
-                assert headers_sent.wait(5)
+                assert reading_body.wait(5)
                 police = next(iter(manager.pools._registry.values())).pool
                 assert police is not None
                 manager.clear()
             finally:
                 finish_body.set()
-            try:
-                response = future.result(5)
-            except HTTPError:
-                pass  # Closure may win before the client forms its response.
-            else:
-                assert response.data == b"ok"
+            response = future.result(5)
+            assert response.data == b"ok"
             assert peer_closed.wait(5)
             assert police.rsize() == 0
             assert manager.pools.rsize() == 0

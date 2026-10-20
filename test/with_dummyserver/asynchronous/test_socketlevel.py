@@ -395,10 +395,22 @@ class TestSocketClosing(SocketDummyServerTestCase):
             for conn in connections:
                 await conn.close()
 
-    async def test_manager_clear_during_request_cleans_up(self) -> None:
-        from urllib3.exceptions import HTTPError
+    async def test_manager_clear_during_request_cleans_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3 import AsyncHTTPResponse
 
-        headers_sent, finish_body, peer_closed = Event(), Event(), Event()
+        reading_body, finish_body, peer_closed = Event(), Event(), Event()
+        raw_read = AsyncHTTPResponse._raw_read
+
+        async def read_body(
+            response: AsyncHTTPResponse, *args: typing.Any, **kwargs: typing.Any
+        ) -> bytes:
+            # Signal once the response exists and the client starts reading its body.
+            reading_body.set()
+            return await raw_read(response, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncHTTPResponse, "_raw_read", read_body)
 
         def handler(listener: socket.socket) -> None:
             listener.settimeout(5)
@@ -410,7 +422,6 @@ class TestSocketClosing(SocketDummyServerTestCase):
                     assert chunk
                     headers.extend(chunk)
                 sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\no")
-                headers_sent.set()
                 assert finish_body.wait(5)
                 try:
                     sock.sendall(b"k")
@@ -426,17 +437,13 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 manager.request("GET", f"http://{self.host}:{self.port}/")
             )
             try:
-                assert await loop.run_in_executor(None, headers_sent.wait, 5)
+                assert await loop.run_in_executor(None, reading_body.wait, 5)
                 police = next(iter(manager.pools._registry.values())).pool
                 assert police is not None
                 await manager.clear()
                 finish_body.set()
-                try:
-                    response = await asyncio.wait_for(future, 5)
-                except HTTPError:
-                    pass  # Closure may win before the client forms its response.
-                else:
-                    assert await response.data == b"ok"
+                response = await asyncio.wait_for(future, 5)
+                assert await response.data == b"ok"
                 assert await loop.run_in_executor(None, peer_closed.wait, 5)
                 assert police.rsize() == 0
                 assert manager.pools.rsize() == 0
