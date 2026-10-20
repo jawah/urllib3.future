@@ -28,6 +28,7 @@ WebSocketExtension = (
 
 
 class TestWebExtensions(TraefikTestCase):
+    @notWindows()  # The Windows stack does not provide the HAProxy RFC 8441 endpoint.
     @pytest.mark.skipif(
         WebSocketExtensionFromMultiplexedHTTP is None, reason="test requires wsproto"
     )
