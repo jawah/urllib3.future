@@ -163,6 +163,10 @@ def test_oversized_quic_packet_does_not_stop_following_packets(
                 "CONNECT", "/", preload_content=False, extension=Tunnel()
             )
             assert response.extension is not None
+            if operation == "raw-flow-control":
+                quic_echo_server[2]()
+                assert wait_for_read(sock, timeout=5)
+                protocol.ping()
         elif operation == "peek":
             # Two unacknowledged client PINGs trigger our expiry heuristic.
             # Use the peer to make the socket readable, keeping one client PING
@@ -189,6 +193,11 @@ def test_oversized_quic_packet_does_not_stop_following_packets(
 
         def wait_for_credit(stream_id: int, size: int) -> bool | None:
             nonlocal armed
+            if operation in ("upload", "raw-flow-control") and not injected:
+                # Enter the ACK-wait send path once. Request headers or the peer
+                # PING provide real input, independently of packet pacing.
+                armed = True
+                return True
             waiting = should_wait(stream_id, size)
             if waiting:
                 armed = True
@@ -236,8 +245,7 @@ def test_oversized_quic_packet_does_not_stop_following_packets(
             assert pool.request("POST", "/", body=body).data == body
         else:
             assert response is not None and response.extension is not None
-            for _ in range(32 if operation == "raw-flow-control" else 1):
-                response.extension.send_payload(b"x" * 1024)
+            response.extension.send_payload(b"x" * 1024)
 
         assert injected, "The intended send path was not reached"
         assert len(rejected) == 1

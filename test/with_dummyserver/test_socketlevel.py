@@ -696,7 +696,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
     ) -> None:
         from urllib3.exceptions import HTTPError
 
-        request_received, peer_closed = Event(), Event()
+        request_received, peer_closed, send_eof = Event(), Event(), Event()
 
         def handler(listener: socket.socket) -> None:
             listener.settimeout(5)
@@ -708,6 +708,9 @@ class TestSocketClosing(SocketDummyServerTestCase):
                     assert chunk
                     headers.extend(chunk)
                 request_received.set()
+                if overlap_close:
+                    assert send_eof.wait(5)
+                    sock.shutdown(socket.SHUT_WR)
                 assert sock.recv(1) == b""
                 peer_closed.set()
 
@@ -731,22 +734,25 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 def synchronized_shutdown(sock: socket.socket, how: int) -> None:
                     if sock is client_sock:
                         if threading.get_ident() == closing_thread:
-                            shutdown(sock, how)
-                            # Wake the request, then wait for its error cleanup
-                            # to enter close() before this thread finishes close().
+                            # Peer EOF wakes recv() on every OS; local SHUT_RD
+                            # need not interrupt another thread's recv() on Windows.
+                            send_eof.set()
                             assert cleanup_started.wait(5)
-                            return
-                        cleanup_started.set()
-                        assert manager_cleared.wait(5)
+                        else:
+                            cleanup_started.set()
+                            assert manager_cleared.wait(5)
                     shutdown(sock, how)
 
                 monkeypatch.setattr(socket.socket, "shutdown", synchronized_shutdown)
             try:
                 manager.clear()
             finally:
+                send_eof.set()
                 manager_cleared.set()
-            with pytest.raises(HTTPError):
+            with pytest.raises(HTTPError) as caught:
                 request.result(5)
+            # EOF handling may wrap a cleanup failure in ClosedPoolError.
+            assert not isinstance(caught.value.__cause__, AttributeError)
             assert peer_closed.wait(5)
             assert manager.pools.rsize() == 0
 
