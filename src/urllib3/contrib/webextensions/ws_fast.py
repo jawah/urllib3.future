@@ -79,7 +79,9 @@ class _WebsocketsEngine:
                 "WebSocket handshake failed"
             ) from self._protocol.handshake_exc
         if not events or not isinstance(events[0], Response):
-            raise ProtocolError("WebSocket handshake did not complete")
+            raise ProtocolError(
+                "WebSocket handshake did not complete"
+            )  # Defensive: a complete validated handshake must emit Response.
         self._events.extend(event for event in events[1:] if isinstance(event, Frame))
 
     def _feed(self, data: bytes) -> None:
