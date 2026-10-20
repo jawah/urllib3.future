@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import builtins
 import io
+import errno
 import socket
 import unittest
 import warnings
@@ -18,6 +20,7 @@ from urllib3.util import parse_url
 from urllib3.contrib.wasi import socket as wasi_socket
 
 from ..common import (
+    edge_address,
     CLIENT_CERT,
     CLIENT_KEY,
     COMBINED_CA,
@@ -304,4 +307,147 @@ class SyncWasiTests(unittest.TestCase):
             head, body = data.split(b"\r\n\r\n", 1)
             self.assertTrue(head.startswith(b"HTTP/1.1 200"))
             self.assertEqual(len(body), 64)
+            self.assertEqual(sock.recv(1), b"")
+
+    def test_socket_invalid_operations(self) -> None:
+        for family, kind in (
+            (-1, socket.SOCK_STREAM),
+            (socket.AF_INET, socket.SOCK_DGRAM),
+        ):
+            with self.subTest(family=family, kind=kind), self.assertRaises(OSError):
+                wasi_socket.socket(family, kind)
+        sock = wasi_socket.socket()
+        try:
+            for operation in (sock.getsockname, sock.getpeername):
+                with self.assertRaises(OSError):
+                    operation()
+            with self.assertRaises(OSError):
+                sock.recv(1)
+            with self.assertRaises(OSError):
+                sock.send(b"x")
+            for option in (
+                socket.TCP_KEEPIDLE,
+                socket.TCP_KEEPINTVL,
+                socket.TCP_KEEPCNT,
+            ):
+                with self.subTest(option=option), self.assertRaises(OSError):
+                    sock.setsockopt(socket.IPPROTO_TCP, option, 0)
+        finally:
+            sock.close()
+
+    def test_socket_names_and_service_errors(self) -> None:
+        records = wasi_socket.getaddrinfo(
+            "localhost", 80, socket.AF_INET, socket.SOCK_STREAM
+        )
+        self.assertIn("127.0.0.1", [r[4][0] for r in records])
+        for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            with self.assertRaises(OSError):
+                wasi_socket.getaddrinfo(
+                    "127.0.0.1", "urllib3-no-such-service", type=kind
+                )
+        with self.assertRaises(socket.gaierror):
+            wasi_socket.getaddrinfo("x" * 64 + ".invalid", 80)
+        with self.assertRaises((ValueError, socket.gaierror)):
+            wasi_socket.getaddrinfo("127.0.0.1", 80, type=-1, proto=17)
+
+    def test_socket_network_denied(self) -> None:
+        address = edge_address("plain")
+        assert address is not None
+        with self.assertRaises(OSError) as caught:
+            wasi_socket.create_connection(address)
+        self.assertEqual(caught.exception.errno, errno.EACCES)
+
+    def test_socket_dns_denied(self) -> None:
+        with self.assertRaises(socket.gaierror) as caught:
+            wasi_socket.getaddrinfo("localhost", 80, socket.AF_INET, socket.SOCK_STREAM)
+        self.assertEqual(caught.exception.errno, socket.EAI_FAIL)
+
+    def test_socket_refused_connection(self) -> None:
+        address = edge_address("refused")
+        assert address is not None
+        with self.assertRaises(ConnectionRefusedError):
+            wasi_socket.create_connection(address)
+
+    def test_socket_ipv6_io(self) -> None:
+        address = edge_address("ipv6")
+        if address is None:
+            self.skipTest("IPv6 loopback is unavailable on the host")
+        sock = wasi_socket.socket(socket.AF_INET6)
+        try:
+            sock.connect(address)
+            self.assertEqual(sock.getpeername()[:2], address)
+            self.assertEqual(sock.getsockname()[0], "::1")
+            sock.sendall(b"echo\n")
+            data = bytearray()
+            while True:
+                chunk = sock.recv(16)
+                if not chunk:
+                    break
+                data.extend(chunk)
+            self.assertEqual(bytes(data), b"hello")
+        finally:
+            sock.close()
+
+    def test_socket_connect_ex_and_half_close(self) -> None:
+        address = edge_address("plain")
+        refused = edge_address("refused")
+        assert address is not None and refused is not None
+        with wasi_socket.socket() as sock:
+            self.assertEqual(sock.connect_ex(refused), errno.ECONNREFUSED)
+        with self.assertRaises(getattr(builtins, "ExceptionGroup")) as caught:
+            wasi_socket.create_connection(refused, all_errors=True)
+        self.assertTrue(
+            all(
+                isinstance(error, ConnectionRefusedError)
+                for error in caught.exception.exceptions
+            )
+        )
+        with self.assertRaisesRegex(OSError, "bind unsupported"):
+            wasi_socket.create_connection(address, source_address=("127.0.0.1", 0))
+        with wasi_socket.socket() as sock:
+            self.assertEqual(sock.connect_ex(address), 0)
+            sock.sendall(b"half-close\n")
+            sock.shutdown(socket.SHUT_WR)
+            data = bytearray()
+            while True:
+                part = sock.recv(16)
+                if not part:
+                    break
+                data.extend(part)
+            self.assertEqual(bytes(data), b"after eof")
+            with self.assertRaises(OSError):
+                sock.send(b"late")
+        self.assertEqual(wasi_socket.gethostbyname("localhost"), "127.0.0.1")
+        self.assertIn("127.0.0.1", wasi_socket.gethostbyname_ex("localhost")[2])
+
+    def test_socket_closed_addresses(self) -> None:
+        sock = wasi_socket.socket()
+        sock.close()
+        for operation in (sock.getsockname, sock.getpeername):
+            with self.assertRaises(OSError) as caught:
+                operation()
+            self.assertEqual(caught.exception.errno, errno.EBADF)
+
+    def test_socket_zero_read_does_not_wait(self) -> None:
+        address = edge_address("plain")
+        assert address is not None
+        with wasi_socket.create_connection(address) as sock:
+            sock.sendall(b"zero-read\n")
+            self.assertEqual(sock.recv(0), b"")
+            sock.sendall(b"!")
+            response = bytearray()
+            while True:
+                chunk = sock.recv(16)
+                if not chunk:
+                    break
+                response.extend(chunk)
+            self.assertEqual(bytes(response), b"ready")
+
+    def test_socket_peer_reset(self) -> None:
+        address = edge_address("plain")
+        assert address is not None
+        with wasi_socket.create_connection(address) as sock:
+            sock.sendall(b"reset\n")
+            with self.assertRaises(OSError):
+                sock.recv(1)
             self.assertEqual(sock.recv(1), b"")

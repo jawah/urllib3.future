@@ -103,6 +103,60 @@ class ThreadingSOCKSServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+class SocketEdgeHandler(socketserver.BaseRequestHandler):
+    """A bounded native peer for guest socket error and EOF cases."""
+
+    def handle(self) -> None:
+        self.request.settimeout(10)
+        context = getattr(self.server, "tls_context", None)
+        if context is not None:
+            with context.wrap_socket(self.request, server_side=True) as peer:
+                self._serve(peer)
+        else:
+            self._serve(self.request)
+
+    def _serve(self, peer: socket.socket) -> None:
+        if getattr(self.server, "mode", "plain") == "handshake-eof":
+            peer.recv(65536)
+            return
+        line = bytearray()
+        while not line.endswith(b"\n"):
+            data = peer.recv(1)
+            if not data:
+                return
+            line.extend(data)
+        if line == b"reset\n":
+            peer.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            peer.close()
+        elif line == b"corrupt\n":
+            # Bypass TLS framing after the genuine handshake to send a bad record.
+            with socket.socket(fileno=peer.detach()) as raw:
+                raw.sendall(b"\x17\x03\x03\x00\x10" + bytes(16))
+        elif line == b"half-close\n":
+            while peer.recv(4096):
+                pass
+            peer.sendall(b"after eof")
+        elif line == b"zero-read\n":
+            # The guest must finish recv(0) before it sends this second command.
+            if peer.recv(1) == b"!":
+                peer.sendall(b"ready")
+        else:
+            peer.sendall(b"hello")
+
+
+class SocketEdgeServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    mode = "plain"
+    tls_context: ssl.SSLContext | None = None
+
+
+class IPv6SocketEdgeServer(SocketEdgeServer):
+    address_family = socket.AF_INET6
+
+
 class NativeServices:
     def __init__(self, fixtures: Path) -> None:
         fixtures.mkdir(parents=True, exist_ok=True)
@@ -134,6 +188,35 @@ class NativeServices:
         self.servers.append(socks)
         self._start_thread(socks.serve_forever, "wasi-socks5")
 
+        # Keep this port reserved without listening, so refusal has no port-reuse race.
+        self.refused = socket.socket()
+        self.refused.bind(("127.0.0.1", 0))
+        endpoints: dict[str, Any] = {"refused": self.refused.getsockname()}
+        for name, host, server_class in (
+            ("plain", "127.0.0.1", SocketEdgeServer),
+            ("handshake-eof", "127.0.0.1", SocketEdgeServer),
+            ("tls", "127.0.0.1", SocketEdgeServer),
+            ("ipv6", "::1", IPv6SocketEdgeServer),
+        ):
+            try:
+                server = server_class((host, 0), SocketEdgeHandler)
+            except OSError:
+                if name != "ipv6":
+                    raise
+                endpoints[name] = None
+                continue
+            server.mode = name
+            if name == "tls":
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(
+                    fixtures / "server.pem", fixtures / "server.key"
+                )
+                server.tls_context = context
+            self.servers.append(server)
+            endpoints[name] = server.server_address[:2]
+            self._start_thread(server.serve_forever, f"wasi-edge-{name}")
+        (fixtures / "socket-edges.json").write_text(json.dumps(endpoints))
+
     def _start_tls_server(
         self,
         fixtures: Path,
@@ -162,6 +245,7 @@ class NativeServices:
         self.threads.append(thread)
 
     def close(self) -> None:
+        self.refused.close()
         for server in self.servers:
             server.shutdown()
             server.server_close()

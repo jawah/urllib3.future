@@ -99,6 +99,8 @@ async def run_async_case(case_id: str, case_class: type[unittest.TestCase]) -> N
         case.tearDown()
         case.doCleanups()
         case_class.tearDownClass()
+    except unittest.SkipTest as reason:
+        print(f"skipped: {reason}")
     except BaseException:
         print("ERROR")
         traceback.print_exc()
