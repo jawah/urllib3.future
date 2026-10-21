@@ -292,6 +292,17 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             assert "cookie" not in data
             assert "Cookie" not in data
 
+    async def test_redirect_cross_host_headers_none(self) -> None:
+        async with AsyncPoolManager(timeout=5, retries=1) as manager:
+            response = await manager.urlopen(
+                "GET",
+                f"{self.base_url}/redirect?target={self.base_url_alt}/headers&status=302%20Found",
+                headers=None,
+            )
+            assert response.status == 200
+            assert response._pool is not None
+            assert response._pool.host == self.host_alt
+
     async def test_redirect_cross_host_no_remove_headers(self) -> None:
         async with AsyncPoolManager() as http:
             r = await http.request(

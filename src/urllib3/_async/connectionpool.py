@@ -34,7 +34,7 @@ from .._typing import (
 )
 from ..backend import ConnectionInfo, ResponsePromise
 from ..connection import _wrap_proxy_error
-from ..connectionpool import _normalize_host
+from ..connectionpool import _is_same_host, _normalize_host
 from ..contrib.resolver import ProtocolResolver
 from ..contrib.resolver._async import (
     AsyncBaseResolver,
@@ -1601,23 +1601,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         Check if the given ``url`` is a member of the same host as this
         connection pool.
         """
-        if url.startswith("/"):
-            return True
-
-        # TODO: Add optional support for socket.gethostbyname checking.
-        scheme, _, host, port, *_ = parse_url(url)
-        scheme = scheme or "http"
-        if host is not None:
-            # parse_url() already normalized the host, including its zone ID.
-            host = host.strip("[]")
-
-        # Use explicit default port for comparison when none is given
-        if self.port and not port:
-            port = port_by_scheme.get(scheme)
-        elif not self.port and port == port_by_scheme.get(scheme):
-            port = None
-
-        return (scheme, host, port) == (self.scheme, self.host, self.port)
+        return _is_same_host(url, self.scheme, self.host, self.port)
 
     @typing.overload  # type: ignore[override]
     async def urlopen(

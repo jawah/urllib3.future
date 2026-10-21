@@ -29,6 +29,68 @@ from .. import TraefikTestCase
 @pytest.mark.asyncio
 class TestPoolManagerMultiplexed(TraefikTestCase):
     @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
+    @pytest.mark.parametrize("same_origin", [False, True])
+    @pytest.mark.parametrize("remove_sensitive", [False, True])
+    @pytest.mark.parametrize("explicit_promise", [False, True])
+    async def test_redirect_origin_and_host_header(
+        self,
+        version: HttpVersion,
+        same_origin: bool,
+        remove_sensitive: bool,
+        explicit_promise: bool,
+    ) -> None:
+        from urllib.parse import urlencode
+
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        target_host = self.host if same_origin else self.alt_host
+        target = f"https://{target_host}:{self.https_port}/headers"
+        headers = {
+            "Host": f"{self.host}:{self.https_port}",
+            "Authorization": "Bearer secret",
+            "Cookie": "private=yes",
+            "X-Public": "retained",
+        }
+        retries = Retry(
+            total=1,
+            remove_headers_on_redirect=(
+                Retry.DEFAULT_REMOVE_HEADERS_ON_REDIRECT if remove_sensitive else ()
+            ),
+        )
+        async with AsyncPoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
+            disabled_svn=set(HttpVersion) - {version},
+            timeout=5,
+        ) as manager:
+            promise = await manager.urlopen(
+                "GET",
+                self.https_url
+                + "/redirect-to?"
+                + urlencode({"url": target, "status_code": 302}),
+                headers=headers,
+                retries=retries,
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+            response = await manager.get_response(
+                promise=promise if explicit_promise else None
+            )
+            assert response is not None and response.status == 200
+            assert response.version == (20 if version is HttpVersion.h2 else 30)
+            echoed = {
+                key.lower(): value
+                for key, value in (await response.json())["headers"].items()
+            }
+            assert echoed["host"] == [f"{target_host}:{self.https_port}"]
+            assert echoed["x-public"] == ["retained"]
+            retain_credentials = same_origin or not remove_sensitive
+            assert ("authorization" in echoed) is retain_credentials
+            assert ("cookie" in echoed) is retain_credentials
+            assert headers["Host"] == f"{self.host}:{self.https_port}"
+            assert headers["Authorization"] == "Bearer secret"
+
+    @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
     @pytest.mark.parametrize("by_promise", [False, True])
     async def test_clear_preserves_uncollected_promises(
         self, version: HttpVersion, by_promise: bool

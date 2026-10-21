@@ -13,6 +13,10 @@
   application errors with overlapping codes remain ``ProtocolError``.
 - Fixed protocol restrictions for a web extension leaking into other connection
   pools through shared settings, in both sync and async. (#433)
+- Fixed redirect header handling comparing against the proxy's origin instead
+  of the request's origin. Cross-origin redirects now rebuild the ``Host`` header
+  and apply the configured sensitive-header policy, including deferred responses,
+  in both sync and async. Backported from https://github.com/urllib3/urllib3/pull/5126.
 - Fixed incomplete pool shutdown leaving connections open after their last
   response was consumed or closed. Responses and promises returned before
   shutdown remain readable and retrievable, in both sync and async. (#432)

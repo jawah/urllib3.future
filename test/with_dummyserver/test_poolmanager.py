@@ -343,6 +343,17 @@ class TestPoolManager(HTTPDummyServerTestCase):
             assert "cookie" not in data
             assert "Cookie" not in data
 
+    def test_redirect_cross_host_headers_none(self) -> None:
+        with PoolManager(timeout=5, retries=1) as manager:
+            response = manager.urlopen(
+                "GET",
+                f"{self.base_url}/redirect?target={self.base_url_alt}/headers&status=302%20Found",
+                headers=None,
+            )
+            assert response.status == 200
+            assert response._pool is not None
+            assert response._pool.host == self.host_alt
+
     def test_redirect_cross_host_no_remove_headers(self) -> None:
         with PoolManager() as http:
             r = http.request(

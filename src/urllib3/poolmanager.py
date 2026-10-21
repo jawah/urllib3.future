@@ -20,7 +20,12 @@ from ._typing import (
     ProxyConfig,
 )
 from .backend import HttpVersion, QuicPreemptiveCacheType, ResponsePromise
-from .connectionpool import HTTPConnectionPool, HTTPSConnectionPool, port_by_scheme
+from .connectionpool import (
+    HTTPConnectionPool,
+    HTTPSConnectionPool,
+    _is_same_host,
+    port_by_scheme,
+)
 from .contrib.resolver import (
     BaseResolver,
     ManyResolver,
@@ -709,6 +714,7 @@ class PoolManager(RequestMethods):
 
             redirect_location = response.get_redirect_location()
             assert isinstance(redirect_location, str)
+            redirect_location = urljoin(url, redirect_location)
 
             if response.status == 303:
                 method = "GET"
@@ -719,6 +725,22 @@ class PoolManager(RequestMethods):
 
                 for should_be_removed_header in NOT_FORWARDABLE_HEADERS:
                     headers.discard(should_be_removed_header)
+
+            # Compare request origins, including for deferred proxy responses.
+            u = parse_url(url)
+            scheme = u.scheme or "http"
+            if headers is not None and not _is_same_host(
+                redirect_location,
+                scheme,
+                u.host.strip("[]") if u.host is not None else None,
+                u.port,
+            ):
+                headers_to_remove = retries.remove_headers_on_redirect | {"host"}
+                new_headers = headers.copy()
+                for header in headers:
+                    if header.lower() in headers_to_remove:
+                        new_headers.pop(header, None)
+                headers = new_headers
 
             try:
                 retries = retries.increment(
@@ -738,7 +760,7 @@ class PoolManager(RequestMethods):
 
             new_promise = self.urlopen(
                 method,
-                urljoin(url, redirect_location),
+                redirect_location,
                 True,
                 body=body,
                 headers=headers,
@@ -974,15 +996,19 @@ class PoolManager(RequestMethods):
         if not isinstance(retries, Retry):
             retries = Retry.from_int(retries, redirect=redirect)
 
-        # Strip headers marked as unsafe to forward to the redirected location.
-        # Check remove_headers_on_redirect to avoid a potential network call within
-        # conn.is_same_host() which may use socket.gethostbyname() in the future.
-        if retries.remove_headers_on_redirect and not conn.is_same_host(
-            redirect_location
+        # The pool may belong to the proxy. Compare destination origins instead,
+        # and remove Host so it can be rebuilt for a cross-origin redirect.
+        scheme = u.scheme or "http"
+        if kw["headers"] is not None and not _is_same_host(
+            redirect_location,
+            scheme,
+            u.host.strip("[]") if u.host is not None else None,
+            u.port,
         ):
+            headers_to_remove = retries.remove_headers_on_redirect | {"host"}
             new_headers = kw["headers"].copy()
             for header in kw["headers"]:
-                if header.lower() in retries.remove_headers_on_redirect:
+                if header.lower() in headers_to_remove:
                     new_headers.pop(header, None)
             kw["headers"] = new_headers
 

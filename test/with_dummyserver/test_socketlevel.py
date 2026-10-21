@@ -2009,6 +2009,77 @@ class TestSocketClosing(SocketDummyServerTestCase):
 
 
 class TestProxyManager(SocketDummyServerTestCase):
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("remove_sensitive", [False, True])
+    @pytest.mark.parametrize("target", ["same", "default-port", "cross", "proxy"])
+    async def test_redirect_rewrites_host_and_strips_credentials(
+        self, asynchronous: bool, remove_sensitive: bool, target: str
+    ) -> None:
+        from urllib3 import AsyncProxyManager
+
+        requests: list[bytearray] = []
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(10)
+            for first in (True, False):
+                with listener.accept()[0] as sock:
+                    sock.settimeout(10)
+                    requests.append(consume_socket(sock))
+                    if first:
+                        sock.sendall(
+                            b"HTTP/1.1 302 Found\r\nLocation: "
+                            + location.encode()
+                            + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    else:
+                        sock.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+
+        self._start_server(handler)
+        proxy_url = f"http://{self.host}:{self.port}"
+        location, expected_host = {
+            "same": ("http://google.com/second", "google.com"),
+            "default-port": ("http://google.com:80/second", "google.com"),
+            "cross": ("http://example.com/second", "example.com"),
+            "proxy": (proxy_url + "/second", f"{self.host}:{self.port}"),
+        }[target]
+        headers = {"Authorization": "Bearer secret", "Cookie": "private=yes"}
+        retries = Retry(
+            total=1,
+            remove_headers_on_redirect=(
+                Retry.DEFAULT_REMOVE_HEADERS_ON_REDIRECT if remove_sensitive else ()
+            ),
+        )
+        if asynchronous:
+            async with AsyncProxyManager(
+                proxy_url, headers=headers, timeout=5, retries=retries
+            ) as manager_async:
+                response_async = await manager_async.request(
+                    "GET", "http://google.com/first"
+                )
+                assert response_async.status == 200
+        else:
+            with proxy_from_url(
+                proxy_url, headers=headers, timeout=5, retries=retries
+            ) as manager:
+                assert manager.request("GET", "http://google.com/first").status == 200
+
+        assert len(requests) == 2
+        assert requests[1].startswith(b"GET " + location.encode() + b" HTTP/1.1\r\n")
+        received = HTTPHeaderDict()
+        for line in requests[1].split(b"\r\n")[1:]:
+            if line:
+                name, value = line.decode().split(":", 1)
+                received.add(name, value.strip())
+        assert received["Host"] == expected_host
+        retain_credentials = target in {"same", "default-port"} or not remove_sensitive
+        assert ("Authorization" in received) is retain_credentials
+        assert ("Cookie" in received) is retain_credentials
+        assert headers == {"Authorization": "Bearer secret", "Cookie": "private=yes"}
+
     def test_simple(self) -> None:
         def echo_socket_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
