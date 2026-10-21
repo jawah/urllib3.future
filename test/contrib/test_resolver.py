@@ -51,6 +51,7 @@ _DOQ_PARAM = pytest.param(
 )
 
 
+@pytest.mark.usefixtures("doq_close_timer")
 def test_doq_local_failed_handshake_releases_socket(
     dns_quic_server: DNSQUICServer,
 ) -> None:

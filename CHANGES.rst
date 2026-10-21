@@ -36,6 +36,8 @@
 - Fixed DNS over QUIC sockets remaining open after protocol termination, in both
   sync and async, and when synchronous setup fails during the handshake or
   because no default CA certificates are available.
+- Fixed DNS over QUIC certificate failures being reported as socket timeouts
+  while waiting for the QUIC closing timer, in both sync and async.
 - Fixed async Happy Eyeballs DNS timeouts being reported as ``ProtocolError``
   instead of ``NameResolutionError``.
 - Fixed zero-byte receives waiting for input on native async WASI sockets,

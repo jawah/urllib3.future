@@ -39,6 +39,7 @@ from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("doq_close_timer")
 async def test_doq_local_failed_handshake_releases_socket(
     dns_quic_server: DNSQUICServer,
 ) -> None:

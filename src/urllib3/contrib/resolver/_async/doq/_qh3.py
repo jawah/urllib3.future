@@ -586,7 +586,8 @@ class QUICResolver(PlainResolver):
             events = []
 
             while True:
-                if not quic._events:
+                # qh3 records a close reason before its closing timer publishes an event.
+                if not quic._events and getattr(quic, "_close_event", None) is None:
                     sub = AsyncSubTimeout(
                         sock,
                         quic.get_timer(),
@@ -618,7 +619,12 @@ class QUICResolver(PlainResolver):
                             data, addr = datagram
                             await sock.sendall(data)
 
-                for ev in iter(quic.next_event, None):
+                while True:
+                    ev = quic.next_event()
+                    if ev is None:
+                        ev = getattr(quic, "_close_event", None)
+                    if ev is None:
+                        break
                     if isinstance(ev, ConnectionTerminated):
                         if ev.error_code == 298:
                             raise SSLError(

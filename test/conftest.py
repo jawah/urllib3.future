@@ -336,6 +336,30 @@ def doq_empty_ca_store(
         monkeypatch.setattr(ssl.SSLContext, "load_default_certs", load_default_certs)
 
 
+@pytest.fixture(params=[False, True], ids=["normal-close-timer", "delayed-close-timer"])
+def doq_close_timer(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not request.param:
+        return
+    connection = pytest.importorskip("qh3.quic.connection").QuicConnection
+    get_timer = connection.get_timer
+
+    def delayed_close_timer(quic: typing.Any) -> float | None:
+        deadline: float | None = get_timer(quic)
+        if (
+            deadline is not None
+            and quic.configuration.is_client
+            and getattr(quic, "_close_event", None) is not None
+        ):
+            # Keep the real TLS rejection pending beyond the socket timeout,
+            # without slowing the handshake or fabricating protocol events.
+            return deadline + 60
+        return deadline
+
+    monkeypatch.setattr(connection, "get_timer", delayed_close_timer)
+
+
 @pytest.fixture
 def dns_quic_server(
     request: pytest.FixtureRequest, tmp_path: Path
