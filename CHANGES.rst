@@ -1,4 +1,4 @@
-2.25.903 (2026-10-20)
+2.25.903 (2026-10-21)
 =====================
 
 - The ``python-socks`` dependency will be removed in a future release. We are
