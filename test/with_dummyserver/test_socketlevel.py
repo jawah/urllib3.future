@@ -263,7 +263,13 @@ class TestClientCerts(SocketDummyServerTestCase):
         from urllib3.contrib.anytls import BACKEND
         from urllib3.contrib.imcc._ctypes import _OpenSSL
 
-        if BACKEND != "ssl" or ssl_.IS_FIPS or ssl.OPENSSL_VERSION_INFO < (1, 1, 1):
+        # LibreSSL's compatibility version does not imply security-level support.
+        if (
+            BACKEND != "ssl"
+            or not ssl.OPENSSL_VERSION.startswith("OpenSSL ")
+            or ssl_.IS_FIPS
+            or ssl.OPENSSL_VERSION_INFO < (1, 1, 1)
+        ):
             pytest.skip("Requires stdlib OpenSSL with configurable security levels")
         try:
             _OpenSSL()
