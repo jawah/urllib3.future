@@ -429,48 +429,36 @@ recommended to set the ``Content-Type`` header:
 WebSocket
 ---------
 
-Using non-multiplexed mode
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+WebSocket over HTTP/1.1
+~~~~~~~~~~~~~~~~~~~~~~~
 
-.. note:: Available since urllib3-future version 2.10 or greater by installing urllib3-future with the ``ws`` extra. Like this: ``pip install urllib3-future[ws]`` or by installing ``wsproto`` by itself.
-
-The WebSocket protocol is an extremely popular extension of HTTP nowadays, and thanks to
-latest achievements in urllib3-future, we're able to serve that capability without even
-breaking a sweat!
-
-In the following example, we will explore how to interact with a basic, but well known echo server.
+Install ``urllib3-future[ws]`` to use the ``wsproto`` implementation. The
+``wss://`` and ``ws://`` schemes select secure and plain WebSocket connections.
+They use HTTP/1.1 by default.
 
 .. code-block:: python
+    :name: websocket-example
 
     import urllib3
 
     with urllib3.PoolManager() as pm:
-        resp = pm.urlopen("GET", "wss://echo.websocket.org")  # be sure to have installed the required extra prior to this.
+        response = pm.urlopen("GET", "wss://echo.websocket.org", timeout=10)
+        try:
+            extension = response.extension
+            if extension is None:
+                raise RuntimeError(f"WebSocket was not accepted: {response.status}")
+            extension.send_payload("Hello World!")
+            message = extension.next_payload()
+            if message is not None:
+                print(message)
+        finally:
+            response.close()
 
-        print(resp.status)  # output '101' for 'Switching Protocol' response status
-
-        print(resp.extension)  # output <class 'urllib3.contrib.webextensions.WebSocketExtensionFromHTTP'>
-
-        print(resp.extension.next_payload())  # output a greeting message from the echo webserver.
-
-        # send two example payloads, one of type string, one of type bytes.
-        resp.extension.send_payload("Hello World!")
-        resp.extension.send_payload(b"Foo Bar Baz!")
-
-        # they should be echoed in order.
-        assert resp.extension.next_payload() == "Hello World!"
-        assert resp.extension.next_payload() == b"Foo Bar Baz!"
-
-        resp.extension.ping()  # send a ping to server
-
-        # gracefully close the sub protocol.
-        resp.extension.close()
-
-That is it! That easy.
-
-.. note:: Historically, urllib3 only accepted ``http://`` and ``https://`` as schemes. But now, you may use ``wss://`` for WebSocket Secure or ``ws://`` for WebSocket over PlainText.
-
-.. warning:: In case anything goes wrong (e.g. server denies us access), ``resp.extension`` will be worth ``None``! Be careful.
+A successful HTTP/1.1 upgrade returns status ``101``. Rejection can return an
+ordinary HTTP response without an extension, and network or protocol failures
+can raise an exception. ``next_payload()`` returns ``None`` at EOF. Servers can
+send unsolicited messages, so the first message need not echo the last payload
+you sent.
 
 Full-duplex reads and writes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -486,14 +474,11 @@ Alternative WebSocket engine
 
 Install ``urllib3-future[ws-fast]`` to use the ``websockets`` Sans-I/O
 engine, then select ``ws+fast://`` or ``wss+fast://``. The extension
-API is the same for ``PoolManager`` and ``AsyncPoolManager``:
+operations are also available through async extensions, where send, receive,
+and close operations must be awaited.
 
-.. code-block:: python
-
-    with urllib3.PoolManager() as pm:
-        resp = pm.urlopen("GET", "wss+fast://echo.websocket.org")
-        resp.extension.send_payload("Hello")
-        print(resp.extension.next_payload())
+Use the previous example with ``wss+fast://echo.websocket.org`` as the URL.
+Keep the same acceptance check and ``finally`` cleanup.
 
 This backend supports HTTP/1.1 and requires Python 3.9 or newer. Supported
 ``websockets`` versions range from 15.0.1 through 17.x: use 15.0.1 on Python
@@ -506,23 +491,23 @@ select ``wsproto``; use ``ws+fast://`` or ``wss+fast://`` to select this backend
     that split a UTF-8 character. With logging handlers that propagate formatting
     exceptions, this can abort reception. Versions 16.1.1 and 17.1 pass this case.
 
-Using multiplexed mode
-~~~~~~~~~~~~~~~~~~~~~~
+WebSocket over HTTP/2 or HTTP/3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-urllib3-future can leverage a multiplexed connection using HTTP/2 or HTTP/3, but often enough, server aren't quite ready
-to bootstrap WebSocket over HTTP/2 or HTTP/3.
+Use ``ws+rfc8441://`` or ``wss+rfc8441://`` with a server that supports extended
+CONNECT. This opt-in implementation uses ``wsproto`` and supports HTTP/2
+(RFC8441), HTTP/3 (RFC9220), and HTTP/1.1 fallback. The ``fast`` implementation
+is HTTP/1.1-only.
 
-For this exact reason, we won't try to negotiate WebSocket over HTTP/2 or HTTP/3 by default. But if you were
-aware of a particular server capable of it, you would simply do as follow:
+For example, replace the URL in the HTTP/1.1 example with
+``wss+rfc8441://your-websocket-server.example/``. Successful extended CONNECT
+uses a 2xx response, rather than HTTP/1.1's ``101`` status. Check
+``response.extension`` and use the same cleanup pattern.
 
-.. code-block:: python
-
-    import urllib3
-
-    with urllib3.PoolManager() as pm:
-        resp = pm.urlopen("GET", "wss+rfc8441://example.test")
-
-The rest of the code is identical to the previous subsection. You may also append ``multiplexed=True`` to urlopen.
+If you also pass ``multiplexed=True``, collect any returned promise before
+accessing its extension; see :ref:`multiplexed-responses`. A plain WSS request
+and an HTTPS request to the same origin can use different pools when their
+protocol restrictions differ. See :ref:`pool-behavior`.
 
 Certificate Verification
 ------------------------
@@ -570,7 +555,7 @@ verification and will raise :class:`~exceptions.SSLError` if verification fails:
     http.request("GET", "https://httpbin.org/")
     # (No exception)
 
-    http.request("GET", "https://expired.badssl.com")
+    http.request("GET", "https://expired.badssl.com", retries=False)
     # urllib3.exceptions.SSLError ...
 
 .. note:: You can use OS-provided certificates if desired. Just specify the full
@@ -579,12 +564,14 @@ verification and will raise :class:`~exceptions.SSLError` if verification fails:
     at ``/etc/ssl/certs/ca-certificates.crt``. Other operating systems can
     be `difficult <https://stackoverflow.com/questions/10095676/openssl-reasonable-default-for-trusted-ca-certificates>`_.
 
+.. _timeout-boundaries:
+
 Using Timeouts
 --------------
 
-Timeouts allow you to control how long (in seconds) requests are allowed to run
-before being aborted. In simple cases, you can specify a timeout as a ``float``
-to :meth:`~urllib3.PoolManager.request`:
+Timeouts bound specific waits in a request. A float sets both the connect and
+read timeout; it is not an overall deadline for the request, its retries, or
+the entire response body. For example:
 
 .. code-block:: python
 
@@ -643,6 +630,17 @@ the timeout at the :class:`~urllib3.poolmanager.PoolManager` level:
     http = urllib3.PoolManager(
         timeout=urllib3.Timeout(connect=1.0, read=2.0)
     )
+
+``pool_timeout`` separately bounds waiting for a connection from a pool. DNS
+resolvers can have their own budgets, and sequential address attempts,
+redirects, retry delays, and application processing can extend the elapsed
+time of an operation. ``Timeout(total=...)`` coordinates connect/read budgets;
+it does not impose a wall-clock deadline across all those phases or all
+streaming reads. A peer that keeps supplying data can keep a response alive
+longer than the configured read timeout.
+
+For cancellation limits in asynchronous code, see :ref:`async-cancellation`.
+For native WASI timeout limitations, see :ref:`wasi-capabilities`.
 
 You still override this pool-level timeout by specifying ``timeout`` to
 :meth:`~urllib3.PoolManager.request`.

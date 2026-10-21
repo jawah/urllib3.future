@@ -1,6 +1,9 @@
 Response and Decoders
 =====================
 
+See :ref:`response-lifecycle` for streaming cleanup and shutdown behavior, and
+:ref:`response-read-semantics` for differences between sync and async reads.
+
 Response
 --------
 

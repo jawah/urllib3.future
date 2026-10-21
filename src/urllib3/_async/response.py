@@ -453,6 +453,13 @@ class AsyncHTTPResponse(HTTPResponse):
         decode_content: bool | None = None,
         cache_content: bool = False,
     ) -> bytes:
+        """Read response data asynchronously.
+
+        ``amt=None`` reads the remaining body. Positive sizes read up to that
+        many bytes, and zero returns empty bytes without consuming input.
+        Negative sizes retain incremental behavior for backward compatibility,
+        unlike synchronous HTTPResponse.read().
+        """
         return await self._read(
             amt=amt,
             decode_content=decode_content,

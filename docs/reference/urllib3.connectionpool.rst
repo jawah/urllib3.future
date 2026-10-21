@@ -1,6 +1,9 @@
 Connection Pools
 ================
 
+See :ref:`pool-behavior` for manager-created versus standalone pool defaults,
+and :ref:`multiplexed-responses` for deferred response retrieval.
+
 .. automodule:: urllib3.connectionpool
 
 .. autoclass:: urllib3.HTTPConnectionPool

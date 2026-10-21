@@ -1,16 +1,23 @@
 urllib3.future
 ==============
 
+urllib3.future is an independently maintained fork of urllib3 with synchronous
+and asynchronous APIs and HTTP/1.1, HTTP/2, and HTTP/3 support.
+
+Install the ``urllib3-future`` distribution. Its default installation supplies
+``import urllib3`` for existing applications. To keep upstream urllib3 alongside
+the fork and use ``import urllib3_future``, follow :doc:`cohabitation`.
+
 .. toctree::
    :hidden:
    :maxdepth: 3
 
-   v2-migration-guide
    user-guide
-   cohabitation
-   wasi
    async
    advanced-usage
+   cohabitation
+   v2-migration-guide
+   wasi
    reference/index
    contributing
    changelog
@@ -29,7 +36,7 @@ urllib3.future
 - Client-side SSL/TLS verification.
 - Highly customizable DNS resolution.
 - File uploads with multipart encoding.
-- DNS over UDP, TLS, QUIC, or HTTPS. DNSSEC protected.
+- DNS over UDP, TLS, QUIC, or HTTPS. DNSSEC validation depends on the configured resolver.
 - Helpers for retrying requests and dealing with HTTP redirects.
 - Support for gzip, deflate, brotli, and zstd encoding.
 - Support for Python/PyPy 3.7+, no compromise.
@@ -58,8 +65,8 @@ urllib3 is powerful and easy to use:
    200
    >>> resp.data
    b"User-agent: *\nDisallow: /deny\n"
-   >>> resp.version
-   20
+   >>> resp.version in (11, 20, 30)
+   True
 
 Installing
 ----------
@@ -68,7 +75,7 @@ urllib3.future can be installed with `pip <https://pip.pypa.io>`_
 
 .. code-block:: bash
 
-  $ python -m pip install urllib3.future
+  $ python -m pip install urllib3-future
 
 To keep upstream urllib3 alongside the fork, see :doc:`cohabitation` for
 source-build and prebuilt-wheel installation methods.

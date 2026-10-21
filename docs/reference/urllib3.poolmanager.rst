@@ -1,6 +1,10 @@
 Pool Manager
 ============
 
+See :ref:`pool-behavior` for pool selection and capacity, and
+:ref:`response-lifecycle` for the lifetime of responses and promises after
+``clear()``.
+
 .. autoclass:: urllib3.PoolManager
     :members:
     :undoc-members:

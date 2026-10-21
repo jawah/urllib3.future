@@ -27,6 +27,6 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           if ! pipx run towncrier check --compare-with "origin/$BASE_REF"; then
-          echo "Please see https://github.com/urllib3/urllib3/blob/main/changelog/README.rst for guidance."
+          echo "Please see https://github.com/jawah/urllib3.future/blob/main/changelog/README.rst for guidance."
             false
           fi

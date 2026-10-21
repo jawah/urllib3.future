@@ -241,17 +241,15 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         been parsed, this is always a `urllib3.util.Timeout` object.
 
     :param maxsize:
-        Number of connections to save that can be reused. More than 1 is useful
-        in multithreaded situations. If ``block`` is set to False, more
-        connections will be created but they will not be saved once they've
-        been used.
+        Connection capacity of this pool, defaulting to 1 for direct
+        construction. A PoolManager supplies its num_pools value when maxsize
+        was not specified. HTTP/2 and HTTP/3 connections can carry multiple
+        requests, so this is not a request-concurrency limit.
 
     :param block:
-        If set to True, no more than ``maxsize`` connections will be used at
-        a time. When no free connections are available, the call will block
-        until a connection has been released. This is a useful side effect for
-        particular multithreaded situations where one does not want to use more
-        than maxsize connections per host to prevent flooding.
+        Retained for urllib3 compatibility. The built-in scheduler can wait at
+        capacity with either value; block=False does not provide disposable
+        overflow connections. Use pool_timeout on a request to bound acquisition.
 
     :param headers:
         Headers to include with all requests, unless other headers are given
@@ -1299,11 +1297,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             Configure the number of retries to allow before raising a
             :class:`~urllib3.exceptions.MaxRetryError` exception.
 
-            Pass ``None`` to retry until you receive a response. Pass a
-            :class:`~urllib3.util.retry.Retry` object for fine-grained control
-            over different types of retries.
-            Pass an integer number to retry connection errors that many times,
-            but no other types of errors. Pass zero to never retry.
+            Pass ``None`` to use the pool's default retry configuration. Pass
+            a :class:`~urllib3.util.retry.Retry` object for fine-grained control
+            over different types of retries. An integer sets the total retry
+            budget; allowed methods and other retry rules still apply.
+            Pass zero to disable further attempts.
 
             If ``False``, then retries are disabled and any exception is raised
             immediately. Also, instead of raising a MaxRetryError on redirects,
@@ -1721,10 +1719,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         .. note::
 
-           `release_conn` will only behave as expected if
-           `preload_content=False` because we want to make
-           `preload_content=False` the default behaviour someday soon without
-           breaking backwards compatibility.
+           For streaming, use ``preload_content=False`` and consume or close
+           the returned response. Returning connection ownership alone does
+           not discard an unread body.
 
         :param method:
             HTTP request method (such as GET, POST, PUT, etc.)
@@ -1745,11 +1742,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             Configure the number of retries to allow before raising a
             :class:`~urllib3.exceptions.MaxRetryError` exception.
 
-            Pass ``None`` to retry until you receive a response. Pass a
-            :class:`~urllib3.util.retry.Retry` object for fine-grained control
-            over different types of retries.
-            Pass an integer number to retry connection errors that many times,
-            but no other types of errors. Pass zero to never retry.
+            Pass ``None`` to use the pool's default retry configuration. Pass
+            a :class:`~urllib3.util.retry.Retry` object for fine-grained control
+            over different types of retries. An integer sets the total retry
+            budget; allowed methods and other retry rules still apply.
+            Pass zero to disable further attempts.
 
             If ``False``, then retries are disabled and any exception is raised
             immediately. Also, instead of raising a MaxRetryError on redirects,
@@ -1773,9 +1770,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             :class:`urllib3.util.Timeout`.
 
         :param pool_timeout:
-            If set and the pool is set to block=True, then this method will
-            block for ``pool_timeout`` seconds and raise EmptyPoolError if no
-            connection is available within the time period.
+            Maximum seconds to wait for connection acquisition. The default,
+            None, has no acquisition deadline. This is separate from connect
+            and read timeouts and can apply with either value of block.
+            Raises EmptyPoolError if no connection becomes available in time.
 
         :param bool preload_content:
             If True, the response's body will be preloaded into memory.
@@ -1785,14 +1783,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             'content-encoding' header.
 
         :param release_conn:
-            If False, then the urlopen call will not release the connection
-            back into the pool once a response is received (but will release if
-            you read the entire contents of the response such as when
-            `preload_content=True`). This is useful if you're not preloading
-            the response's content immediately. You will need to call
-            ``r.release_conn()`` on the response ``r`` to return the connection
-            back into the pool. If None, it takes the value of ``preload_content``
-            which defaults to ``True``.
+            Whether to return acquired connection ownership after receiving
+            response headers. If None, defaults to preload_content. Reading the
+            whole body normally releases ownership automatically. Consume,
+            drain, or close an unused response; release_conn() alone does not
+            consume or abort its unread body.
 
         :param bool chunked:
             If True, urllib3 will send the body using chunked transfer
@@ -1816,14 +1811,14 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         :param on_early_response:
             Callable that will be invoked upon early responses, can be invoked one or several times.
-            All informational responses except HTTP/102 (Switching Protocol) are concerned here.
+            All informational responses except HTTP/101 (Switching Protocol) are concerned here.
             The callback takes only one positional argument, the fully constructed HTTPResponse.
             Those responses never have bodies, only headers.
 
         :param multiplexed:
-            Dispatch the request in a non-blocking way, this means that the
-            response will be retrieved in the future with the get_response()
-            method.
+            Defer response retrieval on HTTP/2 or HTTP/3 and return a
+            ResponsePromise for get_response(). Sending the request still
+            awaits network I/O. HTTP/1.1 returns an immediate response.
         """
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
