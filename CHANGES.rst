@@ -33,6 +33,9 @@
 - Fixed unrestricted response reads losing buffered decompressed data after a
   partial read. Zero-byte reads also leave the transport and decoder untouched,
   in both sync and async.
+- Improved gzip decompression performance by avoiding unnecessary copies when
+  only one output chunk is produced, in both sync and async.
+  Backported from https://github.com/urllib3/urllib3/pull/5304.
 - Fixed DNS over QUIC sockets remaining open after protocol termination, in both
   sync and async, and when synchronous setup fails during the handshake or
   because no default CA certificates are available.

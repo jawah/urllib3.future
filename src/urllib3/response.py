@@ -178,9 +178,8 @@ class GzipDecoder(ContentDecoder):
         self._unconsumed_tail = b""
 
     def decompress(self, data: bytes, max_length: int = -1) -> bytes:
-        ret = bytearray()
         if self._state == GzipDecoderState.SWALLOW_DATA:
-            return bytes(ret)
+            return b""
 
         if max_length == 0:  # Defensive: direct decoder calls only.
             # We should not pass 0 to the zlib decompressor because 0 is
@@ -194,13 +193,22 @@ class GzipDecoder(ContentDecoder):
         # call if decompression is to continue.
         data = self._unconsumed_tail + data
         if not data and self._obj.eof:
-            return bytes(ret)
+            return b""
 
+        # Keep zlib's bytes object unless multiple outputs need combining.
+        ret: bytes | bytearray = b""
         while True:
             try:
-                ret += self._obj.decompress(
+                chunk = self._obj.decompress(
                     data, max_length=max(max_length - len(ret), 0)
                 )
+                if not ret:
+                    ret = chunk
+                elif chunk:
+                    if isinstance(ret, bytes):
+                        ret = bytearray(ret)
+                    ret += chunk
+                    del chunk
             except zlib.error:
                 previous_state = self._state
                 # Ignore data after the first error
@@ -208,7 +216,7 @@ class GzipDecoder(ContentDecoder):
                 self._unconsumed_tail = b""
                 if previous_state == GzipDecoderState.OTHER_MEMBERS:
                     # Allow trailing garbage acceptable in other gzip clients
-                    return bytes(ret)
+                    return ret if isinstance(ret, bytes) else bytes(ret)
                 raise
 
             self._unconsumed_tail = data = (
@@ -218,14 +226,14 @@ class GzipDecoder(ContentDecoder):
                 break
 
             if not data:
-                return bytes(ret)
+                return ret if isinstance(ret, bytes) else bytes(ret)
             # When the end of a gzip member is reached, a new decompressor
             # must be created for unused (possibly future) data.
             if self._obj.eof:
                 self._state = GzipDecoderState.OTHER_MEMBERS
                 self._obj = zlib.decompressobj(16 + zlib.MAX_WBITS)
 
-        return bytes(ret)
+        return ret if isinstance(ret, bytes) else bytes(ret)
 
     @property
     def has_unconsumed_tail(self) -> bool:
