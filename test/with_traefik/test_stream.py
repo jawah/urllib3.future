@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+from time import monotonic
 from typing import Any, Callable
 from json import JSONDecodeError, loads
 
@@ -116,6 +117,16 @@ class TestStreamResponse(TraefikTestCase):
                 monkeypatch.setattr(type(transport), method, record(method))
             if body_state == "buffered":
                 assert len(first.read(8191)) == 8191
+                # Body data and END_STREAM can arrive separately. Keep the last
+                # byte unread, but observe peer completion before expecting no reset.
+                police = pool.pool
+                assert police is not None
+                deadline = monotonic() + 5
+                while stream_id in getattr(protocol, "_open_streams"):
+                    assert monotonic() < deadline, "Peer did not finish the stream"
+                    assert not protocol.has_expired()
+                    with police.borrow(first):
+                        conn.peek_and_react(expect_frame=True)
             elif body_state == "unfinished":
                 assert len(first.read(1)) == 1
             second = pool.request("GET", "/bytes/16", preload_content=False)

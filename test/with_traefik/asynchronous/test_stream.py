@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import platform
+from time import monotonic
 from typing import Any, Callable
 from json import JSONDecodeError, loads
 
 import pytest
 
 from urllib3 import AsyncHTTPSConnectionPool, HttpVersion
+from urllib3._async.connection import AsyncHTTPSConnection
 from urllib3.backend._async.hface import _HAS_HTTP3_SUPPORT  # type: ignore
 
 from urllib3.backend._async import AsyncLowLevelResponse
@@ -85,7 +87,7 @@ class TestStreamResponse(TraefikTestCase):
             first = await pool.request("GET", path, preload_content=False)
             assert first.status == 200, await first.data
             conn = first.connection
-            assert conn is not None and conn.sock is not None
+            assert isinstance(conn, AsyncHTTPSConnection) and conn.sock is not None
             sock, protocol = conn.sock, conn._protocol
             assert protocol is not None
             assert isinstance(first._fp, AsyncLowLevelResponse)
@@ -114,6 +116,16 @@ class TestStreamResponse(TraefikTestCase):
                 monkeypatch.setattr(type(transport), method, record(method))
             if body_state == "buffered":
                 assert len(await first.read(8191)) == 8191
+                # Body data and END_STREAM can arrive separately. Keep the last
+                # byte unread, but observe peer completion before expecting no reset.
+                police = pool.pool
+                assert police is not None
+                deadline = monotonic() + 5
+                while stream_id in getattr(protocol, "_open_streams"):
+                    assert monotonic() < deadline, "Peer did not finish the stream"
+                    assert not protocol.has_expired()
+                    async with police.borrow(first):
+                        await conn.peek_and_react(expect_frame=True)
             elif body_state == "unfinished":
                 assert len(await first.read(1)) == 1
             second = await pool.request("GET", "/bytes/16", preload_content=False)
