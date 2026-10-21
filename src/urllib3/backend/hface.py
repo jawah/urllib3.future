@@ -955,7 +955,10 @@ class HfaceBackend(BaseBackend):
                     break
 
                 try:
-                    self.sock.sendall(data_out)
+                    if self._svn is HttpVersion.h3:
+                        sync_send_dgram(self.sock, data_out)
+                    else:
+                        self.sock.sendall(data_out)
                 except OSError:
                     self._protocol.connection_lost()
                     return True
@@ -1224,25 +1227,14 @@ class HfaceBackend(BaseBackend):
                         message = "Remote end closed connection without response"
                         raise ProtocolError(message) from ConnectionResetError(message)
 
+                    if event.is_tls_error:
+                        raise SSLError(event.message)
                     if (
                         event.error_code == 400
                         and event.message
                         and "header" in event.message
                     ):
                         raise InvalidHeader(event.message)
-                    # QUIC operate TLS verification outside native capabilities
-                    # We have to forward the error so that users aren't caught off guard when the connection
-                    # unexpectedly close.
-                    elif event.error_code == 298 and self._svn == HttpVersion.h3:
-                        if event.message and "Fingerprint" in event.message:
-                            raise SSLError(
-                                f"TLS over QUIC did not succeed. {event.message}"
-                            )
-                        else:
-                            raise SSLError(
-                                "TLS over QUIC did not succeed. Chain certificate verification failed "
-                                "or client cert validation failed."
-                            )
 
                     # we shall convert the ProtocolError to IncompleteRead
                     # so that users aren't caught off guard.
@@ -1618,7 +1610,10 @@ class HfaceBackend(BaseBackend):
                 data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
                 if not data_out:
                     break
-                self.sock.sendall(data_out)  # type: ignore[union-attr]
+                if self._svn is HttpVersion.h3:
+                    sync_send_dgram(self.sock, data_out)  # type: ignore[arg-type]
+                else:
+                    self.sock.sendall(data_out)  # type: ignore[union-attr]
 
         while (
             self._protocol.should_wait_remote_flow_control(__stream_id, len(__buf))
@@ -1655,14 +1650,18 @@ class HfaceBackend(BaseBackend):
             if not data_out:
                 break
 
-            self.sock.sendall(data_out)
+            if self._svn is HttpVersion.h3:
+                sync_send_dgram(self.sock, data_out)
+            else:
+                self.sock.sendall(data_out)
 
         self._last_used_at = time.monotonic()
 
     def __abort_st(self, __stream_id: int) -> None:
         """Kill a stream properly."""
-        assert self._protocol is not None
-        assert self.sock is not None
+        self._pending_responses.pop(__stream_id, None)
+        if self._protocol is None or self.sock is None:
+            return
 
         self._protocol.submit_stream_reset(stream_id=__stream_id)
 
@@ -1672,12 +1671,10 @@ class HfaceBackend(BaseBackend):
             if not data_out:
                 break
 
-            self.sock.sendall(data_out)
-
-        try:
-            del self._pending_responses[__stream_id]
-        except KeyError:
-            pass  # Hmm... this should be impossible.
+            if self._svn is HttpVersion.h3:
+                sync_send_dgram(self.sock, data_out)
+            else:
+                self.sock.sendall(data_out)
 
         # remote can refuse future inquiries, so no need to go further with this conn.
         if self._protocol.has_expired():
@@ -1961,7 +1958,10 @@ class HfaceBackend(BaseBackend):
                 data_out = self._protocol.bytes_to_send()  # type: ignore[union-attr]
                 if not data_out:
                     break
-                self.sock.sendall(data_out)  # type: ignore[union-attr]
+                if self._svn is HttpVersion.h3:
+                    sync_send_dgram(self.sock, data_out)  # type: ignore[arg-type]
+                else:
+                    self.sock.sendall(data_out)  # type: ignore[union-attr]
 
         try:
             while (
@@ -2097,7 +2097,10 @@ class HfaceBackend(BaseBackend):
                 break
 
             try:
-                self.sock.sendall(ping_frame)
+                if self._svn is HttpVersion.h3:
+                    sync_send_dgram(self.sock, ping_frame)
+                else:
+                    self.sock.sendall(ping_frame)
             except (
                 OSError,
                 ssl.SSLError,
@@ -2107,20 +2110,25 @@ class HfaceBackend(BaseBackend):
         self._last_used_at = time.monotonic()
 
     def close(self) -> None:
-        if self.sock:
-            if self._protocol is not None:
+        # Another thread may clear these attributes while this close is in progress.
+        sock, protocol = self.sock, self._protocol
+        if sock:
+            if protocol is not None:
                 try:
-                    self._protocol.submit_close()
-                except self._protocol.exceptions() as e:  # Defensive:
+                    protocol.submit_close()
+                except protocol.exceptions() as e:  # Defensive:
                     # overly protective, made in case of possible exception leak.
                     raise ProtocolError(e) from e  # Defensive:
                 else:
                     while True:
-                        goodbye_frame = self._protocol.bytes_to_send()
+                        goodbye_frame = protocol.bytes_to_send()
                         if not goodbye_frame:
                             break
                         try:
-                            self.sock.sendall(goodbye_frame)
+                            if self._svn is HttpVersion.h3:
+                                sync_send_dgram(sock, goodbye_frame)
+                            else:
+                                sock.sendall(goodbye_frame)
                         except (
                             OSError,
                             ssl.SSLEOFError,
@@ -2128,12 +2136,12 @@ class HfaceBackend(BaseBackend):
                             break
 
             try:
-                self.sock.shutdown(0)
+                sock.shutdown(0)
             except (OSError, AttributeError):
                 pass
 
             try:
-                self.sock.close()
+                sock.close()
             except OSError:
                 pass
 

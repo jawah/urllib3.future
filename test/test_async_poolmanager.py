@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from urllib3 import AsyncPoolManager, AsyncProxyManager
+from urllib3 import AsyncPoolManager, AsyncProxyManager, HttpVersion
 from urllib3._async.connectionpool import AsyncHTTPConnectionPool
 from urllib3._async.response import AsyncHTTPResponse
 from urllib3.backend import ResponsePromise
@@ -18,6 +18,68 @@ from urllib3.util.retry import Retry
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://@", None])
+async def test_nohost(url: str | None) -> None:
+    from urllib3.exceptions import LocationValueError
+
+    async with AsyncPoolManager() as manager:
+        with pytest.raises(LocationValueError, match="No host specified"):
+            await manager.connection_from_url(url)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["ws", "wss"])
+@pytest.mark.parametrize("disabled_svn", [(), (HttpVersion.h3,)])
+@pytest.mark.parametrize("override", [False, True])
+@pytest.mark.parametrize("http_first", [False, True])
+async def test_extension_protocol_restrictions_are_local(
+    scheme: str,
+    disabled_svn: tuple[HttpVersion, ...],
+    override: bool,
+    http_first: bool,
+) -> None:
+    if (
+        AsyncWebSocketExtensionFromHTTP is None
+        and AsyncFastWebSocketExtensionFromHTTP is None
+    ):
+        pytest.skip("test requires a WebSocket backend")
+    caller_options = set(disabled_svn)
+    manager_options = {HttpVersion.h11} if override else caller_options
+    expected_options = manager_options.copy()
+    pool_kwargs = {"disabled_svn": caller_options} if override else None
+    http_scheme = "https" if scheme == "wss" else "http"
+    url = f"{http_scheme}://example.test/"
+
+    async with AsyncPoolManager(disabled_svn=manager_options) as manager:
+        existing = await manager.connection_from_url(url) if http_first else None
+        websocket = await manager.connection_from_url(
+            f"{scheme}://example.test/", pool_kwargs=pool_kwargs
+        )
+        assert caller_options == set(disabled_svn)
+        assert manager.connection_pool_kw["disabled_svn"] == expected_options
+        assert websocket.conn_kw["disabled_svn"] == set(disabled_svn) | {
+            HttpVersion.h2,
+            HttpVersion.h3,
+        }
+        normal = await manager.connection_from_url(url)
+        assert normal is not websocket
+        assert normal.conn_kw["disabled_svn"] == expected_options
+        if existing is not None:
+            assert normal is existing
+            assert existing.conn_kw["disabled_svn"] == expected_options
+        assert await manager.connection_from_url(url) is normal
+        assert (
+            await manager.connection_from_url(
+                f"{scheme}://example.test/", pool_kwargs=pool_kwargs
+            )
+            is websocket
+        )
+        other = await manager.connection_from_url(f"{http_scheme}://other.test/")
+        assert other.conn_kw["disabled_svn"] == expected_options
+        assert manager.pools.rsize() == 3
 
 
 @pytest.mark.asyncio

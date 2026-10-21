@@ -1096,19 +1096,14 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         message = "Remote end closed connection without response"
                         raise ProtocolError(message) from ConnectionResetError(message)
 
+                    if event.is_tls_error:
+                        raise SSLError(event.message)
                     if (
                         event.error_code == 400
                         and event.message
                         and "header" in event.message
                     ):
                         raise InvalidHeader(event.message)
-                    # QUIC operate TLS verification outside native capabilities
-                    # We have to forward the error so that users aren't caught off guard when the connection
-                    # unexpectedly close.
-                    elif event.error_code == 298 and self._svn == HttpVersion.h3:
-                        raise SSLError(
-                            "TLS over QUIC did not succeed (Error 298). Chain certificate verification failed."
-                        )
 
                     # we shall convert the ProtocolError to IncompleteRead
                     # so that users aren't caught off guard.
@@ -1504,8 +1499,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
     async def __abort_st(self, __stream_id: int) -> None:
         """Kill a stream properly."""
-        assert self._protocol is not None
-        assert self.sock is not None
+        self._pending_responses.pop(__stream_id, None)
+        if self._protocol is None or self.sock is None:
+            return
 
         self._protocol.submit_stream_reset(stream_id=__stream_id)
 
@@ -1516,11 +1512,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 break
 
             await self.sock.sendall(data_out)
-
-        try:
-            del self._pending_responses[__stream_id]
-        except KeyError:
-            pass  # Hmm... this should be impossible.
 
         # remote can refuse future inquiries, so no need to go further with this conn.
         if self._protocol.has_expired():

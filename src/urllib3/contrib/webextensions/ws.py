@@ -86,12 +86,12 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
         try:
             self._protocol.receive_data(fake_http_response)
         except WebSocketProtocolError as e:
-            raise ProtocolError from e  # Defensive: should never happen
+            raise ProtocolError from e
 
         event = next(self._protocol.events())
 
         if not isinstance(event, AcceptConnection):
-            raise RuntimeError(
+            raise RuntimeError(  # Defensive: a validated wsproto handshake must emit AcceptConnection.
                 "The WebSocket state-machine did not pass the handshake phase when expected."
             )
 
@@ -112,8 +112,10 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                     host="example.com", target="/", extensions=(PerMessageDeflate(),)
                 )
             )
-        except WebSocketProtocolError as e:
-            raise ProtocolError from e  # Defensive: should never happen
+        except (
+            WebSocketProtocolError
+        ) as e:  # Defensive: fixed opening request on a fresh wsproto connection.
+            raise ProtocolError from e
 
         raw_headers = raw_data_to_socket.split(b"\r\n")[2:-2]
         request_headers: dict[str, str] = {}
@@ -238,7 +240,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                                     data_to_send: bytes = self._protocol.send(
                                         event.response()
                                     )
-                                except WebSocketProtocolError as e:
+                                except WebSocketProtocolError as e:  # Defensive: PONG is generated from a validated PING before closing.
                                     self.close()
                                     raise ProtocolError from e
 
@@ -276,7 +278,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                             self._protocol.receive_data(
                                 None if not data and eot else data
                             )
-                        except WebSocketProtocolError as e:
+                        except WebSocketProtocolError as e:  # Defensive: wsproto receive_data only rejects an already-closed local state.
                             self.close()
                             raise ProtocolError from e
 
@@ -303,7 +305,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
                                         data_to_send = self._protocol.send(
                                             event.response()
                                         )
-                                    except WebSocketProtocolError as e:
+                                    except WebSocketProtocolError as e:  # Defensive: PONG is generated from a validated PING before closing.
                                         self.close()
                                         raise ProtocolError from e
                                     with self._write_error_catcher():
@@ -402,7 +404,9 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
             if self._remote_shutdown is False:
                 try:
                     data_to_send: bytes = self._protocol.send(Ping())
-                except WebSocketProtocolError as e:
+                except (
+                    WebSocketProtocolError
+                ) as e:  # Defensive: empty PING on an owned, open wsproto connection.
                     self.close()
                     raise ProtocolError from e
 

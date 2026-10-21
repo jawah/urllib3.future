@@ -102,7 +102,7 @@ sandbox and preopen its host directory:
 
 .. code-block:: python
 
-    with urllib3.PoolManager(ca_certs="root-ca.pem") as pool:
+    with urllib3.PoolManager(ca_certs="certificates/root-ca.pem") as pool:
         response = pool.request("GET", "https://service.internal/")
 
 .. code-block:: bash
@@ -130,9 +130,10 @@ WASI socket facades support more than basic GET requests:
 * HTTP, HTTPS, and SOCKS5 proxies. HTTPS destinations through an HTTPS proxy use
   TLS-in-TLS and require ``rtls``. Install the ``socks`` extra for SOCKS proxy
   support.
-* Custom DNS resolvers, including the system resolver, DNS over UDP, DNS over
-  TLS (DoT), and DNS over HTTPS (DoH). Resolver configuration is identical to
-  native urllib3 usage. Encrypted DNS transports require ``rtls``.
+* Host-provided system name lookup, in-memory resolution, DNS over TLS (DoT),
+  and DNS over HTTPS (DoH). Encrypted DNS transports require ``rtls``.
+  Native Preview 2 and Preview 3 socket adapters support TCP only, so they
+  cannot use DNS over UDP or DNS over QUIC.
 * WebSocket connections and Server-Sent Events (SSE). Install the ``ws`` extra
   when using WebSockets.
 * Request streaming, byte and file-like request bodies, response streaming,
@@ -150,6 +151,54 @@ dependencies before componentizing it:
 Optional dependencies must be available when the component is built. Rebuild
 the ``.wasm`` file after adding an extra or changing resolver and protocol
 dependencies.
+
+.. _wasi-capabilities:
+
+Socket capabilities
+~~~~~~~~~~~~~~~~~~~
+
+The native adapters implement a subset of Python's socket API. Host-provided
+DNS lookup does not imply that the guest can open a UDP socket.
+
+.. list-table::
+    :header-rows: 1
+
+    * - Capability
+      - Preview 1 fallback
+      - Native Preview 2
+      - Native Preview 3
+    * - urllib3 API
+      - Synchronous
+      - Synchronous
+      - Asynchronous
+    * - Socket transport
+      - Depends on the host's legacy adapter
+      - TCP
+      - TCP
+    * - HTTP/1.1 and HTTP/2
+      - Supported with suitable host networking
+      - Supported
+      - Supported
+    * - HTTP/3
+      - Disabled on WASI
+      - Disabled on WASI
+      - Disabled on WASI
+    * - HTTPS and encrypted DNS over TCP
+      - Requires a WASI-compatible TLS backend
+      - Requires ``rtls``
+      - Requires ``rtls``
+    * - Local source-address binding
+      - Host-dependent
+      - Not implemented
+      - Not implemented
+    * - Socket connect/read deadlines
+      - Host-dependent
+      - Timeout values are stored but do not bound blocking host I/O
+      - Not enforced with componentize-py 0.25.0
+
+Use a host-level execution deadline when an operation must be bounded. Setting
+``timeout=...`` on a request does not make the native socket adapters' blocking
+or uncancellable host operations interruptible.
 
 WIT, Sync, and Async
 --------------------
@@ -292,6 +341,8 @@ Known Caveats
 * Async operation cancellation is not yet supported by componentize-py 0.25.0.
   Consequently, urllib3 read and connect timeouts are not enforced by the
   native Preview 3 socket facade.
+* Native Preview 2 sockets also store timeout values without enforcing them
+  around blocking host calls. See :ref:`wasi-capabilities`.
 * Lazy imports and runtime plugin discovery require explicit module-level
   imports, as described above.
 * Network access, DNS, and filesystem paths are denied unless the host grants
@@ -299,8 +350,9 @@ Known Caveats
 * HTTPS requires a WASI-compatible TLS backend. Install the ``rtls`` extra and
   rebuild the component; plain HTTP remains available without it. The rtls
   WASI extension currently requires CPython.
-* HTTP/1.1 and HTTP/2 are supported. HTTP/3 requires a WASI-compatible ``qh3``
-  build and is not included in this getting-started setup.
+* HTTP/1.1 and HTTP/2 are supported. HTTP/3 is explicitly disabled on WASI;
+  installing ``qh3`` alone does not enable it. Native adapters also reject UDP
+  sockets, including those required by DNS over UDP and DNS over QUIC.
 * Preview 2 and Preview 3 socket resources cannot be passed to one another.
   Use the matching urllib3 API and WIT world, or deliberately compose both sets
   of imports in a custom world.

@@ -1,322 +1,131 @@
-v2.0 Migration Guide
-====================
+Migrating to urllib3.future
+===========================
 
-**urllib3 v2.0 is now available!** Read below for how to get started and what is contained in the new major release.
+urllib3.future preserves the public synchronous urllib3 APIs used by many
+applications while adding async APIs, HTTP/2 and HTTP/3, custom DNS resolvers,
+and web extensions. This page describes migration to the fork. Upstream
+urllib3's historical 2.0 release and deprecation schedule are separate from
+this project's releases.
 
-**🚀 Migrating from 1.x to 2.0**
---------------------------------
+Choose the installation mode
+----------------------------
 
-We're maintaining **functional API compatibility for most users** to make the
-migration an easy choice for almost everyone. Most changes are either to default
-configurations, supported Python versions, or internal implementation details.
-So unless you're in a specific situation you should notice no changes! 🎉
+The distribution name is ``urllib3-future``. Its default wheel provides the
+``urllib3`` import namespace, so existing callers use the fork without changing
+their imports:
 
-.. note::
+.. code-block:: bash
 
-  If you have difficulty migrating to v2.0 or following this guide
-  you can `open an issue on GitHub <https://github.com/jawah/urllib3.future/issues>`_.
-
-
-What are the important changes?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Here's a short summary of which changes in urllib3 v2.0 are most important:
-
-- Python version must be **3.7 or later** (previously supported Python 2.7, 3.5, and 3.6).
-- Removed support for Python implementations that aren't CPython or PyPy3 (previously supported Google App Engine, Jython).
-- Removed the ``urllib3.contrib.ntlmpool`` module.
-- Deprecated the ``urllib3.contrib.pyopenssl`` module, made inoperant in v2.1.0.
-- Deprecated the ``urllib3.contrib.securetransport`` module, is removed in v2.1.0.
-- Deprecated the ``urllib3[secure]`` extra, made inoperant in v2.1.0.
-- Deprecated the ``HTTPResponse.getheaders()`` method in favor of ``HTTPResponse.headers``, will be removed in v2.1.0.
-- Deprecated the ``HTTPResponse.getheader(name, default)`` method in favor of ``HTTPResponse.headers.get(name, default)``, will be removed in v2.1.0.
-- Deprecated URLs without a scheme (ie 'https://') and will be raising an error in a future version of urllib3.
-- Changed the default minimum TLS version to TLS 1.2 (previously was TLS 1.0).
-- Removed support for verifying certificate hostnames via ``commonName``, now only ``subjectAltName`` is used.
-- Removed the default set of TLS ciphers, instead now urllib3 uses the list of ciphers recommended by Mozilla.
-
-For a full list of changes you can look at `the changelog <https://github.com/jawah/urllib3.future/blob/main/CHANGES.rst>`_.
-
-
-Migrating as a package maintainer?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If you're a maintainer of a package that uses urllib3 under the hood then this section is for you.
-You may have already seen an issue opened from someone on our team about the upcoming release.
-
-The primary goal for migrating to urllib3 v2.x should be to ensure your package supports **both urllib3 v1.26.x and v2.0 for some time**.
-This is to reduce the chance that diamond dependencies are introduced into your users' dependencies which will then cause issues
-with them upgrading to the latest version of **your package**.
-
-The first step to supporting urllib3 v2.0 is to make sure the version v2.x not being excluded by ``install_requires``. You should
-ensure your package allows for both urllib3 1.26.x and 2.0 to be used:
+    python -m pip install --upgrade urllib3-future
 
 .. code-block:: python
 
-  # setup.py (setuptools)
-  setup(
-    ...
-    install_requires=["urllib3.future>=2,<3"]
-  )
+    import urllib3
 
-  # pyproject.toml (hatch)
-  [project]
-  dependencies = [
-    "urllib3.future>=2,<3"
-  ]
+    print(urllib3.__version__)
+    print(urllib3.__file__)
 
-Next you should try installing urllib3.future locally and run your test suite.
+This is an environment-wide replacement. If upstream urllib3 must remain in
+use by other dependencies, follow :doc:`cohabitation` to install an isolated
+wheel or build an isolated source distribution. In that mode, application code
+selects the fork with ``import urllib3_future``. A runtime environment variable
+does not convert an already-installed default wheel into an isolated one.
 
-.. code-block:: bash
+The two distributions are not interchangeable dependency names to Python's
+package resolver. Check the resolved environment and run your application's
+tests, including integrations that exchange response, exception, retry, or
+timeout objects between libraries.
 
-  $ python -m pip install -U urllib3.future
-
-
-Because there are many ``DeprecationWarnings`` you should ensure that you're
-able to see those warnings when running your test suite. To do so you can add
-the following to your test setup to ensure even ``DeprecationWarnings`` are
-output to the terminal:
-
-.. code-block:: bash
-
-  # Set PYTHONWARNING=default to show all warnings.
-  $ export PYTHONWARNINGS="default"
-
-  # Run your test suite and look for failures.
-  # Pytest automatically prints all warnings.
-  $ pytest tests/
-
-or you can opt-in within your Python code:
-
-.. code-block:: python
-
-  # You can change warning filters according to the filter rules:
-  # https://docs.python.org/3/library/warnings.html#warning-filter
-  import warnings
-  warnings.filterwarnings("default", category=DeprecationWarning)
-
-Any failures or deprecation warnings you receive should be fixed as urllib3 v2.1.0 will remove all
-deprecated features. Many deprecation warnings will make suggestions about what to do to avoid the deprecated feature.
-
-Warnings will look something like this:
-
-.. code-block:: bash
-
-  DeprecationWarning: 'ssl_version' option is deprecated and will be removed
-  in urllib3 v2.1.0. Instead use 'ssl_minimum_version'
-
-Continue removing deprecation warnings until there are no more. After this you can publish a new release of your package
-that supports both urllib3 v1.26.x and v2.x.
-
-.. note::
-
-  If you're not able to support urllib3.future with your package please
-  `open an issue on GitHub <https://github.com/jawah/urllib3.future/issues>`_.
-
-
-Migrating as an application developer?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If you're someone who writes Python but doesn't ship as a package (things like web services, data science, tools, and more) this section is for you.
-
-Python environments only allow for one version of a dependency to be installed per environment which means
-that **all of your dependencies using urllib3 need to support v2.0 for you to upgrade**.
-
-The best way to visualize relationships between your dependencies is using `pipdeptree <https://pypi.org/project/pipdeptree>`_ and ``$ pipdeptree --reverse``:
-
-.. code-block:: bash
-
-  # From inside your Python environment:
-  $ python -m pip install pipdeptree
-  # We only care about packages requiring urllib3
-  $ pipdeptree --reverse | grep "requires: urllib3"
-
-  - botocore==1.29.8 [requires: urllib3>=1.25.4,<2]
-  - requests==2.28.1 [requires: urllib3>=1.21.1,<2]
-
-Reading the output from above, there are two packages which depend on urllib3: ``botocore`` and ``requests``.
-The versions of these two packages both require urllib3 that is less than v2.0 (ie ``<2``).
-
-Because both of these packages require urllib3 before v2.0 the new version of urllib3 can't be installed
-by default. There are ways to force installing the newer version of urllib3 v2.0 (ie pinning to ``urllib3==2.0.0``)
-which you can do to test your application.
-
-It's important to know that even if you don't upgrade all of your services to 2.x
-immediately you will `receive security fixes on the 1.26.x release stream <#security-fixes-for-urllib3-v1-26-x>` for some time.
-
-
-**🤔 Common upgrading issues**
--------------------------------
-
-docker.errors.dockerexception: error while fetching server api version: request() got an unexpected keyword argument 'chunked'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Upgrade to ``docker==6.1.0`` that is compatible with urllib3(-future) 2+
-
-ImportError: cannot import name 'gaecontrib' from 'requests_toolbelt._compat'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-To be compatible with urllib3 2.0, Requests Toolbelt released version 1.0.0 without Google App
-Engine Standard Python 2.7 support. Most users that reported this issue were using the `Pyrebase
-<https://github.com/thisbejim/Pyrebase>`_ library that provides an API for the Firebase API. This
-library is unmaintained, but `replacements exist
-<https://github.com/thisbejim/Pyrebase/issues/435>`_.
-
-AttributeError: module 'urllib3.connectionpool' has no attribute 'VerifiedHTTPSConnection'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The ``VerifiedHTTPSConnection`` class has always been documented to be in the
-:mod:`~urllib3.connection` module. It used to be possible to import it from
-:mod:`~urllib3.connectionpool` but that was acccidental and is no longer possible due to a
-refactoring in urllib3 2.0.
-
-Note that the new name of this class is :class:`~urllib3.connection.HTTPSConnection`. It can be used
-starting from urllib3 1.25.9.
-
-AttributeError: 'HTTPResponse' object has no attribute 'strict'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The ``strict`` parameter is unneeded with Python 3 and should be removed.
-
-Pinning urllib3<2
-~~~~~~~~~~~~~~~~~
-
-If the advice from the above sections did not help, you can pin urllib3 to 1.26.x by installing
-``urllib3<2``. Please do **not** specify ``urllib3==1.26.15`` to make sure you continue getting
-1.26.x updates!
-
-While urllib3 1.26.x is still supported, it won't get new features or bug fixes, just security
-updates. Consider opening a tracking issue to unpin urllib3 in the future to not stay on 1.26.x
-indefinitely.  For more details on the recommended way to handle your dependencies in general, see
-`Semantic Versioning Will Not Save You <https://hynek.me/articles/semver-will-not-save-you/>`_. The
-second half even uses urllib3 2.0 as an example!
-
-
-**💪 User-friendly features**
+Application changes to review
 -----------------------------
 
-urllib3 has always billed itself as a **user-friendly HTTP client library**.
-In the spirit of being even more user-friendly we've added two features
-which should make using urllib3 for tinkering sessions, throw-away scripts,
-and smaller projects a breeze!
+* Reuse a manager for related requests. Pools are selected by origin and
+  connection policy; see :ref:`pool-behavior` for the fork's defaults and limits.
+* Finish reading or explicitly close streamed responses. ``release_conn()``
+  alone does not discard an unread body. See :ref:`response-lifecycle` for
+  HTTP/1.1 versus multiplexed-stream cleanup and the 2.25.903 shutdown behavior.
+* HTTP/2 and HTTP/3 can be negotiated automatically. Inspect ``response.version``
+  rather than assuming HTTP/1.1; use :ref:`protocol-selection` when restricting
+  protocols is necessary.
+* ``multiplexed=True`` can return a ``ResponsePromise`` or an immediate response
+  when HTTP/1.1 is used. See :ref:`multiplexed-responses`.
+* Synchronous ``read(-1)`` reads the remaining body. Async negative-size reads
+  retain incremental behavior. See :ref:`response-read-semantics`.
+* Async applications use ``AsyncPoolManager`` and await I/O methods, while
+  ``stream()`` is consumed with ``async for``. See :doc:`async`.
 
-urllib3.request()
-~~~~~~~~~~~~~~~~~
+Compatibility concerns from urllib3 1.x
+---------------------------------------
 
-Previously the highest-level API available for urllib3 was a ``PoolManager``,
-but for many cases configuring a poolmanager is extra steps for no benefit.
-To make using urllib3 as simple as possible we've added a top-level function
-for sending requests from a global poolmanager instance:
+The fork supports CPython and PyPy versions compatible with Python 3.7 or later,
+subject to platform and optional-dependency support. Python 2 is not supported.
+Review the :doc:`changelog` for changes between the versions you deploy.
 
-.. code-block:: python
+The old ``urllib3.contrib.ntlmpool``, ``urllib3.contrib.pyopenssl``, and
+``urllib3.contrib.securetransport`` integrations are not available. See
+:ref:`tls-backends` for the supported TLS backends.
 
-  >>> import urllib3
-  >>> resp = urllib3.request("GET", "https://example.com")
-  >>> resp.status
-  200
+``HTTPResponse.getheaders()`` and ``getheader()`` remain as compatibility
+methods in current releases. Prefer ``response.headers`` and
+``response.headers.get(...)``. Older copies of this guide incorrectly promised
+that all deprecated APIs would disappear in version 2.1.0. Historical version
+numbers in inherited deprecation notices do not establish this fork's removal
+schedule; consult its current release notes.
 
-JSON support for requests and responses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TLS verification is enabled by default, with TLS 1.2 as the default minimum.
+Default hostname verification uses subject alternative names. Review custom
+SSL contexts, legacy TLS endpoints, and the selected backend's capabilities
+when migrating an application that overrides these defaults.
 
-JSON is everywhere – and now it's in urllib3, too!
+The fork does not inherit its protocol backend from ``http.client``. Public
+compatibility does not guarantee that private response fields, socket objects,
+or protocol internals have the same types or behavior as upstream urllib3.
+Prefer public response methods and documented extension APIs.
 
-If you'd like to send JSON in a request body or deserialize a response body
-from JSON into Python objects you can now use the new ``json=`` parameter
-for requests and ``HTTPResponse.json()`` method on responses:
+Package maintainers
+-------------------
 
-.. code-block:: python
+If your package specifically requires the fork, declare that dependency under
+its distribution name. For example, in ``pyproject.toml``:
 
-  import urllib3
+.. code-block:: toml
 
-  # Send a request with a JSON body.
-  # This adds 'Content-Type: application/json' by default.
-  resp = urllib3.request(
-      "POST", "https://example.api.com",
-      json={"key": "value"}
-  )
+    [project]
+    name = "my-http-application"
+    version = "0.1.0"
+    dependencies = ["urllib3-future>=2.25.903,<3"]
 
-  # Receive a JSON body in the response.
-  resp = urllib3.request("GET", "https://xkcd.com/2347/info.0.json")
+This example chooses the default replacement installation. Projects that need
+cohabitation should follow that guide's source-build or isolation-wheel recipes.
+Test supported upstream and fork configurations in separate environments if your
+package supports both implementations.
 
-  # There's always an XKCD...
-  resp.json()
-  {
-    "num": 2347,
-    "img": "https://imgs.xkcd.com/comics/dependency.png",
-    "title": "Dependency",
-    ...
-  }
+Enable deprecation warnings when testing:
 
+.. code-block:: bash
 
-**✨ Optimized for Python 3.7+**
---------------------------------
+    PYTHONWARNINGS=default python -m pytest tests/
 
-In v2.0 we'll be specifically targeting
-CPython 3.7+ and PyPy 7.0+ (compatible with CPython 3.7)
-and dropping support for Python versions 2.7, 3.5, and 3.6.
+Report incompatibilities with a minimal reproducer and the installed versions
+of Python, urllib3-future, the calling library, and any optional TLS or proxy
+backend. Issues can be opened on `GitHub
+<https://github.com/jawah/urllib3.future/issues>`_.
 
-By dropping end-of-life Python versions we're able to optimize
-the codebase for Python 3.7+ by using new features to improve
-performance and reduce the amount of code that needs to be executed
-in order to support legacy versions.
-
-
-**📜 Type-hinted APIs**
+Older dependency errors
 -----------------------
 
-You're finally able to run Mypy or other type-checkers
-on code using urllib3. This also means that for IDEs
-that support type hints you'll receive better suggestions
-from auto-complete. No more confusion with ``**kwargs``!
+* Docker SDK errors about an unexpected ``chunked`` argument were addressed in
+  Docker SDK 6.1.0. Upgrade older SDK versions and check their current compatibility
+  requirements.
+* Requests Toolbelt 1.0.0 removed its obsolete Google App Engine integration.
+  An import error involving ``gaecontrib`` can require updating the calling
+  package as well as Requests Toolbelt.
+* Replace imports of ``VerifiedHTTPSConnection`` with the public
+  ``urllib3.connection.HTTPSConnection`` class.
+* Remove the obsolete ``strict`` parameter and private ``HTTPResponse.strict``
+  accesses from Python 3 integrations.
 
-.. note::
-
-  If you're one of the rare few who is subclassing connections
-  or responses you should take a closer look at detailed changes
-  in `the changelog <https://github.com/jawah/urllib3.future/blob/main/CHANGES.rst>`_.
-
-
-**🔐 Modern security by default**
----------------------------------
-
-HTTPS requires TLS 1.2+
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Greater than 95% of websites support TLS 1.2 or above.
-At this point we're comfortable switching the default
-minimum TLS version to be 1.2 to ensure high security
-for users without breaking services.
-
-Dropping TLS 1.0 and 1.1 by default means you
-won't be vulnerable to TLS downgrade attacks
-if a vulnerability in TLS 1.0 or 1.1 were discovered in
-the future. Extra security for free! By dropping TLS 1.0
-and TLS 1.1 we also tighten the list of ciphers we need
-to support to ensure high security for data traveling
-over the wire.
-
-If you still need to use TLS 1.0 or 1.1 in your application
-you can still upgrade to v2.0, you'll only need to set
-``ssl_minimum_version`` to the proper value to continue using
-legacy TLS versions.
-
-
-Stop verifying commonName in certificates
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Dropping support the long deprecated ``commonName``
-field on certificates in favor of only verifying
-``subjectAltName`` to put us in line with browsers and
-other HTTP client libraries and to improve security for our users.
-
-
-Certificate verification via SSLContext
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-By default certificate verification is handled by urllib3
-to support legacy Python versions, but now we can
-rely on Python's certificate verification instead! This
-should result in a speedup for verifying certificates
-and means that any improvements made to certificate
-verification in Python or OpenSSL will be immediately
-available.
+For the history and support policy of upstream urllib3 releases, consult the
+`upstream migration guide
+<https://urllib3.readthedocs.io/en/stable/v2-migration-guide.html>`_. This fork's
+features and fixes are tracked in its own :doc:`changelog`.

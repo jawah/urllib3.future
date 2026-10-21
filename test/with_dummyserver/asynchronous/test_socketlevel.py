@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+import contextlib
 import ssl
 import typing
 
@@ -11,6 +12,8 @@ from jh2.connection import H2Connection  # type: ignore[import-untyped]
 from jh2.events import RequestReceived  # type: ignore[import-untyped]
 from urllib3 import HttpVersion, ResponsePromise, AsyncProxyManager
 from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool, AsyncPoolManager
+from urllib3._async.connection import AsyncHTTPConnection
+from urllib3.contrib.ssa import AsyncSocket
 from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
 from urllib3.contrib.webextensions._async.sse import (
     AsyncServerSideEventExtensionFromHTTP,
@@ -22,10 +25,12 @@ from urllib3.exceptions import (
     InvalidHeader,
     ProtocolError,
     ReadTimeoutError,
+    SSLError,
 )
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from test.conftest import ServerConfig
 from threading import Event
 import socket
 
@@ -289,6 +294,279 @@ class TestServerSentEvents(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestSocketClosing(SocketDummyServerTestCase):
+    async def test_close_before_response_headers_releases_socket(self) -> None:
+        from urllib3.exceptions import HTTPError
+
+        request_received, peer_closed = Event(), Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    headers.extend(chunk)
+                request_received.set()
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        loop = asyncio.get_running_loop()
+        async with AsyncPoolManager(timeout=5, retries=False) as manager:
+            request = asyncio.create_task(
+                manager.request("GET", f"http://{self.host}:{self.port}/")
+            )
+            try:
+                assert await loop.run_in_executor(None, request_received.wait, 5)
+                await manager.clear()
+                with pytest.raises((HTTPError, asyncio.CancelledError)):
+                    await asyncio.wait_for(request, 5)
+                assert await loop.run_in_executor(None, peer_closed.wait, 5)
+                assert manager.pools.rsize() == 0
+            finally:
+                request.cancel()
+                await asyncio.gather(request, return_exceptions=True)
+
+    async def test_manager_clear_reaches_busy_child_pool(self) -> None:
+        finish_body, first_closed, second_closed = Event(), Event(), Event()
+
+        def read_request(sock: socket.socket) -> None:
+            sock.settimeout(5)
+            headers = bytearray()
+            while not headers.endswith(b"\r\n\r\n"):
+                chunk = sock.recv(65536)
+                assert chunk
+                headers.extend(chunk)
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as first:
+                read_request(first)
+                first.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\naa")
+                with listener.accept()[0] as second:
+                    read_request(second)
+                    second.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nb")
+                    try:
+                        assert first.recv(1) == b""
+                    except ConnectionResetError:
+                        pass
+                    first_closed.set()
+                    assert finish_body.wait(5)
+                    try:
+                        second.sendall(b"b")
+                        assert second.recv(1) == b""
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass
+                    second_closed.set()
+
+        self._start_server(handler)
+        connections: list[AsyncHTTPConnection] = []
+        loop = asyncio.get_running_loop()
+        try:
+            async with AsyncPoolManager(timeout=5, retries=False) as manager:
+                url = f"http://{self.host}:{self.port}/"
+                first = await manager.request("GET", url, preload_content=False)
+                assert isinstance(first.connection, AsyncHTTPConnection)
+                connections.append(first.connection)
+                second = await manager.request("GET", url, preload_content=False)
+                assert isinstance(second.connection, AsyncHTTPConnection)
+                connections.append(second.connection)
+                assert connections[0] is not connections[1]
+                first_sock, second_sock = [conn.sock for conn in connections]
+                assert first_sock is not None and second_sock is not None
+                police = second._police_officer
+                assert police is not None
+                assert await first.read() == b"aa"
+                assert first_sock.fileno() >= 0
+                await manager.clear()
+                assert police._shutdown
+                assert first_sock.fileno() == -1
+                assert await loop.run_in_executor(None, first_closed.wait, 5)
+                assert second_sock.fileno() >= 0
+                finish_body.set()
+                assert await second.read() == b"bb"
+                assert second_sock.fileno() == -1
+                assert await loop.run_in_executor(None, second_closed.wait, 5)
+                assert not police._shutdown
+        finally:
+            finish_body.set()
+            for conn in connections:
+                await conn.close()
+
+    async def test_manager_clear_during_request_cleans_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3 import AsyncHTTPResponse
+
+        reading_body, finish_body, peer_closed = Event(), Event(), Event()
+        raw_read = AsyncHTTPResponse._raw_read
+
+        async def read_body(
+            response: AsyncHTTPResponse, *args: typing.Any, **kwargs: typing.Any
+        ) -> bytes:
+            # Signal once the response exists and the client starts reading its body.
+            reading_body.set()
+            return await raw_read(response, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncHTTPResponse, "_raw_read", read_body)
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    headers.extend(chunk)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\no")
+                assert finish_body.wait(5)
+                try:
+                    sock.sendall(b"k")
+                    assert sock.recv(1) == b""
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                peer_closed.set()
+
+        self._start_server(handler)
+        loop = asyncio.get_running_loop()
+        async with AsyncPoolManager(timeout=5, retries=False) as manager:
+            future = asyncio.create_task(
+                manager.request("GET", f"http://{self.host}:{self.port}/")
+            )
+            try:
+                assert await loop.run_in_executor(None, reading_body.wait, 5)
+                police = next(iter(manager.pools._registry.values())).pool
+                assert police is not None
+                await manager.clear()
+                finish_body.set()
+                response = await asyncio.wait_for(future, 5)
+                assert await response.data == b"ok"
+                assert await loop.run_in_executor(None, peer_closed.wait, 5)
+                assert police.rsize() == 0
+                assert manager.pools.rsize() == 0
+            finally:
+                finish_body.set()
+                if not future.done():
+                    future.cancel()
+                await asyncio.gather(future, return_exceptions=True)
+
+    @pytest.mark.parametrize(
+        "owner_kind", ["pool", "manager", "direct-child", "adapter"]
+    )
+    @pytest.mark.parametrize("close_owner", [False, True])
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_streamed_response_outlives_owner(
+        self, owner_kind: str, close_owner: bool, stream: bool
+    ) -> None:
+        finish_body, peer_closed = Event(), Event()
+        body = b"first" + b"x" * 1024
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                for index in range(1 if close_owner else 2):
+                    headers = bytearray()
+                    while not headers.endswith(b"\r\n\r\n"):
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            return
+                        headers.extend(chunk)
+                    sock.sendall(
+                        f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+                        + body[:5]
+                    )
+                    if index == 0:
+                        assert finish_body.wait(5)
+                    sock.sendall(body[5:])
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        owner = (
+            AsyncPoolManager(timeout=5, retries=False)
+            if owner_kind != "pool"
+            else AsyncHTTPConnectionPool(self.host, self.port, timeout=5, retries=False)
+        )
+        url = f"http://{self.host}:{self.port}/" if owner_kind != "pool" else "/"
+        conn = None
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                await stack.enter_async_context(owner)
+                requester = owner
+                if owner_kind in ("direct-child", "adapter"):
+                    assert isinstance(owner, AsyncPoolManager)
+                    # Requests gets a child pool directly instead of calling manager.urlopen().
+                    requester = await owner.connection_from_url(url)
+                    url = "/"
+                response = await requester.request("GET", url, preload_content=False)
+                if owner_kind == "adapter":
+                    assert isinstance(owner, AsyncPoolManager)
+                    assert isinstance(requester, AsyncHTTPConnectionPool)
+                    # Niquests returns the parent checkout before reading the body.
+                    owner.pools.memorize(response, requester)
+                    owner.pools.release()
+                    assert not owner.pools.busy
+                candidate = response.connection
+                assert isinstance(candidate, AsyncHTTPConnection)
+                conn = candidate
+                assert conn.sock is not None
+                http_pool = response._pool
+                assert http_pool is not None
+                watcher = http_pool._background_monitoring
+                assert watcher is not None
+                # Keep strong references: GC must not close this socket.
+                sock = conn.sock
+                if close_owner:
+                    await stack.aclose()
+                    assert http_pool.pool is None
+                    assert watcher.done()
+                assert sock.fileno() >= 0
+                assert await response.read(1) == body[:1]
+                assert sock.fileno() >= 0
+                finish_body.set()
+                remaining = (
+                    b"".join([chunk async for chunk in response.stream(17)])
+                    if stream
+                    else await response.read()
+                )
+                assert remaining == body[1:]
+                if isinstance(owner, AsyncPoolManager):
+                    assert id(response) not in owner.pools._map
+                if close_owner:
+                    assert sock.fileno() == -1
+                    if isinstance(owner, AsyncPoolManager):
+                        assert owner.pools.rsize() == 0
+                else:
+                    assert conn.sock is sock and sock.fileno() >= 0
+                await response.close()
+                if not close_owner:
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, AsyncPoolManager)
+                        requester = await owner.connection_from_url(
+                            f"http://{self.host}:{self.port}/"
+                        )
+                    followup = await requester.request(
+                        "GET", url, preload_content=False
+                    )
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, AsyncPoolManager)
+                        assert isinstance(requester, AsyncHTTPConnectionPool)
+                        owner.pools.memorize(followup, requester)
+                        owner.pools.release()
+                    assert await followup.data == body
+                    assert conn.sock is sock
+            assert await asyncio.get_running_loop().run_in_executor(
+                None, peer_closed.wait, 5
+            ), "Client did not close the retired connection"
+        finally:
+            finish_body.set()
+            if conn is not None:
+                await conn.close()
+
     async def test_idle_tls_close_notify_before_reuse(self) -> None:
         close_first = Event()
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -344,6 +622,95 @@ class TestSocketClosing(SocketDummyServerTestCase):
             async with pool.pool.borrow() as conn:
                 assert conn.sock is not None and conn.sock is not previous
 
+    @pytest.mark.parametrize("peer_event", ["goaway", "invalid-ping"])
+    async def test_idle_http2_event_before_reuse(self, peer_event: str) -> None:
+        send_event = Event()
+        event_sent = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            for index in range(2):
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        h2 = H2Connection(config=H2Configuration(client_side=False))
+                        h2.initiate_connection()
+                        sock.sendall(h2.data_to_send())
+                        responded = False
+                        while not responded:
+                            data = sock.recv(65536)
+                            assert data
+                            for event in h2.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    h2.send_headers(
+                                        event.stream_id,
+                                        [
+                                            (b":status", b"200"),
+                                            (b"content-length", b"2"),
+                                        ],
+                                    )
+                                    h2.send_data(
+                                        event.stream_id, b"ok", end_stream=True
+                                    )
+                                    responded = True
+                            sock.sendall(h2.data_to_send())
+                        if index == 0:
+                            assert send_event.wait(5)
+                            if peer_event == "goaway":
+                                h2.close_connection(last_stream_id=1)
+                                sock.sendall(h2.data_to_send())
+                            else:
+                                # PING requires eight payload bytes; send seven.
+                                sock.sendall(
+                                    b"\x00\x00\x07\x06\x00\x00\x00\x00\x00invalid"
+                                )
+                            event_sent.set()
+                        # Keep TCP open: the client must act on the HTTP/2 event.
+                        try:
+                            while sock.recv(65536):
+                                pass
+                        except ConnectionResetError:
+                            pass
+                        except ssl.SSLError as error:
+                            # Older Python can expose ragged EOF as a generic SSLError.
+                            if (
+                                not isinstance(error, ssl.SSLEOFError)
+                                and "unexpected eof" not in str(error).lower()
+                            ):
+                                raise
+
+        self._start_server(handler)
+        async with AsyncPoolManager(
+            ssl_backend="ssl",
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h3},
+            background_watch_delay=None,
+            retries=False,
+        ) as manager:
+            url = f"https://{self.host}:{self.port}/"
+            first = await manager.urlopen("GET", url, preload_content=False)
+            conn = first.connection
+            assert first.version == 20 and conn is not None
+            previous = typing.cast(AsyncSocket, conn.sock)
+            assert previous is not None
+            assert await first.read() == b"ok"
+            send_event.set()
+            assert await asyncio.get_running_loop().run_in_executor(
+                None, event_sent.wait, 5
+            )
+            await previous.until_data_available(5)
+            second = await manager.urlopen("GET", url, preload_content=False)
+            assert second.version == 20 and second.connection is not None
+            assert previous.fileno() == -1
+            current = typing.cast(AsyncSocket, second.connection.sock)
+            assert current is not previous
+            assert await second.read() == b"ok"
+
     async def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
         # connection pool gets hung up on by the server, then reaches
@@ -395,6 +762,140 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
     """
 
     @pytest.mark.parametrize(
+        "error_code,error_name",
+        [
+            (0xB, "ENHANCE_YOUR_CALM"),
+            (0x1, "PROTOCOL_ERROR"),
+            (0xFFFF, "UNKNOWN_ERROR"),
+        ],
+    )
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    async def test_http2_goaway_error_message(
+        self, error_code: int, error_name: str, multiplexed: bool
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    received = False
+                    while not received:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                h2.close_connection(
+                                    error_code=error_code,
+                                    last_stream_id=event.stream_id,
+                                )
+                                received = True
+                        sock.sendall(h2.data_to_send())
+                    # Keep TCP open until the client processes the actual GOAWAY.
+                    try:
+                        while sock.recv(65536):
+                            pass
+                    except (ssl.SSLError, ConnectionResetError):
+                        pass
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            with pytest.raises(ProtocolError) as caught:
+                if multiplexed:
+                    promise = await pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(promise, ResponsePromise)
+                    await pool.get_response(promise=promise)
+                else:
+                    await pool.urlopen("GET", "/")
+            message = str(caught.value)
+            assert "HTTP/2" in message
+            assert "GOAWAY" in message
+            assert error_name in message
+            assert hex(error_code) in message
+
+    @pytest.mark.parametrize(
+        "error_code,frame_type,reason,error_name,error_type",
+        [
+            (0x107, None, "too many requests", "H3_EXCESSIVE_LOAD", ProtocolError),
+            (
+                0x200,
+                None,
+                "invalid QPACK data",
+                "QPACK_DECOMPRESSION_FAILED",
+                ProtocolError,
+            ),
+            # The same number belongs to different namespaces on the wire.
+            (0x10A, None, "", "H3_MISSING_SETTINGS", ProtocolError),
+            (
+                0x10A,
+                0x6,
+                "unexpected handshake message",
+                "TLS_UNEXPECTED_MESSAGE",
+                SSLError,
+            ),
+            (0x12A, None, "custom application error", "UNKNOWN_ERROR", ProtocolError),
+            (
+                0x12A,
+                0x6,
+                "peer rejected client certificate",
+                "TLS_BAD_CERTIFICATE",
+                SSLError,
+            ),
+            (0x128, 0x6, "no compatible cipher", "TLS_HANDSHAKE_FAILURE", SSLError),
+            (0x3, 0x8, "flow control exceeded", "FLOW_CONTROL_ERROR", ProtocolError),
+            (0xFFFF, None, "custom application error", "UNKNOWN_ERROR", ProtocolError),
+            (0x1FF, 0x6, "", "UNKNOWN_ERROR", SSLError),
+            # TLS classification must precede the legacy code-400/header heuristic.
+            (0x190, 0x6, "invalid header", "UNKNOWN_ERROR", SSLError),
+        ],
+    )
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    async def test_http3_close_error_message(
+        self,
+        http3_error_server: ServerConfig,
+        error_code: int,
+        frame_type: int | None,
+        reason: str,
+        error_name: str,
+        error_type: type[Exception],
+        multiplexed: bool,
+    ) -> None:
+        async with AsyncHTTPSConnectionPool(
+            http3_error_server.host,
+            http3_error_server.port,
+            ca_certs=http3_error_server.ca_certs,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+            retries=False,
+        ) as pool:
+            with pytest.raises(error_type) as caught:
+                if multiplexed:
+                    promise = await pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(promise, ResponsePromise)
+                    await pool.get_response(promise=promise)
+                else:
+                    await pool.urlopen("GET", "/")
+            message = str(caught.value)
+            assert "HTTP/3" in message
+            assert error_name in message
+            assert hex(error_code) in message
+            if reason:
+                assert reason in message
+
+    @pytest.mark.parametrize(
         "error_code, multiplexed",
         [(0xD, False), (0x8, False), (0x8, True)],
     )
@@ -440,6 +941,65 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
                     await pool.get_response()
                 else:
                     await pool.urlopen("GET", "/")
+
+    @pytest.mark.parametrize("through_manager", [False, True])
+    @pytest.mark.parametrize("by_promise", [False, True])
+    async def test_retired_pool_connection_error_releases_registry(
+        self, through_manager: bool, by_promise: bool
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        terminate = Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    while True:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                assert terminate.wait(5)
+                                h2.close_connection(
+                                    error_code=0x2, last_stream_id=event.stream_id
+                                )
+                                sock.sendall(h2.data_to_send())
+                                return
+                        sock.sendall(h2.data_to_send())
+
+        self._start_server(handler)
+        try:
+            async with AsyncPoolManager(
+                ca_certs=DEFAULT_CA,
+                disabled_svn={HttpVersion.h11, HttpVersion.h3},
+                timeout=5,
+                retries=False,
+            ) as manager:
+                promise = await manager.urlopen(
+                    "GET", f"https://{self.host}:{self.port}/", multiplexed=True
+                )
+                assert isinstance(promise, ResponsePromise)
+                old_pool = next(iter(manager.pools._registry.values()))
+                police = old_pool.pool
+                assert police is not None
+                sock = promise._conn.sock
+                assert sock is not None
+                await manager.clear()
+                terminate.set()
+                reader = manager if through_manager else old_pool
+                with pytest.raises(ProtocolError, match="GOAWAY"):
+                    await reader.get_response(promise=promise if by_promise else None)
+                assert sock.fileno() == -1
+                assert police.rsize() == 0
+                assert manager.pools.rsize() == 0
+        finally:
+            terminate.set()
 
     async def test_http2_rejects_upload_before_body_is_consumed(self) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -667,6 +1227,58 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
                 assert response.extension.closed
         assert manager.pools.rsize() == 0
 
+    @pytest.mark.parametrize("partial", [False, True])
+    @pytest.mark.parametrize("chunked", [False, True])
+    async def test_compressed_response_read_boundaries(
+        self,
+        compressed_payload: tuple[str, bytes, bytes],
+        partial: bool,
+        chunked: bool,
+    ) -> None:
+        encoding, encoded, plain = compressed_payload
+        headers = f"HTTP/1.1 200 OK\r\nContent-Encoding: {encoding}\r\nConnection: close\r\n".encode()
+        if chunked:
+            wire = (
+                headers
+                + b"Transfer-Encoding: chunked\r\n\r\n"
+                + f"{len(encoded):x}\r\n".encode()
+                + encoded
+                + b"\r\n0\r\n\r\n"
+            )
+        else:
+            wire = (
+                headers + f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded
+            )
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(wire)
+
+        self._start_server(handler)
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            from urllib3.backend._async._base import AsyncLowLevelResponse
+
+            assert isinstance(response._fp, AsyncLowLevelResponse)
+            assert response._fp.from_promise is not None
+            assert response.is_from_promise(response._fp.from_promise)
+            prefix = await response.read(64) if partial else b""
+            assert prefix == (plain[:64] if partial else b"")
+            assert await response.read(0) == b""
+            assert await response.read1(0) == b""
+            assert [part async for part in response.stream(0)] == []
+            if chunked:
+                remainder = b"".join([part async for part in response.read_chunked(-1)])
+            else:
+                remainder = await response.read()
+            assert len(prefix + remainder) == len(plain)
+            assert prefix + remainder == plain
+            await response.close()
+
     @pytest.mark.parametrize("decode_content", [False, True])
     async def test_zero_sized_read1_does_not_wait_for_body(
         self, decode_content: bool
@@ -711,6 +1323,34 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             response = await pool.urlopen("GET", "/", preload_content=False)
             assert await response.read1(2**31) == b"body"
             assert await response.read1() == b""
+
+    @pytest.mark.parametrize("decode_content", [False, True])
+    async def test_zero_sized_read_does_not_wait_for_body(
+        self, decode_content: bool
+    ) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        async with AsyncHTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = await pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert await response.read(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert await response.read(cache_content=True) == b"body"
+                assert await response.data == b"body"
+            finally:
+                send_body.set()
+                await response.close()
 
     @pytest.mark.parametrize("chunked", [False, True])
     async def test_small_reads_of_compressed_transport(self, chunked: bool) -> None:

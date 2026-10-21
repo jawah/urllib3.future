@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import errno
 import socket
 import unittest
 import warnings
@@ -25,6 +26,7 @@ from urllib3.util import parse_url
 from urllib3.contrib.wasi._async import socket as wasi_socket
 
 from ..common import (
+    edge_address,
     CLIENT_CERT,
     CLIENT_KEY,
     COMBINED_CA,
@@ -367,3 +369,205 @@ class AsyncWasiTests(unittest.TestCase):
                 finally:
                     sock.close()
                     await sock.wait_for_close()
+
+    async def test_socket_invalid_operations(self) -> None:
+        for family, kind in (
+            (-1, socket.SOCK_STREAM),
+            (socket.AF_INET, socket.SOCK_DGRAM),
+        ):
+            with self.subTest(family=family, kind=kind), self.assertRaises(OSError):
+                wasi_socket.socket(family, kind)  # type: ignore[arg-type]
+        sock: Any = wasi_socket.socket()
+        try:
+            for operation in (sock.getsockname, sock.getpeername):
+                with self.assertRaises(OSError):
+                    operation()
+            with self.assertRaises(OSError):
+                await sock.recv(1)
+            with self.assertRaises(OSError):
+                await sock.send(b"x")
+            for option in (
+                socket.TCP_KEEPIDLE,
+                socket.TCP_KEEPINTVL,
+                socket.TCP_KEEPCNT,
+            ):
+                with self.subTest(option=option), self.assertRaises(OSError):
+                    sock.setsockopt(socket.IPPROTO_TCP, option, 0)
+        finally:
+            sock.close()
+
+    async def test_socket_names_and_service_errors(self) -> None:
+        records = await wasi_socket.getaddrinfo(
+            "localhost", 80, socket.AF_INET, socket.SOCK_STREAM
+        )
+        self.assertIn("127.0.0.1", [r[4][0] for r in records])
+        for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            with self.assertRaises(OSError):
+                await wasi_socket.getaddrinfo(
+                    "127.0.0.1", "urllib3-no-such-service", type=kind
+                )
+        with self.assertRaises(socket.gaierror):
+            await wasi_socket.getaddrinfo("x" * 64 + ".invalid", 80)
+        with self.assertRaises((ValueError, socket.gaierror)):
+            await wasi_socket.getaddrinfo("127.0.0.1", 80, type=-1, proto=17)
+
+    async def test_socket_network_denied(self) -> None:
+        address = edge_address("plain")
+        assert address is not None
+        with self.assertRaises(OSError) as caught:
+            await wasi_socket.create_connection(address)
+        self.assertEqual(caught.exception.errno, errno.EACCES)
+
+    async def test_socket_dns_denied(self) -> None:
+        with self.assertRaises(socket.gaierror) as caught:
+            await wasi_socket.getaddrinfo(
+                "localhost", 80, socket.AF_INET, socket.SOCK_STREAM
+            )
+        self.assertEqual(caught.exception.errno, socket.EAI_FAIL)
+
+    async def test_socket_refused_connection(self) -> None:
+        address = edge_address("refused")
+        assert address is not None
+        with self.assertRaises(ConnectionRefusedError):
+            await wasi_socket.create_connection(address)
+
+    async def test_socket_ipv6_io(self) -> None:
+        address = edge_address("ipv6")
+        if address is None:
+            self.skipTest("IPv6 loopback is unavailable on the host")
+        sock: Any = wasi_socket.socket(socket.AF_INET6)
+        try:
+            await sock.connect(address)
+            self.assertEqual(sock.getpeername()[:2], address)
+            self.assertEqual(sock.getsockname()[0], "::1")
+            await sock.sendall(b"echo\n")
+            data = bytearray()
+            while True:
+                chunk = await sock.recv(16)
+                if not chunk:
+                    break
+                data.extend(chunk)
+            self.assertEqual(bytes(data), b"hello")
+        finally:
+            sock.close()
+
+    async def test_socket_tls_handshake_eof(self) -> None:
+        address = edge_address("handshake-eof")
+        assert address is not None
+        sock = await wasi_socket.create_connection(address)
+        context = ssl.create_default_context(cafile=ROOT_CA)
+        try:
+            with self.assertRaises(ssl.SSLEOFError):
+                await sock.wrap_socket(context, server_hostname="localhost")
+        finally:
+            sock.close()
+            await sock.wait_for_close()
+
+    async def test_socket_tls_metadata(self) -> None:
+        url = parse_url(TLS12_URL)
+        assert url.host is not None and url.port is not None
+        raw: Any = await wasi_socket.create_connection((url.host, url.port))
+        context = ssl.create_default_context(cafile=ROOT_CA)
+        sock = await raw.wrap_socket(context, server_hostname=url.host)
+        try:
+            with sock:
+                self.assertTrue(sock.getpeercert(binary_form=True))
+                self.assertIsNotNone(sock.cipher())
+                self.assertEqual(sock.version(), "TLSv1.2")
+                await sock.wait_for_readiness()
+                request = f"GET /get HTTP/1.1\r\nHost: {url.host}\r\nConnection: close\r\n\r\n".encode()
+                size = await sock.send(request)
+                await sock.sendall(request[size:])
+                await sock.until_data_available()
+                self.assertTrue(sock.read_ready())
+                self.assertEqual(await sock.read_exact(4), b"HTTP")
+                while await sock.recv(4096):
+                    pass
+        finally:
+            sock.close()
+            await sock.wait_for_close()
+        await sock.wait_for_close()
+        self.assertEqual(sock.fileno(), -1)
+
+    async def test_socket_closed_addresses(self) -> None:
+        sock: Any = wasi_socket.socket()
+        sock.close()
+        for operation in (sock.getsockname, sock.getpeername):
+            with self.assertRaises(OSError) as caught:
+                operation()
+            self.assertEqual(caught.exception.errno, errno.EBADF)
+
+    async def test_socket_zero_read_does_not_wait(self) -> None:
+        for name in ("plain", "tls"):
+            with self.subTest(transport=name):
+                address = edge_address(name)
+                assert address is not None
+                sock: Any = await wasi_socket.create_connection(address)
+                try:
+                    if name == "tls":
+                        context = ssl.create_default_context(cafile=ROOT_CA)
+                        sock = await sock.wrap_socket(
+                            context, server_hostname="localhost"
+                        )
+                    await sock.sendall(b"zero-read\n")
+                    self.assertEqual(await sock.recv(0), b"")
+                    await sock.sendall(b"!")
+                    self.assertEqual(await sock.read_exact(5), b"ready")
+                finally:
+                    sock.close()
+                    await sock.wait_for_close()
+
+    async def test_socket_tls_corrupt_record(self) -> None:
+        address = edge_address("tls")
+        assert address is not None
+        raw: Any = await wasi_socket.create_connection(address)
+        context = ssl.create_default_context(cafile=ROOT_CA)
+        sock = await raw.wrap_socket(context, server_hostname="localhost")
+        try:
+            await sock.sendall(b"corrupt\n")
+            with self.assertRaises(ssl.SSLError):
+                await sock.recv(1)
+            with self.assertRaises(ssl.SSLError):
+                await sock.send(b"late")
+        finally:
+            sock.close()
+            try:
+                await sock.wait_for_close()
+            except OSError:
+                # The malformed-record peer may reject the outgoing TLS alert.
+                pass
+        self.assertEqual(sock.fileno(), -1)
+
+    async def test_socket_write_after_peer_reset(self) -> None:
+        address = edge_address("plain")
+        assert address is not None
+        sock = await wasi_socket.create_connection(address)
+        try:
+            await sock.sendall(b"reset\n")
+            # P3 reports completion/error separately from the byte stream's EOF.
+            try:
+                self.assertEqual(await sock.recv(1), b"")
+            except OSError:
+                pass
+            with self.assertRaises(OSError):
+                await sock.sendall(b"late")
+        finally:
+            sock.close()
+            await sock.wait_for_close()
+
+    async def test_socket_tls_partial_close(self) -> None:
+        url = parse_url(HTTPS_URL)
+        assert url.host is not None and url.port is not None
+        raw: Any = await wasi_socket.create_connection((url.host, url.port))
+        context = ssl.create_default_context(cafile=ROOT_CA)
+        context.set_alpn_protocols(["http/1.1"])
+        sock = await raw.wrap_socket(context, server_hostname=url.host)
+        try:
+            request = f"GET /bytes/262144 HTTP/1.1\r\nHost: {url.host}\r\nConnection: close\r\n\r\n".encode()
+            await sock.sendall(request)
+            await sock.until_data_available()
+            self.assertEqual(await sock.recv(1), b"H")
+        finally:
+            sock.close()
+            await sock.wait_for_close()
+        self.assertEqual(sock.fileno(), -1)

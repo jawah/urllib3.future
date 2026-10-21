@@ -30,6 +30,14 @@ else:
     T = typing.TypeVar("T")
 
 
+def _has_response_owner(conn: object, police: object) -> bool:
+    """A formed response or returned promise still owns this connection."""
+    return bool(getattr(conn, "_pending_responses", None)) or any(
+        promise.get_parameter("police_officer") is police
+        for promise in tuple(getattr(conn, "_promises", {}).values())
+    )
+
+
 class TrafficState(int, Enum):
     #: can be used to issue new request
     IDLE = 0
@@ -272,11 +280,6 @@ class TrafficPolice(typing.Generic[T]):
             return len(self._registry)
 
     def _map_clear(self, value: T) -> None:
-        obj_id = id(value)
-
-        if obj_id not in self._registry:
-            return
-
         outdated_keys = list(self._map.keys_for(value))
 
         for key in outdated_keys:
@@ -294,7 +297,9 @@ class TrafficPolice(typing.Generic[T]):
                 conn_or_pool = self._map[kt]
                 obj_id = id(conn_or_pool)
 
-                if obj_id in self._container:
+                if obj_id in self._container or (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                ):
                     # Reserve before unlocking, as we do when handing off to a waiter.
                     cursor_key = get_ident()
                     if cursor_key not in self._cursor:
@@ -339,56 +344,60 @@ class TrafficPolice(typing.Generic[T]):
         )
 
     def kill_cursor(self) -> None:
-        """In case there is no other way, a conn or pool may be unusable and should be destroyed.
-        This make the scheduler forget about it."""
+        """Dispose of the object held by the current thread after a failure."""
         with self._lock:
-            if not self.busy:
-                return
+            active_cursor = self._cursor.get(get_ident())
+            if active_cursor is not None:
+                self.kill(active_cursor.conn_or_pool)
 
-            cursor_key = get_ident()
-            active_cursor = self._cursor[cursor_key]
-
-            self._map_clear(active_cursor.conn_or_pool)
-
+    def kill(self, target: T, *, idle_only: bool = False) -> bool:
+        """Dispose of a registered target, independently of the current cursor."""
+        with self._lock:
+            obj_id = id(target)
             if (
-                active_cursor.obj_id not in self._registry
-            ):  # Defensive: bug-situation-detection
-                raise UnavailableTraffic(
-                    "Our internal thread safety mechanism seems out of sync. This is likely a bug in urllib3-future. "
-                    "You may open a ticket at https://github.com/jawah/urllib3.future for support."
+                obj_id not in self._registry
+                and not self._map.keys_for(target)
+                and not self.is_held(target)
+            ):
+                return False
+            pending_responses = getattr(target, "_pending_responses", None)
+            if idle_only:
+                # Returned promises and formed responses both keep the connection alive.
+                busy = (
+                    _has_response_owner(target, self)
+                    if self._shutdown and pending_responses is not None
+                    else traffic_state_of(target) is not TrafficState.IDLE
                 )
+                if busy or any(
+                    cursor.obj_id == obj_id for cursor in self._cursor.values()
+                ):
+                    return False
 
-            del self._registry[active_cursor.obj_id]
-
+            self._map_clear(target)
+            self._registry.pop(obj_id, None)
+            self._container.pop(obj_id, None)
+            keys = [
+                key for key, cursor in self._cursor.items() if cursor.obj_id == obj_id
+            ]
+            for key in keys:
+                del self._cursor[key]
+            if not self._registry:
+                self._shutdown = False
             try:
-                active_cursor.conn_or_pool.close()
+                target.close()
             except Exception:  # Defensive: force cleanup phase
                 pass
 
-            del self._cursor[cursor_key]
-
-            # killing the cursor abruptly may result in other thread waiting
-            # for conn_or_pool indefinitely. We must ensure to properly wake
-            # sleeping thread accordingly.
             signals_to_wake = []
-            edge_case_all_wake = not bool(self._registry)
-
             for pending_signal in self._signals:
-                if edge_case_all_wake:
+                if not self._registry or pending_signal.target_conn_or_pool is target:
                     signals_to_wake.append(pending_signal)
-                    continue
-
-                if (
-                    pending_signal.target_conn_or_pool is not None
-                    and id(pending_signal.target_conn_or_pool) == active_cursor.obj_id
-                ):
-                    signals_to_wake.append(pending_signal)
-
             for pending_signal in signals_to_wake:
                 self._signals.remove(pending_signal)
 
         for pending_signal in signals_to_wake:
             pending_signal.event.set()
+        return True
 
     def _sacrifice_first_idle(self, block: bool = True) -> None:
         """When trying to fill the bag, arriving at the maxsize, we may want to remove an item.
@@ -399,7 +408,7 @@ class TrafficPolice(typing.Generic[T]):
 
         while True:
             with self._lock:
-                if self.busy:
+                if self.busy and self._cursor[get_ident()].obj_id in self._registry:
                     cursor_key = get_ident()
                     active_cursor = self._cursor[cursor_key]
 
@@ -455,6 +464,9 @@ class TrafficPolice(typing.Generic[T]):
                 signal = self._register_signal(None, TrafficState.IDLE)
 
             signal.event.wait()
+            with self._lock:
+                if self.maxsize is not None and len(self._registry) < self.maxsize:
+                    return
 
         raise OverwhelmedTraffic(
             "Cannot select a disposable connection to ease the charge. "
@@ -478,11 +490,10 @@ class TrafficPolice(typing.Generic[T]):
         self._lock.acquire()
 
         # clear was called, each conn/pool that gets back must be destroyed appropriately.
-        if self._shutdown:
-            self.kill_cursor()
-            # Cleanup was completed, no need to act like this anymore.
-            if not self._registry:
-                self._shutdown = False
+        if self._shutdown and not immediately_unavailable:
+            if self.is_held(conn_or_pool):
+                self.release()
+            self.kill(conn_or_pool, idle_only=True)
             self._lock.release()
             return
 
@@ -494,10 +505,10 @@ class TrafficPolice(typing.Generic[T]):
         ):
             self._lock.release()
             self._sacrifice_first_idle(block=block)
-        else:
-            self._lock.release()
+            self._lock.acquire()
 
-        with self._lock:
+        # Keep the shutdown check and ownership return atomic with clear().
+        try:
             obj_id = id(conn_or_pool)
             registered_conn_or_pool = obj_id in self._registry
 
@@ -535,6 +546,8 @@ class TrafficPolice(typing.Generic[T]):
                     conn_or_pool, ItemPlaceholder
                 ):
                     self._container[obj_id] = conn_or_pool
+        finally:
+            self._lock.release()
 
         if traffic_indicators:
             for indicator in traffic_indicators:
@@ -724,11 +737,11 @@ class TrafficPolice(typing.Generic[T]):
             else:
                 obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
 
-                if obj_id not in self._registry:
-                    # we raised an exception before
-                    # after consideration, it's best just
-                    # to ignore!
-                    return
+            if obj_id not in self._registry:
+                # we raised an exception before
+                # after consideration, it's best just
+                # to ignore!
+                return
 
             if isinstance(traffic_indicator, tuple):
                 self._map[traffic_indicator] = conn_or_pool
@@ -747,11 +760,9 @@ class TrafficPolice(typing.Generic[T]):
         )
 
         with self._lock:
-            if key not in self._map:
-                return
-
-            del self._map[key]
-            del self._map_types[key]
+            if key in self._map:
+                del self._map[key]
+                del self._map_types[key]
 
         if self.parent is not None:
             try:
@@ -915,7 +926,9 @@ class TrafficPolice(typing.Generic[T]):
             # Keep lookup and borrower/waiter registration atomic.
             try:
                 cursor_key = get_ident()
-                if obj_id not in self._registry:
+                if obj_id not in self._registry and not (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                ):
                     raise UnavailableTraffic(
                         "The connection was closed before acquisition"
                     )
@@ -929,7 +942,9 @@ class TrafficPolice(typing.Generic[T]):
                         "Seeking to locate a connection when having another one used, did you forget a call to release?"
                     )
 
-                if obj_id not in self._container:
+                if obj_id not in self._container and not (
+                    self.concurrency and getattr(conn_or_pool, "pool", False) is None
+                ):
                     if not block:
                         raise UnavailableTraffic("Unavailable connection")
                 else:
@@ -1065,6 +1080,10 @@ class TrafficPolice(typing.Generic[T]):
             else:
                 self.release()
 
+            if self._shutdown and conn_or_pool is not None:
+                # release_conn() may have already returned ownership while reading.
+                self.kill(conn_or_pool, idle_only=True)
+
     def release(self) -> None:
         with self._lock:
             cursor_key = get_ident()
@@ -1100,40 +1119,68 @@ class TrafficPolice(typing.Generic[T]):
                                 self._signals.remove(signal)
                                 signal.event.set()
 
+    @property
+    def _has_pending_promises(self) -> bool:
+        """Inspect promise routes without borrowing a connection."""
+        from ..backend import ResponsePromise
+
+        with self._lock:
+            return bool(self._map_types.keys_for(ResponsePromise))
+
     def clear(self) -> None:
-        """Shutdown traffic pool."""
-        planned_removal = []
+        """Close child pools, retaining routes for returned promises until collected."""
+        from ..backend import ResponsePromise
+        from ..response import HTTPResponse
 
         with self._lock:
             self._shutdown = True
-
-            for obj_id in self._container:
-                if traffic_state_of(self._container[obj_id]) is TrafficState.IDLE:
-                    planned_removal.append(obj_id)
-
-            for obj_id in planned_removal:
-                conn_or_pool = self._container.pop(obj_id)
-
-                try:
-                    conn_or_pool.close()
-                except Exception:  # Defensive: we are in a force shutdown loop, we shall dismiss errors here.
-                    pass
-
-                self._map_clear(conn_or_pool)
-
-                del self._registry[obj_id]
-
-            if self.busy:
-                cursor_key = get_ident()
-                active_cursor = self._cursor[cursor_key]
-
-                if active_cursor.obj_id in planned_removal:
-                    del self._cursor[cursor_key]
-
-            # we've closed all conn/pool successfully, we can unset the shutdown toggle to
-            # prevent killing incoming new conn or pool.
-            if not self._registry:
-                self._shutdown = False
+            cursor_key = get_ident()
+            targets = list(self._registry.items())
+            for obj_id, target in targets:
+                child = getattr(target, "pool", None)
+                if isinstance(child, TrafficPolice) and any(
+                    self._map_types[key] is ResponsePromise
+                    for key in self._map.keys_for(target)
+                ):
+                    # Keep promise routes, but free the active cache slot before closing.
+                    self._registry.pop(obj_id, None)
+                    self._container.pop(obj_id, None)
+                    for key in list(self._map.keys_for(target)):
+                        if self._map_types[key] is not ResponsePromise:
+                            del self._map[key]
+                            del self._map_types[key]
+                    with contextlib.suppress(Exception):
+                        target.close()
+                    continue
+                pending_responses = getattr(target, "_pending_responses", None)
+                if (
+                    isinstance(child, TrafficPolice)
+                    or (
+                        pending_responses is not None
+                        and not _has_response_owner(target, self)
+                        # EOF can precede release of a formed response's borrow.
+                        and not any(
+                            issubclass(self._map_types[key], HTTPResponse)
+                            for key in self._map.keys_for(target)
+                        )
+                    )
+                    or (
+                        traffic_state_of(target) is TrafficState.IDLE
+                        and not any(
+                            key != cursor_key and cursor.obj_id == obj_id
+                            for key, cursor in self._cursor.items()
+                        )
+                    )
+                ):
+                    self.kill(target)
+            self._shutdown = any(obj_id in self._registry for obj_id, _ in targets)
+            if self.concurrency:
+                for signal in tuple(self._signals):
+                    if signal.target_conn_or_pool is None and signal.states == (
+                        TrafficState.IDLE,
+                    ):
+                        self._signals.remove(signal)
+                        signal.event.set()
 
     def qsize(self) -> int:
         with self._lock:

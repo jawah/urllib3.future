@@ -24,6 +24,69 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
         cls.base_url = f"http://{cls.host}:{cls.port}"
         cls.base_url_alt = f"http://{cls.host_alt}:{cls.port}"
 
+    async def test_resolver_options_recycle_and_http1_fallback(self) -> None:
+        from pathlib import Path
+        from dummyserver.server import DEFAULT_CA
+        from urllib3 import HttpVersion, AsyncHTTPResponse
+
+        ca_data = Path(DEFAULT_CA).read_text()
+        async with AsyncPoolManager(
+            resolver=["system://default"],
+            ca_cert_data=ca_data,
+            disabled_svn={HttpVersion.h2, HttpVersion.h3},
+            timeout=5,
+            retries=False,
+        ) as manager:
+            for _ in range(2):
+                response = await manager.urlopen(
+                    "GET", self.base_url + "/", multiplexed=True
+                )
+                assert isinstance(response, AsyncHTTPResponse)
+                assert response.status == 200 and response.version == 11
+                assert await response.data == b"Dummy server!"
+                assert "PoolManager" in repr(manager)
+                with pytest.raises(TypeError, match="ResponsePromise"):
+                    await manager.get_response(promise=response)
+                assert await manager.get_response() is None
+                await manager.clear()
+            pool = await manager.connection_from_context(
+                {
+                    "scheme": "http",
+                    "host": self.host,
+                    "port": self.port,
+                    "strict": True,
+                }
+            )
+            assert (await pool.request("GET", "/", timeout=5)).status == 200
+
+    async def test_pool_factory_uses_manager_defaults(self) -> None:
+        from urllib3 import AsyncHTTPConnectionPool
+
+        class DefaultContextManager(AsyncPoolManager):
+            def _new_pool(
+                self,
+                scheme: str,
+                host: str,
+                port: int,
+                request_context: dict[str, typing.Any] | None = None,
+            ) -> AsyncHTTPConnectionPool:
+                # Custom pool factories may rely on the manager's own defaults.
+                return super()._new_pool(scheme, host, port)
+
+        async with DefaultContextManager(timeout=5, retries=False) as manager:
+            response = await manager.request("GET", self.base_url + "/")
+            assert response.status == 200
+            assert await response.data == b"Dummy server!"
+            pool = await manager.connection_from_url(self.base_url)
+            assert pool.timeout.connect_timeout == 5
+
+    async def test_url_without_scheme_warns_and_requests(self) -> None:
+        async with AsyncPoolManager(timeout=5, retries=False) as manager:
+            with pytest.warns(DeprecationWarning, match="URLs without a scheme"):
+                response = await manager.urlopen("GET", f"//{self.host}:{self.port}/")
+            assert response.status == 200
+            assert await response.data == b"Dummy server!"
+
     @pytest.mark.parametrize(
         "pool_manager_kwargs",
         ({}, {"retries": None}, {"retries": 1}, {"retries": Retry(1)}),
@@ -228,6 +291,17 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             assert "Proxy-Authorization" not in data
             assert "cookie" not in data
             assert "Cookie" not in data
+
+    async def test_redirect_cross_host_headers_none(self) -> None:
+        async with AsyncPoolManager(timeout=5, retries=1) as manager:
+            response = await manager.urlopen(
+                "GET",
+                f"{self.base_url}/redirect?target={self.base_url_alt}/headers&status=302%20Found",
+                headers=None,
+            )
+            assert response.status == 200
+            assert response._pool is not None
+            assert response._pool.host == self.host_alt
 
     async def test_redirect_cross_host_no_remove_headers(self) -> None:
         async with AsyncPoolManager() as http:

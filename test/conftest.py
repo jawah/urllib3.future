@@ -5,6 +5,7 @@ import asyncio
 from base64 import urlsafe_b64decode
 from collections import Counter
 import contextlib
+import errno
 import os
 import socket
 import ssl
@@ -32,7 +33,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--python-udp",
         action="store_true",
-        help="Exercise the Python UDP transport while retaining qh3 for HTTP/3",
+        help="Exercise the Python UDP transport while retaining qh3 for HTTP/3 and DoQ",
     )
 
 
@@ -121,6 +122,33 @@ def upload_body(request: pytest.FixtureRequest) -> tuple[typing.Any, bytes]:
     return iter(chunks), "Unicode: 🚀prefix".encode() + payload
 
 
+@pytest.fixture(params=["gzip", "deflate", "br", "zstd"])
+def compressed_payload(request: pytest.FixtureRequest) -> tuple[str, bytes, bytes]:
+    """Real compressed data, including consecutive nonempty Zstandard frames."""
+    import gzip
+    import zlib
+    from urllib3 import response
+
+    encoding = request.param
+    first = bytes(range(256)) * 32
+    second = b"another frame" * 1024
+    plain = first + second
+    if encoding == "gzip":
+        encoded = gzip.compress(plain)
+    elif encoding == "deflate":
+        encoded = zlib.compress(plain)
+    else:
+        codec = response.brotli if encoding == "br" else response.zstd
+        if codec is None:
+            pytest.skip(f"{encoding} is unavailable")
+        encoded = (
+            codec.compress(plain)
+            if encoding == "br"
+            else codec.compress(first) + codec.compress(second)
+        )
+    return encoding, encoded, plain
+
+
 class DNSUDPServer(typing.NamedTuple):
     address: tuple[str, int]
     requests: list[bytes]
@@ -131,7 +159,9 @@ class DNSUDPServer(typing.NamedTuple):
 @pytest.fixture
 def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServer]:
     """Answer address/HTTPS queries over loopback with a parametrized TTL."""
-    ttl = getattr(request, "param", 60)
+    setting = getattr(request, "param", 60)
+    mode = setting if isinstance(setting, str) else "normal"
+    ttl = 0 if isinstance(setting, str) else setting
     queries: list[bytes] = []
     errors: list[Exception] = []
     received, respond = threading.Event(), threading.Event()
@@ -147,8 +177,11 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
                     query, client = sock.recvfrom(4096)
                     if not query:
                         return
+                    first_attempt = query not in queries
                     queries.append(query)
                     received.set()
+                    if mode == "timeout" or (mode == "drop-first" and first_attempt):
+                        continue
                     assert respond.wait(5), "DNS response was never released"
                     query_type, query_class = struct.unpack("!HH", query[-4:])
                     assert query_class == 1 and query_type in (1, 28, 65)
@@ -158,12 +191,47 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
                         data = socket.inet_pton(socket.AF_INET6, "2001:db8::1")
                     else:
                         data = b"\x00\x01\x00"  # HTTPS ServiceMode, original target.
+                        if mode == "empty-https":
+                            data = b""
+                        elif mode == "https-ech":
+                            data += b"\x00\x01\x00\x03\x02h3\x00\x05\x00\x04\x00\x02ab"
                     # Echo the question; the answer name points back to its QNAME.
                     response = query[:2] + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
                     response += query[12:] + b"\xc0\x0c"
                     response += (
                         struct.pack("!HHIH", query_type, 1, ttl, len(data)) + data
                     )
+                    if mode == "garbage-first":
+                        sock.sendto(b"garbage", client)
+                    elif mode == "question-count":
+                        sock.sendto(response[:4] + b"\x00\x00" + response[6:], client)
+                    elif mode == "truncated-record":
+                        sock.sendto(response[:-1], client)
+                    elif mode == "truncated-answers":
+                        sock.sendto(response[:6] + b"\x00\x02" + response[8:], client)
+                    elif mode == "unknown-record":
+                        question_end = len(query)
+                        cname = (
+                            b"\xc0\x0c" + struct.pack("!HHIH", 5, 1, 0, 2) + b"\xc0\x0c"
+                        )
+                        response = (
+                            response[:6]
+                            + b"\x00\x02"
+                            + response[8:question_end]
+                            + cname
+                            + response[question_end:]
+                        )
+                    elif mode == "truncated-https" and query_type == 65:
+                        response = response[:2] + b"\x83\x80" + response[4 : len(query)]
+                    elif mode in ("servfail", "unknown-rcode", "no-answer"):
+                        rcode = {"servfail": 2, "unknown-rcode": 15, "no-answer": 0}[
+                            mode
+                        ]
+                        response = (
+                            query[:2]
+                            + struct.pack("!HHHHH", 0x8180 | rcode, 1, 0, 0, 0)
+                            + query[12:]
+                        )
                     sock.sendto(response, client)
             except Exception as exc:
                 errors.append(exc)
@@ -180,6 +248,309 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
             thread.join(5)
             assert not thread.is_alive()
             assert not errors
+
+
+class DNSQUICServer(typing.NamedTuple):
+    address: tuple[str, int]
+    ca_certs: str
+    requests: list[bytes]
+    received: threading.Event
+
+
+@pytest.fixture
+def doq_udp_socket(
+    dns_quic_server: DNSQUICServer,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> typing.Iterator[list[socket.socket]]:
+    """Keep real UDP I/O while rejecting the requested kernel offload operation."""
+    from urllib3._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
+    from urllib3.contrib.ssa._gro import _sock_has_gso
+
+    mode = request.param
+    if mode != "plain-udp":
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            if not _sock_has_gso(probe):
+                pytest.skip("Kernel does not support UDP_SEGMENT")
+    sockets: list[socket.socket] = []
+    discarded = None
+    if mode == "loss-then-reject-gso":
+        discarded = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        discarded.bind(("127.0.0.1", 0))
+
+    class Socket(socket.socket):
+        gso_attempts = 0
+
+        def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+            super().__init__(*args, **kwargs)
+            if self.type == socket.SOCK_DGRAM:
+                sockets.append(self)
+
+        def setsockopt(self, level: int, option: int, *args: typing.Any) -> None:
+            if (
+                mode == "plain-udp"
+                and level == socket.IPPROTO_UDP
+                and option in (UDP_LINUX_GRO, UDP_LINUX_SEGMENT)
+            ):
+                raise OSError(errno.ENOPROTOOPT, "UDP offload unavailable")
+            super().setsockopt(level, option, *args)
+
+        def sendmsg(self, *args: typing.Any, **kwargs: typing.Any) -> int:
+            self.gso_attempts += 1
+            if discarded is not None and self.gso_attempts == 1:
+                # Deliver the first flight to a silent UDP sink to exercise PTO.
+                return super().sendmsg(args[0], args[1], 0, discarded.getsockname())
+            # Emulate a NIC rejecting GSO after the kernel accepted its option.
+            raise OSError(errno.EIO, "UDP segmentation rejected by the device")
+
+    monkeypatch.setattr(socket, "socket", Socket)
+    try:
+        yield sockets
+    finally:
+        if discarded is not None:
+            discarded.close()
+
+
+@pytest.fixture
+def doq_empty_ca_store(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from urllib3.contrib.anytls import ssl as tls_backend
+
+    if tls_backend is not ssl or os.name == "nt":
+        pytest.skip("Requires OpenSSL default CA paths controlled by environment")
+    ca_file = tmp_path / "empty.pem"
+    ca_file.write_text("")
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca_file))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path))
+    if request.param == "load-error":
+
+        def load_default_certs(
+            context: ssl.SSLContext, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH
+        ) -> None:
+            # Produce a real OpenSSL loading error without replacing the context.
+            context.load_verify_locations(cafile=str(ca_file))
+
+        monkeypatch.setattr(ssl.SSLContext, "load_default_certs", load_default_certs)
+
+
+@pytest.fixture(params=[False, True], ids=["normal-close-timer", "delayed-close-timer"])
+def doq_close_timer(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not request.param:
+        return
+    connection = pytest.importorskip("qh3.quic.connection").QuicConnection
+    get_timer = connection.get_timer
+
+    def delayed_close_timer(quic: typing.Any) -> float | None:
+        deadline: float | None = get_timer(quic)
+        if (
+            deadline is not None
+            and quic.configuration.is_client
+            and getattr(quic, "_close_event", None) is not None
+        ):
+            # Keep the real TLS rejection pending beyond the socket timeout,
+            # without slowing the handshake or fabricating protocol events.
+            return deadline + 60
+        return deadline
+
+    monkeypatch.setattr(connection, "get_timer", delayed_close_timer)
+
+
+@pytest.fixture
+def dns_quic_server(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> typing.Iterator[DNSQUICServer]:
+    """A real DoQ peer with explicit control over DNS framing and stream failures."""
+    if ssl_.IS_FIPS:
+        pytest.skip("DNS-over-QUIC is disabled with a FIPS-compliant ssl module")
+    pytest.importorskip("urllib3.contrib.resolver.doq._qh3")
+    from qh3.asyncio import QuicConnectionProtocol
+    from qh3.asyncio.server import QuicServer
+    from qh3.quic.configuration import QuicConfiguration
+    from qh3.quic.events import StreamDataReceived
+
+    root = Path(__file__).resolve().parents[1]
+    ca_path = root / "rootCA.pem"
+    cert_path = root / "traefik/httpbin.local.pem"
+    key_path = root / "traefik/httpbin.local.pem.key"
+    if not all(p.exists() for p in (ca_path, cert_path, key_path)):
+        ca = trustme.CA()
+        cert = ca.issue_cert("httpbin.local")
+        ca_path, cert_path, key_path = (
+            tmp_path / name for name in ("ca.pem", "server.pem", "server.key")
+        )
+        ca.cert_pem.write_to_path(ca_path)
+        cert.cert_chain_pems[0].write_to_path(cert_path)
+        cert.private_key_pem.write_to_path(key_path)
+
+    mode = getattr(request, "param", "normal")
+    queries: list[bytes] = []
+    errors: list[BaseException] = []
+    pending: set[asyncio.Task[None]] = set()
+    received = threading.Event()
+
+    class DNSProtocol(QuicConnectionProtocol):
+        def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.buffers: dict[int, bytes] = {}
+            self.delayed_replies: list[tuple[int, bytes]] = []
+
+        def datagram_received(self, data: bytes | str, addr: typing.Any) -> None:
+            self.client_address = addr
+            super().datagram_received(data, addr)
+
+        def quic_event_received(self, event: typing.Any) -> None:
+            if not isinstance(event, StreamDataReceived):
+                return
+            stream_id = event.stream_id
+            data = self.buffers.pop(stream_id, b"") + event.data
+            if not event.end_stream:
+                self.buffers[stream_id] = data
+                return
+            try:
+                assert (
+                    len(data) >= 2 and int.from_bytes(data[:2], "big") == len(data) - 2
+                )
+                query = data[2:]
+                queries.append(query)
+                if mode == "reset":
+                    self._quic.reset_stream(stream_id, 0x2)
+                elif mode == "close":
+                    self._quic.close(error_code=0x2, reason_phrase="test peer closed")
+                    self.transmit()
+                    return
+                else:
+                    if mode == "stop-sending":
+                        self._quic.stop_stream(stream_id, 0x2)
+                    elif mode == "empty-datagram":
+                        assert self._transport is not None
+                        self._transport.sendto(b"", self.client_address)
+                    kind = int.from_bytes(query[-4:-2], "big")
+                    if kind == 1:
+                        rdata = socket.inet_pton(socket.AF_INET, "192.0.2.1")
+                    elif kind == 28:
+                        rdata = socket.inet_pton(socket.AF_INET6, "2001:db8::1")
+                    else:
+                        # HTTPS ServiceMode, with ALPN=h3 and a framed ECHConfigList.
+                        rdata = b"\x00\x01\x00\x00\x01\x00\x03\x02h3\x00\x05\x00\x04\x00\x02ab"
+                    rcode = 3 if mode == "nxdomain" else 0
+                    count = 0 if mode in ("nxdomain", "no-answer") else 1
+                    answer = (
+                        query[:2]
+                        + struct.pack("!HHHHH", 0x8180 | rcode, 1, count, 0, 0)
+                        + query[12:]
+                    )
+                    if count:
+                        answer += (
+                            b"\xc0\x0c"
+                            + struct.pack("!HHIH", kind, 1, 0, len(rdata))
+                            + rdata
+                        )
+                    if mode == "malformed":
+                        answer = answer[:5]
+                    elif mode == "mismatch":
+                        answer = b"\x00\x01" + answer[2:]
+                    framed = len(answer).to_bytes(2, "big") + answer
+                    if mode == "partial-prefix":
+                        framed = framed[:1]
+                    elif mode == "partial-body":
+                        framed = framed[:-1]
+                    elif mode == "multiple":
+                        framed += framed
+                    elif mode == "concurrent-malformed":
+                        if query[12:16] == b"\x03bad":
+                            framed = framed[:1]
+                        if len(queries) <= 4:
+                            self.delayed_replies.append((stream_id, framed))
+                            # Both lookups have sent A + HTTPS before either gets
+                            # a reply. Deliver the second lookup's errors first.
+                            if len(self.delayed_replies) == 4:
+                                for reply_id, reply in reversed(self.delayed_replies):
+                                    self._quic.send_stream_data(
+                                        reply_id, reply, end_stream=True
+                                    )
+                                self.delayed_replies.clear()
+                                self.transmit()
+                            return
+                    if mode in ("split-prefix", "split-body"):
+                        cut = 1 if mode == "split-prefix" else len(framed) // 2
+                        self._quic.send_stream_data(
+                            stream_id, framed[:cut], end_stream=False
+                        )
+                        self.transmit()
+
+                        async def finish() -> None:
+                            # An acknowledged PING proves the client received the first
+                            # datagram before the rest can be sent. No timing sleep.
+                            await self.ping()
+                            self._quic.send_stream_data(
+                                stream_id, framed[cut:], end_stream=True
+                            )
+                            self.transmit()
+
+                        task = asyncio.create_task(finish())
+                        pending.add(task)
+
+                        def finished(task: asyncio.Task[None]) -> None:
+                            pending.discard(task)
+                            if not task.cancelled():
+                                error = task.exception()
+                                if error is not None:
+                                    errors.append(error)
+
+                        task.add_done_callback(finished)
+                    else:
+                        self._quic.send_stream_data(stream_id, framed, end_stream=True)
+                self.transmit()
+            except Exception as exc:
+                errors.append(exc)
+                self._quic.close(error_code=0x2, reason_phrase="test peer failure")
+                self.transmit()
+
+    class Server(QuicServer):
+        def datagram_received(self, data: bytes | str, addr: typing.Any) -> None:
+            received.set()
+            if mode != "handshake-stall":
+                super().datagram_received(data, addr)
+
+    async def start() -> typing.Any:
+        configuration = QuicConfiguration(is_client=False, alpn_protocols=["doq"])
+        configuration.load_cert_chain(str(cert_path), str(key_path))
+        _, server = await asyncio.get_running_loop().create_datagram_endpoint(
+            lambda: Server(configuration=configuration, create_protocol=DNSProtocol),
+            local_addr=("127.0.0.1", 0),
+        )
+        return server
+
+    with run_loop_in_thread() as io_loop:
+        loop = io_loop.asyncio_loop
+        server = asyncio.run_coroutine_threadsafe(start(), loop).result(10)
+        address = server._transport.get_extra_info("sockname")
+        try:
+            yield DNSQUICServer(address, str(ca_path), queries, received)
+        finally:
+
+            async def stop() -> None:
+                tasks = list(pending)
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                peers = set(server._protocols.values())
+                for peer in peers:
+                    peer.close()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*(peer.wait_closed() for peer in peers)), 5
+                    )
+                finally:
+                    server.close()
+
+            asyncio.run_coroutine_threadsafe(stop(), loop).result(10)
+            assert not errors, errors
 
 
 class DNSTLSServer(typing.NamedTuple):
@@ -324,6 +695,92 @@ class ServerConfig(typing.NamedTuple):
         if ":" in host:
             host = f"[{host}]"
         return f"{self.scheme}://{host}:{self.port}"
+
+
+@pytest.fixture
+def http3_error_server(
+    tmp_path: Path, error_code: int, frame_type: int | None, reason: str
+) -> typing.Iterator[ServerConfig]:
+    """Send a QUIC close frame after receiving an actual HTTP/3 request."""
+    if not (_SYNC_HAS_HTTP3_SUPPORT() and _ASYNC_HAS_HTTP3_SUPPORT()):
+        pytest.skip("HTTP/3 unavailable")
+    from qh3 import H3Connection, QuicConfiguration, h3_events
+    from qh3.asyncio import QuicConnectionProtocol
+    from qh3.asyncio.server import QuicServer
+
+    ca = trustme.CA()
+    cert = ca.issue_cert("127.0.0.1")
+    ca_path = tmp_path / "ca.pem"
+    ca.cert_pem.write_to_path(ca_path)
+    certs = _write_cert_to_dir(cert, tmp_path)
+    errors: list[Exception] = []
+    received = threading.Event()
+    pending: list[asyncio.Task[None]] = []
+
+    class Protocol(QuicConnectionProtocol):
+        def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.http = H3Connection(self._quic)
+
+        def quic_event_received(self, event: typing.Any) -> None:
+            try:
+                for http_event in self.http.handle_event(event):
+                    if isinstance(http_event, h3_events.HeadersReceived):
+                        received.set()
+                        pending.append(asyncio.create_task(self.close_after_setup()))
+            except Exception as exc:
+                errors.append(exc)
+                self.close()
+
+        async def close_after_setup(self) -> None:
+            # Confirm delivery of the server's SETTINGS before closing, so the
+            # client does not have to finish HTTP/3 setup on an already closed QUIC.
+            await self.ping()
+            self._quic.close(
+                error_code=error_code, frame_type=frame_type, reason_phrase=reason
+            )
+            self.transmit()
+
+    async def start() -> typing.Any:
+        configuration = QuicConfiguration(
+            is_client=False, alpn_protocols=["h3"], max_datagram_frame_size=65536
+        )
+        configuration.load_cert_chain(certs["certfile"], certs["keyfile"])
+        _, server = await asyncio.get_running_loop().create_datagram_endpoint(
+            lambda: QuicServer(configuration=configuration, create_protocol=Protocol),
+            local_addr=("127.0.0.1", 0),
+        )
+        return server
+
+    with run_loop_in_thread() as io_loop:
+        loop = io_loop.asyncio_loop
+        server = asyncio.run_coroutine_threadsafe(start(), loop).result(10)
+        host, port = server._transport.get_extra_info("sockname")
+        try:
+            yield ServerConfig("https", host, port, str(ca_path), None)
+        finally:
+
+            async def stop() -> None:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+                results = await asyncio.gather(*pending, return_exceptions=True)
+                errors.extend(
+                    result for result in results if isinstance(result, Exception)
+                )
+                peers = set(server._protocols.values())
+                for peer in peers:
+                    peer.close()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*(peer.wait_closed() for peer in peers)), 5
+                    )
+                finally:
+                    server.close()
+
+            asyncio.run_coroutine_threadsafe(stop(), loop).result(10)
+            assert not errors, errors
+            assert received.is_set(), "The HTTP/3 peer did not receive the request"
 
 
 def _write_cert_to_dir(

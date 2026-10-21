@@ -191,8 +191,10 @@ def idle_conn_watch_task(
             if pool.pool is None:
                 return
 
+            connections = None
             try:
-                for conn in pool.pool.iter_idle():
+                connections = pool.pool.iter_idle()
+                for conn in connections:
                     now = time.monotonic()
                     last_used = conn.last_used_at
 
@@ -221,6 +223,11 @@ def idle_conn_watch_task(
                                     conn.peek_and_react(expect_frame=True)
             except AttributeError:
                 return
+            finally:
+                # Finish the generator in the thread that owns its checkout and
+                # lock; delayed GC may otherwise finalize it in another thread.
+                if connections is not None:
+                    connections.close()
     except ReferenceError:
         return
 
@@ -245,17 +252,15 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         been parsed, this is always a `urllib3.util.Timeout` object.
 
     :param maxsize:
-        Number of connections to save that can be reused. More than 1 is useful
-        in multithreaded situations. If ``block`` is set to False, more
-        connections will be created but they will not be saved once they've
-        been used.
+        Connection capacity of this pool, defaulting to 1 for direct
+        construction. A PoolManager supplies its num_pools value when maxsize
+        was not specified. HTTP/2 and HTTP/3 connections can carry multiple
+        requests, so this is not a request-concurrency limit.
 
     :param block:
-        If set to True, no more than ``maxsize`` connections will be used at
-        a time. When no free connections are available, the call will block
-        until a connection has been released. This is a useful side effect for
-        particular multithreaded situations where one does not want to use more
-        than maxsize connections per host to prevent flooding.
+        Retained for urllib3 compatibility. The built-in scheduler can wait at
+        capacity with either value; block=False does not provide disposable
+        overflow connections. Use pool_timeout on a request to bound acquisition.
 
     :param headers:
         Headers to include with all requests, unless other headers are given
@@ -275,8 +280,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
     :param resolver:
         A manual configuration to use for DNS resolution.
         Can be a support DSN/str (e.g. "doh+cloudflare://") or a
-        :class:`urllib3.AsyncResolverDescription` or a list of DSN/str or
-        :class:`urllib3.AsyncResolverDescription`
+        :class:`urllib3.contrib.resolver.ResolverDescription` or a list of DSN/str or
+        :class:`urllib3.contrib.resolver.ResolverDescription`
 
     :param happy_eyeballs:
         Enable IETF Happy Eyeballs algorithm when trying to
@@ -366,8 +371,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             self.pool: TrafficPolice[HTTPConnection] | None = self.QueueCls(
                 maxsize, concurrency=False, strict_maxsize=not self.block
             )
-        except TypeError:
+        except (
+            TypeError
+        ):  # Defensive: best-effort compatibility with legacy QueueCls constructors.
             self.pool = self.QueueCls(maxsize)
+
+        self._draining_pool: TrafficPolice[HTTPConnection] | None = None
 
         self.proxy = _proxy
         self.proxy_headers = _proxy_headers or {}
@@ -484,7 +493,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
     @property
     def is_idle(self) -> bool:
-        return self.pool is None or self.pool.bag_only_idle
+        police = self.pool
+        if police is not None:
+            return police.bag_only_idle
+        police = self._draining_pool
+        # Formed responses own their registry; only promises still need pool routing.
+        return police is None or not police._has_pending_promises
 
     @property
     def is_saturated(self) -> bool:
@@ -796,7 +810,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             except AttributeError:
                 # self.pool is None.
                 pass
-            except queue.Full:
+            except queue.Full:  # Defensive: legacy queues may reject a blocking put; TrafficPolice waits for capacity.
                 # Connection never got put back into the pool, close it.
                 if conn:
                     if conn.is_idle:
@@ -893,7 +907,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
-        if self.pool is None:
+        police = self.pool
+        if police is None:
+            police = self._draining_pool
+        if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
         if promise is not None and not isinstance(promise, ResponsePromise):
@@ -905,7 +922,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         clean_exit = True
 
         try:
-            with self.pool.borrow(
+            with police.borrow(
                 promise or ResponsePromise,
                 block=promise is not None,
                 not_idle_only=True,
@@ -916,9 +933,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                         typing.Optional[float], promise.get_parameter("read_timeout")
                     )
                 try:
-                    response = conn.getresponse(
-                        promise=promise, police_officer=self.pool
-                    )
+                    response = conn.getresponse(promise=promise, police_officer=police)
                 except (BaseSSLError, OSError) as e:
                     if promise is not None:
                         url = typing.cast(str, promise.get_parameter("url"))
@@ -938,6 +953,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             ProxyError,
             RecoverableError,
         ) as e:
+            if self.pool is None and not police._has_pending_promises:
+                self._draining_pool = None
+                if police.parent is not None:
+                    with police.parent._lock:
+                        police.parent._map_clear(self)
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -1011,7 +1031,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
 
-        self.pool.forget(from_promise)
+        police.forget(from_promise)
+
+        # Once collected, the response replaces the promise as registry owner.
+        if self.pool is None and not police._has_pending_promises:
+            self._draining_pool = None
+        from_promise.set_parameter("police_officer", None)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -1276,11 +1301,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             Configure the number of retries to allow before raising a
             :class:`~urllib3.exceptions.MaxRetryError` exception.
 
-            Pass ``None`` to retry until you receive a response. Pass a
-            :class:`~urllib3.util.retry.Retry` object for fine-grained control
-            over different types of retries.
-            Pass an integer number to retry connection errors that many times,
-            but no other types of errors. Pass zero to never retry.
+            Pass ``None`` to use the pool's default retry configuration. Pass
+            a :class:`~urllib3.util.retry.Retry` object for fine-grained control
+            over different types of retries. An integer sets the total retry
+            budget; allowed methods and other retry rules still apply.
+            Pass zero to disable further attempts.
 
             If ``False``, then retries are disabled and any exception is raised
             immediately. Also, instead of raising a MaxRetryError on redirects,
@@ -1482,6 +1507,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 )
             conn.timeout = read_timeout
 
+        police = self.pool
+        if police is None:
+            raise ClosedPoolError(self, "Pool is closed")
+
         can_shelve_conn: bool = conn.is_multiplexed and not conn.is_saturated
 
         # Receive the response from the server
@@ -1492,7 +1521,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if not can_shelve_conn:
             try:
                 response = conn.getresponse(
-                    police_officer=self.pool,
+                    police_officer=police,
                     early_response_callback=on_early_response,
                     promise=rp,
                 )
@@ -1500,16 +1529,15 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
                 raise
         else:
-            assert self.pool is not None
             assert rp is not None
 
-            self.pool.memorize(rp, conn)
+            police.memorize(rp, conn)
             self._put_conn(conn)
 
-            with self.pool.borrow(rp) as conn:
+            with police.borrow(rp) as conn:
                 try:
                     response = conn.getresponse(
-                        police_officer=self.pool,
+                        police_officer=police,
                         early_response_callback=on_early_response,
                         promise=rp,
                     )
@@ -1517,7 +1545,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
                     raise
                 finally:
-                    self.pool.forget(rp)
+                    police.forget(rp)
 
         # Set properties that are used by the pooling layer.
         response.retries = retries
@@ -1550,19 +1578,25 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
     def close(self) -> None:
         """
-        Close all pooled connections and disable the pool.
+        Close the pool while allowing returned responses to finish reading.
+
+        New requests are rejected; returned promises remain retrievable.
         """
         with self._background_monitoring_lock:
             if self.pool is None:
                 return
 
-            # Disable the pool and prevent the watcher from starting after close.
-            old_pool, self.pool = self.pool, None
+            # Retain routing for blind collection until all returned promises are collected.
+            old_pool = self.pool
+            self._draining_pool = old_pool
+            self.pool = None
             self._background_monitoring_stop.set()
             self._background_monitoring = None
 
         # Close all the HTTPConnections outside the watcher lifecycle lock.
         old_pool.clear()
+        if not old_pool._has_pending_promises:
+            self._draining_pool = None
 
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
@@ -1573,23 +1607,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         Check if the given ``url`` is a member of the same host as this
         connection pool.
         """
-        if url.startswith("/"):
-            return True
-
-        # TODO: Add optional support for socket.gethostbyname checking.
-        scheme, _, host, port, *_ = parse_url(url)
-        scheme = scheme or "http"
-        if host is not None:
-            # parse_url() already normalized the host, including its zone ID.
-            host = host.strip("[]")
-
-        # Use explicit default port for comparison when none is given
-        if self.port and not port:
-            port = port_by_scheme.get(scheme)
-        elif not self.port and port == port_by_scheme.get(scheme):
-            port = None
-
-        return (scheme, host, port) == (self.scheme, self.host, self.port)
+        return _is_same_host(url, self.scheme, self.host, self.port)
 
     @typing.overload  # type: ignore[override]
     def urlopen(
@@ -1681,10 +1699,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         .. note::
 
-           `release_conn` will only behave as expected if
-           `preload_content=False` because we want to make
-           `preload_content=False` the default behaviour someday soon without
-           breaking backwards compatibility.
+           For streaming, use ``preload_content=False`` and consume or close
+           the returned response. Returning connection ownership alone does
+           not discard an unread body.
 
         :param method:
             HTTP request method (such as GET, POST, PUT, etc.)
@@ -1705,11 +1722,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             Configure the number of retries to allow before raising a
             :class:`~urllib3.exceptions.MaxRetryError` exception.
 
-            Pass ``None`` to retry until you receive a response. Pass a
-            :class:`~urllib3.util.retry.Retry` object for fine-grained control
-            over different types of retries.
-            Pass an integer number to retry connection errors that many times,
-            but no other types of errors. Pass zero to never retry.
+            Pass ``None`` to use the pool's default retry configuration. Pass
+            a :class:`~urllib3.util.retry.Retry` object for fine-grained control
+            over different types of retries. An integer sets the total retry
+            budget; allowed methods and other retry rules still apply.
+            Pass zero to disable further attempts.
 
             If ``False``, then retries are disabled and any exception is raised
             immediately. Also, instead of raising a MaxRetryError on redirects,
@@ -1733,9 +1750,10 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             :class:`urllib3.util.Timeout`.
 
         :param pool_timeout:
-            If set and the pool is set to block=True, then this method will
-            block for ``pool_timeout`` seconds and raise EmptyPoolError if no
-            connection is available within the time period.
+            Maximum seconds to wait for connection acquisition. The default,
+            None, has no acquisition deadline. This is separate from connect
+            and read timeouts and can apply with either value of block.
+            Raises EmptyPoolError if no connection becomes available in time.
 
         :param bool preload_content:
             If True, the response's body will be preloaded into memory.
@@ -1745,14 +1763,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             'content-encoding' header.
 
         :param release_conn:
-            If False, then the urlopen call will not release the connection
-            back into the pool once a response is received (but will release if
-            you read the entire contents of the response such as when
-            `preload_content=True`). This is useful if you're not preloading
-            the response's content immediately. You will need to call
-            ``r.release_conn()`` on the response ``r`` to return the connection
-            back into the pool. If None, it takes the value of ``preload_content``
-            which defaults to ``True``.
+            Whether to return acquired connection ownership after receiving
+            response headers. If None, defaults to preload_content. Reading the
+            whole body normally releases ownership automatically. Consume,
+            drain, or close an unused response; release_conn() alone does not
+            consume or abort its unread body.
 
         :param bool chunked:
             If True, urllib3 will send the body using chunked transfer
@@ -1776,14 +1791,14 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         :param on_early_response:
             Callable that will be invoked upon early responses, can be invoked one or several times.
-            All informational responses except HTTP/102 (Switching Protocol) are concerned here.
+            All informational responses except HTTP/101 (Switching Protocol) are concerned here.
             The callback takes only one positional argument, the fully constructed HTTPResponse.
             Those responses never have bodies, only headers.
 
         :param multiplexed:
-            Dispatch the request in a non-blocking way, this means that the
-            response will be retrieved in the future with the get_response()
-            method.
+            Defer response retrieval on HTTP/2 or HTTP/3 and return a
+            ResponsePromise for get_response(). Sending the request can still
+            perform blocking I/O. HTTP/1.1 returns an immediate response.
         """
         # Retrying must not decode IPv6 zone identifiers a second time.
         original_url = url
@@ -1830,8 +1845,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         # have to copy the headers dict so we can safely change it without those
         # changes being reflected in anyone else's copy.
         if not http_tunnel_required:
-            headers = headers.copy()  # type: ignore[attr-defined]
-            headers.update(self.proxy_headers)  # type: ignore[union-attr]
+            # Mapping implementations need not provide dict.copy().
+            headers = headers.copy() if hasattr(headers, "copy") else dict(headers)
+            headers.update(self.proxy_headers)
 
         # Must keep the exception bound to a separate variable or else Python 3
         # complains about UnboundLocalError.
@@ -1933,6 +1949,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             RecoverableError,
             UnavailableTraffic,
         ) as e:
+            if isinstance(e, UnavailableTraffic) and self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -1970,6 +1988,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             # Keep track of the error for the retry warning.
             err = e
 
+        except Exception as e:
+            # Closing before a response is formed invalidates the backend state.
+            if self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
+            raise
+
         finally:
             if not clean_exit:
                 # We hit some kind of exception, handled or otherwise. We need
@@ -1977,7 +2001,11 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 # Close the connection, set the variable to None, and make sure
                 # we put the None back in the pool to avoid leaking it.
                 if conn:
-                    self.pool.kill_cursor()  # type: ignore[union-attr]
+                    police = self.pool
+                    if police is None:
+                        conn.close()
+                    else:
+                        police.kill_cursor()
                     conn = None
 
                 release_this_conn = True
@@ -1987,9 +2015,14 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 and conn is not None
                 and isinstance(response, ResponsePromise)
             ):
-                self.pool.memorize(response, conn)  # type: ignore[union-attr]
-                if self.pool.parent is not None:  # type: ignore[union-attr]
-                    self.pool.parent.memorize(response, self)  # type: ignore[union-attr]
+                police = self.pool
+                if police is None:
+                    conn.close()
+                    raise ClosedPoolError(self, "Pool is closed")
+                response.set_parameter("police_officer", police)
+                police.memorize(response, conn)
+                if police.parent is not None:
+                    police.parent.memorize(response, self)
 
             if (
                 release_this_conn and self.pool is not None
@@ -2586,6 +2619,27 @@ def _normalize_host(host: str | None, scheme: str | None) -> str | None:
     if host and host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
     return host
+
+
+def _is_same_host(
+    url: str, scheme: str | None, host: str | None, port: int | None
+) -> bool:
+    """Compare a URL with an origin whose host is already normalized for sockets."""
+    if url.startswith("/"):
+        return True
+
+    url_scheme, _, url_host, url_port, *_ = parse_url(url)
+    url_scheme = url_scheme or "http"
+    if url_host is not None:
+        # parse_url() already normalized the host, including its zone ID.
+        url_host = url_host.strip("[]")
+
+    if port is not None and url_port is None:
+        url_port = port_by_scheme.get(url_scheme)
+    elif port is None and url_port == port_by_scheme.get(url_scheme):
+        url_port = None
+
+    return (url_scheme, url_host, url_port) == (scheme, host, port)
 
 
 def _url_from_pool(

@@ -181,7 +181,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ fromJson('{"macos-15-intel":"macOS","windows-2025":"Windows","ubuntu-24.04":"Ubuntu"}')[matrix.os] }} ${{ matrix.python-version }} ${{ matrix.nox-session }}
     continue-on-error: ${{ matrix.experimental }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
@@ -256,6 +256,12 @@ jobs:
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
           NOX_SESSION: ${{ matrix.nox-session }}
+          # Older PyPy builds segfault during pytest assertion rewriting in CI.
+          # Plain mode keeps assertions enabled, without the rewritten AST.
+          # Dump all thread stacks and stop stalled PyPy tests before the job timeout.
+          PYTEST_ADDOPTS: >-
+            ${{ (matrix.python-version == 'pypy-3.7' || matrix.python-version == 'pypy-3.9-v7.3.13') && '--assert=plain' || '' }}
+            ${{ startsWith(matrix.python-version, 'pypy-') && '-o faulthandler_timeout=60 --timeout=120 --timeout-method=thread' || '' }}
           TRAEFIK_HTTPBIN_ENABLE: ${{ matrix.traefik-server }}
           TRAEFIK_HTTPBIN_IPV4: ${{ contains(matrix.os, 'mac') && steps.colima-ip.outputs.autodiscover || '127.0.0.1' }}
 
@@ -419,7 +425,7 @@ jobs:
         run: |
           python -m coverage combine
           python -m coverage html --skip-covered --skip-empty
-          python -m coverage report --ignore-errors --show-missing --fail-under=93
+          python -m coverage report --ignore-errors --show-missing --fail-under=96
 
       - name: "Upload report"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f

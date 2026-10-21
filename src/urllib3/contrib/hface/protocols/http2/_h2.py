@@ -27,7 +27,7 @@ import jh2.events  # type: ignore
 import jh2.exceptions  # type: ignore
 import jh2.settings  # type: ignore
 
-from jh2 import __version__ as jh2_version
+from jh2 import __version__ as jh2_version  # type: ignore[attr-defined]
 
 from ..._stream_matrix import StreamMatrix
 from ..._typing import HeadersType
@@ -88,7 +88,7 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
 
     def _open_streams(self, *args, **kwargs) -> int:  # type: ignore[no-untyped-def]
         if self._observable_impl is not None:
-            return self._observable_impl._open_stream_count
+            return len(self._observable_impl._open_streams)
         return super()._open_streams(*args, **kwargs)  # type: ignore[no-any-return]  # Defensive: unreachable
 
     def _receive_goaway_frame(self, frame):  # type: ignore[no-untyped-def]
@@ -110,7 +110,7 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
         if (
             err_code == 0
             and self._observable_impl is not None
-            and self._observable_impl._open_stream_count > 0
+            and self._observable_impl._open_streams
         ):
             self.state_machine.state = jh2.connection.ConnectionState.CLIENT_OPEN
 
@@ -161,7 +161,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             ),
             observable_impl=self,
         )
-        self._open_stream_count: int = 0
+        self._open_streams: set[int] = set()
         self._connection.initiate_connection()
         if JH2_NOT_RFC_COMPLIANT_SETTINGS:
             self._connection.increment_flow_control_window(2**24)
@@ -197,7 +197,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def is_available(self) -> bool:
         if self._terminated or self._goaway_to_honor:
             return False
-        return self._max_stream_count > self._open_stream_count
+        return self._max_stream_count > len(self._open_streams)
 
     @property
     def max_stream_count(self) -> int:
@@ -206,7 +206,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
     def is_idle(self) -> bool:
         if self._events.stream_count:
             return False
-        return not self._terminated and self._open_stream_count == 0
+        return not self._terminated and not self._open_streams
 
     def has_expired(self) -> bool:
         if len(self._pending_ping_ack) >= 2:
@@ -226,22 +226,26 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
         self._connection.send_headers(stream_id, headers, end_stream)
-        self._open_stream_count += 1
+        self._open_streams.add(stream_id)
 
     def submit_data(
         self, stream_id: int, data: bytes, end_stream: bool = False
     ) -> None:
         self._connection.send_data(stream_id, data, end_stream)
 
-    def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
+    def submit_stream_reset(self, stream_id: int, error_code: int = 8) -> None:
+        """Discard local events and cancel an unfinished stream (CANCEL)."""
+        self._events.discard(stream_id)
+        self._open_streams.discard(stream_id)
+        stream = self._connection.streams.get(stream_id)
+        if stream is None or stream.closed:
+            return
         try:
             self._connection.reset_stream(stream_id, error_code)
         except jh2.exceptions.StreamClosedError:
             # The peer may have closed the stream after the caller decided to
             # abort it but before the reset reached the HTTP/2 state machine.
             pass
-        else:
-            self._open_stream_count -= 1
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id)
@@ -261,30 +265,42 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
             if ev_type is jh2.events.DataReceived:
                 stream_id = e.stream_id
+                conn.acknowledge_received_data(e.flow_controlled_length, stream_id)
+                if stream_id not in self._open_streams:
+                    continue
                 end_stream = e.stream_ended is not None
                 if end_stream:
-                    self._open_stream_count -= 1
-                    stream = conn.streams.pop(stream_id)
-                    conn._closed_streams[stream_id] = stream.closed_by
-                conn.acknowledge_received_data(e.flow_controlled_length, stream_id)
+                    self._open_streams.discard(stream_id)
+                    stream = conn.streams[stream_id]
+                    if stream.closed:
+                        del conn.streams[stream_id]
+                        conn._closed_streams[stream_id] = stream.closed_by
                 yield DataReceived(stream_id, e.data, end_stream=end_stream)
             elif ev_type in HEADER_OR_TRAILER_TYPE_SET:
                 stream_id = e.stream_id
+                if stream_id not in self._open_streams:
+                    continue
                 end_stream = e.stream_ended is not None
                 if end_stream:
-                    self._open_stream_count -= 1
-                    stream = conn.streams.pop(stream_id)
-                    conn._closed_streams[stream_id] = stream.closed_by
+                    self._open_streams.discard(stream_id)
+                    stream = conn.streams[stream_id]
+                    if stream.closed:
+                        del conn.streams[stream_id]
+                        conn._closed_streams[stream_id] = stream.closed_by
                 yield HeadersReceived(stream_id, e.headers, end_stream=end_stream)
             elif ev_type is jh2.events.InformationalResponseReceived:
+                if e.stream_id not in self._open_streams:
+                    continue
                 yield EarlyHeadersReceived(
                     e.stream_id,
                     e.headers,
                 )
             elif ev_type is jh2.events.StreamReset:
-                self._open_stream_count -= 1
                 # event StreamEnded may occur before StreamReset
                 stream_id = e.stream_id
+                if stream_id not in self._open_streams:
+                    continue
+                self._open_streams.discard(stream_id)
                 if stream_id in conn.streams:
                     stream = conn.streams.pop(stream_id)
                     conn._closed_streams[stream_id] = stream.closed_by
@@ -301,7 +317,11 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                     yield GoawayReceived(e.last_stream_id, e.error_code)
                 else:
                     self._terminated = True
-                    yield ConnectionTerminated(e.error_code, None)
+                    error_name = getattr(e.error_code, "name", "UNKNOWN_ERROR")
+                    yield ConnectionTerminated(
+                        e.error_code,
+                        f"HTTP/2 peer sent GOAWAY with error {error_name} ({e.error_code:#x}).",
+                    )
             elif ev_type in SETTINGS_EVENT_SET:
                 yield HandshakeCompleted(alpn_protocol="h2")
             elif ev_type is jh2.events.PingAckReceived:
@@ -329,7 +349,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
         # we want to perpetually mark the connection as "saturated"
         if self._goaway_to_honor:
-            self._max_stream_count = self._open_stream_count
+            self._max_stream_count = len(self._open_streams)
 
         if self._connection.remote_settings.has_update:
             if not self._goaway_to_honor:

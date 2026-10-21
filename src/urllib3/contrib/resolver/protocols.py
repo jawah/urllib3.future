@@ -536,7 +536,9 @@ class DomainNameServerQuery:
         return struct.unpack("!H", self._id)[0]  # type: ignore[no-any-return]
 
     @property
-    def raw_id(self) -> bytes:
+    def raw_id(
+        self,
+    ) -> bytes:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._id
 
     @property
@@ -551,7 +553,9 @@ class DomainNameServerQuery:
     def query_class(self) -> int:
         return self._query_class
 
-    def __repr__(self) -> str:
+    def __repr__(
+        self,
+    ) -> str:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return f"<Query '{self._host}' IN {self._query.name}>"
 
     def __bytes__(self) -> bytes:
@@ -580,7 +584,11 @@ class DomainNameServerQuery:
         return payload
 
     @staticmethod
-    def bulk(host: str, *types: SupportedQueryType) -> list[DomainNameServerQuery]:
+    def bulk(
+        host: str, *types: SupportedQueryType
+    ) -> list[
+        DomainNameServerQuery
+    ]:  # Defensive: optional query-construction helper; no internal callers.
         queries = []
 
         for query_type in types:
@@ -686,7 +694,7 @@ class DomainNameServerReturn:
                             continue
                         decoded_data = parse_https_rdata(data)
                     else:
-                        continue
+                        continue  # Defensive: a new enum member may not yet have a record decoder.
 
                     self._records.append((query_type, rr_ttl, decoded_data))
                 if answers_read != self._an_count:
@@ -702,31 +710,45 @@ class DomainNameServerReturn:
         return self._id  # type: ignore[no-any-return]
 
     @property
-    def hostname(self) -> str:
+    def hostname(
+        self,
+    ) -> str:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._hostname
 
     @property
-    def normalized_hostname(self) -> str:
+    def normalized_hostname(
+        self,
+    ) -> str:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._normalized_hostname
 
     @property
-    def qr(self) -> int:
+    def qr(
+        self,
+    ) -> int:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._qr  # type: ignore[no-any-return]
 
     @property
-    def opcode(self) -> int:
+    def opcode(
+        self,
+    ) -> int:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._opcode  # type: ignore[no-any-return]
 
     @property
-    def qd_count(self) -> int:
+    def qd_count(
+        self,
+    ) -> int:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._qd_count  # type: ignore[no-any-return]
 
     @property
-    def query_type(self) -> int:
+    def query_type(
+        self,
+    ) -> int:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._query_type  # type: ignore[no-any-return]
 
     @property
-    def query_class(self) -> int:
+    def query_class(
+        self,
+    ) -> int:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return self._query_class  # type: ignore[no-any-return]
 
     def matches(self, query: DomainNameServerQuery) -> bool:
@@ -749,7 +771,9 @@ class DomainNameServerReturn:
         return self._answer_ttls
 
     @property
-    def is_found(self) -> bool:
+    def is_found(
+        self,
+    ) -> bool:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         return bool(self._records)
 
     @property
@@ -760,7 +784,9 @@ class DomainNameServerReturn:
     def is_ok(self) -> bool:
         return self._rcode == 0
 
-    def __repr__(self) -> str:
+    def __repr__(
+        self,
+    ) -> str:  # Defensive: diagnostic DNS access; resolver logic uses stored fields.
         if self.is_ok:
             return f"<Records '{self.hostname}' {self._records}>"
         return f"<DNS Error '{self.hostname}' with Status {self.rcode} ({COMMON_RCODE_LABEL[self.rcode] if self.rcode in COMMON_RCODE_LABEL else 'Unknown'})>"

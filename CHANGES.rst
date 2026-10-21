@@ -1,3 +1,62 @@
+2.25.903 (2026-10-21)
+=====================
+
+- The ``python-socks`` dependency will be removed in a future release. We are
+  evaluating alternatives. Version 3 is incompatible with our SOCKS integration
+  and must not be installed. The dependency remains capped at <=2.8.1 (#437)
+- Fixed HTTP/2 GOAWAY errors reporting ``None`` instead of the error code.
+  Errors now include the code and its name when known, in both sync and async. (#436)
+- Improved HTTP/3 connection close errors to include the error code and its name
+  when known, while preserving the peer's explanation, in both sync and async.
+- Fixed QUIC TLS alerts other than ``bad_certificate`` being reported as
+  ``ProtocolError`` instead of ``SSLError``, in both sync and async. HTTP/3
+  application errors with overlapping codes remain ``ProtocolError``.
+- Fixed protocol restrictions for a web extension leaking into other connection
+  pools through shared settings, in both sync and async. (#433)
+- Fixed redirect header handling comparing against the proxy's origin instead
+  of the request's origin. Cross-origin redirects now rebuild the ``Host`` header
+  and apply the configured sensitive-header policy, including deferred responses,
+  in both sync and async. Backported from https://github.com/urllib3/urllib3/pull/5126.
+- Fixed ``Retry.parse_retry_after()`` raising ``ValueError`` or ``OverflowError``
+  for dates outside the supported range. It now raises ``InvalidHeader``, in both
+  sync and async. Backported from https://github.com/urllib3/urllib3/pull/5310.
+- Fixed incomplete pool shutdown leaving connections open after their last
+  response was consumed or closed. Responses and promises returned before
+  shutdown remain readable and retrievable, in both sync and async. (#432)
+- Fixed closing an HTTP/2 or HTTP/3 response interrupting other responses on
+  the shared connection. Unfinished streams are cancelled and their queued
+  data is discarded, allowing connection reuse, in both sync and async.
+- Fixed cancellation of the async idle connection watcher leaving a connection
+  checked out and preventing its cleanup during pool shutdown.
+- Fixed the synchronous idle connection watcher retaining its checkout and lock
+  after an early exit when generator cleanup is delayed, notably on PyPy.
+- Fixed garbage collection of unread synchronous responses blocking the collecting
+  thread while waiting for a connection checkout, notably on PyPy.
+- Fixed concurrent synchronous connection cleanup raising ``AttributeError``
+  when another thread closed the same connection.
+- Fixed oversized QUIC probes aborting synchronous HTTP/3 sends or causing
+  subsequent async UDP reads to fail, including on Windows. Rejected oversized
+  datagrams are now consistently discarded so valid traffic can continue.
+- Fixed unrestricted response reads losing buffered decompressed data after a
+  partial read. Zero-byte reads also leave the transport and decoder untouched,
+  in both sync and async.
+- Improved gzip decompression performance by avoiding unnecessary copies when
+  only one output chunk is produced, in both sync and async.
+  Backported from https://github.com/urllib3/urllib3/pull/5304.
+- Fixed DNS over QUIC sockets remaining open after protocol termination, in both
+  sync and async, and when synchronous setup fails during the handshake or
+  because no default CA certificates are available.
+- Fixed DNS over QUIC certificate failures being reported as socket timeouts
+  while waiting for the QUIC closing timer, in both sync and async.
+- Fixed async Happy Eyeballs DNS timeouts being reported as ``ProtocolError``
+  instead of ``NameResolutionError``.
+- Fixed zero-byte receives waiting for input on native async WASI sockets,
+  including TLS connections.
+- Fixed address queries on closed native WASI sockets raising ``AttributeError``
+  instead of ``OSError``, in both sync and async.
+- Fixed requests with custom header mappings lacking a ``copy()`` method raising
+  ``AttributeError`` before connection setup, in both sync and async.
+
 2.25.902 (2026-10-04)
 =====================
 

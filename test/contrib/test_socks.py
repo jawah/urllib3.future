@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
-from dummyserver.testcase import IPV4SocketDummyServerTestCase
+from dummyserver.testcase import IPV4SocketDummyServerTestCase, consume_socket
 from urllib3.contrib import socks
 from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
 
@@ -63,6 +63,8 @@ def _read_exactly(sock: socket.socket, amt: int) -> bytes:
 
     while amt > 0:
         chunk = sock.recv(amt)
+        if not chunk:
+            raise ConnectionAbortedError("Peer closed during SOCKS negotiation")
         data += chunk
         amt -= len(chunk)
 
@@ -76,11 +78,34 @@ def _read_until(sock: socket.socket, char: bytes) -> bytes:
     chunks = []
     while True:
         chunk = sock.recv(1)
+        if not chunk:
+            raise ConnectionAbortedError("Peer closed during SOCKS negotiation")
         chunks.append(chunk)
         if chunk == char:
             break
 
     return b"".join(chunks)
+
+
+@pytest.mark.parametrize("operation", ["exactly", "until"])
+def test_negotiation_reader_stops_on_eof(operation: str) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    reader, writer = socket.socketpair()
+    with reader, writer, ThreadPoolExecutor(1) as executor:
+        reader.settimeout(5)
+        writer.sendall(b"a")
+        writer.shutdown(socket.SHUT_WR)
+        reading = (
+            executor.submit(_read_exactly, reader, 2)
+            if operation == "exactly"
+            else executor.submit(_read_until, reader, b"\x00")
+        )
+        try:
+            with pytest.raises(ConnectionAbortedError, match="SOCKS negotiation"):
+                reading.result(5)
+        finally:
+            reader.close()
 
 
 def _address_from_socket(sock: socket.socket) -> bytes | str:
@@ -884,41 +909,37 @@ class TestSOCKSWithTLS(IPV4SocketDummyServerTestCase):
     @pytest.mark.skipif(not HAS_SSL, reason="No TLS available")
     def test_basic_request(self) -> None:
         def request_handler(listener: socket.socket) -> None:
-            sock = listener.accept()[0]
+            listener.settimeout(10)
+            with listener.accept()[0] as sock:
+                sock.settimeout(10)
+                handler = handle_socks5_negotiation(sock, negotiate=False)
+                addr, port = next(handler)
 
-            handler = handle_socks5_negotiation(sock, negotiate=False)
-            addr, port = next(handler)
+                assert addr == b"localhost"
+                assert port == 443
+                with pytest.raises(StopIteration):
+                    handler.send(True)
 
-            assert addr == b"localhost"
-            assert port == 443
-            with pytest.raises(StopIteration):
-                handler.send(True)
-
-            # Wrap in TLS
-            context = better_ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)  # type: ignore[misc]
-            context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
-            tls = context.wrap_socket(sock, server_side=True)
-            buf = b""
-
-            while True:
-                buf += tls.recv(65535)
-                if buf.endswith(b"\r\n\r\n"):
-                    break
-
-            assert buf.startswith(b"GET / HTTP/1.1\r\n")
-
-            tls.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Server: SocksTestServer\r\n"
-                b"Content-Length: 0\r\n"
-                b"\r\n"
-            )
-            tls.close()
-            sock.close()
+                # Bound the TLS handshake and request read as well as negotiation.
+                context = better_ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)  # type: ignore[misc]
+                context.load_cert_chain(
+                    DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"]
+                )
+                with context.wrap_socket(sock, server_side=True) as tls:
+                    buf = consume_socket(tls)
+                    assert buf.startswith(b"GET / HTTP/1.1\r\n")
+                    tls.sendall(
+                        b"HTTP/1.1 200 OK\r\n"
+                        b"Server: SocksTestServer\r\n"
+                        b"Content-Length: 0\r\n"
+                        b"\r\n"
+                    )
 
         self._start_server(request_handler)
         proxy_url = f"socks5h://{self.host}:{self.port}"
-        with socks.SOCKSProxyManager(proxy_url, ca_certs=DEFAULT_CA) as pm:
+        with socks.SOCKSProxyManager(
+            proxy_url, ca_certs=DEFAULT_CA, timeout=10, retries=False
+        ) as pm:
             response = pm.request("GET", "https://localhost")
 
             assert response.status == 200

@@ -4,57 +4,63 @@ Advanced Usage
 .. currentmodule:: urllib3
 
 
+.. _pool-behavior:
+
 Customizing Pool Behavior
 -------------------------
 
-The :class:`~poolmanager.PoolManager` class automatically handles creating
-:class:`~connectionpool.ConnectionPool` instances for each host as needed. By
-default, it will keep a maximum of 10 :class:`~connectionpool.ConnectionPool`
-instances. If you're making requests to many different hosts it might improve
-performance to increase this number.
+A :class:`~poolmanager.PoolManager` creates connection pools as needed. Pool
+identity includes the origin and connection policy, including TLS, proxy, and
+protocol settings. Requests to the same hostname can therefore use different
+pools. For example, ordinary HTTPS and an HTTP/1.1-only WebSocket extension
+can select separate pools; the extension's restrictions do not change the
+manager's settings for other requests.
+
+.. list-table:: Pool sizing defaults
+    :header-rows: 1
+
+    * - Setting
+      - Meaning
+      - Default
+    * - ``PoolManager(num_pools=...)``
+      - Capacity of the manager's active pool cache
+      - ``10``
+    * - ``PoolManager(maxsize=...)``
+      - Connection capacity of each pool the manager creates
+      - The manager's ``num_pools`` value if omitted
+    * - ``HTTPConnectionPool(maxsize=...)`` / ``HTTPSConnectionPool(maxsize=...)``
+      - Connection capacity of a directly constructed pool
+      - ``1``
+
+Set both manager dimensions explicitly when tuning them independently:
 
 .. code-block:: python
 
     import urllib3
 
-    http = urllib3.PoolManager(num_pools=50)
+    with urllib3.PoolManager(num_pools=50, maxsize=10, block=True) as pm:
+        response = pm.request(
+            "GET", "https://httpbin.org/get", pool_timeout=5
+        )
+        print(response.status)
 
-However, keep in mind that this does increase memory and socket consumption.
+The built-in pool scheduler can reuse an HTTP/2 or HTTP/3 connection while it
+still has other streams in progress. ``maxsize`` counts connections, not
+concurrent requests. The peer's stream limits and the availability of a
+connection for the next operation also affect when a request can proceed.
+Use an application semaphore or worker queue to bound request concurrency;
+see :doc:`async` for an example.
 
-Similarly, the :class:`~connectionpool.ConnectionPool` class keeps a pool
-of individual :class:`~connection.HTTPConnection` instances. These connections
-are used during an individual request and returned to the pool when the request
-is complete. By default only one connection will be saved for re-use. If you
-are making many requests to the same host simultaneously it might improve
-performance to increase this number.
+At capacity, connection acquisition can wait. In the current built-in scheduler
+this can also happen with ``block=False``: it does not provide the upstream
+queue behavior of creating disposable overflow connections. Use
+``pool_timeout`` on a request to bound this wait. It is separate from the
+connect and read timeouts; its default is ``None`` (no acquisition deadline).
 
-.. code-block:: python
-
-    import urllib3
-
-    http = urllib3.PoolManager(maxsize=10)
-    # Alternatively
-    pool = urllib3.HTTPConnectionPool("google.com", maxsize=10)
-
-The behavior of the pooling for :class:`~connectionpool.ConnectionPool` is
-different from :class:`~poolmanager.PoolManager`. By default, if a new
-request is made and there is no free connection in the pool then a new
-connection will be created. However, this connection will not be saved if more
-than ``maxsize`` connections exist. This means that ``maxsize`` does not
-determine the maximum number of connections that can be open to a particular
-host, just the maximum number of connections to keep in the pool. However, if you specify ``block=True`` then there can be at most ``maxsize`` connections
-open to a particular host.
-
-.. code-block:: python
-
-    http = urllib3.PoolManager(maxsize=10, block=True)
-
-    # Alternatively
-    pool = urllib3.HTTPConnectionPool("google.com", maxsize=10, block=True)
-
-Any new requests will block until a connection is available from the pool.
-This is a great way to prevent flooding a host with too many connections in
-multi-threaded applications.
+These settings are not a process-wide socket limit. Different policies can
+create separate pools, Happy Eyeballs can attempt multiple addresses, and
+responses retained across manager shutdown can keep old connections alive
+while new pools are created.
 
 .. _stream:
 .. _streaming_and_io:
@@ -62,125 +68,149 @@ multi-threaded applications.
 Streaming and I/O
 -----------------
 
-When using ``preload_content=True`` (the default setting) the
-response body will be read immediately into memory and the HTTP connection
-will be released back into the pool without manual intervention.
+With ``preload_content=True`` (the default), a normal request reads its response
+body into memory before returning. Connection ownership is released
+without a manual ``release_conn()`` call.
 
-However, when dealing with large responses it's often better to stream the response
-content using ``preload_content=False``. Setting ``preload_content`` to ``False`` means
-that urllib3 will only read from the socket when data is requested.
-
-.. note:: When using ``preload_content=False``, you need to manually release
-    the HTTP connection back to the connection pool so that it can be re-used.
-    To ensure the HTTP connection is in a valid state before being re-used
-    all data should be read off the wire.
-
-    You can call the  :meth:`~response.HTTPResponse.drain_conn` to throw away
-    unread data still on the wire. This call isn't necessary if data has already
-    been completely read from the response.
-
-    After all data is read you can call :meth:`~response.HTTPResponse.release_conn`
-    to release the connection into the pool.
-
-    You can call the :meth:`~response.HTTPResponse.close` to close the connection,
-    but this call doesn’t return the connection to the pool, throws away the unread
-    data on the wire, and leaves the connection in an undefined protocol state.
-    This is desirable if you prefer not reading data from the socket to re-using the
-    HTTP connection.
-
-:meth:`~response.HTTPResponse.stream` lets you iterate over chunks of the response content.
+Use ``preload_content=False`` to return after the response headers and consume
+the body incrementally. Protocol processing may already have buffered some
+body data; further network reads happen as you consume the response.
 
 .. code-block:: python
+    :name: sync-streaming-example
 
     import urllib3
 
-    resp = urllib3.request(
-        "GET",
-        "https://httpbin.org/bytes/1024",
-        preload_content=False
-    )
+    with urllib3.PoolManager() as pm:
+        response = pm.request(
+            "GET", "https://httpbin.org/bytes/1024", preload_content=False
+        )
+        try:
+            total = 0
+            for chunk in response.stream(64 * 1024):
+                total += len(chunk)
+            print(total)
+        finally:
+            response.close()
 
-    for chunk in resp.stream(32):
-        print(chunk)
-        # b"\x9e\xa97'\x8e\x1eT ....
+The ``finally`` block also handles an early ``break`` or an exception while
+processing a chunk. Reading to completion normally releases the connection
+automatically. For the async equivalent, see :ref:`async-streaming`.
 
-    resp.release_conn()
+.. _response-lifecycle:
 
-If you desire to iterate over chunks as soon as they arrive, specify ``-1`` as the **amt**.
+Consume, discard, or close a response
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+    :header-rows: 1
+    :widths: 25 75
+
+    * - Operation
+      - Effect
+    * - Read or stream the entire body
+      - Consume the response and release ownership in normal managed use.
+        A healthy connection can be reused.
+    * - ``response.drain_conn()``
+      - Read and discard the remaining wire body without decompressing it.
+        This may perform network I/O and allows reuse when the exchange finishes
+        successfully.
+    * - ``response.close()``
+      - Abandon the response and discard buffered data. An unfinished HTTP/1.1
+        response requires connection disposal. For HTTP/2 and HTTP/3, an
+        unfinished stream is cancelled while other streams can continue on a
+        healthy connection. A reset-write or transport failure can still require
+        closing the connection.
+    * - ``response.release_conn()``
+      - Return held connection ownership. This compatibility operation does not
+        drain or abort unread data and is not a substitute for the operations
+        above.
+
+If the wire exchange has already completed, closing unread local buffers need
+not close the connection. Close each response you stop consuming, including
+when using a manager context; do not rely on garbage collection for cleanup.
+For async responses, await ``drain_conn()`` and ``close()``.
+
+Manager and pool shutdown
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionchanged:: 2.25.903
+    Responses and promises returned before shutdown retain the connection
+    ownership needed to finish reading or collecting their existing exchange.
+
+``PoolManager.clear()`` and leaving a manager context close its pools. Returned
+responses remain readable, and returned ``ResponsePromise`` objects remain
+retrievable. Their connections are disposed of after the remaining responses
+are consumed or closed. The manager can create new pools for later requests.
+A directly closed connection pool rejects new requests.
+
+A request that has not yet returned a response or promise can fail if shutdown
+wins the race. Retries and redirects can also require new requests, so normally
+collect promises and finish or close responses before shutting down their owner.
+These rules apply to both APIs. Task cancellation has additional consequences;
+see :ref:`async-cancellation`.
+
+.. _response-read-semantics:
+
+Choosing a read method
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+    :header-rows: 1
+    :widths: 24 38 38
+
+    * - Operation
+      - Synchronous response
+      - Asynchronous response
+    * - ``read()`` / ``read(None)``
+      - Read the remaining body
+      - Await to read the remaining body
+    * - ``read(n)`` with ``n > 0``
+      - Read up to ``n`` bytes, waiting for data or EOF
+      - Await up to ``n`` bytes, waiting for data or EOF
+    * - ``read(-1)`` (or another negative size)
+      - Read the remaining body, since 2.25.902
+      - Await an incremental read, retained for backward compatibility
+    * - ``read1()`` / ``read1(-1)``
+      - Incremental read; may wait for input
+      - Await an incremental read; may wait for input
+    * - ``read(0)`` / ``read1(0)``
+      - Return ``b""`` without advancing the body or decoder
+      - Await to obtain ``b""`` without advancing the body or decoder
+    * - ``stream(n)``
+      - Iterate with ``for``
+      - Iterate with ``async for``
+
+``stream(-1)`` uses incremental reads in both APIs. It can wait for input;
+``-1`` does not mean non-blocking socket polling. Neither positive chunk sizes
+nor incremental reads preserve TCP packet, TLS record, or HTTP frame boundaries.
+Content decompression can also change chunk sizes.
+
+File-like readers
+~~~~~~~~~~~~~~~~~
+
+A synchronous response can be wrapped by file-like consumers. Keep the response
+lifetime explicit even if the consumer only reads a prefix:
 
 .. code-block:: python
-
-    import urllib3
-
-    resp = urllib3.request(
-        "GET",
-        "https://httpbin.org/bytes/1024",
-        preload_content=False
-    )
-
-    for chunk in resp.stream(-1):
-        print(chunk)
-        # b"\x9e\xa97'\x8e\x1eT ....
-
-    resp.release_conn()
-
-However, you can also treat the :class:`~response.HTTPResponse` instance as
-a file-like object. This allows you to do buffering:
-
-.. code-block:: python
-
-    import urllib3
-
-    resp = urllib3.request(
-        "GET",
-        "https://httpbin.org/bytes/1024",
-        preload_content=False
-    )
-
-    print(resp.read(4))
-    # b"\x88\x1f\x8b\xe5"
-
-Calls to :meth:`~response.HTTPResponse.read()` will block until more response
-data is available.
-
-.. code-block:: python
+    :name: buffered-response-example
 
     import io
     import urllib3
 
-    resp = urllib3.request(
-        "GET",
-        "https://httpbin.org/bytes/1024",
-        preload_content=False
-    )
+    with urllib3.PoolManager() as pm:
+        response = pm.request(
+            "GET", "https://httpbin.org/bytes/1024", preload_content=False
+        )
+        try:
+            with io.BufferedReader(response, buffer_size=8192) as reader:
+                print(reader.read(4))
+        finally:
+            response.close()
 
-    reader = io.BufferedReader(resp, 8)
-    print(reader.read(4))
-    # b"\xbf\x9c\xd6"
-
-    resp.release_conn()
-
-You can use this file-like object to do things like decode the content using
-:mod:`codecs`:
-
-.. code-block:: python
-
-    import codecs
-    import json
-    import urllib3
-
-    reader = codecs.getreader("utf-8")
-
-    resp = urllib3.request(
-        "GET",
-        "https://httpbin.org/ip",
-        preload_content=False
-    )
-
-    print(json.load(reader(resp)))
-    # {"origin": "127.0.0.1"}
-
-    resp.release_conn()
+For complete JSON responses, ``response.json()`` handles decoding directly.
+For incremental text processing, use an incremental decoder so a multibyte
+character split across chunks is preserved.
 
 .. _proxies:
 
@@ -652,143 +682,128 @@ flag that isn't set by default, and then makes a HTTPS request:
     from urllib3 import PoolManager
     from urllib3.util import create_urllib3_context
 
-    ctx = create_urllib3_context()
+    ctx = create_urllib3_context(ssl_backend="ssl")
     ctx.load_default_certs()
     ctx.options |= ssl.OP_ENABLE_MIDDLEBOX_COMPAT
 
-    with PoolManager(ssl_context=ctx) as pool:
+    with PoolManager(ssl_context=ctx, ssl_backend="ssl") as pool:
         pool.request("GET", "https://www.google.com/")
 
 Note that this is different from passing an ``options`` argument to
 :func:`~urllib3.util.create_urllib3_context` because we don't overwrite
 the default options: we only add a new one.
 
+.. _protocol-selection:
+
 Remembering HTTP/3 over QUIC support
 ------------------------------------
 
-There is a chance that you may want to speed up HTTP/3 negotiation. urllib3 does
-not remember if a particular host, port HTTP server is capable of serving QUIC.
+For HTTPS over TCP, TLS ALPN negotiates an allowed HTTP version with the server.
+An ``Alt-Svc`` response header can advertise an HTTP/3 endpoint for later use.
+A custom DNS resolver that supplies HTTPS records can also discover HTTP/3
+before the first TCP connection, when ``quic_upgrade_via_dns_rr`` is enabled.
+HTTP/3 requires the optional ``qh3`` dependency and a supported platform.
 
-In practice, we always have to initiate a TCP connection and then observe the first response headers
-in order to determine if the remote is capable of communicating through QUIC.
+The protocol used by a request is reported as ``response.version``: ``11``,
+``20``, or ``30``. Availability depends on the server, installed dependencies,
+resolver, proxy configuration, and allowed protocol versions. A proxy route can
+prevent an otherwise available HTTP/3 upgrade.
 
-.. note:: Since urllib3.future 2.4+ we are capable of asking for DNS HTTPS records to preemptively connect using HTTP/3 over QUIC.
-
-.. note::
-
-    HTTP/3 require installing ``qh3`` package if not automatically grabbed.
+Use ``preemptive_quic_cache`` to share discovered HTTP/3 endpoints between
+managers, or to supply entries saved by your application:
 
 .. code-block:: python
 
     from urllib3 import PoolManager
 
-    quic_cache = dict()
+    quic_cache = {}
+    with PoolManager(preemptive_quic_cache=quic_cache) as pm:
+        response = pm.request("GET", "https://www.cloudflare.com/")
+        print(response.version)
 
-    with PoolManager(preemptive_quic_cache=quic_cache) as pool:
-        pool.request("GET", "https://www.cloudflare.com")
+The cache accepts a mutable mapping from ``(host, port)`` to an alternative
+``(host, port)`` or ``None``. Entries depend on discovery and successful use;
+the example does not guarantee a particular entry or protocol. Coordinate
+access if your application shares the mapping across threads, and manage
+persistence yourself. Cached Alt-Svc entries cannot switch hostnames.
 
-In bellow example, the variable ``quic_cache`` will be populated with a single entry and
-if you pickle and restore this variable in between interpreter run, it should not make TCP connection
-prior to the QUIC one.
+.. _explicitly-disable-http-2-and-or-http-3:
 
-urllib3 is meant to be thread safe, so we do not provide any 'default' solution for the caching. It
-is up to you.
+Selecting HTTP versions
+-----------------------
 
-``preemptive_quic_cache`` takes any ``MutableMapping[Tuple[str, int], Tuple[str, int] | None]``.
-
-Note that to lower the attack surface we won't allow hostname switching from saved Alt-Svc entry.
-
-Explicitly disable HTTP/2 and/or HTTP/3
----------------------------------------
-
-You can, at your own discretion, disable HTTP/2 and/or HTTP/3 by passing the argument ``disabled_svn``
-to your ``PoolManager``.
-It takes a ``set`` of ``HttpVersion`` like so:
+Pass ``disabled_svn`` as a set of :class:`~urllib3.backend.HttpVersion` values to a
+manager or connection pool:
 
 .. code-block:: python
 
     from urllib3 import PoolManager, HttpVersion
 
-    with PoolManager(disabled_svn={HttpVersion.h3, HttpVersion.h2}) as pool:
-        resp = pool.request("GET", "https://www.cloudflare.com")
-        print(resp.version)  # 11
+    with PoolManager(disabled_svn={HttpVersion.h2, HttpVersion.h3}) as pm:
+        response = pm.request("GET", "https://httpbin.org/get")
+        print(response.version)  # 11
 
-.. note::
+HTTP/1.1 can also be disabled. For a plain ``http://`` endpoint known to speak
+HTTP/2, disabling HTTP/1.1 selects :ref:`HTTP/2 prior knowledge <h2-prior-knowledge>`.
+Restrictions do not add capabilities to a server: a request can fail if no
+allowed protocol is usable. Web extensions can impose additional restrictions,
+which participate in :ref:`pool selection <pool-behavior>`.
 
-    HTTP/3 require installing ``qh3`` package if not automatically available. Setting disabled_svn has no effect otherwise.
-    Also, you cannot disable HTTP/1.1 at the current state of affairs.
+.. _multiplexed-responses:
 
-Multiplexed connection
-----------------------
+Multiplexed connections and deferred responses
+----------------------------------------------
 
-Since the version 2.2 you can emit multiple concurrent requests and retrieve the responses later.
-A new keyword argument is available in ``PoolManager``, ``HTTPPoolConnection`` through the following methods:
+Ordinary ``request()`` calls can already use HTTP/2 or HTTP/3 and share their
+connections with requests from other threads or tasks. ``multiplexed=True``
+additionally separates issuing a request from retrieving its response.
 
-- :meth:`~urllib3.PoolManager.request`
-- :meth:`~urllib3.PoolManager.urlopen`
-- :meth:`~urllib3.PoolManager.request_encode_url`
-- :meth:`~urllib3.PoolManager.request_encode_body`
+On a multiplexed connection, the initial call returns a
+:class:`~urllib3.backend.ResponsePromise`. Sending the request body still happens
+as part of that call; a promise does not create a background upload task.
+On HTTP/1.1, the same call returns an immediate response instead. Check the
+return type so the code also works when multiplexing is unavailable:
 
-When you omit ``multiplexed=...`` it default to the old behavior of waiting upon the response and return a :class:`~urllib3.response.HTTPResponse`
-otherwise if you specify ``multiplexed=True`` it will return a :class:`~urllib3.backend.ResponsePromise` instead.
+.. code-block:: python
+    :name: sync-deferred-example
 
-Here is an example::
+    import urllib3
 
-    from urllib3 import PoolManager
+    with urllib3.PoolManager() as pm:
+        pending = [
+            pm.urlopen("GET", url, multiplexed=True)
+            for url in ("https://httpbin.org/get", "https://httpbin.org/ip")
+        ]
+        for result in pending:
+            if isinstance(result, urllib3.ResponsePromise):
+                response = pm.get_response(promise=result)
+            else:
+                response = result
+            if response is None:
+                raise RuntimeError("No response could be collected")
+            print(response.status, response.data)
 
-    with PoolManager() as pm:
-        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
-        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
-        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
-        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
-        response0 = pm.get_response()
-        # the second request arrived first
-        response0.json()["url"]  # https://pie.dev/delay/1
-        # the first arrived last
-        response1 = pm.get_response()
-        response1.json()["url"]  # https://pie.dev/delay/3
+``get_response(promise=...)`` requests that particular response.
+``get_response()`` without a promise selects an available pending exchange;
+there is no guaranteed global arrival order across pools. Retrieval can perform
+network I/O and wait for response data. It is not a non-blocking socket poll.
+``None`` means no response could be collected by that call, for example because
+no pending exchange is available or another caller holds the required pool.
+It does not prove that other tasks have finished their requests.
 
-  or you may do::
+Errors may occur when issuing the request or later during ``get_response()``.
+Read timeouts and retry handling apply during retrieval. Collect promises inside
+the manager context in normal use; see :ref:`response-lifecycle` for the shutdown
+guarantees introduced in 2.25.903. An HTTP/3 upgrade may need to wait until active
+exchanges have finished. The :doc:`async` guide shows the equivalent awaited API.
 
-    from urllib3 import PoolManager
+Associate a promise with its response
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    with PoolManager() as pm:
-        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
-        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
-        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
-        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
-        response0 = pm.get_response(promise=promise0)
-        # forcing retrieving promise0
-        response0.json()["url"]  # https://pie.dev/delay/3
-        # then pick first available
-        response1 = pm.get_response()
-        response1.json()["url"]  # https://pie.dev/delay/1
-
-.. note:: You cannot expect the connection upgrade to HTTP/3 if all in-flight request aren't consumed.
-
-.. warning:: Using ``multiplexed=True`` if the target connection does not support it is ignored and assume you meant ``multiplexed=False``. It will raise a warning in a future version.
-
-Associate a promise to its response
------------------------------------
-
-When issuing concurrent request using ``multiplexed=True`` and want to retrieve
-the responses in whatever order they may come, you may want to clearly identify the originating promise.
-
-To identify with certainty::
-
-    from urllib3 import PoolManager
-
-    with PoolManager() as pm:
-        promise0 = pm.urlopen("GET", "https://pie.dev/delay/3", multiplexed=True)
-        # <ResponsePromise 'IOYTFooi0bCuaQ9mwl4HaA==' HTTP/2.0 Stream[1]>
-        promise1 = pm.urlopen("GET", "https://pie.dev/delay/1", multiplexed=True)
-        # <ResponsePromise 'U9xT9dPVGnozL4wzDbaA3w==' HTTP/2.0 Stream[3]>
-        response = pm.get_response()
-        # verify that response is linked to second promise
-        response.is_from_promise(promise0)
-        # True!
-        response.is_from_promise(promise1)
-        # False.
+``response.is_from_promise(promise)`` identifies the originating request. Use it
+when collecting without a specified promise instead of assuming that requests
+complete in submission order. A response collected with
+``get_response(promise=promise)`` belongs to that promise.
 
 In-memory client (mTLS) certificate
 -----------------------------------
@@ -810,7 +825,9 @@ You may give your certificate to urllib3.future this way::
     ) as https_pool:
         r = https_pool.request("GET", "/")
 
-.. note:: If your platform isn't served by this feature it will raise a warning and ignore the certificate.
+.. note:: If the selected backend cannot load an in-memory client identity, setup
+    raises an error. Supply ``cert_file`` and ``key_file`` paths when in-memory
+    certificate loading is unavailable.
 
 Inspect connection information and timings
 ------------------------------------------
@@ -882,7 +899,7 @@ See the following example::
         print(f"{total_sent} / {content_length} bytes", f"{is_completed=} {any_error=}")
 
     with PoolManager() as pm:
-        resp = pm.urlopen("POST", "https://httpbin.org/post", data=b"foo"*1024*10, on_upload_body=track)
+        resp = pm.urlopen("POST", "https://httpbin.org/post", body=b"foo"*1024*10, on_upload_body=track)
 
 Using a Custom DNS Resolver
 ---------------------------
@@ -1343,23 +1360,25 @@ When passing the resolver as a plain string url, you can do as follow::
 
     from urllib3 import PoolManager
 
-    with PoolManager(resolver="doh+google://default?timeout=2&cert_reqs=0") as pm:
-        pm.urlopen(...)
+    with PoolManager(resolver="doh+google://default?timeout=2") as pm:
+        pm.request("GET", "https://httpbin.org/get")
 
-.. note:: The following set the timeout to 2 and disable the certificate verification.
+This sets a two-second resolver timeout and keeps certificate verification enabled.
 
 It is also possible to pass more complex argument like **ca_cert_data** using a ``ResolverDescription`` instance::
 
     from urllib3 import PoolManager, ResolverDescription
     import wassima
 
-    my_resolver = ResolverDescription.from_url("doh+google://default?timeout=2&cert_reqs=0")
+    my_resolver = ResolverDescription.from_url("doh+google://default?timeout=2")
     my_resolver["ca_cert_data"] = wassima.generate_ca_bundle()
 
-    with PoolManager(resolver="doh+google://default?timeout=2") as pm:
-        pm.urlopen(...)
+    with PoolManager(resolver=my_resolver) as pm:
+        pm.request("GET", "https://httpbin.org/get")
 
-.. note:: That example showcase how to inject your OS trust store CA to be used with the DNS connection verification.
+The optional ``wassima`` package (``python -m pip install wassima``) reads the OS
+trust store. The configured description is passed to the manager, so its CA data
+is used to verify the DNS server.
 
 Create your own Resolver
 ------------------------
@@ -1374,27 +1393,27 @@ Use cases:
 - DNS over PostgreSQL (Using a database to translate hostnames)
 - DNS over Redis (Implementing a sharable persistent cache)
 
-.. note:: You can inherit any of ``urllib3.contrib.dot.TLSResolver``, ``urllib3.contrib.doq.QUICResolver``, ``urllib3.contrib.dou.PlainResolver``, or ``urllib3.contrib.doh.HTTPSResolver`` and add your own layer. e.g. the redis sharable cache layer.
+.. note:: You can inherit any of ``urllib3.contrib.resolver.dot.TLSResolver``, ``urllib3.contrib.resolver.doq.QUICResolver``, ``urllib3.contrib.resolver.dou.PlainResolver``, or ``urllib3.contrib.resolver.doh.HTTPSResolver`` and add your own layer. e.g. the redis sharable cache layer.
 
 DNSSEC
 ------
 
-When you leverage a DNS resolver that is not the default, meaning DNS over QUIC / TLS / HTTPS and UDP, that ships
-within urllib3.future native capabilities you should expect DNSSEC to be enforced. See https://www.cloudflare.com/learning/dns/dns-security/ for
-in-depth explanations on the matter.
+DNSSEC validation depends on the recursive resolver you configure.
+urllib3.future does not validate DNSSEC signature chains locally. Choosing
+DNS over TLS, HTTPS, or QUIC encrypts the DNS transport and, with certificate
+verification enabled, authenticates the DNS server. It does not by itself
+establish that the server validates DNSSEC.
 
-You can execute the following code to witness it::
+A validating recursive resolver can reject a domain with bogus DNSSEC records,
+which then surfaces as a resolution error in urllib3.future. For background,
+see `Cloudflare's DNSSEC explanation
+<https://www.cloudflare.com/learning/dns/dns-security/>`_.
 
-    from urllib3 import PoolManager
-
-    with PoolManager(resolver="doh+cloudflare://") as pm:
-        pm.urlopen("GET", "https://brokendnssec.net")
-
-This will raise an exception with the following message::
-
-     Failed to resolve 'brokendnssec.net' (DNSSEC validation failure. Check http://dnsviz.net/d/brokendnssec.net/dnssec/ and http://dnssec-debugger.verisignlabs.com/brokendnssec.net for errors)
-
-.. note:: You cannot circumvent that security check. It may be a life saver to you or your company. If you really want this feature shutdown, use `resolver=None`. You won't be able to support (secure) alternative DNS providers.
+The current resolver error messages classify DNS ``SERVFAIL`` (response code 2)
+as a DNSSEC validation failure. ``SERVFAIL`` also has other causes; the message
+alone is not proof of a failed signature check. Confirm the cause with your
+resolver's diagnostics. The system resolver's validation policy likewise
+belongs to the system or upstream DNS service.
 
 Use our Resolvers outside of urllib3-future
 -------------------------------------------
@@ -1457,7 +1476,7 @@ By writing exactly this::
     import socket
 
     with PoolManager(socket_family=socket.AF_INET) as pm:
-        pm.urlopen("GET, "https://pie.dev/get", on_post_connection=lambda ci: print(ci))
+        pm.urlopen("GET", "https://pie.dev/get", on_post_connection=lambda ci: print(ci))
 
 In this example, you are enforcing connecting to a IPv4 only address, and thanks to the callback ``on_post_connection``
 you will be able to inspect the ``ConnectionInfo`` and verify the destination address.
@@ -1493,12 +1512,14 @@ You will have to enable it this way::
 
     import urllib3
 
-    async with urllib3.AsyncPoolManager(happy_eyeballs=True) as pm:
-        ...
+    with urllib3.PoolManager(happy_eyeballs=True) as pm:
+        response = pm.request("GET", "https://httpbin.org/get")
+        print(response.status)
 
 .. note:: The keyword argument ``happy_eyeballs`` can be used in ``AsyncPoolManager``, ``AsyncHTTPConnectionPool`` and its synchronous counterparts.
 
-This feature works out-of-the-box no matter what protocol you are using or interpreter version.
+The synchronous implementation falls back to sequential connection attempts
+when threads are unavailable. See :doc:`wasi` for native socket limitations.
 
 Debug
 ~~~~~
@@ -1540,13 +1561,18 @@ Here is a simple example::
 
     import urllib3
 
-    async with urllib3.AsyncPoolManager(happy_eyeballs=10) as pm:
-        ...
+    with urllib3.PoolManager(happy_eyeballs=10) as pm:
+        response = pm.request("GET", "https://httpbin.org/get")
+        print(response.status)
 
-This will enable up to 10 concurrent connections. To be clear, with that setting,
-if your DNS resolver yield 6 addresses, you will spawn 6 tasks.
+This permits up to 10 concurrent connection attempts. Fewer are started if the
+resolver returns fewer candidate addresses. Async managers use tasks; synchronous
+managers use threads.
 
-.. warning:: Setting more than 20 is impracticable, DNS servers have a set limit of how many records can be returned. Most of the time, regular user are advised to leave the default value.
+Larger values increase temporary socket and scheduling costs. The default of
+four attempts is a useful starting point.
+
+.. _h2-prior-knowledge:
 
 HTTP/2 with prior knowledge
 ---------------------------
@@ -1606,62 +1632,70 @@ issue is a thing of the past.
 You may now inspect early responses like https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/100 (Continue) or
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/103 (Early Hint) with a mere callback.
 
-Fastly provide a test server that can helps you see that feature in action::
+A server may send zero or more informational responses. This example records
+them without assuming that a 103 response will arrive:
 
-    from urllib3 import PoolManager, HTTPResponse
+.. code-block:: python
+    :name: early-response-example
 
-    early_response: HTTPResponse | None = None
+    from urllib3 import PoolManager
 
-    def my_callback(caught_response: HTTPResponse) -> None:
-        nonlocal early_response
-        early_response = caught_response
+    early_responses = []
+
+    def on_early_response(response):
+        early_responses.append(response)
 
     with PoolManager() as pm:
-        response = pm.urlopen("GET", "https://early-hints.fastlylabs.com/", on_early_response=my_callback)
+        response = pm.request(
+            "GET", "https://early-hints.fastlylabs.com/",
+            on_early_response=on_early_response,
+        )
+        for early in early_responses:
+            print(early.status, early.headers)
+        print(response.status)
 
-    print(early_response.status)  # 103
-    print(early_response.headers) # HTTPHeaderDict({"Link": "...
-    print(response.status)  # 200
-
-This example works whether you enable manual multiplexing or using asyncio.
+For asynchronous requests, use an ``async def`` callback and await the request;
+see :doc:`async`. When using deferred responses, the callback can run during
+response retrieval.
 
 .. warning:: Some webservers may enable that feature on HTTP/2+ and disable it in HTTP/1.1. In urllib3-future case, that feature is available no matter the used protocol.
 
-.. note:: The status 101 (Switching Protocol) is never considered "early", therefor "response" will be the 101 one and "early_response" will be worth "None".
+.. note:: Status 101 (Switching Protocols) is the final upgrade response and is
+    not delivered through ``on_early_response``.
 
 .. note:: Any responses yielded through the "on_early_response" callback will never have a body per standards.
 
 Switching Protocol
 ------------------
 
-.. note:: Available since urllib3-future version 2.10 or greater.
-
-Manually passing from HTTP to a sub protocol can be achieved easily thanks to our ``DirectStreamAccess`` policy.
-If, for any reason, you wanted to negotiate ``WebSocket`` manually or any other proprietary protocol after receiving
-a ``101 Switching Protocol`` response or alike; you may access the RawExtensionFromHTTP that is available on your
-response object.
+A successful protocol switch exposes ``response.extension`` for exchanging
+subprotocol data. For WebSockets, use the implementations in :doc:`user-guide`.
+For a custom HTTP/1.1 upgrade, the following example requires a server on
+``localhost:8080`` that accepts the illustrative ``my-protocol`` upgrade:
 
 .. code-block:: python
 
     import urllib3
 
-    with urllib3.PoolManager() as pm:
-        resp = pm.urlopen("GET", "https://example.tld", headers={...})
+    with urllib3.PoolManager(
+        disabled_svn={urllib3.HttpVersion.h2, urllib3.HttpVersion.h3}
+    ) as pm:
+        response = pm.urlopen(
+            "GET", "http://localhost:8080/", timeout=10,
+            headers={"Connection": "Upgrade", "Upgrade": "my-protocol"},
+        )
+        try:
+            extension = response.extension
+            if extension is None:
+                raise RuntimeError(f"Upgrade was not accepted: {response.status}")
+            extension.send_payload(b"hello")
+            print(extension.next_payload())
+        finally:
+            response.close()
 
-        print(resp.status)  # output '101' for 'Switching Protocol' response status
-
-        print(resp.extension)  # output <class 'urllib3.contrib.webextensions.RawExtensionFromHTTP'>
-
-        print(resp.extension.next_payload())  # read from the stream
-        resp.extension.send_payload(b"..")  # write in the stream
-
-        # gracefully close the sub protocol.
-        resp.extension.close()
-
-
-.. note:: The important thing here, is that, when the server agrees to stop speaking HTTP in favor of something else, the ``response.extension`` is set and you will be able to exchange raw data at will.
-
-.. warning:: In HTTP/2 or HTTP/3 you want to replace ``"GET"`` by ``"CONNECT"`` and add a header named ``:protocol`` to issue a proper "Upgrade".
+HTTP/2 and HTTP/3 use extended CONNECT rather than these HTTP/1.1 upgrade
+headers. The server must advertise the required support. Select an extension
+that supports that protocol, as described for WebSockets in the user guide.
 
 Background unsolicited data
 ----------------------------
@@ -1680,35 +1714,40 @@ Setting it to ``None`` makes it disabled.
 
 .. warning:: Disabling this will void the effect of our automated keepalive.
 
-Server Side Event
------------------
+Server-Sent Events
+------------------
 
-.. note:: Upgrade urllib3-future to 2.12+ or later to benefit from this.
-
-You can start leveraging SSE through HTTP/1, HTTP/2 or HTTP/3 with a mere line of code!
-Everything is handled by us, you don't have to worry about protocols internal. Do as you
-did simple http request.
+SSE is supported over HTTP/1.1, HTTP/2, and HTTP/3. Use ``sse://`` for HTTPS or
+``psse://`` for plain HTTP. Check for a successful extension before reading,
+and for ``None`` at the end of the stream:
 
 .. code-block:: python
+    :name: sse-example
 
     import urllib3
 
-    if __name__ == "__main__":
+    with urllib3.PoolManager() as pm:
+        response = pm.urlopen(
+            "GET", "sse://httpbingo.org/sse?delay=1s&duration=5s&count=10"
+        )
+        try:
+            extension = response.extension
+            if extension is None:
+                raise RuntimeError(f"SSE request was not accepted: {response.status}")
+            while True:
+                event = extension.next_payload()
+                if event is None:
+                    break
+                print(event.data)
+            print(response.trailers)
+        finally:
+            response.close()
 
-        with urllib3.PoolManager() as pm:
-            r = pm.urlopen("GET", "sse://httpbingo.org/sse?delay=1s&duration=5s&count=10")
-
-            while r.extension.closed is False:
-                event = r.extension.next_payload()  # here, next_payload() returns an ServerSentEvent object.
-                print(event)
-                print(event.json())
-
-            print(r.trailers)  # some server can give you some stats post ending the stream of events, you'll find them here.
-
-.. warning:: By default ``sse://`` is bound to ``https://``. Use ``psse://`` to connect using plain http instead.
-
-In opposition to WebSocket, the method ``next_payload()`` output an object. The event fully parsed.
-If you wanted to get the raw event, untouched, as unicode string, add the kwarg ``raw=True`` into the method ``next_payload()``.
+``next_payload()`` returns a parsed ``ServerSentEvent``. Its ``data`` is text;
+call ``event.json()`` only when the server sends JSON. Passing ``raw=True``
+returns the event text instead. The reader does not automatically reconnect
+at EOF. Applications that reconnect can use event IDs and retry metadata to
+implement the server's resumption policy.
 
 Debug your pool state
 ---------------------
@@ -1723,7 +1762,7 @@ Wonder no more! starting from urllib3-future 2.12.913+ you can have a proper rep
     if __name__ == "__main__":
 
         with urllib3.PoolManager() as pm:
-            r = pm.urlopen("GET", "https://httpbingo.org/get)
+            r = pm.urlopen("GET", "https://httpbingo.org/get")
             print(pm)  # <PoolManager <HTTPSConnectionPool "httpbingo.org:443" <TrafficPolice 1/10 (Idle)>> <TrafficPolice 1/10 (Idle)>>
 
 .. note:: TrafficPolice is the inner task/thread safety container. The representation is as follow: used/maxsize (status).
@@ -1733,6 +1772,8 @@ Wonder no more! starting from urllib3-future 2.12.913+ you can have a proper rep
 .. warning:: Both ``PoolManager`` and ``ConnectionPool`` have a ``TrafficPolice`` inside them.
 
 .. danger:: Calling ``repr`` here is highly discouraged at a high frequency. Do it for debug purposes only.
+
+.. _tls-backends:
 
 Alternative TLS backends (``anytls``)
 -------------------------------------
@@ -1792,6 +1833,11 @@ You can also use the ``ssl_backend`` kwargs into your Pool constructor and speci
 - ``ssl``
 
 This will overrule any default configuration and force a specific TLS backend.
+
+An unavailable explicitly selected ``ssl_backend`` raises an error during
+setup; it does not silently choose another backend. This setting selects the
+TCP TLS implementation. HTTP/3 uses the QUIC/TLS implementation provided by
+``qh3``.
 
 The ``anytls`` module
 ~~~~~~~~~~~~~~~~~~~~~

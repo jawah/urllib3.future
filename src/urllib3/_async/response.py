@@ -32,6 +32,7 @@ from ..exceptions import (
 from ..response import ContentDecoder, HTTPResponse
 from ..util.response import is_fp_closed
 from ..util.retry import Retry
+from ..util.traffic_police import UnavailableTraffic
 from .connection import AsyncHTTPConnection
 
 try:
@@ -122,7 +123,7 @@ class AsyncHTTPResponse(HTTPResponse):
             self._body = body
 
         self._pool: AsyncHTTPConnectionPool = pool  # type: ignore[assignment]
-        self._connection: AsyncHTTPConnection = connection  # type: ignore[assignment]
+        self._connection: AsyncHTTPConnection | None = connection  # type: ignore[assignment]
 
         if hasattr(body, "read"):
             self._fp = body  # type: ignore[assignment]
@@ -151,8 +152,10 @@ class AsyncHTTPResponse(HTTPResponse):
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
             # we can utilize a ConnectionPool without level-0 PoolManager!
-            if self._police_officer.parent is not None:
-                self._police_officer.parent.memorize(self, self._pool)
+            # Direct collection after pool close need not hold a parent checkout.
+            parent = self._police_officer.parent
+            if parent is not None and (self._pool is not None or parent.busy):
+                parent.memorize(self, self._pool)
 
     async def readinto(self, b: bytearray) -> int:  # type: ignore[override]
         temp = await self.read(len(b))
@@ -450,6 +453,13 @@ class AsyncHTTPResponse(HTTPResponse):
         decode_content: bool | None = None,
         cache_content: bool = False,
     ) -> bytes:
+        """Read response data asynchronously.
+
+        ``amt=None`` reads the remaining body. Positive sizes read up to that
+        many bytes, and zero returns empty bytes without consuming input.
+        Negative sizes retain incremental behavior for backward compatibility,
+        unlike synchronous HTTPResponse.read().
+        """
         return await self._read(
             amt=amt,
             decode_content=decode_content,
@@ -464,6 +474,9 @@ class AsyncHTTPResponse(HTTPResponse):
         *,
         read1: bool = False,
     ) -> bytes:
+        # Zero-byte reads must not advance the transport or the decoder.
+        if amt == 0:
+            return b""
         try:
             self._init_decoder()
             if decode_content is None:
@@ -559,6 +572,9 @@ class AsyncHTTPResponse(HTTPResponse):
 
             if amt is None:
                 data = self._decode(data, decode_content, flush_decoder)
+                # A previous bounded read may have left decoded output buffered.
+                if self._decoded_buffer:
+                    data = self._decoded_buffer.get(len(self._decoded_buffer)) + data
                 if cache_content and not self._uncached_read_occurred:
                     self._body = data
             else:
@@ -685,11 +701,36 @@ class AsyncHTTPResponse(HTTPResponse):
         if self.extension is not None and not self.extension.closed:
             await self.extension.close()
 
-        if not self.closed and self._fp:
+        if (
+            isinstance(self._fp, AsyncLowLevelResponse)
+            and self._police_officer is not None
+        ):
+            police = self._police_officer
+            try:
+                async with police.borrow(self) as conn:
+                    try:
+                        await self._fp.abort()
+                    except (OSError, BaseSSLError):
+                        # A failed reset write makes the transport unusable.
+                        await conn.close()
+                    finally:
+                        self._fp.close()
+                        self._connection = None
+            except UnavailableTraffic:
+                self._fp.close()
+                self._connection = None
+            finally:
+                if self._fp.closed:
+                    police.forget(self)
+                    self._police_officer = None
+        elif isinstance(self._fp, AsyncLowLevelResponse) and self._fp._eot:
             self._fp.close()
-
-        if self._connection:
-            await self._connection.close()
+            self._connection = None
+        else:
+            if not self.closed and self._fp:
+                self._fp.close()
+            if self._connection:
+                await self._connection.close()  # Defensive: external file-like body.
 
         if not self.auto_close:
             io.IOBase.close(self)

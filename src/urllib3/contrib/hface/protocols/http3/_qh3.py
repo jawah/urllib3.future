@@ -40,7 +40,10 @@ from qh3 import (
     h3_events,
     quic_events,
 )
+from qh3.h3.connection import ErrorCode as H3ErrorCode
 from qh3.quic.connection import QuicConnectionState
+from qh3.quic.packet import QuicErrorCode
+from qh3.tls import AlertDescription
 
 from ..._configuration import QuicTLSConfig
 from ..._stream_matrix import StreamMatrix
@@ -66,6 +69,12 @@ QUIC_RELEVANT_EVENT_TYPES = {
     quic_events.StreamReset,
     quic_events.PingAcknowledged,
 }
+
+if hasattr(quic_events, "StopSendingReceived"):
+    STOP_SENDING_EVENT_AVAILABLE = True
+    QUIC_RELEVANT_EVENT_TYPES.add(quic_events.StopSendingReceived)
+else:
+    STOP_SENDING_EVENT_AVAILABLE = False
 
 _SHORT_NAME_ASSOC = {
     "CN": "commonName",
@@ -152,7 +161,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self._packets: deque[bytes] = deque()
         self._http: H3Connection | None = None
         self._terminated: bool = False
-        self._open_stream_count: int = 0
+        self._open_streams: set[int] = set()
+        self._sending_streams: set[int] = set()
         self._total_stream_count: int = 0
         self._goaway_to_honor: bool = False
         self._max_frame_size: int | None = None
@@ -179,7 +189,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     def is_idle(self) -> bool:
         if self._events.stream_count:
             return False
-        return not self._terminated and self._open_stream_count == 0
+        return (
+            not self._terminated
+            and not self._open_streams
+            and not self._sending_streams
+        )
 
     def has_expired(self) -> bool:
         if not self._terminated and not self._goaway_to_honor:
@@ -230,7 +244,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self, stream_id: int, headers: HeadersType, end_stream: bool = False
     ) -> None:
         assert self._http is not None
-        self._open_stream_count += 1
+        self._open_streams.add(stream_id)
+        if not end_stream:
+            self._sending_streams.add(stream_id)
         self._total_stream_count += 1
         self._http.send_headers(stream_id, headers, end_stream)  # type: ignore[arg-type]
 
@@ -239,9 +255,31 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
     ) -> None:
         assert self._http is not None
         self._http.send_data(stream_id, data, end_stream)
+        if end_stream:
+            self._sending_streams.discard(stream_id)
 
-    def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
-        self._quic.reset_stream(stream_id, error_code)
+    def submit_stream_reset(self, stream_id: int, error_code: int = 0x10C) -> None:
+        """Discard local events and cancel unfinished directions (H3_REQUEST_CANCELLED)."""
+        self._events.discard(stream_id)
+        assert self._http is not None
+        stream = self._http._stream.get(stream_id)
+        if stream_id in self._open_streams:
+            self._open_streams.discard(stream_id)
+            # FIN may already have arrived while HTTP/3 is decoding trailers.
+            if stream is None or not getattr(stream, "receiving_ended", stream.ended):
+                self._quic.stop_stream(stream_id, error_code)
+        if stream_id in self._sending_streams:
+            self._sending_streams.discard(stream_id)
+            self._quic.reset_stream(stream_id, error_code)
+        if stream is not None and stream.blocked:
+            # QPACK may still need this context to finish decoding trailers.
+            # Keep its bookkeeping, but release payload and never deliver its events.
+            stream.buffer = type(stream.buffer)()
+            stream.ended = True
+            stream.receiving_ended = True
+            stream.sending_ended = True
+        else:
+            self._http._stream.pop(stream_id, None)
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
         return self._events.popleft(stream_id)
@@ -318,6 +356,14 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         assert self._http is not None
 
         for quic_event in iter(self._quic.next_event, None):
+            if (
+                isinstance(quic_event, quic_events.StreamDataReceived)
+                and quic_event.stream_id % 4 == 0
+                and quic_event.stream_id not in self._open_streams
+            ):
+                # QUIC still processes transport/flow control; abandoned payload
+                # must not recreate HTTP/3 stream buffers or application events.
+                continue
             qe = self._map_quic_event(quic_event)
 
             if qe is not None:
@@ -350,18 +396,45 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if event_type is quic_events.ConnectionTerminated:
             self._terminated = True
-            return ConnectionTerminated(
-                quic_event.error_code,  # type: ignore[attr-defined]
-                quic_event.reason_phrase  # type: ignore[attr-defined]
-                or "Remote end closed connection (not gracefully)",
+            termination = typing.cast(quic_events.ConnectionTerminated, quic_event)
+            error_code = termination.error_code
+            is_tls_error = (
+                termination.frame_type is not None and 0x100 <= error_code < 0x200
             )
+            try:
+                # Application closes omit the triggering frame type. Transport
+                # closes use a separate namespace, including TLS alerts at 0x100.
+                if termination.frame_type is None:
+                    error_name = H3ErrorCode(error_code).name
+                elif is_tls_error:
+                    error_name = (
+                        f"TLS_{AlertDescription(error_code - 0x100).name.upper()}"
+                    )
+                else:
+                    error_name = QuicErrorCode(error_code).name
+            except ValueError:
+                error_name = "UNKNOWN_ERROR"
+            message = f"HTTP/3 connection terminated with error {error_name} ({error_code:#x})."
+            if termination.reason_phrase:
+                message += f" {termination.reason_phrase}"
+            return ConnectionTerminated(error_code, message, is_tls_error=is_tls_error)
 
         if event_type is quic_events.StreamReset:
-            self._open_stream_count -= 1
+            stream_id = quic_event.stream_id  # type: ignore[attr-defined]
+            if stream_id not in self._open_streams:
+                return None
+            self._open_streams.discard(stream_id)
             return StreamResetReceived(
                 quic_event.stream_id,  # type: ignore[attr-defined]
                 quic_event.error_code,  # type: ignore[attr-defined]
             )
+
+        if (
+            STOP_SENDING_EVENT_AVAILABLE
+            and event_type is quic_events.StopSendingReceived
+        ):
+            self._sending_streams.discard(quic_event.stream_id)  # type: ignore[attr-defined]
+            return None
 
         if event_type is quic_events.PingAcknowledged:
             try:
@@ -378,9 +451,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         event_type = h3_event.__class__
 
         if event_type is h3_events.DataReceived:
+            if h3_event.stream_id not in self._open_streams:  # type: ignore[attr-defined]
+                return None
             stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
             if stream_ended:
-                self._open_stream_count -= 1
+                self._open_streams.discard(h3_event.stream_id)  # type: ignore[attr-defined]
             return DataReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.data,  # type: ignore[attr-defined]
@@ -388,9 +463,11 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
 
         if event_type is h3_events.HeadersReceived:
+            if h3_event.stream_id not in self._open_streams:  # type: ignore[attr-defined]
+                return None
             stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
             if stream_ended:
-                self._open_stream_count -= 1
+                self._open_streams.discard(h3_event.stream_id)  # type: ignore[attr-defined]
             return HeadersReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.headers,  # type: ignore[attr-defined]
@@ -398,6 +475,8 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             )
 
         if event_type is h3_events.InformationalHeadersReceived:
+            if h3_event.stream_id not in self._open_streams:  # type: ignore[attr-defined]
+                return None
             return EarlyHeadersReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.headers,  # type: ignore[attr-defined]

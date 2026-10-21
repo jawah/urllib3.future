@@ -34,7 +34,7 @@ from .._typing import (
 )
 from ..backend import ConnectionInfo, ResponsePromise
 from ..connection import _wrap_proxy_error
-from ..connectionpool import _normalize_host
+from ..connectionpool import _is_same_host, _normalize_host
 from ..contrib.resolver import ProtocolResolver
 from ..contrib.resolver._async import (
     AsyncBaseResolver,
@@ -59,7 +59,7 @@ from ..exceptions import (
     ReadTimeoutError,
     RecoverableError,
     SSLError,
-    TimeoutError,
+    TimeoutError as _TimeoutError,
 )
 from ..util._async.traffic_police import (  # type: ignore[attr-defined]
     AsyncTrafficPolice,
@@ -180,8 +180,9 @@ async def idle_conn_watch_task(
 
             if pool.pool is None:
                 return
+            connections = pool.pool.iter_idle()
             try:
-                async for conn in pool.pool.iter_idle():
+                async for conn in connections:
                     now = time.monotonic()
                     last_used = conn.last_used_at
                     idle_delay = now - last_used
@@ -208,6 +209,12 @@ async def idle_conn_watch_task(
                                     await conn.peek_and_react(expect_frame=True)
             except AttributeError:
                 return
+            finally:
+                # `async for` does not await generator cleanup on early exit.
+                # Close iter_idle() here so its finally runs in this task.
+                # Deferred finalization may run in another task, which cannot
+                # release the watcher's TrafficPolice checkout.
+                await connections.aclose()
     except asyncio.CancelledError:
         raise
     except ReferenceError:
@@ -234,17 +241,15 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         been parsed, this is always a `urllib3.util.Timeout` object.
 
     :param maxsize:
-        Number of connections to save that can be reused. More than 1 is useful
-        in multithreaded situations. If ``block`` is set to False, more
-        connections will be created but they will not be saved once they've
-        been used.
+        Connection capacity of this pool, defaulting to 1 for direct
+        construction. A PoolManager supplies its num_pools value when maxsize
+        was not specified. HTTP/2 and HTTP/3 connections can carry multiple
+        requests, so this is not a request-concurrency limit.
 
     :param block:
-        If set to True, no more than ``maxsize`` connections will be used at
-        a time. When no free connections are available, the call will block
-        until a connection has been released. This is a useful side effect for
-        particular multithreaded situations where one does not want to use more
-        than maxsize connections per host to prevent flooding.
+        Retained for urllib3 compatibility. The built-in scheduler can wait at
+        capacity with either value; block=False does not provide disposable
+        overflow connections. Use pool_timeout on a request to bound acquisition.
 
     :param headers:
         Headers to include with all requests, unless other headers are given
@@ -358,6 +363,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             strict_maxsize=not self.block,
         )
 
+        self._draining_pool: AsyncTrafficPolice[AsyncHTTPConnection] | None = None
+
         self.proxy = _proxy
         self.proxy_headers = _proxy_headers or {}
         self.proxy_config = _proxy_config
@@ -448,7 +455,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
     @property
     def is_idle(self) -> bool:
-        return self.pool is None or self.pool.bag_only_idle
+        police = self.pool
+        if police is not None:
+            return police.bag_only_idle
+        police = self._draining_pool
+        # Formed responses own their registry; only promises still need pool routing.
+        return police is None or not police._has_pending_promises
 
     @property
     def is_saturated(self) -> bool:
@@ -785,7 +797,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             except AttributeError:
                 # self.pool is None.
                 pass
-            except queue.Full:
+            except queue.Full:  # Defensive: legacy queues may reject a blocking put; TrafficPolice waits for capacity.
                 # Connection never got put back into the pool, close it.
                 if conn:
                     if conn.is_idle:
@@ -875,7 +887,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         This method should be called after issuing at least one request with ``multiplexed=True``.
         If none available, return None.
         """
-        if self.pool is None:
+        police = self.pool
+        if police is None:
+            police = self._draining_pool
+        if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
         if promise is not None and not isinstance(promise, ResponsePromise):
@@ -887,7 +902,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         clean_exit = True
 
         try:
-            async with self.pool.borrow(
+            async with police.borrow(
                 promise or ResponsePromise,
                 block=promise is not None,
                 not_idle_only=True,
@@ -899,7 +914,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     )
                 try:
                     response = await conn.getresponse(
-                        promise=promise, police_officer=self.pool
+                        promise=promise, police_officer=police
                     )
                 except (BaseSSLError, OSError) as e:
                     if promise is not None:
@@ -914,7 +929,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             await asyncio.sleep(0)
             return None
         except (
-            TimeoutError,
+            _TimeoutError,
             OSError,
             ProtocolError,
             BaseSSLError,
@@ -923,6 +938,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             ProxyError,
             RecoverableError,
         ) as e:
+            if self.pool is None and not police._has_pending_promises:
+                self._draining_pool = None
+                if police.parent is not None:
+                    police.parent._map_clear(self)
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -934,7 +953,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 (
                     OSError,
                     NewConnectionError,
-                    TimeoutError,
+                    _TimeoutError,
                     SSLError,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
@@ -995,6 +1014,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             raise ValueError(
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
+
+        # Once collected, the response replaces the promise as registry owner.
+        if self.pool is None and not police._has_pending_promises:
+            self._draining_pool = None
+        from_promise.set_parameter("police_officer", None)
 
         # Retrieve request ctx
         method = typing.cast(str, from_promise.get_parameter("method"))
@@ -1273,11 +1297,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             Configure the number of retries to allow before raising a
             :class:`~urllib3.exceptions.MaxRetryError` exception.
 
-            Pass ``None`` to retry until you receive a response. Pass a
-            :class:`~urllib3.util.retry.Retry` object for fine-grained control
-            over different types of retries.
-            Pass an integer number to retry connection errors that many times,
-            but no other types of errors. Pass zero to never retry.
+            Pass ``None`` to use the pool's default retry configuration. Pass
+            a :class:`~urllib3.util.retry.Retry` object for fine-grained control
+            over different types of retries. An integer sets the total retry
+            budget; allowed methods and other retry rules still apply.
+            Pass zero to disable further attempts.
 
             If ``False``, then retries are disabled and any exception is raised
             immediately. Also, instead of raising a MaxRetryError on redirects,
@@ -1329,7 +1353,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         except (
             OSError,
             NewConnectionError,
-            TimeoutError,
+            _TimeoutError,
             BaseSSLError,
             CertificateError,
             SSLError,
@@ -1340,7 +1364,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # If the connection didn't successfully connect to it's proxy
             # then there
             if isinstance(
-                new_e, (OSError, NewConnectionError, TimeoutError, SSLError)
+                new_e, (OSError, NewConnectionError, _TimeoutError, SSLError)
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
                 new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
             raise new_e
@@ -1472,19 +1496,22 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 )
             conn.timeout = read_timeout
 
-        can_shelve_conn = (
-            conn.is_multiplexed is True and self.pool is not None and rp is not None
-        )
+        police = self.pool
+        if police is None:
+            raise ClosedPoolError(self, "Pool is closed")
+
+        can_shelve_conn = conn.is_multiplexed is True and rp is not None
 
         if can_shelve_conn:
-            self.pool.memorize(rp, conn)  # type: ignore[union-attr,arg-type]
+            assert rp is not None
+            police.memorize(rp, conn)
             await self._put_conn(conn)
 
             # Receive the response from the server
-            async with self.pool.borrow(rp) as conn:  # type: ignore[union-attr]
+            async with police.borrow(rp) as conn:
                 try:
                     response = await conn.getresponse(
-                        police_officer=self.pool,
+                        police_officer=police,
                         early_response_callback=on_early_response,
                         promise=rp,
                     )
@@ -1492,11 +1519,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
                     raise
                 finally:
-                    self.pool.forget(rp)  # type: ignore[union-attr,arg-type]
+                    police.forget(rp)
         else:
             try:
                 response = await conn.getresponse(
-                    police_officer=self.pool,
+                    police_officer=police,
                     early_response_callback=on_early_response,
                     promise=rp,
                 )
@@ -1539,16 +1566,17 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
     async def close(self) -> None:
         """
-        Close all pooled connections and disable the pool.
+        Close the pool while allowing returned responses to finish reading.
+
+        New requests are rejected; returned promises remain retrievable.
         """
         if self.pool is None:
             return
 
-        # Disable access to the pool
-        old_pool, self.pool = self.pool, None
-
-        # Close all the HTTPConnections in the pool.
-        await old_pool.clear()
+        # Retain routing for blind collection until all returned promises are collected.
+        old_pool = self.pool
+        self._draining_pool = old_pool
+        self.pool = None
 
         if self._background_monitoring is not None:
             self._background_monitoring.cancel()
@@ -1559,6 +1587,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             finally:
                 self._background_monitoring = None
 
+        # The watcher has returned its checkout; only user responses remain to drain.
+        await old_pool.clear()
+        if not old_pool._has_pending_promises:
+            self._draining_pool = None
+
         # Close allocated resolver if we own it. (aka. not shared)
         if self._own_resolver and self._resolver.is_available():
             await self._resolver.close()
@@ -1568,23 +1601,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         Check if the given ``url`` is a member of the same host as this
         connection pool.
         """
-        if url.startswith("/"):
-            return True
-
-        # TODO: Add optional support for socket.gethostbyname checking.
-        scheme, _, host, port, *_ = parse_url(url)
-        scheme = scheme or "http"
-        if host is not None:
-            # parse_url() already normalized the host, including its zone ID.
-            host = host.strip("[]")
-
-        # Use explicit default port for comparison when none is given
-        if self.port and not port:
-            port = port_by_scheme.get(scheme)
-        elif not self.port and port == port_by_scheme.get(scheme):
-            port = None
-
-        return (scheme, host, port) == (self.scheme, self.host, self.port)
+        return _is_same_host(url, self.scheme, self.host, self.port)
 
     @typing.overload  # type: ignore[override]
     async def urlopen(
@@ -1686,10 +1703,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         .. note::
 
-           `release_conn` will only behave as expected if
-           `preload_content=False` because we want to make
-           `preload_content=False` the default behaviour someday soon without
-           breaking backwards compatibility.
+           For streaming, use ``preload_content=False`` and consume or close
+           the returned response. Returning connection ownership alone does
+           not discard an unread body.
 
         :param method:
             HTTP request method (such as GET, POST, PUT, etc.)
@@ -1710,11 +1726,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             Configure the number of retries to allow before raising a
             :class:`~urllib3.exceptions.MaxRetryError` exception.
 
-            Pass ``None`` to retry until you receive a response. Pass a
-            :class:`~urllib3.util.retry.Retry` object for fine-grained control
-            over different types of retries.
-            Pass an integer number to retry connection errors that many times,
-            but no other types of errors. Pass zero to never retry.
+            Pass ``None`` to use the pool's default retry configuration. Pass
+            a :class:`~urllib3.util.retry.Retry` object for fine-grained control
+            over different types of retries. An integer sets the total retry
+            budget; allowed methods and other retry rules still apply.
+            Pass zero to disable further attempts.
 
             If ``False``, then retries are disabled and any exception is raised
             immediately. Also, instead of raising a MaxRetryError on redirects,
@@ -1738,9 +1754,10 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             :class:`urllib3.util.Timeout`.
 
         :param pool_timeout:
-            If set and the pool is set to block=True, then this method will
-            block for ``pool_timeout`` seconds and raise EmptyPoolError if no
-            connection is available within the time period.
+            Maximum seconds to wait for connection acquisition. The default,
+            None, has no acquisition deadline. This is separate from connect
+            and read timeouts and can apply with either value of block.
+            Raises EmptyPoolError if no connection becomes available in time.
 
         :param bool preload_content:
             If True, the response's body will be preloaded into memory.
@@ -1750,14 +1767,11 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             'content-encoding' header.
 
         :param release_conn:
-            If False, then the urlopen call will not release the connection
-            back into the pool once a response is received (but will release if
-            you read the entire contents of the response such as when
-            `preload_content=True`). This is useful if you're not preloading
-            the response's content immediately. You will need to call
-            ``r.release_conn()`` on the response ``r`` to return the connection
-            back into the pool. If None, it takes the value of ``preload_content``
-            which defaults to ``True``.
+            Whether to return acquired connection ownership after receiving
+            response headers. If None, defaults to preload_content. Reading the
+            whole body normally releases ownership automatically. Consume,
+            drain, or close an unused response; release_conn() alone does not
+            consume or abort its unread body.
 
         :param bool chunked:
             If True, urllib3 will send the body using chunked transfer
@@ -1781,14 +1795,14 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         :param on_early_response:
             Callable that will be invoked upon early responses, can be invoked one or several times.
-            All informational responses except HTTP/102 (Switching Protocol) are concerned here.
+            All informational responses except HTTP/101 (Switching Protocol) are concerned here.
             The callback takes only one positional argument, the fully constructed HTTPResponse.
             Those responses never have bodies, only headers.
 
         :param multiplexed:
-            Dispatch the request in a non-blocking way, this means that the
-            response will be retrieved in the future with the get_response()
-            method.
+            Defer response retrieval on HTTP/2 or HTTP/3 and return a
+            ResponsePromise for get_response(). Sending the request still
+            awaits network I/O. HTTP/1.1 returns an immediate response.
         """
         if self.pool is None:
             raise ClosedPoolError(self, "Pool is closed")
@@ -1840,8 +1854,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         # have to copy the headers dict so we can safely change it without those
         # changes being reflected in anyone else's copy.
         if not http_tunnel_required:
-            headers = headers.copy()  # type: ignore[attr-defined]
-            headers.update(self.proxy_headers)  # type: ignore[union-attr]
+            # Mapping implementations need not provide dict.copy().
+            headers = headers.copy() if hasattr(headers, "copy") else dict(headers)
+            headers.update(self.proxy_headers)
 
         # Must keep the exception bound to a separate variable or else Python 3
         # complains about UnboundLocalError.
@@ -1936,7 +1951,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             raise
 
         except (
-            TimeoutError,
+            _TimeoutError,
             OSError,
             ProtocolError,
             BaseSSLError,
@@ -1946,6 +1961,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             RecoverableError,
             UnavailableTraffic,
         ) as e:
+            if isinstance(e, UnavailableTraffic) and self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
             # Discard the connection for these exceptions. It will be
             # replaced during the next _get_conn() call.
             clean_exit = False
@@ -1957,7 +1974,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 (
                     OSError,
                     NewConnectionError,
-                    TimeoutError,
+                    _TimeoutError,
                     SSLError,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
@@ -1983,6 +2000,14 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             # Keep track of the error for the retry warning.
             err = e
 
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Closing before a response is formed invalidates the backend state.
+            if self.pool is None:
+                raise ClosedPoolError(self, "Pool is closed") from e
+            raise
+
         finally:
             if not clean_exit:
                 # We hit some kind of exception, handled or otherwise. We need
@@ -1994,12 +2019,22 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     conn = None
                 release_this_conn = True
 
+            if (
+                self.pool is None
+                and clean_exit
+                and conn is not None
+                and isinstance(response, ResponsePromise)
+            ):
+                await conn.close()
+                raise ClosedPoolError(self, "Pool is closed")
+
             if self.pool is not None:
                 if (
                     clean_exit
                     and conn is not None
                     and isinstance(response, ResponsePromise)
                 ):
+                    response.set_parameter("police_officer", self.pool)
                     self.pool.memorize(response, conn)
                     # we can always use ConnectionPool without PoolManager!
                     if self.pool.parent is not None:

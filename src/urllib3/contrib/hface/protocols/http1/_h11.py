@@ -237,6 +237,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
             self._h11_submit(h11.EndOfMessage())
 
     def submit_stream_reset(self, stream_id: int, error_code: int = 0) -> None:
+        self._events.discard(stream_id)
         # HTTP/1 cannot submit a stream (it does not have real streams).
         # But if there are no other streams, we can close the connection instead.
         self.connection_lost()

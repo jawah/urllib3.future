@@ -18,10 +18,6 @@ This guide explains the choice and shows two supported installation methods:
 building from the PyPI source distribution, or installing a prebuilt
 ``+isolation`` wheel from the project's alternative index.
 
-.. contents:: On this page
-   :local:
-   :depth: 2
-
 Why there are two installation modes
 ------------------------------------
 

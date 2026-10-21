@@ -10,6 +10,8 @@ from time import perf_counter
 import pytest
 
 from urllib3 import (
+    AsyncHTTPConnectionPool,
+    AsyncHTTPSConnectionPool,
     AsyncHTTPResponse,
     AsyncPoolManager,
     ConnectionInfo,
@@ -18,16 +20,256 @@ from urllib3 import (
     Retry,
 )
 from urllib3._async.connection import AsyncHTTPConnection
-from urllib3.exceptions import MaxRetryError
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
+from urllib3.exceptions import ClosedPoolError, MaxRetryError
 
 from .. import TraefikTestCase
 
 
 @pytest.mark.asyncio
 class TestPoolManagerMultiplexed(TraefikTestCase):
-    async def test_as_completed_early_exit_cancels_pending_requests(
+    @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
+    @pytest.mark.parametrize("same_origin", [False, True])
+    @pytest.mark.parametrize("remove_sensitive", [False, True])
+    @pytest.mark.parametrize("explicit_promise", [False, True])
+    async def test_redirect_origin_and_host_header(
+        self,
+        version: HttpVersion,
+        same_origin: bool,
+        remove_sensitive: bool,
+        explicit_promise: bool,
+    ) -> None:
+        from urllib.parse import urlencode
+
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        target_host = self.host if same_origin else self.alt_host
+        target = f"https://{target_host}:{self.https_port}/headers"
+        headers = {
+            "Host": f"{self.host}:{self.https_port}",
+            "Authorization": "Bearer secret",
+            "Cookie": "private=yes",
+            "X-Public": "retained",
+        }
+        retries = Retry(
+            total=1,
+            remove_headers_on_redirect=(
+                Retry.DEFAULT_REMOVE_HEADERS_ON_REDIRECT if remove_sensitive else ()
+            ),
+        )
+        async with AsyncPoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
+            disabled_svn=set(HttpVersion) - {version},
+            timeout=5,
+        ) as manager:
+            promise = await manager.urlopen(
+                "GET",
+                self.https_url
+                + "/redirect-to?"
+                + urlencode({"url": target, "status_code": 302}),
+                headers=headers,
+                retries=retries,
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+            response = await manager.get_response(
+                promise=promise if explicit_promise else None
+            )
+            assert response is not None and response.status == 200
+            assert response.version == (20 if version is HttpVersion.h2 else 30)
+            echoed = {
+                key.lower(): value
+                for key, value in (await response.json())["headers"].items()
+            }
+            assert echoed["host"] == [f"{target_host}:{self.https_port}"]
+            assert echoed["x-public"] == ["retained"]
+            retain_credentials = same_origin or not remove_sensitive
+            assert ("authorization" in echoed) is retain_credentials
+            assert ("cookie" in echoed) is retain_credentials
+            assert headers["Host"] == f"{self.host}:{self.https_port}"
+            assert headers["Authorization"] == "Bearer secret"
+
+    @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
+    @pytest.mark.parametrize("by_promise", [False, True])
+    async def test_clear_preserves_uncollected_promises(
+        self, version: HttpVersion, by_promise: bool
+    ) -> None:
+        import gc
+        from weakref import ref
+
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        conn = None
+        conn_ref = None
+        try:
+            async with AsyncPoolManager(
+                num_pools=1,
+                ca_certs=self.ca_authority,
+                resolver=self.test_async_resolver.new(),
+                disabled_svn=set(HttpVersion) - {version},
+                timeout=5,
+                retries=False,
+            ) as manager:
+                promises: list[ResponsePromise] = []
+                for size in (4096, 8192):
+                    promise = await manager.urlopen(
+                        "GET",
+                        f"{self.https_url}/bytes/{size}",
+                        multiplexed=True,
+                        preload_content=False,
+                    )
+                    assert isinstance(promise, ResponsePromise)
+                    promises.append(promise)
+                candidate = promises[0]._conn
+                assert isinstance(candidate, AsyncHTTPConnection)
+                conn = candidate
+                del candidate
+                assert promises[1]._conn is conn
+                conn_ref = ref(conn)
+                sock = conn.sock
+                assert sock is not None
+                old_pool = next(iter(manager.pools._registry.values()))
+                police = old_pool.pool
+                assert police is not None
+                police_ref = ref(police)
+                watcher = old_pool._background_monitoring
+                assert watcher is not None
+                await manager.clear()
+                await manager.clear()
+                assert watcher.done()
+                with pytest.raises(ClosedPoolError):
+                    await old_pool.request("GET", "/bytes/1")
+                assert sock.fileno() >= 0
+                # Niquests checks this before attempting even explicit retrieval.
+                assert await manager.pools.beacon(ResponsePromise)
+
+                # New requests must get an active pool while the old one drains.
+                followup = await manager.request("GET", f"{self.https_url}/bytes/7")
+                assert len(await followup.data) == 7
+                assert followup._pool is not old_pool
+
+                if not by_promise:
+                    # Blind retrieval must survive without caller-held promises.
+                    promises.clear()
+                    del promise
+                    conn = police = None
+                    gc.collect()
+                sizes = []
+                for index in range(2):
+                    response = await manager.get_response(
+                        promise=promises[index] if by_promise else None
+                    )
+                    assert response is not None
+                    assert response.status == 200
+                    sizes.append(len(await response.read()))
+                    await response.close()
+                assert sorted(sizes) == [4096, 8192]
+                assert sock.fileno() == -1
+                police = police_ref()
+                assert police is None or police.rsize() == 0
+                assert id(old_pool) not in manager.pools._registry
+                assert manager.pools.rsize() == 1
+                assert all(pool is not old_pool for pool in manager.pools._map.values())
+                again = await manager.request("GET", f"{self.https_url}/bytes/3")
+                assert len(await again.data) == 3
+                assert again._pool is followup._pool
+                assert not await manager.pools.beacon(ResponsePromise)
+        finally:
+            if conn is None and conn_ref is not None:
+                conn = conn_ref()
+            if conn is not None:
+                await conn.close()
+
+    @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
+    @pytest.mark.parametrize("owner_kind", ["pool", "manager", "adapter"])
+    @pytest.mark.parametrize("pending_promise", [False, True])
+    async def test_closed_owner_preserves_other_streams(
+        self, version: HttpVersion, owner_kind: str, pending_promise: bool
+    ) -> None:
+        if version is HttpVersion.h3 and not _HAS_HTTP3_SUPPORT():
+            pytest.skip("HTTP/3 requires qh3")
+        options: dict[str, typing.Any] = dict(
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
+            disabled_svn=set(HttpVersion) - {version},
+            timeout=5,
+            retries=False,
+        )
+        owner = (
+            AsyncPoolManager(**options)
+            if owner_kind != "pool"
+            else AsyncHTTPSConnectionPool(self.host, self.https_port, **options)
+        )
+        prefix = self.https_url if owner_kind != "pool" else ""
+        conn = None
+        try:
+            async with owner:
+                promises = []
+                for size in (4096, 8192):
+                    requester: AsyncPoolManager | AsyncHTTPConnectionPool = owner
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, AsyncPoolManager)
+                        requester = await owner.connection_from_url(self.https_url)
+                    promise = await requester.urlopen(
+                        "GET",
+                        f"{prefix}/bytes/{size}",
+                        multiplexed=True,
+                        preload_content=False,
+                    )
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, AsyncPoolManager)
+                        assert isinstance(requester, AsyncHTTPConnectionPool)
+                        owner.pools.memorize(promise, requester)
+                        owner.pools.release()
+                    promises.append(promise)
+                assert all(isinstance(p, ResponsePromise) for p in promises)
+                first = await owner.get_response(promise=promises[0])
+                second = await owner.get_response(promise=promises[1])
+                assert first is not None and second is not None
+                assert first.status == second.status == 200
+                assert (
+                    first.version
+                    == second.version
+                    == (20 if version is HttpVersion.h2 else 30)
+                )
+                candidate = first.connection
+                assert isinstance(candidate, AsyncHTTPConnection)
+                conn = candidate
+                assert second.connection is conn
+                sock = conn.sock
+                assert sock is not None
+                if pending_promise:
+                    pending = await owner.urlopen(
+                        "GET",
+                        f"{prefix}/bytes/7",
+                        multiplexed=True,
+                        preload_content=False,
+                    )
+                    assert isinstance(pending, ResponsePromise)
+                    assert pending._conn is conn
+            assert sock.fileno() >= 0
+            assert len(await first.read()) == 4096
+            await first.close()
+            assert conn.sock is sock and sock.fileno() >= 0
+            assert len(await second.read()) == 8192
+            if pending_promise:
+                assert sock.fileno() >= 0
+                remaining = await owner.get_response(promise=pending)
+                assert remaining is not None
+                assert len(await remaining.read()) == 7
+                await remaining.close()
+            assert sock.fileno() == -1
+            await second.close()
+        finally:
+            if conn is not None:
+                await conn.close()
+
+    async def test_as_completed_early_exit_terminates_pending_requests(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from urllib3.exceptions import HTTPError
+
         all_connected = asyncio.Event()
         hold_responses = asyncio.Event()
         connected = 0
@@ -85,11 +327,16 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
         finally:
             for request in requests:
                 request.cancel()
-            await asyncio.wait_for(
+            results = await asyncio.wait_for(
                 asyncio.gather(*requests, return_exceptions=True), timeout=5
             )
 
-        assert sum(request.cancelled() for request in requests) == 14
+        # Closing the manager can fail an unformed response before cancel() reaches it.
+        assert sum(isinstance(result, AsyncHTTPResponse) for result in results) == 1
+        assert all(
+            isinstance(result, (AsyncHTTPResponse, HTTPError, asyncio.CancelledError))
+            for result in results
+        ), results
 
     @notMacOS()
     async def test_multiplexing_fastest_to_slowest(self) -> None:

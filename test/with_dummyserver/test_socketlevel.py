@@ -20,6 +20,7 @@ import typing
 import warnings
 import zlib
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from test import (
     LONG_TIMEOUT,
@@ -45,6 +46,7 @@ from dummyserver.server import (
     get_unreachable_address,
 )
 from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from test.conftest import ServerConfig
 from urllib3 import (
     HTTPConnectionPool,
     HTTPResponse,
@@ -83,6 +85,43 @@ if typing.TYPE_CHECKING:
     from _typeshed import StrOrBytesPath
 else:
     StrOrBytesPath = object
+
+
+class TestConsumeSocket:
+    @pytest.mark.parametrize("prefix", [b"", b"GET / HTTP/1.1\r\nHost: localhost\r\n"])
+    def test_eof_before_headers(self, prefix: bytes) -> None:
+        reader, writer = socket.socketpair()
+        with reader, writer, ThreadPoolExecutor(1) as executor:
+            reader.settimeout(5)
+            writer.sendall(prefix)
+            writer.shutdown(socket.SHUT_WR)
+            reading = executor.submit(consume_socket, reader)
+            try:
+                with pytest.raises(ConnectionAbortedError, match="HTTP headers"):
+                    reading.result(5)
+            finally:
+                # Also unwind the old implementation if it spins on EOF.
+                reader.close()
+
+    @pytest.mark.parametrize("chunks", [1, 65536])
+    def test_header_delimiter_across_reads_and_before_body(self, chunks: int) -> None:
+        headers = b"POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\n"
+        payload = headers + b"body"
+        reader, writer = socket.socketpair()
+        with reader, writer, ThreadPoolExecutor(1) as executor:
+            reader.settimeout(5)
+            writer.sendall(payload)
+            writer.shutdown(socket.SHUT_WR)
+            reading = executor.submit(consume_socket, reader, chunks)
+            try:
+                consumed = reading.result(5)
+                assert consumed.startswith(headers)
+                if chunks == 1:
+                    assert consumed == headers
+                with reader.makefile("rb") as remaining:
+                    assert consumed + remaining.read() == payload
+            finally:
+                reader.close()
 
 
 class TestCookies(SocketDummyServerTestCase):
@@ -213,6 +252,130 @@ def original_ssl_wrap_socket(
 
 
 class TestClientCerts(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("invalid", ["weak-certificate", "unsupported-key"])
+    def test_native_client_identity_assignment_rejected(self, invalid: str) -> None:
+        from datetime import datetime, timedelta, timezone
+        from io import UnsupportedOperation
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa, x25519
+        from urllib3.contrib.anytls import BACKEND
+        from urllib3.contrib.imcc._ctypes import _OpenSSL
+
+        # LibreSSL's compatibility version does not imply security-level support.
+        if (
+            BACKEND != "ssl"
+            or not ssl.OPENSSL_VERSION.startswith("OpenSSL ")
+            or ssl_.IS_FIPS
+            or ssl.OPENSSL_VERSION_INFO < (1, 1, 1)
+        ):
+            pytest.skip("Requires stdlib OpenSSL with configurable security levels")
+        try:
+            _OpenSSL()
+        except UnsupportedOperation:
+            pytest.skip("The native ctypes certificate loader is unavailable")
+
+        key: rsa.RSAPrivateKey | x25519.X25519PrivateKey
+        if invalid == "weak-certificate":
+            key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+            subject = x509.Name(
+                [x509.NameAttribute(x509.NameOID.COMMON_NAME, "localhost")]
+            )
+            now = datetime.now(timezone.utc)
+            certificate = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(subject)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(days=1))
+                .not_valid_after(now + timedelta(days=1))
+                .sign(key, hashes.SHA256())
+            )
+            cert_data = certificate.public_bytes(serialization.Encoding.PEM)
+            expected_error = "ee key too small"
+        else:
+            # X25519 is a valid private-key encoding, but not a TLS signing key.
+            key = x25519.X25519PrivateKey.generate()
+            cert_data = Path(self.cert_path).read_bytes()
+            expected_error = "unknown certificate type"
+        key_data = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        context = ssl.create_default_context(cafile=self.ca_path)
+        context.set_ciphers("DEFAULT:@SECLEVEL=2")
+        peer_closed = Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(10)
+            with listener.accept()[0] as sock:
+                sock.settimeout(10)
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ssl_context=context,
+            cert_data=cert_data,
+            key_data=key_data,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            with pytest.raises(SSLError, match=expected_error):
+                pool.request("GET", "/")
+        assert peer_closed.wait(10)
+
+    @pytest.mark.parametrize("invalid", ["certificate", "key", "mismatch"])
+    def test_native_client_identity_failure_closes_socket(self, invalid: str) -> None:
+        from io import UnsupportedOperation
+        from urllib3.contrib.anytls import BACKEND
+        from urllib3.contrib.imcc._ctypes import _OpenSSL
+
+        if BACKEND != "ssl":
+            pytest.skip("This regression targets the stdlib OpenSSL certificate loader")
+        try:
+            _OpenSSL()
+        except UnsupportedOperation:
+            pytest.skip("The native ctypes certificate loader is unavailable")
+        cert = Path(self.cert_path).read_bytes()
+        key = Path(self.key_path).read_bytes()
+        if invalid == "certificate":
+            cert = b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n"
+        elif invalid == "key":
+            key = b"-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n"
+        else:
+            key = Path(DEFAULT_CERTS["keyfile"]).read_bytes()
+        peer_closed = Event()
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=self.ca_path,
+            cert_data=cert,
+            key_data=key,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            with pytest.raises((SSLError, ProtocolError)) as caught:
+                pool.request("GET", "/")
+            if isinstance(caught.value, ProtocolError):
+                # The FIPS build wraps the native SSL error as a connection abort.
+                assert len(caught.value.args) == 2
+                assert isinstance(caught.value.args[1], ssl.SSLError)
+        assert peer_closed.wait(5)
+
     """
     Tests for client certificate support.
     """
@@ -642,6 +805,387 @@ class TestServerSentEvents(SocketDummyServerTestCase):
 
 
 class TestSocketClosing(SocketDummyServerTestCase):
+    @pytest.mark.filterwarnings("ignore:unclosed <socket.socket:ResourceWarning")
+    @pytest.mark.parametrize("release_conn", [False, True])
+    def test_unread_response_finalization_does_not_block_server(
+        self, release_conn: bool
+    ) -> None:
+        import gc
+        from weakref import ref
+
+        from urllib3.util.traffic_police import TrafficPolice
+
+        abandoned: list[HTTPResponse] = []
+        finish_collection, peer_closed = Event(), Event()
+        errors: list[BaseException] = []
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                listener.settimeout(10)
+                with listener.accept()[0] as first:
+                    first.settimeout(10)
+                    consume_socket(first)
+                    first.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none")
+                    with listener.accept()[0] as second:
+                        second.settimeout(10)
+                        consume_socket(second)
+                        # Collection on a server thread must not wait for a
+                        # checkout held by the client waiting for this response.
+                        abandoned.clear()
+                        gc.collect()
+                        second.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+                        )
+                        assert finish_collection.wait(10)
+                        # Intentionally abandoned sockets warn during GC;
+                        # peer EOF below verifies that their descriptors close.
+                        gc.collect()
+                        gc.collect()
+                        assert first.recv(1) == b""
+                        peer_closed.set()
+            except BaseException as exc:
+                errors.append(exc)
+
+        self._start_server(handler)
+
+        def abandon_response() -> tuple[
+            TrafficPolice[HTTPConnection], tuple[typing.Callable[[], object], ...]
+        ]:
+            with HTTPConnectionPool(
+                self.host,
+                self.port,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as pool:
+                response = pool.request(
+                    "GET", "/", preload_content=False, release_conn=release_conn
+                )
+                police = pool.pool
+                conn = response.connection
+                assert police is not None and conn is not None
+                assert not response.closed
+                # Delay CPython's destruction too; PyPy already uses tracing GC.
+                response._gc_cycle = response  # type: ignore[attr-defined]
+                abandoned.append(response)
+                references = (ref(response), ref(pool), ref(police), ref(conn))
+            return police, references
+
+        # Retain only the registry as a way to unwind a regressed finalizer.
+        police: TrafficPolice[HTTPConnection] | None
+        police, references = abandon_response()
+        try:
+            with HTTPConnectionPool(
+                self.host,
+                self.port,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as other:
+                assert other.request("GET", "/").data == b"ok"
+            police = None
+            finish_collection.set()
+            assert peer_closed.wait(10), errors
+            assert all(reference() is None for reference in references)
+        finally:
+            if police is not None:
+                police.release()
+            finish_collection.set()
+            self.server_thread.join(10)
+        assert not self.server_thread.is_alive()
+        assert not errors, errors
+
+    @pytest.mark.parametrize("overlap_close", [False, True])
+    def test_close_before_response_headers_releases_socket(
+        self, monkeypatch: pytest.MonkeyPatch, overlap_close: bool
+    ) -> None:
+        from urllib3.exceptions import HTTPError
+
+        request_received, peer_closed, send_eof = Event(), Event(), Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    headers.extend(chunk)
+                request_received.set()
+                if overlap_close:
+                    assert send_eof.wait(5)
+                    sock.shutdown(socket.SHUT_WR)
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        with PoolManager(timeout=5, retries=False) as manager, ThreadPoolExecutor(
+            1
+        ) as executor:
+            request = executor.submit(
+                manager.request, "GET", f"http://{self.host}:{self.port}/"
+            )
+            assert request_received.wait(5)
+            manager_cleared, cleanup_started = Event(), Event()
+            if overlap_close:
+                pool = next(iter(manager.pools._registry.values()))
+                assert pool.pool is not None
+                conn = next(iter(pool.pool._registry.values()))
+                client_sock = conn.sock
+                closing_thread = threading.get_ident()
+                shutdown = socket.socket.shutdown
+
+                def synchronized_shutdown(sock: socket.socket, how: int) -> None:
+                    if sock is client_sock:
+                        if threading.get_ident() == closing_thread:
+                            # Peer EOF wakes recv() on every OS; local SHUT_RD
+                            # need not interrupt another thread's recv() on Windows.
+                            send_eof.set()
+                            assert cleanup_started.wait(5)
+                        else:
+                            cleanup_started.set()
+                            assert manager_cleared.wait(5)
+                    shutdown(sock, how)
+
+                monkeypatch.setattr(socket.socket, "shutdown", synchronized_shutdown)
+            try:
+                manager.clear()
+            finally:
+                send_eof.set()
+                manager_cleared.set()
+            with pytest.raises(HTTPError) as caught:
+                request.result(5)
+            if overlap_close:
+                # The forced overlap must not hide a cleanup failure. An arbitrary
+                # pre-headers close may invalidate other request state instead.
+                assert not isinstance(caught.value.__cause__, AttributeError)
+            assert peer_closed.wait(5)
+            assert manager.pools.rsize() == 0
+
+    def test_manager_clear_reaches_busy_child_pool(self) -> None:
+        finish_body, first_closed, second_closed = Event(), Event(), Event()
+
+        def read_request(sock: socket.socket) -> None:
+            sock.settimeout(5)
+            headers = bytearray()
+            while not headers.endswith(b"\r\n\r\n"):
+                chunk = sock.recv(65536)
+                assert chunk
+                headers.extend(chunk)
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as first:
+                read_request(first)
+                first.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\naa")
+                with listener.accept()[0] as second:
+                    read_request(second)
+                    second.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nb")
+                    try:
+                        assert first.recv(1) == b""
+                    except ConnectionResetError:
+                        pass
+                    first_closed.set()
+                    assert finish_body.wait(5)
+                    try:
+                        second.sendall(b"b")
+                        assert second.recv(1) == b""
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass
+                    second_closed.set()
+
+        self._start_server(handler)
+        connections = []
+        try:
+            with PoolManager(timeout=5, retries=False) as manager:
+                url = f"http://{self.host}:{self.port}/"
+                first = manager.request("GET", url, preload_content=False)
+                assert first.connection is not None
+                connections.append(first.connection)
+                second = manager.request("GET", url, preload_content=False)
+                assert second.connection is not None
+                connections.append(second.connection)
+                assert connections[0] is not connections[1]
+                first_sock, second_sock = [conn.sock for conn in connections]
+                assert first_sock is not None and second_sock is not None
+                police = second._police_officer
+                assert police is not None
+                assert first.read() == b"aa"
+                assert first_sock.fileno() >= 0
+                manager.clear()
+                assert police._shutdown
+                assert first_sock.fileno() == -1
+                assert first_closed.wait(5)
+                assert second_sock.fileno() >= 0
+                finish_body.set()
+                assert second.read() == b"bb"
+                assert second_sock.fileno() == -1
+                assert second_closed.wait(5)
+                assert not police._shutdown
+        finally:
+            finish_body.set()
+            for conn in connections:
+                conn.close()
+
+    def test_manager_clear_during_request_cleans_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reading_body, finish_body, peer_closed = Event(), Event(), Event()
+        raw_read = HTTPResponse._raw_read
+
+        def read_body(
+            response: HTTPResponse, *args: typing.Any, **kwargs: typing.Any
+        ) -> bytes:
+            # Signal once the response exists and the client starts reading its body.
+            reading_body.set()
+            return raw_read(response, *args, **kwargs)
+
+        monkeypatch.setattr(HTTPResponse, "_raw_read", read_body)
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    chunk = sock.recv(65536)
+                    assert chunk
+                    headers.extend(chunk)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\no")
+                assert finish_body.wait(5)
+                try:
+                    sock.sendall(b"k")
+                    assert sock.recv(1) == b""
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                peer_closed.set()
+
+        self._start_server(handler)
+        with ThreadPoolExecutor(1) as executor, PoolManager(
+            timeout=5, retries=False
+        ) as manager:
+            future = executor.submit(
+                manager.request, "GET", f"http://{self.host}:{self.port}/"
+            )
+            try:
+                assert reading_body.wait(5)
+                police = next(iter(manager.pools._registry.values())).pool
+                assert police is not None
+                manager.clear()
+            finally:
+                finish_body.set()
+            response = future.result(5)
+            assert response.data == b"ok"
+            assert peer_closed.wait(5)
+            assert police.rsize() == 0
+            assert manager.pools.rsize() == 0
+
+    @pytest.mark.parametrize(
+        "owner_kind", ["pool", "manager", "direct-child", "adapter"]
+    )
+    @pytest.mark.parametrize("close_owner", [False, True])
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_streamed_response_outlives_owner(
+        self, owner_kind: str, close_owner: bool, stream: bool
+    ) -> None:
+        finish_body, peer_closed = Event(), Event()
+        body = b"first" + b"x" * 1024
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                for index in range(1 if close_owner else 2):
+                    headers = bytearray()
+                    while not headers.endswith(b"\r\n\r\n"):
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            return
+                        headers.extend(chunk)
+                    sock.sendall(
+                        f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+                        + body[:5]
+                    )
+                    if index == 0:
+                        assert finish_body.wait(5)
+                    sock.sendall(body[5:])
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        owner = (
+            PoolManager(timeout=5, retries=False)
+            if owner_kind != "pool"
+            else HTTPConnectionPool(self.host, self.port, timeout=5, retries=False)
+        )
+        url = f"http://{self.host}:{self.port}/" if owner_kind != "pool" else "/"
+        conn = None
+        try:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(owner)
+                requester = owner
+                if owner_kind in ("direct-child", "adapter"):
+                    assert isinstance(owner, PoolManager)
+                    # Requests gets a child pool directly instead of calling manager.urlopen().
+                    requester = owner.connection_from_url(url)
+                    url = "/"
+                response = requester.request("GET", url, preload_content=False)
+                if owner_kind == "adapter":
+                    assert isinstance(owner, PoolManager)
+                    assert isinstance(requester, HTTPConnectionPool)
+                    # Niquests returns the parent checkout before reading the body.
+                    owner.pools.memorize(response, requester)
+                    owner.pools.release()
+                    assert not owner.pools.busy
+                conn = response.connection
+                assert conn is not None and conn.sock is not None
+                http_pool = response._pool
+                assert http_pool is not None
+                watcher = http_pool._background_monitoring
+                assert watcher is not None
+                # Keep strong references: GC must not close this socket.
+                sock = conn.sock
+                if close_owner:
+                    stack.close()
+                    assert http_pool.pool is None
+                    watcher.join(1)
+                    assert not watcher.is_alive()
+                assert sock.fileno() >= 0
+                assert response.read(1) == body[:1]
+                assert sock.fileno() >= 0
+                finish_body.set()
+                remaining = b"".join(response.stream(17)) if stream else response.read()
+                assert remaining == body[1:]
+                if isinstance(owner, PoolManager):
+                    assert id(response) not in owner.pools._map
+                if close_owner:
+                    assert sock.fileno() == -1
+                    if isinstance(owner, PoolManager):
+                        assert owner.pools.rsize() == 0
+                else:
+                    assert conn.sock is sock and sock.fileno() >= 0
+                response.close()
+                if not close_owner:
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, PoolManager)
+                        requester = owner.connection_from_url(
+                            f"http://{self.host}:{self.port}/"
+                        )
+                    followup = requester.request("GET", url, preload_content=False)
+                    if owner_kind == "adapter":
+                        assert isinstance(owner, PoolManager)
+                        assert isinstance(requester, HTTPConnectionPool)
+                        owner.pools.memorize(followup, requester)
+                        owner.pools.release()
+                    assert followup.data == body
+                    assert conn.sock is sock
+            assert peer_closed.wait(5), "Client did not close the retired connection"
+        finally:
+            finish_body.set()
+            if conn is not None:
+                conn.close()
+
     def test_idle_tls_close_notify_before_reuse(self) -> None:
         close_first = Event()
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -696,6 +1240,92 @@ class TestSocketClosing(SocketDummyServerTestCase):
             assert response.data == b"ok"
             with pool.pool.borrow() as conn:
                 assert conn.sock is not None and conn.sock is not previous
+
+    @pytest.mark.parametrize("peer_event", ["goaway", "invalid-ping"])
+    def test_idle_http2_event_before_reuse(self, peer_event: str) -> None:
+        send_event = Event()
+        event_sent = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            for index in range(2):
+                with listener.accept()[0] as raw:
+                    raw.settimeout(5)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        h2 = H2Connection(config=H2Configuration(client_side=False))
+                        h2.initiate_connection()
+                        sock.sendall(h2.data_to_send())
+                        responded = False
+                        while not responded:
+                            data = sock.recv(65536)
+                            assert data
+                            for event in h2.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    h2.send_headers(
+                                        event.stream_id,
+                                        [
+                                            (b":status", b"200"),
+                                            (b"content-length", b"2"),
+                                        ],
+                                    )
+                                    h2.send_data(
+                                        event.stream_id, b"ok", end_stream=True
+                                    )
+                                    responded = True
+                            sock.sendall(h2.data_to_send())
+                        if index == 0:
+                            assert send_event.wait(5)
+                            if peer_event == "goaway":
+                                h2.close_connection(last_stream_id=1)
+                                sock.sendall(h2.data_to_send())
+                            else:
+                                # PING requires eight payload bytes; send seven.
+                                sock.sendall(
+                                    b"\x00\x00\x07\x06\x00\x00\x00\x00\x00invalid"
+                                )
+                            event_sent.set()
+                        # Keep TCP open: the client must act on the HTTP/2 event.
+                        try:
+                            while sock.recv(65536):
+                                pass
+                        except ConnectionResetError:
+                            pass
+                        except ssl.SSLError as error:
+                            # Older Python can expose ragged EOF as a generic SSLError.
+                            if (
+                                not isinstance(error, ssl.SSLEOFError)
+                                and "unexpected eof" not in str(error).lower()
+                            ):
+                                raise
+
+        self._start_server(handler)
+        with PoolManager(
+            ssl_backend="ssl",
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h3},
+            background_watch_delay=None,
+            retries=False,
+        ) as manager:
+            url = f"https://{self.host}:{self.port}/"
+            first = manager.urlopen("GET", url, preload_content=False)
+            conn = first.connection
+            assert first.version == 20 and conn is not None
+            previous = conn.sock
+            assert previous is not None
+            assert first.read() == b"ok"
+            send_event.set()
+            assert event_sent.wait(5)
+            assert wait_for_read(previous, timeout=5)
+            second = manager.urlopen("GET", url, preload_content=False)
+            assert second.version == 20 and second.connection is not None
+            assert previous.fileno() == -1
+            assert second.connection.sock is not previous
+            assert second.read() == b"ok"
 
     def test_recovery_when_server_closes_connection(self) -> None:
         # Does the pool work seamlessly if an open connection in the
@@ -1379,6 +2009,77 @@ class TestSocketClosing(SocketDummyServerTestCase):
 
 
 class TestProxyManager(SocketDummyServerTestCase):
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("remove_sensitive", [False, True])
+    @pytest.mark.parametrize("target", ["same", "default-port", "cross", "proxy"])
+    async def test_redirect_rewrites_host_and_strips_credentials(
+        self, asynchronous: bool, remove_sensitive: bool, target: str
+    ) -> None:
+        from urllib3 import AsyncProxyManager
+
+        requests: list[bytearray] = []
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(10)
+            for first in (True, False):
+                with listener.accept()[0] as sock:
+                    sock.settimeout(10)
+                    requests.append(consume_socket(sock))
+                    if first:
+                        sock.sendall(
+                            b"HTTP/1.1 302 Found\r\nLocation: "
+                            + location.encode()
+                            + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    else:
+                        sock.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+
+        self._start_server(handler)
+        proxy_url = f"http://{self.host}:{self.port}"
+        location, expected_host = {
+            "same": ("http://google.com/second", "google.com"),
+            "default-port": ("http://google.com:80/second", "google.com"),
+            "cross": ("http://example.com/second", "example.com"),
+            "proxy": (proxy_url + "/second", f"{self.host}:{self.port}"),
+        }[target]
+        headers = {"Authorization": "Bearer secret", "Cookie": "private=yes"}
+        retries = Retry(
+            total=1,
+            remove_headers_on_redirect=(
+                Retry.DEFAULT_REMOVE_HEADERS_ON_REDIRECT if remove_sensitive else ()
+            ),
+        )
+        if asynchronous:
+            async with AsyncProxyManager(
+                proxy_url, headers=headers, timeout=5, retries=retries
+            ) as manager_async:
+                response_async = await manager_async.request(
+                    "GET", "http://google.com/first"
+                )
+                assert response_async.status == 200
+        else:
+            with proxy_from_url(
+                proxy_url, headers=headers, timeout=5, retries=retries
+            ) as manager:
+                assert manager.request("GET", "http://google.com/first").status == 200
+
+        assert len(requests) == 2
+        assert requests[1].startswith(b"GET " + location.encode() + b" HTTP/1.1\r\n")
+        received = HTTPHeaderDict()
+        for line in requests[1].split(b"\r\n")[1:]:
+            if line:
+                name, value = line.decode().split(":", 1)
+                received.add(name, value.strip())
+        assert received["Host"] == expected_host
+        retain_credentials = target in {"same", "default-port"} or not remove_sensitive
+        assert ("Authorization" in received) is retain_credentials
+        assert ("Cookie" in received) is retain_credentials
+        assert headers == {"Authorization": "Bearer secret", "Cookie": "private=yes"}
+
     def test_simple(self) -> None:
         def echo_socket_handler(listener: socket.socket) -> None:
             sock = listener.accept()[0]
@@ -2566,6 +3267,78 @@ class TestHEAD(SocketDummyServerTestCase):
 
 
 class TestStream(SocketDummyServerTestCase):
+    def test_response_read_from_closed_descriptor(self) -> None:
+        self.start_response_handler(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n")
+        with HTTPConnectionPool(self.host, self.port, timeout=5, retries=False) as pool:
+            response = pool.request("GET", "/", preload_content=False)
+            try:
+                conn = response.connection
+                assert conn is not None and conn.sock is not None
+                conn.sock.close()
+                with pytest.raises(ProtocolError, match="Connection broken") as caught:
+                    response.read()
+                assert isinstance(caught.value.__cause__, OSError)
+                assert conn.is_closed
+            finally:
+                response.close()
+
+    def test_oversized_read1_from_transport(self) -> None:
+        self.start_response_handler(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody")
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            assert response.read1(2**31) == b"body"
+            assert response.read1() == b""
+
+    @pytest.mark.parametrize("partial", [False, True])
+    @pytest.mark.parametrize("chunked", [False, True])
+    def test_compressed_response_read_boundaries(
+        self,
+        compressed_payload: tuple[str, bytes, bytes],
+        partial: bool,
+        chunked: bool,
+    ) -> None:
+        encoding, encoded, plain = compressed_payload
+        headers = f"HTTP/1.1 200 OK\r\nContent-Encoding: {encoding}\r\nConnection: close\r\n".encode()
+        if chunked:
+            wire = (
+                headers
+                + b"Transfer-Encoding: chunked\r\n\r\n"
+                + f"{len(encoded):x}\r\n".encode()
+                + encoded
+                + b"\r\n0\r\n\r\n"
+            )
+        else:
+            wire = (
+                headers + f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded
+            )
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(wire)
+
+        self._start_server(handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5, retries=False) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            from urllib3.backend import LowLevelResponse
+
+            assert isinstance(response._fp, LowLevelResponse)
+            assert response._fp.from_promise is not None
+            assert response.is_from_promise(response._fp.from_promise)
+            prefix = response.read(64) if partial else b""
+            assert prefix == (plain[:64] if partial else b"")
+            assert response.read(0) == b""
+            assert response.read1(0) == b""
+            assert list(response.stream(0)) == []
+            if chunked:
+                remainder = b"".join(response.read_chunked(-1))
+            else:
+                remainder = response.read()
+            assert len(prefix + remainder) == len(plain)
+            assert prefix + remainder == plain
+            response.close()
+
     @pytest.mark.parametrize("decode_content", [False, True])
     def test_zero_sized_read1_does_not_wait_for_body(
         self, decode_content: bool
@@ -2585,6 +3358,32 @@ class TestStream(SocketDummyServerTestCase):
             try:
                 # The server sends the body only after the zero-byte read returns.
                 assert response.read1(0, decode_content=decode_content) == b""
+                assert response.tell() == 0
+                assert response.length_remaining == 4
+                send_body.set()
+                assert response.read(cache_content=True) == b"body"
+                assert response.data == b"body"
+            finally:
+                send_body.set()
+                response.close()
+
+    @pytest.mark.parametrize("decode_content", [False, True])
+    def test_zero_sized_read_does_not_wait_for_body(self, decode_content: bool) -> None:
+        send_body = Event()
+
+        def socket_handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                consume_socket(sock)
+                sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                if send_body.wait(10):
+                    sock.sendall(b"body")
+
+        self._start_server(socket_handler)
+        with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:
+            response = pool.urlopen("GET", "/", preload_content=False)
+            try:
+                # The server sends the body only after the zero-byte read returns.
+                assert response.read(0, decode_content=decode_content) == b""
                 assert response.tell() == 0
                 assert response.length_remaining == 4
                 send_body.set()
@@ -3323,6 +4122,235 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
     raise (and async mirror).
     """
 
+    def test_http2_disposed_stream_ignores_late_data(self) -> None:
+        from jh2.events import StreamReset
+        from jh2.hyperframe.frame import DataFrame
+
+        reset_received = Event()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    streams: list[int] = []
+                    while len(streams) < 2:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                streams.append(event.stream_id)
+                                h2.send_headers(
+                                    event.stream_id,
+                                    [
+                                        (b":status", b"200"),
+                                        (
+                                            b"content-length",
+                                            b"3" if len(streams) == 1 else b"2",
+                                        ),
+                                    ],
+                                )
+                                if len(streams) == 1:
+                                    h2.send_data(event.stream_id, b"a")
+                        sock.sendall(h2.data_to_send())
+                    while not reset_received.is_set():
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if (
+                                isinstance(event, StreamReset)
+                                and event.stream_id == streams[0]
+                            ):
+                                assert event.error_code == 8
+                                reset_received.set()
+                        sock.sendall(h2.data_to_send())
+                    # Simulate DATA already in flight when the reset crossed it.
+                    late = DataFrame(streams[0])
+                    late.data = b"bc"
+                    late.flags.add("END_STREAM")
+                    h2.send_data(streams[1], b"ok", end_stream=True)
+                    sock.sendall(late.serialize() + h2.data_to_send())
+                    while len(streams) < 3:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                streams.append(event.stream_id)
+                                h2.send_headers(
+                                    event.stream_id,
+                                    [
+                                        (b":status", b"200"),
+                                        (b"content-length", b"2"),
+                                    ],
+                                )
+                                h2.send_data(event.stream_id, b"ok", end_stream=True)
+                        sock.sendall(h2.data_to_send())
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            retries=False,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            background_watch_delay=None,
+        ) as pool:
+            first = pool.request("GET", "/first", preload_content=False)
+            conn = first.connection
+            assert conn is not None and conn._protocol is not None
+            protocol = conn._protocol
+            assert first.read(1) == b"a"
+            second = pool.request("GET", "/second", preload_content=False)
+            assert second.connection is conn
+            first.close()
+            assert reset_received.wait(5)
+            assert second.read() == b"ok"
+            assert protocol.is_idle()
+            assert not protocol.has_pending_event(stream_id=1)
+            third = pool.request("GET", "/third", preload_content=False)
+            assert third.connection is conn
+            assert third.read() == b"ok"
+
+    @pytest.mark.parametrize(
+        "error_code,error_name",
+        [
+            (0xB, "ENHANCE_YOUR_CALM"),
+            (0x1, "PROTOCOL_ERROR"),
+            (0xFFFF, "UNKNOWN_ERROR"),
+        ],
+    )
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    def test_http2_goaway_error_message(
+        self, error_code: int, error_name: str, multiplexed: bool
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    received = False
+                    while not received:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                h2.close_connection(
+                                    error_code=error_code,
+                                    last_stream_id=event.stream_id,
+                                )
+                                received = True
+                        sock.sendall(h2.data_to_send())
+                    # Keep TCP open until the client processes the actual GOAWAY.
+                    try:
+                        while sock.recv(65536):
+                            pass
+                    except (ssl.SSLError, ConnectionResetError):
+                        pass
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            retries=False,
+        ) as pool:
+            with pytest.raises(ProtocolError) as caught:
+                if multiplexed:
+                    promise = pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(promise, ResponsePromise)
+                    pool.get_response(promise=promise)
+                else:
+                    pool.urlopen("GET", "/")
+            message = str(caught.value)
+            assert "HTTP/2" in message
+            assert "GOAWAY" in message
+            assert error_name in message
+            assert hex(error_code) in message
+
+    @pytest.mark.parametrize(
+        "error_code,frame_type,reason,error_name,error_type",
+        [
+            (0x107, None, "too many requests", "H3_EXCESSIVE_LOAD", ProtocolError),
+            (
+                0x200,
+                None,
+                "invalid QPACK data",
+                "QPACK_DECOMPRESSION_FAILED",
+                ProtocolError,
+            ),
+            # The same number belongs to different namespaces on the wire.
+            (0x10A, None, "", "H3_MISSING_SETTINGS", ProtocolError),
+            (
+                0x10A,
+                0x6,
+                "unexpected handshake message",
+                "TLS_UNEXPECTED_MESSAGE",
+                SSLError,
+            ),
+            (0x12A, None, "custom application error", "UNKNOWN_ERROR", ProtocolError),
+            (
+                0x12A,
+                0x6,
+                "peer rejected client certificate",
+                "TLS_BAD_CERTIFICATE",
+                SSLError,
+            ),
+            (0x128, 0x6, "no compatible cipher", "TLS_HANDSHAKE_FAILURE", SSLError),
+            (0x3, 0x8, "flow control exceeded", "FLOW_CONTROL_ERROR", ProtocolError),
+            (0xFFFF, None, "custom application error", "UNKNOWN_ERROR", ProtocolError),
+            (0x1FF, 0x6, "", "UNKNOWN_ERROR", SSLError),
+            # TLS classification must precede the legacy code-400/header heuristic.
+            (0x190, 0x6, "invalid header", "UNKNOWN_ERROR", SSLError),
+        ],
+    )
+    @pytest.mark.parametrize("multiplexed", [False, True])
+    def test_http3_close_error_message(
+        self,
+        http3_error_server: ServerConfig,
+        error_code: int,
+        frame_type: int | None,
+        reason: str,
+        error_name: str,
+        error_type: type[Exception],
+        multiplexed: bool,
+    ) -> None:
+        with HTTPSConnectionPool(
+            http3_error_server.host,
+            http3_error_server.port,
+            ca_certs=http3_error_server.ca_certs,
+            timeout=5,
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+            retries=False,
+        ) as pool:
+            with pytest.raises(error_type) as caught:
+                if multiplexed:
+                    promise = pool.urlopen("GET", "/", multiplexed=True)
+                    assert isinstance(promise, ResponsePromise)
+                    pool.get_response(promise=promise)
+                else:
+                    pool.urlopen("GET", "/")
+            message = str(caught.value)
+            assert "HTTP/3" in message
+            assert error_name in message
+            assert hex(error_code) in message
+            if reason:
+                assert reason in message
+
     @pytest.mark.parametrize(
         "error_code, multiplexed",
         [(0xD, False), (0x8, False), (0x8, True)],
@@ -3369,6 +4397,65 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
                     pool.get_response()
                 else:
                     pool.urlopen("GET", "/")
+
+    @pytest.mark.parametrize("through_manager", [False, True])
+    @pytest.mark.parametrize("by_promise", [False, True])
+    def test_retired_pool_connection_error_releases_registry(
+        self, through_manager: bool, by_promise: bool
+    ) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        terminate = Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(5)
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as sock:
+                    h2 = H2Connection(config=H2Configuration(client_side=False))
+                    h2.initiate_connection()
+                    sock.sendall(h2.data_to_send())
+                    while True:
+                        data = sock.recv(65536)
+                        assert data
+                        for event in h2.receive_data(data):
+                            if isinstance(event, RequestReceived):
+                                assert terminate.wait(5)
+                                h2.close_connection(
+                                    error_code=0x2, last_stream_id=event.stream_id
+                                )
+                                sock.sendall(h2.data_to_send())
+                                return
+                        sock.sendall(h2.data_to_send())
+
+        self._start_server(handler)
+        try:
+            with PoolManager(
+                ca_certs=DEFAULT_CA,
+                disabled_svn={HttpVersion.h11, HttpVersion.h3},
+                timeout=5,
+                retries=False,
+            ) as manager:
+                promise = manager.urlopen(
+                    "GET", f"https://{self.host}:{self.port}/", multiplexed=True
+                )
+                assert isinstance(promise, ResponsePromise)
+                old_pool = next(iter(manager.pools._registry.values()))
+                police = old_pool.pool
+                assert police is not None
+                sock = promise._conn.sock
+                assert sock is not None
+                manager.clear()
+                terminate.set()
+                reader = manager if through_manager else old_pool
+                with pytest.raises(ProtocolError, match="GOAWAY"):
+                    reader.get_response(promise=promise if by_promise else None)
+                assert sock.fileno() == -1
+                assert police.rsize() == 0
+                assert manager.pools.rsize() == 0
+        finally:
+            terminate.set()
 
     def test_http2_rejects_upload_before_body_is_consumed(self) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

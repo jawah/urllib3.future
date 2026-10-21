@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -38,3 +39,9 @@ def async_resolver() -> AsyncBaseResolver:
         "in-memory://default/?hosts=httpbin.local:127.0.0.1,"
         "alt.httpbin.local:127.0.0.1,localhost:127.0.0.1"
     ).new()
+
+
+def edge_address(name: str) -> tuple[str, int] | None:
+    with open("fixtures/socket-edges.json") as file:
+        address = json.load(file)[name]
+    return (address[0], address[1]) if address is not None else None

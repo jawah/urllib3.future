@@ -12,6 +12,7 @@ from urllib3._async.connectionpool import (
     AsyncHTTPConnectionPool,
     AsyncHTTPSConnectionPool,
     connection_from_url,
+    idle_conn_watch_task,
 )
 from urllib3._async.response import AsyncHTTPResponse
 from urllib3.backend import ResponsePromise
@@ -21,6 +22,44 @@ from urllib3.exceptions import (
     LocationValueError,
     UnrewindableBodyError,
 )
+
+
+@pytest.mark.asyncio
+async def test_close_returns_watcher_checkout_before_draining() -> None:
+    entered = asyncio.Event()
+
+    class IdleConnection:
+        is_idle = True
+        last_used_at = 0.0
+        closed = False
+
+        async def peek_and_react(self) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    pool = AsyncHTTPConnectionPool("localhost", background_watch_delay=None)
+    police = pool.pool
+    assert police is not None
+    conn = IdleConnection()
+    await police.put(conn, immediately_unavailable=True)  # type: ignore[arg-type]
+    police.release()
+    watcher = pool._background_monitoring = asyncio.create_task(
+        idle_conn_watch_task(pool, waiting_delay=0, keepalive_delay=None)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(pool.close(), 5)
+        assert watcher.done()
+        assert conn.closed
+        assert police.rsize() == police.qsize() == 0
+        assert not police._cursors
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+        await pool.close()
 
 
 @pytest.mark.asyncio

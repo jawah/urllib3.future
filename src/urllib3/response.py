@@ -68,6 +68,7 @@ from .exceptions import (
 )
 from .util.response import is_fp_closed
 from .util.retry import Retry
+from .util.traffic_police import UnavailableTraffic
 
 try:
     from jh2._hazmat import _BytesQueueBuffer as BytesQueueBuffer  # type: ignore[import-untyped]
@@ -118,7 +119,7 @@ class DeflateDecoder(ContentDecoder):
         original_max_length = max_length
         if original_max_length < 0:
             max_length = 0
-        elif original_max_length == 0:
+        elif original_max_length == 0:  # Defensive: direct decoder calls only.
             # We should not pass 0 to the zlib decompressor because 0 is
             # the default value that will make zlib decompress without a
             # length limit.
@@ -177,11 +178,10 @@ class GzipDecoder(ContentDecoder):
         self._unconsumed_tail = b""
 
     def decompress(self, data: bytes, max_length: int = -1) -> bytes:
-        ret = bytearray()
         if self._state == GzipDecoderState.SWALLOW_DATA:
-            return bytes(ret)
+            return b""
 
-        if max_length == 0:
+        if max_length == 0:  # Defensive: direct decoder calls only.
             # We should not pass 0 to the zlib decompressor because 0 is
             # the default value that will make zlib decompress without a
             # length limit.
@@ -193,13 +193,22 @@ class GzipDecoder(ContentDecoder):
         # call if decompression is to continue.
         data = self._unconsumed_tail + data
         if not data and self._obj.eof:
-            return bytes(ret)
+            return b""
 
+        # Keep zlib's bytes object unless multiple outputs need combining.
+        ret: bytes | bytearray = b""
         while True:
             try:
-                ret += self._obj.decompress(
+                chunk = self._obj.decompress(
                     data, max_length=max(max_length - len(ret), 0)
                 )
+                if not ret:
+                    ret = chunk
+                elif chunk:
+                    if isinstance(ret, bytes):
+                        ret = bytearray(ret)
+                    ret += chunk
+                    del chunk
             except zlib.error:
                 previous_state = self._state
                 # Ignore data after the first error
@@ -207,7 +216,7 @@ class GzipDecoder(ContentDecoder):
                 self._unconsumed_tail = b""
                 if previous_state == GzipDecoderState.OTHER_MEMBERS:
                     # Allow trailing garbage acceptable in other gzip clients
-                    return bytes(ret)
+                    return ret if isinstance(ret, bytes) else bytes(ret)
                 raise
 
             self._unconsumed_tail = data = (
@@ -217,14 +226,14 @@ class GzipDecoder(ContentDecoder):
                 break
 
             if not data:
-                return bytes(ret)
+                return ret if isinstance(ret, bytes) else bytes(ret)
             # When the end of a gzip member is reached, a new decompressor
             # must be created for unused (possibly future) data.
             if self._obj.eof:
                 self._state = GzipDecoderState.OTHER_MEMBERS
                 self._obj = zlib.decompressobj(16 + zlib.MAX_WBITS)
 
-        return bytes(ret)
+        return ret if isinstance(ret, bytes) else bytes(ret)
 
     @property
     def has_unconsumed_tail(self) -> bool:
@@ -448,7 +457,10 @@ def _get_decoder(mode: str) -> ContentDecoder:
     if zlib is not None:
         return DeflateDecoder()
 
-    raise DecodeError(f"Unsupported content encoding: {mode}")
+    # Normal responses filter unsupported encodings before calling this factory.
+    raise DecodeError(
+        f"Unsupported content encoding: {mode}"
+    )  # Defensive: no matching decoder and zlib is unavailable.
 
 
 class HTTPResponse(io.IOBase):
@@ -598,8 +610,10 @@ class HTTPResponse(io.IOBase):
 
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
-            if self._police_officer.parent is not None:
-                self._police_officer.parent.memorize(self, self._pool)
+            # Direct collection after pool close need not hold a parent checkout.
+            parent = self._police_officer.parent
+            if parent is not None and (self._pool is not None or parent.busy):
+                parent.memorize(self, self._pool)
 
         self._preloaded_content = preload_content
 
@@ -1136,6 +1150,9 @@ class HTTPResponse(io.IOBase):
     ) -> bytes:
         """We need this private method to restore BC with urllib3 fast-path for streaming/chunks.
         see https://github.com/jawah/urllib3.future/issues/379"""
+        # Zero-byte reads must not advance the transport or the decoder.
+        if amt == 0:
+            return b""
         try:
             self._init_decoder()
             if decode_content is None:
@@ -1231,6 +1248,9 @@ class HTTPResponse(io.IOBase):
 
             if amt is None:
                 data = self._decode(data, decode_content, flush_decoder)
+                # A previous bounded read may have left decoded output buffered.
+                if self._decoded_buffer:
+                    data = self._decoded_buffer.get(len(self._decoded_buffer)) + data
                 if cache_content and not self._uncached_read_occurred:
                     self._body = data
             else:
@@ -1370,15 +1390,45 @@ class HTTPResponse(io.IOBase):
     def readable(self) -> bool:
         return True
 
+    def __del__(self) -> None:
+        # GC may run in another thread; only explicit close() may borrow a connection.
+        if not getattr(self, "closed", True):
+            if self._fp:
+                self._fp.close()
+            if not self.auto_close:
+                io.IOBase.close(self)
+
     def close(self) -> None:
         if self.extension is not None and self.extension.closed is False:
             self.extension.close()
 
-        if not self.closed and self._fp:
+        if isinstance(self._fp, LowLevelResponse) and self._police_officer is not None:
+            police = self._police_officer
+            try:
+                with police.borrow(self) as conn:
+                    try:
+                        self._fp.abort()
+                    except (OSError, BaseSSLError):
+                        # A failed reset write makes the transport unusable.
+                        conn.close()
+                    finally:
+                        self._fp.close()
+                        self._connection = None
+            except UnavailableTraffic:
+                self._fp.close()
+                self._connection = None
+            finally:
+                if self._fp.closed:
+                    police.forget(self)
+                    self._police_officer = None
+        elif isinstance(self._fp, LowLevelResponse) and self._fp._eot:
             self._fp.close()
-
-        if self._connection:
-            self._connection.close()
+            self._connection = None
+        else:
+            if not self.closed and self._fp:
+                self._fp.close()
+            if self._connection:
+                self._connection.close()  # Defensive: external file-like body.
 
         if not self.auto_close:
             io.IOBase.close(self)

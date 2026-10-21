@@ -30,6 +30,55 @@ AsyncWebSocketExtension = (
 
 @pytest.mark.asyncio
 class TestWebExtensions(TraefikTestCase):
+    @notWindows()  # The Windows stack does not provide the HAProxy RFC 8441 endpoint.
+    @pytest.mark.skipif(
+        AsyncWebSocketExtensionFromMultiplexedHTTP is None,
+        reason="test requires wsproto",
+    )
+    @pytest.mark.parametrize("use_scheme", [False, True])
+    async def test_http2_only_extension_with_deferred_response(
+        self, use_scheme: bool
+    ) -> None:
+        from urllib3 import ResponsePromise
+
+        class HTTP2WebSocket(AsyncWebSocketExtensionFromMultiplexedHTTP):
+            @staticmethod
+            def implementation() -> str:
+                return "test-h2-only"
+
+            @staticmethod
+            def supported_svn() -> set[HttpVersion]:
+                return {HttpVersion.h2}
+
+        async with AsyncPoolManager(
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn={HttpVersion.h3},
+            timeout=5,
+            retries=False,
+        ) as manager:
+            target_url = self.https_haproxy_url
+            if use_scheme:
+                target_url = target_url.replace("https://", "wss+test-h2-only://")
+            promise = await manager.urlopen(
+                "GET",
+                target_url + "/websocket/echo",
+                extension=None if use_scheme else HTTP2WebSocket(),
+                multiplexed=True,
+            )
+            assert isinstance(promise, ResponsePromise)
+            response = await manager.get_response(promise=promise)
+            assert response is not None
+            assert response.status == 200 and response.version == 20
+            assert response.extension is not None
+            assert response.extension.supported_svn() == {HttpVersion.h2}
+            await response.extension.send_payload("HTTP/2 extension")
+            assert await response.extension.next_payload() == "HTTP/2 extension"
+            await response.extension.close()
+            normal = await manager.urlopen("GET", self.https_haproxy_url + "/get")
+            assert normal.status == 200 and normal.version == 20
+            assert manager.connection_pool_kw["disabled_svn"] == {HttpVersion.h3}
+
     async def test_unknown_implementation(self) -> None:
         target_url = self.https_url
         target_url = target_url.replace("https://", "wss+wzproto://")

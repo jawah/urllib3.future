@@ -32,8 +32,11 @@ def consume_socket(
     while True:
         b = sock.recv(chunks)
         assert isinstance(b, bytes)
+        if not b:
+            raise ConnectionAbortedError("Peer closed before completing HTTP headers")
         consumed += b
-        if b.endswith(b"\r\n\r\n"):
+        # The delimiter may span reads or share a read with the body.
+        if b"\r\n\r\n" in consumed:
             break
     return consumed
 

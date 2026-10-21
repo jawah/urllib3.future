@@ -32,7 +32,8 @@ if sys.platform == "wasi":
         if isinstance(error, _wasi_ip_name_lookup.ErrorCode_NameUnresolvable):
             code = _stdlib_socket.EAI_NONAME
         elif isinstance(error, _wasi_ip_name_lookup.ErrorCode_TemporaryResolverFailure):
-            code = _stdlib_socket.EAI_AGAIN
+            # Wasmtime 47 collapses lookup failures to name-unresolvable.
+            code = _stdlib_socket.EAI_AGAIN  # Defensive: WASI spec compatibility.
         else:
             code = _stdlib_socket.EAI_FAIL
         return _stdlib_socket.gaierror(code, type(error).__name__)
@@ -318,6 +319,9 @@ if sys.platform == "wasi":
                 self._read_buffer = await self.recv(65536)
 
         async def recv(self, bufsize: int) -> bytes:
+            # Zero-length component-stream reads wait for readiness.
+            if bufsize == 0:
+                return b""
             if self._receive_error is not None:
                 raise self._receive_error
             if self._reader is None:
@@ -442,12 +446,16 @@ if sys.platform == "wasi":
             raise OSError(errno.ENOPROTOOPT, "protocol option not available")
 
         def getsockname(self) -> tuple[str, int] | tuple[str, int, int, int]:
+            if self._closed:
+                raise OSError(errno.EBADF, "bad file descriptor")
             try:
                 return _python_socket_address(self._socket.get_local_address())
             except Err as error:
                 raise _socket_error(error.value) from None
 
         def getpeername(self) -> tuple[str, int] | tuple[str, int, int, int]:
+            if self._closed:
+                raise OSError(errno.EBADF, "bad file descriptor")
             try:
                 return _python_socket_address(self._socket.get_remote_address())
             except Err as error:
@@ -599,6 +607,9 @@ if sys.platform == "wasi":
                 self._read_buffer = await self.recv(65536)
 
         async def recv(self, bufsize: int) -> bytes:
+            # Zero-length component-stream reads wait for readiness.
+            if bufsize == 0:
+                return b""
             if self._read_buffer:
                 data = self._read_buffer[:bufsize]
                 self._read_buffer = self._read_buffer[bufsize:]

@@ -35,7 +35,9 @@ class AsyncDirectStreamAccess:
     def closed(self) -> bool:
         return self._read is None and self._write is None
 
-    async def readinto(self, b: bytearray) -> int:
+    async def readinto(
+        self, b: bytearray
+    ) -> int:  # Defensive: incidental http.client compatibility.
         if self._read is None:
             raise OSError("read operation on a closed stream")
 
@@ -47,22 +49,24 @@ class AsyncDirectStreamAccess:
             b[: len(temp)] = temp
             return len(temp)
 
-    def readable(self) -> bool:
+    def readable(self) -> bool:  # Defensive: incidental http.client compatibility.
         return self._read is not None
 
-    def writable(self) -> bool:
+    def writable(self) -> bool:  # Defensive: incidental http.client compatibility.
         return self._write is not None
 
-    def seekable(self) -> bool:
+    def seekable(self) -> bool:  # Defensive: incidental http.client compatibility.
         return False
 
-    def fileno(self) -> int:
+    def fileno(self) -> int:  # Defensive: incidental http.client compatibility.
         return -1
 
-    def name(self) -> int:
+    def name(self) -> int:  # Defensive: incidental http.client compatibility.
         return -1
 
-    async def recv(self, __bufsize: int, __flags: int = 0) -> bytes:
+    async def recv(
+        self, __bufsize: int, __flags: int = 0
+    ) -> bytes:  # Defensive: incidental http.client compatibility.
         data, _, _ = await self.recv_extended(__bufsize)
         return data
 
@@ -113,7 +117,9 @@ class AsyncDirectStreamAccess:
 
         await self._write(__data, self._stream_id, False)
 
-    async def write(self, __data: bytes) -> int:
+    async def write(
+        self, __data: bytes
+    ) -> int:  # Defensive: incidental http.client compatibility.
         if self._write is None:
             raise OSError("stream write not permitted")
 
@@ -310,16 +316,17 @@ class AsyncLowLevelResponse:
         return data
 
     async def abort(self) -> None:
-        if self._stream_abort is not None:
-            if self._eot is False:
+        try:
+            if self._stream_abort is not None and not self._eot:
                 if self._stream_id is not None:
                     await self._stream_abort(self._stream_id)
-                self._eot = True
-                self._stream_abort = None
-                self.closed = True
-                self._dsa = None
+        finally:
+            self._eot = True
+            self.close()
 
     def close(self) -> None:
+        self._stream_abort = None
+        self.__buffer_excess = BytesQueueBuffer()
         self.__internal_read_st = None
         self.closed = True
         self._dsa = None

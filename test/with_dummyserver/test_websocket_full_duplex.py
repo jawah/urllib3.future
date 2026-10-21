@@ -6,14 +6,14 @@ import ssl
 import sys
 from contextlib import asynccontextmanager
 from threading import Event, Lock
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Iterator, Mapping
 
 import pytest
 import trustme
 
 from urllib3 import AsyncPoolManager, AsyncProxyManager, PoolManager, ProxyManager
 from urllib3.contrib.ssa import AsyncSocket
-from urllib3.exceptions import ReadTimeoutError, SSLError
+from urllib3.exceptions import ProtocolError, ReadTimeoutError, SSLError
 from urllib3.util.wait import wait_for_read
 
 try:
@@ -30,31 +30,72 @@ pytestmark = pytest.mark.timeout(60, method="thread")
 
 
 class Peer:
-    def __init__(self: Any, initial_message: str | None = None) -> None:
+    def __init__(
+        self: Any,
+        initial_message: str | None = None,
+        *,
+        compression: bool = False,
+        handshake_error: str | None = None,
+    ) -> None:
+        self.compression = compression
+        self.handshake_error = handshake_error
         self.protocol = (
             wsproto.WSConnection(wsproto.ConnectionType.SERVER)
             if wsproto is not None
             else ServerProtocol()
         )
+        if wsproto is None and compression:
+            from websockets.extensions.permessage_deflate import (
+                ServerPerMessageDeflateFactory,
+            )
+
+            self.protocol = ServerProtocol(
+                extensions=[ServerPerMessageDeflateFactory()]
+            )
         self.writer: asyncio.StreamWriter | None = None
         self.received: asyncio.Queue[str | bytes] = asyncio.Queue()
         self.pongs: asyncio.Queue[bytes] = asyncio.Queue()
         self.finished = asyncio.Event()
         self.initial_message = initial_message
+        self.request_headers = b""
 
     async def handle(
         self: Any, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         self.writer = writer
         try:
-            self.protocol.receive_data(await reader.readuntil(b"\r\n\r\n"))
+            self.request_headers = await reader.readuntil(b"\r\n\r\n")
+            self.protocol.receive_data(self.request_headers)
             if wsproto is not None:
                 list(self.protocol.events())
-                handshake = self.protocol.send(wsproto.events.AcceptConnection())
+                handshake = self.protocol.send(
+                    wsproto.events.AcceptConnection(
+                        extensions=[wsproto.extensions.PerMessageDeflate()]
+                        if self.compression
+                        else [],
+                    )
+                )
             else:
                 request = self.protocol.events_received()[0]
                 self.protocol.send_response(self.protocol.accept(request))
                 handshake = b"".join(self.protocol.data_to_send())
+            if self.handshake_error == "missing-accept":
+                handshake = b"\r\n".join(
+                    line
+                    for line in handshake.split(b"\r\n")
+                    if not line.lower().startswith(b"sec-websocket-accept:")
+                )
+            elif self.handshake_error == "wrong-accept":
+                handshake = b"\r\n".join(
+                    b"Sec-WebSocket-Accept: invalid"
+                    if line.lower().startswith(b"sec-websocket-accept:")
+                    else line
+                    for line in handshake.split(b"\r\n")
+                )
+            elif self.handshake_error == "unknown-extension":
+                handshake = handshake.replace(
+                    b"\r\n\r\n", b"\r\nSec-WebSocket-Extensions: unknown\r\n\r\n"
+                )
             if self.initial_message is not None:
                 handshake += self.encode(self.initial_message)
             writer.write(handshake)
@@ -135,8 +176,13 @@ async def _connection(
     *,
     implementation: str,
     tls_proxy: bool = False,
+    compression: bool = False,
+    handshake_error: str | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> AsyncGenerator[tuple[Any, Peer, Any, Any], None]:
-    peer = Peer(initial_message)
+    peer = Peer(
+        initial_message, compression=compression, handshake_error=handshake_error
+    )
     server_context = None
     client_context = None
     if tls:
@@ -218,6 +264,7 @@ async def _connection(
             f"{'wss' if tls else 'ws'}+{implementation}://127.0.0.1:{port}/",
             timeout=5,
             retries=False,
+            headers=headers,
         )
         assert response.version == 11
         # Short read deadlines belong to the WebSocket operation, not its handshake.
@@ -273,6 +320,51 @@ def observe_wait(
 
         monkeypatch.setattr(cls, "_wait_for_read", sync_wait)
     return waiting
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tls,tls_proxy",
+    [(False, False), (True, False), (True, True)],
+    ids=["tcp", "tls", "tls-proxy"],
+)
+async def test_handshake_accepts_header_mapping_without_copy(
+    connection: Any, asynchronous: bool, tls: bool, tls_proxy: bool
+) -> None:
+    class Headers(Mapping[str, str]):
+        def __init__(self) -> None:
+            self.data = {"X-Caller": "preserved", "Accept": "application/custom"}
+
+        def __getitem__(self, key: str) -> str:
+            return self.data[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self.data)
+
+        def __len__(self) -> int:
+            return len(self.data)
+
+    headers = Headers()
+    original = dict(headers)
+    async with connection(asynchronous, tls, headers=headers, tls_proxy=tls_proxy) as (
+        ws,
+        peer,
+        call,
+        _,
+    ):
+        received = {
+            key.lower(): value.strip()
+            for line in peer.request_headers.split(b"\r\n")[1:]
+            if line
+            for key, value in (line.split(b":", 1),)
+        }
+        assert received[b"x-caller"] == b"preserved"
+        assert received[b"accept"] == b"application/custom"
+        assert received[b"upgrade"].lower() == b"websocket"
+        assert received[b"sec-websocket-version"] == b"13"
+        assert dict(headers) == original
+        await call(ws.send_payload, "hello")
+        assert await asyncio.wait_for(peer.received.get(), 5) == "hello"
 
 
 @pytest.mark.asyncio
@@ -897,3 +989,109 @@ async def test_message_and_close_in_one_transport_read(
         assert await call(ws.next_payload) == "last message"
         assert await call(ws.next_payload) is None
         assert ws.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handshake_error", ["missing-accept", "wrong-accept", "unknown-extension"]
+)
+async def test_invalid_handshake_closes_transport(
+    connection: Any,
+    asynchronous: bool,
+    tls: bool,
+    handshake_error: str,
+) -> None:
+    with pytest.raises(ProtocolError):
+        async with connection(
+            asynchronous, tls, timeout=5, handshake_error=handshake_error
+        ):
+            pytest.fail("Invalid WebSocket handshake was accepted")
+
+
+@pytest.mark.asyncio
+async def test_negotiated_compression_and_fragmented_messages(
+    connection: Any,
+    asynchronous: bool,
+    tls: bool,
+) -> None:
+    from urllib3 import HttpVersion
+
+    async with connection(
+        asynchronous, tls, timeout=5, compression=True, initial_message="ready"
+    ) as (ws, peer, call, response):
+        assert "permessage-deflate" in response.headers["sec-websocket-extensions"]
+        assert ws.headers(HttpVersion.h11)["sec-websocket-version"] == "13"
+        assert await call(ws.next_payload) == "ready"
+        for message in ("compressed text " * 32, b"compressed bytes " * 32):
+            half = len(message) // 2
+            assert peer.writer is not None
+            peer.writer.write(
+                peer.encode("first")
+                + peer.encode(message[:half], message_finished=False)
+                + peer.encode(message[half:])
+                + peer.encode("next")
+            )
+            assert await call(ws.next_payload) == "first"
+            assert await call(ws.next_payload) == message
+            assert await call(ws.next_payload) == "next"
+        await call(ws.send_payload, "client message")
+        assert await asyncio.wait_for(peer.received.get(), 5) == "client message"
+
+
+@pytest.mark.asyncio
+async def test_malformed_compressed_frame_closes_transport(
+    connection: Any,
+    asynchronous: bool,
+    tls: bool,
+) -> None:
+    async with connection(asynchronous, tls, timeout=5, compression=True) as (
+        ws,
+        peer,
+        call,
+        _,
+    ):
+        assert peer.writer is not None
+        # RSV1 marks compression; BTYPE=3 is invalid in a DEFLATE block.
+        peer.writer.write(b"\xc1\x01\x07")
+        try:
+            assert await call(ws.next_payload) is None
+        except ProtocolError:
+            pass
+        assert ws.closed
+
+
+@pytest.mark.asyncio
+async def test_close_with_two_queued_readers(
+    connection: Any,
+    asynchronous: bool,
+    tls: bool,
+) -> None:
+    async with connection(asynchronous, tls, timeout=5) as (ws, _, call, _):
+        loop = asyncio.get_running_loop()
+        acquiring: asyncio.Queue[None] = asyncio.Queue()
+        lock = ws._read_lock
+        if lock is None:
+            lock = asyncio.Lock()
+
+        class ObservedLock:
+            def acquire(self) -> Any:
+                # Signal after next_payload's initial closed check. Both readers
+                # must have entered before close; the real lock still serializes them.
+                loop.call_soon_threadsafe(acquiring.put_nowait, None)
+                return lock.acquire()
+
+            def release(self) -> None:
+                lock.release()
+
+        ws._read_lock = ObservedLock()
+        readers = []
+        try:
+            for _ in range(2):
+                readers.append(asyncio.ensure_future(call(ws.next_payload)))
+                await asyncio.wait_for(acquiring.get(), 5)
+            await asyncio.wait_for(call(ws.close), 5)
+            assert await asyncio.wait_for(asyncio.gather(*readers), 5) == [None, None]
+            assert ws.closed
+        finally:
+            await call(ws.close)
+            await asyncio.gather(*readers, return_exceptions=True)

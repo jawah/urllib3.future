@@ -189,8 +189,12 @@ def wasmtime_command(component: Path, case_id: str, *, async_: bool) -> list[str
         command.extend(["-Sp3", "-Wcomponent-model-async"])
     command.extend(
         [
-            "-Sinherit-network",
-            "-Sallow-ip-name-lookup=y",
+            "-Sinherit-network=n"
+            if case_id == "socket-network-denied"
+            else "-Sinherit-network",
+            "-Sallow-ip-name-lookup=n"
+            if case_id == "socket-dns-denied"
+            else "-Sallow-ip-name-lookup=y",
             "--dir",
             f"{COVERAGE}::coverage",
             "--dir",

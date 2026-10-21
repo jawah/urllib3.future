@@ -9,6 +9,26 @@ from urllib3.contrib.hface.events import (
 )
 
 
+def test_discard_stream_preserves_other_streams_and_global_events() -> None:
+    sm = StreamMatrix()
+    handshake = HandshakeCompleted("h2")
+    other = HeadersReceived(3, (), True)
+    goaway = ConnectionTerminated()
+    sm.extend([handshake, DataReceived(1, b"body", False), other, goaway])
+    sm.append(DataReceived(1, b"tail", True))
+    sm.discard(1)
+    sm.discard(1)
+    sm.discard(99)
+    assert sm.count() == 3
+    assert sm.stream_count == 1
+    assert sm.streams == [3]
+    assert sm.count(1) == 0
+    assert sm.popleft(3) is handshake
+    assert sm.popleft(3) is other
+    assert sm.popleft() is goaway
+    assert not sm
+
+
 def test_global_event_count_tracks_consumption() -> None:
     sm = StreamMatrix()
     assert sm.count(stream_id=-1) == 0

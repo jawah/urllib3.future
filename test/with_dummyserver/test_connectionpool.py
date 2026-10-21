@@ -8,7 +8,7 @@ import typing
 import warnings
 from pathlib import Path
 from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
-from threading import Event
+from threading import Event, Thread
 from unittest import mock
 from urllib.parse import urlencode
 
@@ -21,6 +21,7 @@ from urllib3 import ResolverDescription
 from urllib3._collections import HTTPHeaderDict
 from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
 from urllib3.connection import HTTPConnection, _get_default_user_agent
+from urllib3.connectionpool import idle_conn_watch_task
 from urllib3.exceptions import (
     ConnectTimeoutError,
     DecodeError,
@@ -701,6 +702,63 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert r.status == 200
             assert pool.num_connections == 1
             assert pool.num_requests == 2
+
+    @pytest.mark.parametrize("error", [AttributeError, ReferenceError])
+    def test_watcher_returns_checkout_on_early_exit(
+        self, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+    ) -> None:
+        with HTTPConnectionPool(
+            self.host, self.port, timeout=5, background_watch_delay=None
+        ) as pool:
+            assert pool.request("GET", "/").status == 200
+            police = pool.pool
+            assert police is not None
+            conn = next(iter(police._registry.values()))
+            conn._last_used_at = time.monotonic() - 2
+            iterators: list[typing.Generator[HTTPConnection, None, None]] = []
+            iter_idle = police.iter_idle
+            peek_and_react = conn.peek_and_react
+
+            def retain_iterator() -> typing.Generator[HTTPConnection, None, None]:
+                iterator = iter_idle()
+                # PyPy may retain this generator until a later collection.
+                iterators.append(iterator)
+                return iterator
+
+            def failed_peek() -> bool:
+                raise error("connection changed during the idle check")
+
+            monkeypatch.setattr(police, "iter_idle", retain_iterator)
+            monkeypatch.setattr(conn, "peek_and_react", failed_peek)
+            finished, cleanup = Event(), Event()
+
+            def watch() -> None:
+                try:
+                    idle_conn_watch_task(pool, waiting_delay=0, keepalive_delay=None)
+                finally:
+                    finished.set()
+                    cleanup.wait(5)
+                    # Always unwind in the owner thread, including on regression.
+                    for iterator in iterators:
+                        iterator.close()
+
+            watcher = Thread(target=watch)
+            watcher.start()
+            try:
+                assert finished.wait(5)
+                checkout_returned = not police._cursor
+                iterator_closed = (
+                    bool(iterators) and getattr(iterators[0], "gi_frame") is None
+                )
+            finally:
+                cleanup.set()
+                watcher.join(5)
+            assert not watcher.is_alive()
+            assert checkout_returned
+            assert iterator_closed
+            monkeypatch.setattr(conn, "peek_and_react", peek_and_react)
+            assert pool.request("GET", "/").status == 200
+            assert pool.num_connections == 1
 
     def test_keepalive_close(self) -> None:
         with HTTPConnectionPool(

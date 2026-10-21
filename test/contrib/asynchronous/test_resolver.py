@@ -5,7 +5,7 @@ import socket
 import struct
 from base64 import b64encode
 from test import requires_network
-from test.conftest import DNSHTTPSServer, DNSTLSServer, DNSUDPServer
+from test.conftest import DNSHTTPSServer, DNSQUICServer, DNSTLSServer, DNSUDPServer
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -36,6 +36,377 @@ from urllib3.contrib.resolver._async.in_memory import InMemoryResolver  # noqa: 
 from urllib3.contrib.resolver._async.null import NullResolver  # noqa: E402
 from urllib3.contrib.resolver._async.system import SystemResolver  # noqa: E402
 from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("doq_close_timer")
+async def test_doq_local_failed_handshake_releases_socket(
+    dns_quic_server: DNSQUICServer,
+) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="wrong.example",
+        timeout=5,
+    )
+    try:
+        with pytest.raises(ssl.SSLError, match="certificate verification failed"):
+            await resolver.getaddrinfo(
+                "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+        assert resolver._socket is None
+    finally:
+        await resolver.close()
+    assert not server.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("python_udp_transport")
+@pytest.mark.parametrize("doq_udp_socket", ["plain-udp"], indirect=True)
+async def test_doq_local_udp_offload_fallback(
+    dns_quic_server: DNSQUICServer,
+    doq_udp_socket: list[socket.socket],
+) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        for hostname in ("first.example", "second.example"):
+            results = await resolver.getaddrinfo(
+                hostname, 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+            assert {r[4][0] for r in results} == {"192.0.2.1", "2001:db8::1"}
+        assert all(getattr(sock, "gso_attempts") == 0 for sock in doq_udp_socket)
+    finally:
+        await resolver.close()
+    assert all(sock.fileno() == -1 for sock in doq_udp_socket)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ca_from_file", [False, True])
+@pytest.mark.parametrize("identity_from_file", [False, True])
+@pytest.mark.parametrize("socktype", [socket.SOCK_STREAM, socket.SOCK_DGRAM])
+async def test_doq_local_certificate_options(
+    dns_quic_server: DNSQUICServer,
+    ca_from_file: bool,
+    identity_from_file: bool,
+    socktype: socket.SocketKind,
+) -> None:
+    from pathlib import Path
+    from typing import Any
+    from dummyserver.server import DEFAULT_CERTS
+
+    server = dns_quic_server
+    options: dict[str, Any] = (
+        {"ca_certs": server.ca_certs}
+        if ca_from_file
+        else {"ca_cert_data": Path(server.ca_certs).read_text()}
+    )
+    if identity_from_file:
+        options.update(
+            cert_file=DEFAULT_CERTS["certfile"], key_file=DEFAULT_CERTS["keyfile"]
+        )
+    else:
+        options.update(
+            cert_data=Path(DEFAULT_CERTS["certfile"]).read_text(),
+            key_data=Path(DEFAULT_CERTS["keyfile"]).read_text(),
+        )
+    resolver = QUICResolver(
+        *server.address, server_hostname="httpbin.local", timeout=5, **options
+    )
+    try:
+        results = await resolver.getaddrinfo(
+            "certificates.example",
+            8443,
+            socket.AF_INET,
+            socktype,
+            quic_upgrade_via_dns_rr=True,
+        )
+        assert any(r[1] == socktype for r in results)
+        assert all(
+            r[3] == b"\x00\x02ab" and r[4] == ("192.0.2.1", 8443) for r in results
+        )
+        if socktype == socket.SOCK_DGRAM:
+            assert all(r[1] == socktype for r in results)
+        assert resolver.is_available()
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("doq_empty_ca_store", ["empty", "load-error"], indirect=True)
+@pytest.mark.parametrize("verify", [True, False])
+async def test_doq_local_missing_default_ca(
+    dns_quic_server: DNSQUICServer,
+    doq_empty_ca_store: None,
+    verify: bool,
+) -> None:
+    server = dns_quic_server
+    if verify:
+        with pytest.raises(ssl.SSLError, match="DoQ requires at least one CA"):
+            QUICResolver(*server.address, timeout=5)
+        assert not server.requests
+    else:
+        resolver = QUICResolver(*server.address, timeout=5, cert_reqs=ssl.CERT_NONE)
+        try:
+            results = await resolver.getaddrinfo(
+                "unverified.example", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+            assert results and all(r[4] == ("192.0.2.1", 443) for r in results)
+        finally:
+            await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dns_udp_server",
+    [
+        "drop-first",
+        "garbage-first",
+        "question-count",
+        "truncated-record",
+        "truncated-answers",
+        "unknown-record",
+        "empty-https",
+        "truncated-https",
+        "https-ech",
+    ],
+    indirect=True,
+)
+async def test_udp_local_recovers_and_preserves_records(
+    dns_udp_server: DNSUDPServer, request: pytest.FixtureRequest
+) -> None:
+    server = dns_udp_server
+    resolver = PlainResolver(*server.address, timeout=5, source_address="127.0.0.1")
+    try:
+        results = await resolver.getaddrinfo(
+            "first.example",
+            443,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+            quic_upgrade_via_dns_rr=True,
+        )
+        assert {(r[0], r[4][0]) for r in results} == {
+            (socket.AF_INET, "192.0.2.1"),
+            (socket.AF_INET6, "2001:db8::1"),
+        }
+        if request.node.callspec.params["dns_udp_server"] == "https-ech":
+            assert all(r[3] == b"\x00\x02ab" for r in results)
+            assert {r[1] for r in results} == {socket.SOCK_STREAM, socket.SOCK_DGRAM}
+        else:
+            assert all(r[1] == socket.SOCK_STREAM and not r[3] for r in results)
+        assert resolver.is_available()
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dns_udp_server,error",
+    [
+        ("timeout", "timed out"),
+        ("servfail", "DNSSEC validation failure"),
+        ("unknown-rcode", "DNS returned an error"),
+        ("no-answer", "Name or service not known"),
+    ],
+    indirect=["dns_udp_server"],
+)
+async def test_udp_local_errors_are_bounded(
+    dns_udp_server: DNSUDPServer, error: str
+) -> None:
+    resolver = PlainResolver(*dns_udp_server.address, timeout=1)
+    try:
+        with pytest.raises(socket.gaierror, match=error):
+            await resolver.getaddrinfo(
+                "first.example",
+                443,
+                socket.AF_INET,
+                socket.SOCK_DGRAM,
+                quic_upgrade_via_dns_rr=True,
+            )
+    finally:
+        await resolver.close()
+    assert dns_udp_server.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dns_quic_server",
+    ["normal", "split-prefix", "split-body", "empty-datagram"],
+    indirect=True,
+)
+async def test_doq_local_framing_and_reuse(dns_quic_server: DNSQUICServer) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        for hostname in ("first.example", "second.example"):
+            results = await resolver.getaddrinfo(
+                hostname, 443, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+            assert {(r[0], r[4][0]) for r in results} == {
+                (socket.AF_INET, "192.0.2.1"),
+                (socket.AF_INET6, "2001:db8::1"),
+            }
+            assert all(r[3] == b"\x00\x02ab" for r in results)
+            assert resolver.is_available()
+    finally:
+        await resolver.close()
+    assert len(server.requests) == 6
+    assert not resolver.is_available()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dns_quic_server", ["stop-sending"], indirect=True)
+async def test_doq_local_stop_sending_retires_connection(
+    dns_quic_server: DNSQUICServer,
+) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        results = await resolver.getaddrinfo(
+            "stopped.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert results and all(r[4] == ("192.0.2.1", 443) for r in results)
+        assert not resolver.is_available()
+        assert resolver._socket is not None
+        assert resolver._socket.fileno() == -1
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dns_quic_server", ["concurrent-malformed"], indirect=True)
+async def test_doq_local_concurrent_failure_does_not_break_other_lookup(
+    dns_quic_server: DNSQUICServer,
+) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                resolver.getaddrinfo(
+                    "good.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                ),
+                resolver.getaddrinfo(
+                    "bad.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                ),
+                return_exceptions=True,
+            ),
+            5,
+        )
+        good, bad = results
+        assert isinstance(good, list) and good[0][4] == ("192.0.2.1", 443)
+        assert isinstance(bad, socket.gaierror)
+        assert "before its response length" in str(bad)
+        assert resolver.is_available()
+        again = await resolver.getaddrinfo(
+            "again.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert again[0][4] == ("192.0.2.1", 443)
+        assert len(server.requests) == 6
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dns_quic_server", ["handshake-stall"], indirect=True)
+async def test_doq_local_close_during_handshake(
+    dns_quic_server: DNSQUICServer,
+) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    lookup = asyncio.ensure_future(
+        resolver.getaddrinfo("pending.example", 443, socket.AF_INET, socket.SOCK_STREAM)
+    )
+    try:
+        received = await asyncio.get_running_loop().run_in_executor(
+            None, server.received.wait, 5
+        )
+        assert received, "The client did not send its QUIC handshake"
+        assert not lookup.done()
+        transport = resolver._socket
+        await asyncio.wait_for(resolver.close(), 5)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(lookup, 5)
+        assert not resolver.is_available()
+        assert transport is not None and transport.fileno() == -1
+        assert resolver._socket is None
+    finally:
+        if not lookup.done():
+            lookup.cancel()
+        await asyncio.gather(lookup, return_exceptions=True)
+        await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dns_quic_server,error",
+    [
+        ("partial-prefix", "before its response length"),
+        ("partial-body", "incomplete DNS response"),
+        ("multiple", "more than one DNS response"),
+        ("malformed", "malformed DNS response"),
+        ("mismatch", "did not match its query"),
+        ("reset", "StreamReset"),
+        ("close", "unrecoverable failure"),
+        ("nxdomain", "DNS returned an error"),
+        ("no-answer", "Name or service not known"),
+    ],
+    indirect=["dns_quic_server"],
+)
+async def test_doq_local_rejects_invalid_responses(
+    dns_quic_server: DNSQUICServer, error: str
+) -> None:
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        with pytest.raises(socket.gaierror) as exc:
+            await resolver.getaddrinfo(
+                "first.example",
+                443,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                quic_upgrade_via_dns_rr=False,
+            )
+        assert error in str(exc.value) or error in str(exc.value.__cause__)
+        if error in ("StreamReset", "unrecoverable failure"):
+            assert not resolver.is_available()
+    finally:
+        transport = resolver._socket
+        await resolver.close()
+        assert transport is None or transport.fileno() == -1
+        await resolver.close()
+    assert server.requests
 
 
 @pytest.mark.asyncio
