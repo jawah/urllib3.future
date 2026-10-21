@@ -690,6 +690,96 @@ class TestServerSentEvents(SocketDummyServerTestCase):
 
 
 class TestSocketClosing(SocketDummyServerTestCase):
+    @pytest.mark.filterwarnings("ignore:unclosed <socket.socket:ResourceWarning")
+    @pytest.mark.parametrize("release_conn", [False, True])
+    def test_unread_response_finalization_does_not_block_server(
+        self, release_conn: bool
+    ) -> None:
+        import gc
+        from weakref import ref
+
+        from urllib3.util.traffic_police import TrafficPolice
+
+        abandoned: list[HTTPResponse] = []
+        finish_collection, peer_closed = Event(), Event()
+        errors: list[BaseException] = []
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                listener.settimeout(10)
+                with listener.accept()[0] as first:
+                    first.settimeout(10)
+                    consume_socket(first)
+                    first.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none")
+                    with listener.accept()[0] as second:
+                        second.settimeout(10)
+                        consume_socket(second)
+                        # Collection on a server thread must not wait for a
+                        # checkout held by the client waiting for this response.
+                        abandoned.clear()
+                        gc.collect()
+                        second.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+                        )
+                        assert finish_collection.wait(10)
+                        # Intentionally abandoned sockets warn during GC;
+                        # peer EOF below verifies that their descriptors close.
+                        gc.collect()
+                        gc.collect()
+                        assert first.recv(1) == b""
+                        peer_closed.set()
+            except BaseException as exc:
+                errors.append(exc)
+
+        self._start_server(handler)
+
+        def abandon_response() -> tuple[
+            TrafficPolice[HTTPConnection], tuple[typing.Callable[[], object], ...]
+        ]:
+            with HTTPConnectionPool(
+                self.host,
+                self.port,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as pool:
+                response = pool.request(
+                    "GET", "/", preload_content=False, release_conn=release_conn
+                )
+                police = pool.pool
+                conn = response.connection
+                assert police is not None and conn is not None
+                assert not response.closed
+                # Delay CPython's destruction too; PyPy already uses tracing GC.
+                response._gc_cycle = response  # type: ignore[attr-defined]
+                abandoned.append(response)
+                references = (ref(response), ref(pool), ref(police), ref(conn))
+            return police, references
+
+        # Retain only the registry as a way to unwind a regressed finalizer.
+        police: TrafficPolice[HTTPConnection] | None
+        police, references = abandon_response()
+        try:
+            with HTTPConnectionPool(
+                self.host,
+                self.port,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as other:
+                assert other.request("GET", "/").data == b"ok"
+            police = None
+            finish_collection.set()
+            assert peer_closed.wait(10), errors
+            assert all(reference() is None for reference in references)
+        finally:
+            if police is not None:
+                police.release()
+            finish_collection.set()
+            self.server_thread.join(10)
+        assert not self.server_thread.is_alive()
+        assert not errors, errors
+
     @pytest.mark.parametrize("overlap_close", [False, True])
     def test_close_before_response_headers_releases_socket(
         self, monkeypatch: pytest.MonkeyPatch, overlap_close: bool

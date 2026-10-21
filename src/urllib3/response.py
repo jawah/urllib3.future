@@ -1382,6 +1382,14 @@ class HTTPResponse(io.IOBase):
     def readable(self) -> bool:
         return True
 
+    def __del__(self) -> None:
+        # GC may run in another thread; only explicit close() may borrow a connection.
+        if not getattr(self, "closed", True):
+            if self._fp:
+                self._fp.close()
+            if not self.auto_close:
+                io.IOBase.close(self)
+
     def close(self) -> None:
         if self.extension is not None and self.extension.closed is False:
             self.extension.close()
