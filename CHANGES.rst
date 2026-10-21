@@ -17,6 +17,9 @@
   of the request's origin. Cross-origin redirects now rebuild the ``Host`` header
   and apply the configured sensitive-header policy, including deferred responses,
   in both sync and async. Backported from https://github.com/urllib3/urllib3/pull/5126.
+- Fixed ``Retry.parse_retry_after()`` raising ``ValueError`` or ``OverflowError``
+  for dates outside the supported range. It now raises ``InvalidHeader``, in both
+  sync and async. Backported from https://github.com/urllib3/urllib3/pull/5310.
 - Fixed incomplete pool shutdown leaving connections open after their last
   response was consumed or closed. Responses and promises returned before
   shutdown remain readable and retrievable, in both sync and async. (#432)
