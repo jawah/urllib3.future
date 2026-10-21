@@ -87,6 +87,43 @@ else:
     StrOrBytesPath = object
 
 
+class TestConsumeSocket:
+    @pytest.mark.parametrize("prefix", [b"", b"GET / HTTP/1.1\r\nHost: localhost\r\n"])
+    def test_eof_before_headers(self, prefix: bytes) -> None:
+        reader, writer = socket.socketpair()
+        with reader, writer, ThreadPoolExecutor(1) as executor:
+            reader.settimeout(5)
+            writer.sendall(prefix)
+            writer.shutdown(socket.SHUT_WR)
+            reading = executor.submit(consume_socket, reader)
+            try:
+                with pytest.raises(ConnectionAbortedError, match="HTTP headers"):
+                    reading.result(5)
+            finally:
+                # Also unwind the old implementation if it spins on EOF.
+                reader.close()
+
+    @pytest.mark.parametrize("chunks", [1, 65536])
+    def test_header_delimiter_across_reads_and_before_body(self, chunks: int) -> None:
+        headers = b"POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\n"
+        payload = headers + b"body"
+        reader, writer = socket.socketpair()
+        with reader, writer, ThreadPoolExecutor(1) as executor:
+            reader.settimeout(5)
+            writer.sendall(payload)
+            writer.shutdown(socket.SHUT_WR)
+            reading = executor.submit(consume_socket, reader, chunks)
+            try:
+                consumed = reading.result(5)
+                assert consumed.startswith(headers)
+                if chunks == 1:
+                    assert consumed == headers
+                with reader.makefile("rb") as remaining:
+                    assert consumed + remaining.read() == payload
+            finally:
+                reader.close()
+
+
 class TestCookies(SocketDummyServerTestCase):
     def test_multi_setcookie(self) -> None:
         def multicookie_response_handler(listener: socket.socket) -> None:
@@ -215,6 +252,78 @@ def original_ssl_wrap_socket(
 
 
 class TestClientCerts(SocketDummyServerTestCase):
+    @pytest.mark.parametrize("invalid", ["weak-certificate", "unsupported-key"])
+    def test_native_client_identity_assignment_rejected(self, invalid: str) -> None:
+        from datetime import datetime, timedelta, timezone
+        from io import UnsupportedOperation
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa, x25519
+        from urllib3.contrib.anytls import BACKEND
+        from urllib3.contrib.imcc._ctypes import _OpenSSL
+
+        if BACKEND != "ssl" or ssl_.IS_FIPS or ssl.OPENSSL_VERSION_INFO < (1, 1, 1):
+            pytest.skip("Requires stdlib OpenSSL with configurable security levels")
+        try:
+            _OpenSSL()
+        except UnsupportedOperation:
+            pytest.skip("The native ctypes certificate loader is unavailable")
+
+        key: rsa.RSAPrivateKey | x25519.X25519PrivateKey
+        if invalid == "weak-certificate":
+            key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+            subject = x509.Name(
+                [x509.NameAttribute(x509.NameOID.COMMON_NAME, "localhost")]
+            )
+            now = datetime.now(timezone.utc)
+            certificate = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(subject)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(days=1))
+                .not_valid_after(now + timedelta(days=1))
+                .sign(key, hashes.SHA256())
+            )
+            cert_data = certificate.public_bytes(serialization.Encoding.PEM)
+            expected_error = "ee key too small"
+        else:
+            # X25519 is a valid private-key encoding, but not a TLS signing key.
+            key = x25519.X25519PrivateKey.generate()
+            cert_data = Path(self.cert_path).read_bytes()
+            expected_error = "unknown certificate type"
+        key_data = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        context = ssl.create_default_context(cafile=self.ca_path)
+        context.set_ciphers("DEFAULT:@SECLEVEL=2")
+        peer_closed = Event()
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(10)
+            with listener.accept()[0] as sock:
+                sock.settimeout(10)
+                assert sock.recv(1) == b""
+                peer_closed.set()
+
+        self._start_server(handler)
+        with HTTPSConnectionPool(
+            self.host,
+            self.port,
+            ssl_context=context,
+            cert_data=cert_data,
+            key_data=key_data,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            with pytest.raises(SSLError, match=expected_error):
+                pool.request("GET", "/")
+        assert peer_closed.wait(10)
+
     @pytest.mark.parametrize("invalid", ["certificate", "key", "mismatch"])
     def test_native_client_identity_failure_closes_socket(self, invalid: str) -> None:
         from io import UnsupportedOperation
@@ -3081,6 +3190,21 @@ class TestHEAD(SocketDummyServerTestCase):
 
 
 class TestStream(SocketDummyServerTestCase):
+    def test_response_read_from_closed_descriptor(self) -> None:
+        self.start_response_handler(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n")
+        with HTTPConnectionPool(self.host, self.port, timeout=5, retries=False) as pool:
+            response = pool.request("GET", "/", preload_content=False)
+            try:
+                conn = response.connection
+                assert conn is not None and conn.sock is not None
+                conn.sock.close()
+                with pytest.raises(ProtocolError, match="Connection broken") as caught:
+                    response.read()
+                assert isinstance(caught.value.__cause__, OSError)
+                assert conn.is_closed
+            finally:
+                response.close()
+
     def test_oversized_read1_from_transport(self) -> None:
         self.start_response_handler(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody")
         with HTTPConnectionPool(self.host, self.port, timeout=5) as pool:

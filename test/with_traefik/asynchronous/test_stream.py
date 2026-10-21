@@ -17,6 +17,44 @@ from .. import TraefikTestCase
 
 @pytest.mark.asyncio
 class TestStreamResponse(TraefikTestCase):
+    async def test_failed_stream_reset_closes_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import errno
+
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.https_port,
+            ca_certs=self.ca_authority,
+            resolver=self.test_async_resolver.new(),
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            response = await pool.request(
+                "GET", "/drip?duration=10&numbytes=2&delay=0", preload_content=False
+            )
+            assert response.version == 20
+            assert len(await response.read(1)) == 1
+            conn = response.connection
+            assert conn is not None and conn.sock is not None
+            sock = conn.sock
+            failed_writes = []
+
+            async def fail_sendall(data: bytes) -> None:
+                failed_writes.append(data)
+                raise OSError(errno.EPIPE, "stream reset write failed")
+
+            # Only the write boundary fails; negotiation and the response are real.
+            with monkeypatch.context() as patch:
+                patch.setattr(sock, "sendall", fail_sendall)
+                await response.close()
+            assert failed_writes
+            assert response.closed and conn.is_closed
+            following = await pool.request("GET", "/bytes/7")
+            assert len(await following.data) == 7
+
     @pytest.mark.parametrize("version", [HttpVersion.h2, HttpVersion.h3])
     @pytest.mark.parametrize("body_state", ["queued", "buffered", "unfinished"])
     @pytest.mark.parametrize("close_owner", [False, True])

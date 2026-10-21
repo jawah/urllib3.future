@@ -59,6 +59,34 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
             )
             assert (await pool.request("GET", "/", timeout=5)).status == 200
 
+    async def test_pool_factory_uses_manager_defaults(self) -> None:
+        from urllib3 import AsyncHTTPConnectionPool
+
+        class DefaultContextManager(AsyncPoolManager):
+            def _new_pool(
+                self,
+                scheme: str,
+                host: str,
+                port: int,
+                request_context: dict[str, typing.Any] | None = None,
+            ) -> AsyncHTTPConnectionPool:
+                # Custom pool factories may rely on the manager's own defaults.
+                return super()._new_pool(scheme, host, port)
+
+        async with DefaultContextManager(timeout=5, retries=False) as manager:
+            response = await manager.request("GET", self.base_url + "/")
+            assert response.status == 200
+            assert await response.data == b"Dummy server!"
+            pool = await manager.connection_from_url(self.base_url)
+            assert pool.timeout.connect_timeout == 5
+
+    async def test_url_without_scheme_warns_and_requests(self) -> None:
+        async with AsyncPoolManager(timeout=5, retries=False) as manager:
+            with pytest.warns(DeprecationWarning, match="URLs without a scheme"):
+                response = await manager.urlopen("GET", f"//{self.host}:{self.port}/")
+            assert response.status == 200
+            assert await response.data == b"Dummy server!"
+
     @pytest.mark.parametrize(
         "pool_manager_kwargs",
         ({}, {"retries": None}, {"retries": 1}, {"retries": Retry(1)}),

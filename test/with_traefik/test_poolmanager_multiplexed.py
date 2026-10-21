@@ -562,6 +562,49 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             with pytest.raises(MaxRetryError):
                 pool.get_response(promise=promise)
 
+    def test_selected_pool_can_be_drained_by_another_reader(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event, get_ident
+        from urllib3 import HTTPResponse
+
+        selected, collected = Event(), Event()
+        caller = get_ident()
+        with PoolManager(
+            ca_certs=self.ca_authority,
+            resolver=self.test_resolver.new(),
+            disabled_svn={HttpVersion.h11, HttpVersion.h3},
+            timeout=5,
+            retries=False,
+        ) as manager:
+            promise = manager.urlopen(
+                "GET", self.https_url + "/bytes/7", multiplexed=True
+            )
+            assert isinstance(promise, ResponsePromise)
+            pool = manager.connection_from_url(self.https_url)
+            get_response = pool.get_response
+
+            def after_other_reader(
+                *, promise: ResponsePromise | None = None
+            ) -> HTTPResponse | None:
+                if get_ident() != caller:
+                    selected.set()
+                    assert collected.wait(5)
+                return get_response(promise=promise)
+
+            monkeypatch.setattr(pool, "get_response", after_other_reader)
+            with ThreadPoolExecutor(1) as executor:
+                waiting = executor.submit(manager.get_response)
+                try:
+                    assert selected.wait(5)
+                    response = manager.get_response(promise=promise)
+                    assert response is not None and response.version == 20
+                    assert len(response.data) == 7
+                finally:
+                    collected.set()
+                assert waiting.result(5) is None
+
     def test_multiplexed_concurrent_get_response_drain(self) -> None:
         """Regression: concurrent ``get_response()`` callers (via threads) on
         a single multiplexed pool must each receive a distinct response while

@@ -114,6 +114,42 @@ def sock() -> typing.Generator[socket.socket, None, None]:
 
 
 class TestResponse:
+    @pytest.mark.parametrize("auto_close", [False, True])
+    def test_finalizer_closes_file_body(self, auto_close: bool) -> None:
+        import gc
+        from weakref import ref
+
+        body = BytesIO(b"unread body")
+        response = HTTPResponse(body, preload_content=False, auto_close=auto_close)
+        reference = ref(response)
+        del response
+        gc.collect()
+        assert reference() is None
+        assert body.closed
+
+    def test_empty_response_stream_and_trailers(self) -> None:
+        response = HTTPResponse()
+        assert response.trailers is None
+        assert list(response.stream()) == []
+
+    def test_file_body_metadata_and_extensions(self) -> None:
+        from urllib3.contrib.webextensions.raw import RawExtensionFromHTTP
+        from urllib3.exceptions import BodyNotHttplibCompatible, ResponseNotReady
+
+        body = BytesIO(b"body")
+        with HTTPResponse(
+            body, headers={"Transfer-Encoding": "chunked"}, preload_content=False
+        ) as response:
+            assert response.trailers is None
+            response.flush()
+            assert body.tell() == 0
+            with pytest.raises(ResponseNotReady):
+                response.start_extension(RawExtensionFromHTTP())
+            with pytest.raises(BodyNotHttplibCompatible):
+                list(response.read_chunked())
+            assert response.read() == b"body"
+        assert body.closed
+
     @pytest.mark.parametrize("content_encoding", (None, "gzip"))
     def test_content_encoding_is_inspected_once(
         self, content_encoding: str | None

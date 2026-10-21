@@ -21,6 +21,16 @@ if typing.TYPE_CHECKING:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://@", None])
+async def test_nohost(url: str | None) -> None:
+    from urllib3.exceptions import LocationValueError
+
+    async with AsyncPoolManager() as manager:
+        with pytest.raises(LocationValueError, match="No host specified"):
+            await manager.connection_from_url(url)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scheme", ["ws", "wss"])
 @pytest.mark.parametrize("disabled_svn", [(), (HttpVersion.h3,)])
 @pytest.mark.parametrize("override", [False, True])
