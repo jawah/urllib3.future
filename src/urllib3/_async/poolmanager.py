@@ -494,7 +494,9 @@ class AsyncPoolManager(AsyncRequestMethods):
             await asyncio.sleep(0)
             return None
 
-        if promise is not None and response is None:
+        if (
+            promise is not None and response is None
+        ):  # Defensive: pool validates promises.
             raise ValueError(
                 "Invoked get_response with promise=... that no connections across pools recognize"
             )
@@ -514,7 +516,7 @@ class AsyncPoolManager(AsyncRequestMethods):
             ):
                 from_promise = response._fp.from_promise
 
-        if from_promise is None:
+        if from_promise is None:  # Defensive: pool attaches promise metadata.
             raise ValueError(
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
@@ -648,7 +650,9 @@ class AsyncPoolManager(AsyncRequestMethods):
                     method, url, response=response, _pool=response._pool
                 )
             except MaxRetryError:
-                if retries.raise_on_status:
+                if (
+                    retries.raise_on_status
+                ):  # Defensive: pool handles status exhaustion.
                     await response.drain_conn()
                     raise
                 return response
@@ -684,7 +688,7 @@ class AsyncPoolManager(AsyncRequestMethods):
         if extension is not None and response.extension is None:
             if response.status == 101 or (
                 200 <= response.status < 300 and method == "CONNECT"
-            ):
+            ):  # Defensive: extension startup fallback for custom pools.
                 await response.start_extension(extension)
 
         return response

@@ -730,7 +730,7 @@ class AsyncHTTPResponse(HTTPResponse):
             if not self.closed and self._fp:
                 self._fp.close()
             if self._connection:
-                await self._connection.close()
+                await self._connection.close()  # Defensive: external file-like body.
 
         if not self.auto_close:
             io.IOBase.close(self)

@@ -218,7 +218,8 @@ _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is 
 
 _head_extra_fields = []
 
-if sys.flags.debug:
+if sys.flags.debug:  # Defensive: legacy ABI compatibility.
+    # TODO: Investigate ABI detection: sys.flags.debug does not identify Py_TRACE_REFS.
     # In debug builds (_POSIX_C_SOURCE or Py_DEBUG is defined), PyObject_HEAD
     # is preceded by _PyObject_HEAD_EXTRA, which typically consists of
     # two pointers (_ob_next, _ob_prev).
@@ -326,7 +327,7 @@ def load_cert_chain(
         bypass_options = lib.SSL_CTX_get_options(ssl_ctx_address)
         expected_options = int(ctx.options)
 
-        if bypass_options != expected_options:
+        if bypass_options != expected_options:  # Defensive: ABI sanity check.
             raise UnsupportedOperation(
                 f"CPython internal SSL_CTX changed! Cannot pursue safely. Expected = {expected_options:x} Actual = {bypass_options:x}"
             )

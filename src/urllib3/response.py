@@ -119,7 +119,7 @@ class DeflateDecoder(ContentDecoder):
         original_max_length = max_length
         if original_max_length < 0:
             max_length = 0
-        elif original_max_length == 0:
+        elif original_max_length == 0:  # Defensive: direct decoder calls only.
             # We should not pass 0 to the zlib decompressor because 0 is
             # the default value that will make zlib decompress without a
             # length limit.
@@ -182,7 +182,7 @@ class GzipDecoder(ContentDecoder):
         if self._state == GzipDecoderState.SWALLOW_DATA:
             return bytes(ret)
 
-        if max_length == 0:
+        if max_length == 0:  # Defensive: direct decoder calls only.
             # We should not pass 0 to the zlib decompressor because 0 is
             # the default value that will make zlib decompress without a
             # length limit.
@@ -1420,7 +1420,7 @@ class HTTPResponse(io.IOBase):
             if not self.closed and self._fp:
                 self._fp.close()
             if self._connection:
-                self._connection.close()
+                self._connection.close()  # Defensive: external file-like body.
 
         if not self.auto_close:
             io.IOBase.close(self)

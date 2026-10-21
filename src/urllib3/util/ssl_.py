@@ -1033,7 +1033,7 @@ def convert_ssl_ctx_nonstdlib(ctx: ssl.SSLContext) -> ssl.SSLContext:
         if stdlib_ssl.OP_NO_TLSv1_2 in ctx.options:  # Defensive: legacy TLS options.
             new_ctx.options |= ssl.OP_NO_TLSv1_2
             opt_match_no_tls = True
-    except TypeError:
+    except TypeError:  # Defensive: foreign Options enum compatibility.
         # TODO: Investigate this weird edge case.
         #       Debug info:
         #         print(stdlib_ssl.OP_NO_TLSv1_3.__class__ == ssl.Options)  # False

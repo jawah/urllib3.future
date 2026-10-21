@@ -80,7 +80,7 @@ def load_cert_chain(
         if key_thread is not None:
             key_thread.join(timeout=1.0)
 
-        if writer_exc is not None:
+        if writer_exc is not None:  # Defensive: report the guarded writer failure.
             raise UnsupportedOperation(
                 "Unable to provide support for in-memory client certificate: "
                 f"FIFO writer failed: {writer_exc}"
