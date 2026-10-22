@@ -673,7 +673,7 @@ class TrafficPolice(typing.Generic[T]):
 
                     if cursor_key not in self._cursor:
                         self._cursor[cursor_key] = ActiveCursor(obj_id, conn_or_pool)
-                    else:
+                    else:  # Defensive: tolerate reentrant custom traffic objects.
                         self._cursor[cursor_key].depth += 1
 
                     if self.concurrency:
@@ -958,7 +958,7 @@ class TrafficPolice(typing.Generic[T]):
                             self._cursor[cursor_key] = ActiveCursor(
                                 obj_id, conn_or_pool
                             )
-                        else:
+                        else:  # Defensive: a custom readiness callback may reenter ownership.
                             self._cursor[cursor_key].depth += 1
 
                         return conn_or_pool
