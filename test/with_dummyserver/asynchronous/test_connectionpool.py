@@ -234,6 +234,52 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestConnectionPool(HTTPDummyServerTestCase):
+    async def test_async_body_empty_and_text_chunks(self) -> None:
+        async def body() -> typing.AsyncIterator[str]:
+            yield ""
+            yield "café"
+            yield ""
+
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            response = await pool.request(
+                "POST", "/echo", body=body(), preload_content=False
+            )
+            assert await response.read() == "café".encode()
+
+    async def test_async_readable_body_accepts_text_after_bytes(self) -> None:
+        class Body:
+            chunks: typing.Iterator[bytes | str] = iter([b"caf", "é", b""])
+
+            def __aiter__(self) -> typing.Any:
+                return self
+
+            async def read(self, size: int) -> bytes | str:
+                return next(self.chunks)
+
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            response = await pool.request(
+                "POST", "/echo", body=Body(), preload_content=False
+            )
+            assert await response.read() == "café".encode()
+
+    async def test_string_body_warns_about_conflicting_charset(self) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            with pytest.warns(UserWarning, match="conflicting charset"):
+                response = await pool.request(
+                    "POST",
+                    "/echo",
+                    body="café",
+                    headers={"Content-Type": "text/plain; charset=latin-1"},
+                    preload_content=False,
+                )
+            assert await response.read() == "café".encode()
+
     @pytest.mark.parametrize("as_list", [False, True])
     async def test_pool_resolver_configuration(self, as_list: bool) -> None:
         resolver = ["system://default"] if as_list else "system://default"
