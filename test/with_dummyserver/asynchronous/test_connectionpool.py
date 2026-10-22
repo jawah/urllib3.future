@@ -280,6 +280,12 @@ class TestConnectionPool(HTTPDummyServerTestCase):
                 )
             assert await response.read() == "café".encode()
 
+    async def test_invalid_tunnel_scheme_is_rejected_before_connecting(self) -> None:
+        conn = AsyncHTTPConnection(self.host, self.port)
+        with pytest.raises(ValueError):
+            conn.set_tunnel("example.invalid", scheme="ftp")
+        assert conn.sock is None
+
     @pytest.mark.parametrize("as_list", [False, True])
     async def test_pool_resolver_configuration(self, as_list: bool) -> None:
         resolver = ["system://default"] if as_list else "system://default"
