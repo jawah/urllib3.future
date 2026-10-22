@@ -2019,7 +2019,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 # Close the connection, set the variable to None, and make sure
                 # we put the None back in the pool to avoid leaking it.
                 if conn:
-                    await conn.close()
+                    police = self.pool
+                    if police is None:
+                        await conn.close()
+                    else:
+                        # Response retrieval may already have returned the checkout.
+                        await police.kill(conn)
                     conn = None
                 release_this_conn = True
 

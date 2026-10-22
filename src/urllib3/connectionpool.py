@@ -2009,7 +2009,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     if police is None:
                         conn.close()
                     else:
-                        police.kill_cursor()
+                        # Response retrieval may already have returned the checkout.
+                        police.kill(conn)
                     conn = None
 
                 release_this_conn = True
