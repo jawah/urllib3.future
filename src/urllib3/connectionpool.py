@@ -992,7 +992,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 promise.set_parameter("retries", retries)
                 retries.sleep()
             else:
-                raise e
+                raise new_e
 
             # Keep track of the error for the retry warning.
             err = e
