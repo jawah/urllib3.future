@@ -354,7 +354,19 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             if qe is not None:
                 self._events.append(qe)
 
-            for h3_event in self._http.handle_event(quic_event):
+            try:
+                http_events = self._http.handle_event(quic_event)
+            except QuicConnectionError:
+                close_event = getattr(self._quic, "_close_event", None)
+                if close_event is None:
+                    raise  # Defensive: unexpected qh3 failure without a recorded close.
+                # Responding to queued SETTINGS can fail after TLS already rejected us.
+                # Surface the recorded cause before any queued handshake-success event.
+                qe = self._map_quic_event(close_event)
+                assert qe is not None
+                self._events.appendleft(qe)
+                return
+            for h3_event in http_events:
                 he = self._map_h3_event(h3_event)
 
                 if he is not None:
