@@ -87,6 +87,17 @@ def traefik_boot(
 
         shutil.move("./traefik/client.pem", "./rootCA.pem")
 
+    # A separate CA and identity keep the mTLS router isolated from ordinary tests.
+    mtls_dir = "./traefik/mtls"
+    if not all(
+        os.path.exists(os.path.join(mtls_dir, name))
+        for name in ("server.pem", "server.key", "client.pem")
+    ):
+        os.makedirs(mtls_dir, exist_ok=True)
+        session.run(
+            "python", "-m", "trustme", "-i", "mtls.httpbin.local", "-d", mtls_dir
+        )
+
     try:
         session.log("Attempt to start Traefik with go-httpbin[...]")
 

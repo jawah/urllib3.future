@@ -97,4 +97,10 @@ services:
       - traefik.http.routers.httpbin-https.rule=Host(`httpbin.local`) || Host(`alt.httpbin.local`)
       - traefik.http.routers.httpbin-https.entrypoints=https,alt-https
       - traefik.http.routers.httpbin-https.tls=true
+      - traefik.http.routers.httpbin-mtls.rule=Host(`mtls.httpbin.local`)
+      - traefik.http.routers.httpbin-mtls.entrypoints=https
+      - traefik.http.routers.httpbin-mtls.tls=true
+      - traefik.http.routers.httpbin-mtls.tls.options=mtls@file
+      - traefik.http.routers.httpbin-mtls.middlewares=mtls-client-cert@file
+      - traefik.http.routers.httpbin-mtls.service=httpbin
       - traefik.http.services.httpbin.loadbalancer.server.port=8080

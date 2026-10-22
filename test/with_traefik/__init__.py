@@ -27,6 +27,7 @@ TRAEFIK_HTTPBIN_IPV4: str = environ.get("TRAEFIK_HTTPBIN_IPV4", "127.0.0.1")
 class TraefikTestCase:
     host: str = "httpbin.local"
     alt_host: str = "alt.httpbin.local"
+    mtls_host: str = "mtls.httpbin.local"
 
     http_port: int = 8888
     https_port: int = 4443
@@ -44,7 +45,7 @@ class TraefikTestCase:
 
     https_haproxy_url: str = f"https://{host}:{https_haproxy_port}"
 
-    test_resolver_raw: str = f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}"
+    test_resolver_raw: str = f"in-memory://default?hosts={host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={alt_host}:{TRAEFIK_HTTPBIN_IPV4}&hosts={mtls_host}:{TRAEFIK_HTTPBIN_IPV4}"
 
     test_resolver: ResolverDescription = ResolverDescription.from_url(test_resolver_raw)
 
