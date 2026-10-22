@@ -797,7 +797,8 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         events = await self.__exchange_until(
             HeadersReceived,
             receive_first=False,
-            event_type_collectable=(HeadersReceived,),
+            # Consume informational proxy responses; only final headers decide success.
+            event_type_collectable=(HeadersReceived, EarlyHeadersReceived),
             # special case for CONNECT
             respect_end_stream_signal=False,
         )
