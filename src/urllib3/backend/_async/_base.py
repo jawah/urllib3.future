@@ -321,7 +321,10 @@ class AsyncLowLevelResponse:
 
     async def abort(self) -> None:
         try:
-            if self._stream_abort is not None and not self._eot:
+            # Upgraded responses have no HTTP body, but their stream can still be open.
+            if self._stream_abort is not None and (
+                not self._eot or self._dsa is not None
+            ):
                 if self._stream_id is not None:
                     await self._stream_abort(self._stream_id)
         finally:
