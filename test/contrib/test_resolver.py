@@ -123,6 +123,110 @@ def test_doq_local_udp_offload_fallback(
     assert all(sock.fileno() == -1 for sock in doq_udp_socket)
 
 
+@pytest.mark.parametrize("phase", ["query", "receive"])
+def test_doq_local_gso_rejection_after_handshake(
+    dns_quic_server: DNSQUICServer, phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+    from typing import Any
+
+    server = dns_quic_server
+    resolver = QUICResolver(
+        *server.address,
+        ca_certs=server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        if not resolver._dgram_gso_enabled:
+            pytest.skip("Kernel does not expose UDP GSO")
+        sock = resolver._socket
+        queued = rejected = False
+        sendmsg = socket.socket.sendmsg
+
+        def queue_pings() -> None:
+            nonlocal queued
+            if not queued:
+                queued = True
+                for token in range(1800):
+                    resolver._quic.send_ping(token)
+
+        if phase == "query":
+            queue_pings()
+        else:
+            receive = resolver._quic.receive_datagram
+
+            def receive_and_queue(*args: Any, **kwargs: Any) -> Any:
+                result = receive(*args, **kwargs)
+                queue_pings()
+                return result
+
+            monkeypatch.setattr(resolver._quic, "receive_datagram", receive_and_queue)
+
+        def reject_once(current: socket.socket, *args: Any, **kwargs: Any) -> int:
+            nonlocal rejected
+            if current is sock and not rejected:
+                rejected = True
+                raise OSError(errno.EIO, "injected post-handshake GSO failure")
+            return sendmsg(current, *args, **kwargs)
+
+        with monkeypatch.context() as driver:
+            driver.setattr(socket.socket, "sendmsg", reject_once)
+            records = resolver.getaddrinfo(
+                "gso.example", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+        assert records[0][4] == ("192.0.2.1", 443)
+        assert queued and rejected and not resolver._dgram_gso_enabled
+        assert resolver.getaddrinfo(
+            "next.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("socket_kind", [0, socket.SOCK_RAW])
+def test_doq_local_other_socket_kind_does_not_gain_quic_records(
+    dns_quic_server: DNSQUICServer, socket_kind: SocketKind
+) -> None:
+    resolver = QUICResolver(
+        *dns_quic_server.address,
+        ca_certs=dns_quic_server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        records = resolver.getaddrinfo(
+            "kind.example",
+            443,
+            socket.AF_INET,
+            socket_kind,
+            quic_upgrade_via_dns_rr=True,
+        )
+        assert records and all(record[1] == socket_kind for record in records)
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("dns_quic_server", ["empty-datagram"], indirect=True)
+@pytest.mark.parametrize("doq_udp_socket", ["plain-udp"], indirect=True)
+def test_doq_empty_datagram_without_offload(
+    dns_quic_server: DNSQUICServer, doq_udp_socket: list[socket.socket]
+) -> None:
+    resolver = QUICResolver(
+        *dns_quic_server.address,
+        ca_certs=dns_quic_server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        records = resolver.getaddrinfo(
+            "empty.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert records[0][4] == ("192.0.2.1", 443)
+    finally:
+        resolver.close()
+
+
 @pytest.mark.parametrize("ca_from_file", [False, True])
 @pytest.mark.parametrize("identity_from_file", [False, True])
 @pytest.mark.parametrize("socktype", [socket.SOCK_STREAM, socket.SOCK_DGRAM])
@@ -2406,6 +2510,76 @@ def test_system_resolver_accepts_bytes_and_default_host(
     resolver = SystemResolver("*.example", server="ignored", port=853)
     assert resolver.support(hostname) is True
     assert resolver.support("elsewhere.invalid") is False
+
+
+@pytest.mark.parametrize(
+    "patterns, hostname, expected",
+    [
+        ((), "service.example", None),
+        (("localhost",), None, True),
+        (("*.example",), b"service.example", True),
+        (("*.example",), b"elsewhere.invalid", False),
+    ],
+)
+def test_resolver_support_normalizes_hostnames(
+    patterns: tuple[str, ...], hostname: str | bytes | None, expected: bool | None
+) -> None:
+    resolver = NullResolver(*patterns)
+    assert resolver.have_constraints() is bool(patterns)
+    assert resolver.support(hostname) is expected
+
+
+@pytest.mark.parametrize("keyword_constructor", [False, True])
+def test_resolver_recycle_custom_constructor(
+    dns_udp_server: DNSUDPServer, keyword_constructor: bool
+) -> None:
+    from typing import Any
+
+    class KeywordResolver(PlainResolver):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+
+    class FixedResolver(PlainResolver):
+        def __init__(self) -> None:
+            super().__init__(*dns_udp_server.address, "*.example", timeout=5)
+
+    resolver = (
+        KeywordResolver(
+            server=dns_udp_server.address[0],
+            port=dns_udp_server.address[1],
+            patterns=("*.example",),
+            timeout=5,
+        )
+        if keyword_constructor
+        else FixedResolver()
+    )
+    recycled: BaseResolver | None = None
+    try:
+        resolver.close()
+        recycled = resolver.recycle()
+        assert not resolver.is_available()
+        assert recycled is not resolver
+        assert type(recycled) is type(resolver)
+        assert recycled.is_available()
+        assert (recycled.server, recycled.port) == dns_udp_server.address
+        assert recycled.support("recycled.example") is True
+        assert recycled.support("elsewhere.invalid") is False
+        results = recycled.getaddrinfo(
+            "recycled.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert [result[-1] for result in results] == [("192.0.2.1", 443)]
+        assert dns_udp_server.requests
+    finally:
+        resolver.close()
+        if recycled is not None:
+            recycled.close()
+
+
+@pytest.mark.parametrize("port", [65536, 2**64])
+def test_resolver_create_connection_rejects_out_of_range_port(port: int) -> None:
+    # Numeric addresses need no DNS; the real socket validates the port.
+    with pytest.raises(OverflowError):
+        NullResolver().create_connection(("127.0.0.1", port), timeout=5)
 
 
 @pytest.mark.parametrize("value", [None, True, -1, "60", 1.5])

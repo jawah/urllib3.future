@@ -25,6 +25,60 @@ from urllib3.contrib.resolver._async.factories import AsyncResolverFactory
 
 _MISSING_QUIC_SENTINEL = object()
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("socket_kind", [0, socket.SOCK_RAW])
+async def test_doq_local_other_socket_kind_does_not_gain_quic_records(
+    dns_quic_server: DNSQUICServer, socket_kind: socket.SocketKind
+) -> None:
+    resolver = QUICResolver(
+        *dns_quic_server.address,
+        ca_certs=dns_quic_server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        records = await resolver.getaddrinfo(
+            "kind.example",
+            443,
+            socket.AF_INET,
+            socket_kind,
+            quic_upgrade_via_dns_rr=True,
+        )
+        assert records and all(record[1] == socket_kind for record in records)
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dns_quic_server", ["empty-datagram"], indirect=True)
+@pytest.mark.parametrize("doq_udp_socket", ["plain-udp"], indirect=True)
+async def test_doq_empty_datagram_without_offload(
+    dns_quic_server: DNSQUICServer,
+    doq_udp_socket: list[socket.socket],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib3.contrib.ssa import _gro
+
+    # Select the existing generic asyncio transport, which delivers empty UDP
+    # datagrams rather than dropping them in the optimized receive path.
+    monkeypatch.setattr(_gro, "_IS_LINUX", False)
+    monkeypatch.setattr(_gro, "_IS_DARWIN", False)
+    resolver = QUICResolver(
+        *dns_quic_server.address,
+        ca_certs=dns_quic_server.ca_certs,
+        server_hostname="httpbin.local",
+        timeout=5,
+    )
+    try:
+        records = await resolver.getaddrinfo(
+            "empty.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+        assert records[0][4] == ("192.0.2.1", 443)
+    finally:
+        await resolver.close()
+
+
 try:
     from urllib3.contrib.resolver._async.doq._qh3 import QUICResolver
 except ImportError:
