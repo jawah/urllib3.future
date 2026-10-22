@@ -11,6 +11,7 @@
   <a href="https://pypi.org/project/urllib3-future"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/urllib3-future.svg?maxAge=86400" /></a>
   <a href="https://github.com/jawah/urllib3.future/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jawah/urllib3.future/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/jawah/urllib3.future/actions/workflows/integration.yml"><img alt="Downstream compatibility" src="https://github.com/jawah/urllib3.future/actions/workflows/integration.yml/badge.svg" /></a>
+  <a href="https://github.com/jawah/urllib3.future/actions?query=workflow%3ACI"><img alt="Coverage Status" src="https://img.shields.io/badge/coverage-100%25-success" /></a>
 </p>
 
 **urllib3.future** is an independently maintained, compatibility-first fork of
