@@ -1349,7 +1349,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         return len(self._registry)
 
     def empty(self) -> bool:
-        return bool(self.rsize())
+        return not self.rsize()
 
     async def beacon(self, traffic_indicator: MappableTraffic | type) -> bool:
         if not isinstance(traffic_indicator, type):

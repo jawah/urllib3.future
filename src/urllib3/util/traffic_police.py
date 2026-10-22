@@ -1191,7 +1191,7 @@ class TrafficPolice(typing.Generic[T]):
             return len(self._registry)
 
     def empty(self) -> bool:
-        return bool(self.rsize())
+        return not self.rsize()
 
     def beacon(self, traffic_indicator: MappableTraffic | type) -> bool:
         """Answer the following question: Do this PoliceTraffic know about the traffic_indicator?"""
