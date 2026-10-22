@@ -237,6 +237,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         self, stream_id: int, data: bytes, end_stream: bool = False
     ) -> None:
         assert self._http is not None
+        # STOP_SENDING may finish this direction before extension cleanup sends FIN.
+        if end_stream and not data and stream_id not in self._sending_streams:
+            return
         self._http.send_data(stream_id, data, end_stream)
         if end_stream:
             self._sending_streams.discard(stream_id)
