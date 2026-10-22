@@ -2011,6 +2011,176 @@ class TestSocketClosing(SocketDummyServerTestCase):
 class TestProxyManager(SocketDummyServerTestCase):
     @pytest.mark.asyncio
     @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("target_scheme", ["http", "https"])
+    async def test_https_forwarding_proxy_is_verified(
+        self, asynchronous: bool, target_scheme: str
+    ) -> None:
+        from urllib3 import AsyncProxyManager
+        from .test_http2_lifecycle import call
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        received: list[bytes] = []
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    received.append(consume_socket(tls))
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+
+        self._start_server(handler)
+        manager = (AsyncProxyManager if asynchronous else ProxyManager)(
+            f"https://{self.host}:{self.port}",
+            ca_certs=DEFAULT_CA,
+            use_forwarding_for_https=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        )
+        try:
+            response = await call(
+                manager.request,
+                "GET",
+                f"{target_scheme}://example.invalid/resource",
+                preload_content=False,
+            )
+            conn = response.connection
+            assert conn is not None and conn.proxy_is_verified is True
+            assert conn.is_verified is False
+            assert await call(response.read) == b"ok"
+        finally:
+            await call(manager.clear)
+        self.server_thread.join(5)
+        assert received[0].startswith(
+            f"GET {target_scheme}://example.invalid/resource HTTP/1.1\r\n".encode()
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_scoped_tls_hostname_uses_ip_without_zone(self) -> None:
+        from urllib3 import AsyncHTTPSConnectionPool
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        names: list[str | None] = []
+        context.set_servername_callback(lambda sock, name, ctx: names.append(name))
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    consume_socket(tls)
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            server_hostname="[::1%scope]",
+            assert_hostname="localhost",
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            assert (await pool.request("GET", "/")).status == 200
+        self.server_thread.join(5)
+        assert names == [None], "An IPv6 literal must not be sent as DNS SNI"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    @pytest.mark.parametrize("proxy_host", ["localhost:443", "other.example:443"])
+    async def test_connect_host_header_and_informational_response(
+        self, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, proxy_host: str
+    ) -> None:
+        from urllib3 import AsyncProxyManager
+        from urllib3.contrib.hface.protocols.http1._h11 import HTTP1ProtocolHyperImpl
+
+        reshelve = mock.Mock(side_effect=HTTP1ProtocolHyperImpl.reshelve)
+
+        def observe_reshelve(
+            protocol: HTTP1ProtocolHyperImpl, *events: typing.Any
+        ) -> None:
+            reshelve(protocol, *events)
+
+        monkeypatch.setattr(HTTP1ProtocolHyperImpl, "reshelve", observe_reshelve)
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        received: list[bytes] = []
+        errors: list[BaseException] = []
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                listener.settimeout(10)
+                with listener.accept()[0] as sock:
+                    sock.settimeout(10)
+                    if proxy_host != "localhost:443":
+                        # A conflicting proxy Host must fail before sending CONNECT.
+                        assert sock.recv(1) == b""
+                        return
+                    received.append(consume_socket(sock))
+                    # The backend defers the informational event until it has
+                    # received the final CONNECT response.
+                    sock.sendall(
+                        b"HTTP/1.1 100 Continue\r\n\r\n"
+                        b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                    )
+                    with context.wrap_socket(sock, server_side=True) as tls:
+                        received.append(consume_socket(tls))
+                        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            except BaseException as exc:
+                errors.append(exc)
+
+        self._start_server(handler)
+        proxy = f"http://{self.host}:{self.port}"
+
+        async def request() -> None:
+            if asynchronous:
+                async with AsyncProxyManager(
+                    proxy,
+                    ca_certs=DEFAULT_CA,
+                    proxy_headers={"Host": proxy_host},
+                    timeout=5,
+                    retries=False,
+                ) as manager:
+                    response = await manager.request("GET", "https://localhost/")
+                    assert response.version == 11
+                    assert await response.data == b"ok"
+            else:
+                with ProxyManager(
+                    proxy,
+                    ca_certs=DEFAULT_CA,
+                    proxy_headers={"Host": proxy_host},
+                    timeout=5,
+                    retries=False,
+                ) as sync_manager:
+                    sync_response = sync_manager.request("GET", "https://localhost/")
+                    assert sync_response.version == 11
+                    assert sync_response.data == b"ok"
+
+        try:
+            if proxy_host != "localhost:443":
+                with pytest.raises(
+                    ValueError, match="Host header does not match :authority"
+                ):
+                    await request()
+            else:
+                await request()
+        finally:
+            self.server_thread.join(10)
+        assert not self.server_thread.is_alive()
+        assert not errors, errors
+        if proxy_host == "localhost:443":
+            reshelve.assert_not_called()
+            assert received[0].startswith(b"CONNECT localhost:443 HTTP/1.1\r\n")
+            assert received[0].count(b"Host: localhost:443\r\n") == 1
+            assert received[1].startswith(b"GET / HTTP/1.1\r\n")
+        else:
+            assert not received
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
     @pytest.mark.parametrize("remove_sensitive", [False, True])
     @pytest.mark.parametrize("target", ["same", "default-port", "cross", "proxy"])
     async def test_redirect_rewrites_host_and_strips_credentials(
@@ -4121,6 +4291,89 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
     before any HTTP/1.1 response headers are emitted. See ``"Remote end closed connection without response"``
     raise (and async mirror).
     """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_http2_completed_response_survives_upload_reset(
+        self, asynchronous: bool
+    ) -> None:
+        from jh2.settings import SettingCodes, Settings  # type: ignore[import-untyped]
+        from urllib3 import AsyncHTTPSConnectionPool
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        errors: list[BaseException] = []
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                listener.settimeout(10)
+                with listener.accept()[0] as raw:
+                    raw.settimeout(10)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        peer = H2Connection(H2Configuration(client_side=False))
+                        # Keep the upload open while returning the complete response.
+                        peer.local_settings = Settings(
+                            client=False,
+                            initial_values={SettingCodes.INITIAL_WINDOW_SIZE: 0},
+                        )
+                        peer.initiate_connection()
+                        sock.sendall(peer.data_to_send())
+                        while True:
+                            data = sock.recv(65536)
+                            if not data:
+                                break
+                            for event in peer.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    uploading = (b":method", b"POST") in event.headers
+                                    peer.send_headers(
+                                        event.stream_id,
+                                        [
+                                            (
+                                                b":status",
+                                                b"413" if uploading else b"200",
+                                            ),
+                                            (b"content-length", b"0"),
+                                        ],
+                                        end_stream=True,
+                                    )
+                                    if uploading:
+                                        peer.reset_stream(event.stream_id, error_code=0)
+                            pending = peer.data_to_send()
+                            if pending:
+                                sock.sendall(pending)
+            except BaseException as exc:
+                errors.append(exc)
+
+        self._start_server(handler)
+        options: dict[str, typing.Any] = {
+            "ca_certs": DEFAULT_CA,
+            "timeout": 5,
+            "retries": False,
+            "disabled_svn": {HttpVersion.h11, HttpVersion.h3},
+            "background_watch_delay": None,
+        }
+        try:
+            if asynchronous:
+                async with AsyncHTTPSConnectionPool(
+                    self.host, self.port, **options
+                ) as pool:
+                    response = await pool.request("POST", "/", body=b"body")
+                    assert response.status == 413
+                    assert await response.data == b""
+                    assert (await pool.request("GET", "/")).status == 200
+                    assert pool.num_connections == 1
+            else:
+                with HTTPSConnectionPool(self.host, self.port, **options) as sync_pool:
+                    sync_response = sync_pool.request("POST", "/", body=b"body")
+                    assert sync_response.status == 413
+                    assert sync_response.data == b""
+                    assert sync_pool.request("GET", "/").status == 200
+                    assert sync_pool.num_connections == 1
+        finally:
+            self.server_thread.join(10)
+        assert not self.server_thread.is_alive()
+        assert not errors, errors
 
     def test_http2_disposed_stream_ignores_late_data(self) -> None:
         from jh2.events import StreamReset

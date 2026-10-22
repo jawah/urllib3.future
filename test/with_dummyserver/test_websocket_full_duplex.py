@@ -16,6 +16,8 @@ from urllib3.contrib.ssa import AsyncSocket
 from urllib3.exceptions import ProtocolError, ReadTimeoutError, SSLError
 from urllib3.util.wait import wait_for_read
 
+from .test_http3_lifecycle import HTTP3Peer, http3_peer as http3_peer
+
 try:
     import wsproto
 except ImportError:
@@ -179,7 +181,11 @@ async def _connection(
     compression: bool = False,
     handshake_error: str | None = None,
     headers: Mapping[str, str] | None = None,
+    blocksize: int | None = None,
 ) -> AsyncGenerator[tuple[Any, Peer, Any, Any], None]:
+    socket_options: dict[str, Any] = (
+        {} if blocksize is None else {"blocksize": blocksize}
+    )
     peer = Peer(
         initial_message, compression=compression, handshake_error=handshake_error
     )
@@ -243,10 +249,13 @@ async def _connection(
             timeout=timeout,
             ssl_context=client_context,
             proxy_ssl_context=client_context,
+            **socket_options,
         )
     else:
         manager = (AsyncPoolManager if asynchronous else PoolManager)(
-            timeout=timeout, ssl_context=client_context
+            timeout=timeout,
+            ssl_context=client_context,
+            **socket_options,
         )
 
     async def call(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -1095,3 +1104,356 @@ async def test_close_with_two_queued_readers(
         finally:
             await call(ws.close)
             await asyncio.gather(*readers, return_exceptions=True)
+
+
+@asynccontextmanager
+async def held_websocket_connection(
+    ws: Any, response: Any, call: Any, asynchronous: bool
+) -> AsyncGenerator[None, None]:
+    acquired = asyncio.Event()
+    release: Any = asyncio.Event() if asynchronous else Event()
+    loop = asyncio.get_running_loop()
+
+    async def async_owner() -> None:
+        async with ws._police_officer.borrow(response):
+            acquired.set()
+            await release.wait()
+
+    def sync_owner() -> None:
+        with ws._police_officer.borrow(response):
+            loop.call_soon_threadsafe(acquired.set)
+            assert release.wait(10)
+
+    owner = asyncio.ensure_future(call(async_owner if asynchronous else sync_owner))
+    try:
+        await asyncio.wait_for(acquired.wait(), 5)
+        yield
+    finally:
+        release.set()
+        await asyncio.wait_for(owner, 5)
+
+
+def observe_websocket_borrows(
+    ws: Any, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> asyncio.Queue[None]:
+    queued: asyncio.Queue[None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    target = ws._police_officer._signals if asynchronous else ws._police_officer
+    method = "register" if asynchronous else "_register_signal"
+    original = getattr(target, method)
+
+    def register(*args: Any) -> Any:
+        signal = original(*args)
+        loop.call_soon_threadsafe(queued.put_nowait, None)
+        return signal
+
+    monkeypatch.setattr(target, method, register)
+    return queued
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["initial-read", "ready-read", "second-close"])
+async def test_close_while_waiting_for_connection_ownership(
+    connection: Any, asynchronous: bool, phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with connection(asynchronous, False, timeout=5) as (ws, peer, call, response):
+        queued = observe_websocket_borrows(ws, asynchronous, monkeypatch)
+        tasks = []
+        try:
+            if phase == "ready-read":
+                waiting = observe_wait(monkeypatch, asynchronous, ws)
+                tasks.append(asyncio.ensure_future(call(ws.next_payload)))
+                await asyncio.wait_for(waiting.get(), 5)
+            async with held_websocket_connection(ws, response, call, asynchronous):
+                if phase == "ready-read":
+                    peer.send("ready")
+                else:
+                    tasks.append(
+                        asyncio.ensure_future(
+                            call(
+                                ws.close if phase == "second-close" else ws.next_payload
+                            )
+                        )
+                    )
+                await asyncio.wait_for(queued.get(), 5)
+                tasks.append(asyncio.ensure_future(call(ws.close)))
+                await asyncio.wait_for(queued.get(), 5)
+            assert await asyncio.wait_for(asyncio.gather(*tasks), 5) == [None, None]
+            assert ws.closed
+        finally:
+            await call(ws.close)
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_deadline_expiring_after_readiness_keeps_unread_message(
+    connection: Any, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib
+    import time
+    from types import SimpleNamespace
+
+    async with connection(asynchronous, False, timeout=5) as (ws, peer, call, _):
+        waiting = observe_wait(monkeypatch, asynchronous, ws)
+        original = ws._before_read_pick
+        expired = None
+
+        def before_pick(conn: Any) -> Any:
+            nonlocal expired
+            result = original(conn)
+            if result is None and ws._read_deadline is not None:
+                expired = ws._read_deadline + 1
+            return result
+
+        with monkeypatch.context() as clock:
+            clock.setattr(
+                importlib.import_module(type(ws).__module__),
+                "time",
+                SimpleNamespace(
+                    monotonic=lambda: time.monotonic() if expired is None else expired
+                ),
+            )
+            clock.setattr(ws, "_before_read_pick", before_pick)
+            reader = asyncio.ensure_future(call(ws.next_payload))
+            await asyncio.wait_for(waiting.get(), 5)
+            peer.send("still buffered")
+            with pytest.raises(ReadTimeoutError):
+                await asyncio.wait_for(reader, 5)
+        assert not ws.closed
+        assert await call(ws.next_payload) == "still buffered"
+
+
+@pytest.mark.asyncio
+async def test_missing_connection_is_not_reported_as_clean_websocket_eof(
+    connection: Any, asynchronous: bool
+) -> None:
+    from urllib3.util.traffic_police import UnavailableTraffic
+
+    async with connection(asynchronous, False, timeout=5) as (ws, _, call, response):
+        police = ws._police_officer
+        conn = response._fp.from_promise._conn
+        await call(police.kill, conn)
+        with pytest.raises(UnavailableTraffic):
+            await call(ws.next_payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["write", "ping"])
+async def test_protocol_encoder_failure_closes_websocket(
+    connection: Any, asynchronous: bool, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with connection(asynchronous, False, timeout=5) as (ws, _, call, response):
+        fast = hasattr(ws._protocol, "send_text")
+        if fast:
+            from websockets.exceptions import InvalidState
+
+            error: Exception = InvalidState("injected encoder failure")
+            method = "send_text" if operation == "write" else "send_ping"
+        else:
+            from wsproto.utilities import LocalProtocolError
+
+            error = LocalProtocolError("injected encoder failure")
+            method = "send"
+        original = getattr(ws._protocol, method)
+
+        def fail_once(*args: Any, **kwargs: Any) -> Any:
+            monkeypatch.setattr(ws._protocol, method, original)
+            raise error
+
+        monkeypatch.setattr(ws._protocol, method, fail_once)
+        with pytest.raises(ProtocolError) as caught:
+            if operation == "write":
+                await call(ws.send_payload, "message")
+            else:
+                await call(ws.ping)
+        assert caught.value.__cause__ is error
+        assert ws.closed and response._fp.from_promise._conn.is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_input", [False, True])
+async def test_wsproto_internal_assertion_is_translated_and_closed(
+    connection: Any,
+    asynchronous: bool,
+    after_input: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if connection.keywords["implementation"] != "wsproto":
+        pytest.skip("wsproto assertion contract")
+    async with connection(asynchronous, False, timeout=5) as (ws, peer, call, _):
+        events = ws._protocol.events
+        received = False
+        receive = ws._protocol.receive_data
+
+        def observed_input(data: Any) -> Any:
+            nonlocal received
+            result = receive(data)
+            received = True
+            return result
+
+        def fail_once() -> Any:
+            if received or not after_input:
+                monkeypatch.setattr(ws._protocol, "events", events)
+                raise AssertionError("injected parser invariant failure")
+            return events()
+
+        monkeypatch.setattr(ws._protocol, "receive_data", observed_input)
+        monkeypatch.setattr(ws._protocol, "events", fail_once)
+        peer.send("wire input")
+        with pytest.raises(ProtocolError) as caught:
+            await call(ws.next_payload)
+        assert isinstance(caught.value.__cause__, AssertionError)
+        assert ws.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["closing-write", "shutdown"])
+async def test_websocket_close_tolerates_socket_failure(
+    connection: Any, asynchronous: bool, phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if phase == "shutdown" and asynchronous:
+        pytest.skip("direct shutdown belongs to the synchronous socket path")
+    async with connection(asynchronous, False, timeout=5) as (ws, _, call, response):
+        conn = response._fp.from_promise._conn
+        sock = conn.sock
+        if phase == "closing-write":
+            target, method = ws._dsa, "sendall"
+        else:
+            target, method = type(sock), "shutdown"
+        original = getattr(target, method)
+        injected = False
+
+        def fail_once(*args: Any, **kwargs: Any) -> Any:
+            nonlocal injected
+            if not injected and (phase != "shutdown" or args[0] is sock):
+                injected = True
+                raise OSError("injected close failure")
+            return original(*args, **kwargs)
+
+        with monkeypatch.context() as failure:
+            failure.setattr(target, method, fail_once)
+            await call(ws.close)
+        assert injected and ws.closed and conn.sock is None
+
+
+@pytest.mark.asyncio
+async def test_closed_readiness_error_wakes_reader(
+    connection: Any, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib
+
+    async with connection(asynchronous, False, timeout=5) as (ws, _, call, response):
+        waiting = observe_wait(monkeypatch, asynchronous, ws)
+        sock = response._fp.from_promise._conn.sock
+        if asynchronous:
+            original = type(sock).until_data_available
+
+            async def wait(current: Any, *args: Any) -> Any:
+                result = await original(current, *args)
+                if current is sock and ws._read_closed:
+                    raise OSError("readiness socket closed")
+                return result
+
+            monkeypatch.setattr(type(sock), "until_data_available", wait)
+        else:
+            module = importlib.import_module(type(ws).__module__)
+            sync_wait = module.wait_for_read
+
+            def wait_sync(current: Any, *args: Any) -> Any:
+                result = sync_wait(current, *args)
+                if current is sock and ws._read_closed:
+                    raise OSError("readiness socket closed")
+                return result
+
+            monkeypatch.setattr(module, "wait_for_read", wait_sync)
+        reader = asyncio.ensure_future(call(ws.next_payload))
+        try:
+            await asyncio.wait_for(waiting.get(), 5)
+            await call(ws.close)
+            assert await asyncio.wait_for(reader, 5) is None
+        finally:
+            await call(ws.close)
+            await asyncio.gather(reader, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_small_reads_use_buffered_inner_tls_plaintext(
+    connection: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib3.util.ssltransport import SSLTransport
+
+    async with connection(False, True, timeout=5, tls_proxy=True, blocksize=64) as (
+        ws,
+        peer,
+        call,
+        _,
+    ):
+        before_pick = ws._before_read_pick
+        buffered = 0
+
+        def observe(conn: Any) -> Any:
+            nonlocal buffered
+            sock = conn.sock
+            if isinstance(sock, SSLTransport) and (
+                sock.sslobj.pending() or sock.incoming.pending
+            ):
+                buffered += 1
+            return before_pick(conn)
+
+        monkeypatch.setattr(ws, "_before_read_pick", observe)
+        peer.send("x" * 2048)
+        assert await call(ws.next_payload) == "x" * 2048
+        assert buffered > 0
+
+
+@pytest.mark.asyncio
+async def test_multiplexed_websocket_queued_close_is_idempotent(
+    http3_peer: HTTP3Peer, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("wsproto")
+    from urllib3 import AsyncHTTPSConnectionPool, HTTPSConnectionPool, HttpVersion
+    from urllib3.contrib.webextensions.ws import WebSocketExtensionFromMultiplexedHTTP
+    from urllib3.contrib.webextensions._async.ws import (
+        AsyncWebSocketExtensionFromMultiplexedHTTP,
+    )
+
+    async def call(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        if asynchronous:
+            return await fn(*args, **kwargs)
+        return await asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(fn, *args, **kwargs)
+        )
+
+    pool = (AsyncHTTPSConnectionPool if asynchronous else HTTPSConnectionPool)(
+        "localhost",
+        http3_peer.port,
+        ca_cert_data=http3_peer.ca_data,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h2},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    ws = (
+        AsyncWebSocketExtensionFromMultiplexedHTTP()
+        if asynchronous
+        else WebSocketExtensionFromMultiplexedHTTP()
+    )
+    closers = []
+    try:
+        response = await call(
+            pool.request, "GET", "/", extension=ws, preload_content=False
+        )
+        assert response.version == 30 and response.status == 200
+        queued = observe_websocket_borrows(ws, asynchronous, monkeypatch)
+        async with held_websocket_connection(ws, response, call, asynchronous):
+            for _ in range(2):
+                closers.append(asyncio.ensure_future(call(ws.close)))
+                await asyncio.wait_for(queued.get(), 5)
+        await asyncio.wait_for(asyncio.gather(*closers), 5)
+        assert ws.closed
+        assert (await call(pool.request, "GET", "/next")).status == 200
+    finally:
+        await call(ws.close)
+        await asyncio.gather(*closers, return_exceptions=True)
+        await call(pool.close)

@@ -172,6 +172,8 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
         address = sock.getsockname()
 
         def serve() -> None:
+            held_replies: list[tuple[bytes, typing.Any]] = []
+            released_batch = False
             try:
                 while True:
                     query, client = sock.recvfrom(4096)
@@ -182,7 +184,8 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
                     received.set()
                     if mode == "timeout" or (mode == "drop-first" and first_attempt):
                         continue
-                    assert respond.wait(5), "DNS response was never released"
+                    if mode != "reverse-two-lookups":
+                        assert respond.wait(5), "DNS response was never released"
                     query_type, query_class = struct.unpack("!HH", query[-4:])
                     assert query_class == 1 and query_type in (1, 28, 65)
                     if query_type == 1:
@@ -232,6 +235,14 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
                             + struct.pack("!HHHHH", 0x8180 | rcode, 1, 0, 0, 0)
                             + query[12:]
                         )
+                    if mode == "reverse-two-lookups" and not released_batch:
+                        held_replies.append((response, client))
+                        if len(held_replies) == 4:
+                            assert respond.wait(5), "DNS batch was never released"
+                            for packet, target in reversed(held_replies):
+                                sock.sendto(packet, target)
+                            released_batch = True
+                        continue
                     sock.sendto(response, client)
             except Exception as exc:
                 errors.append(exc)
@@ -428,7 +439,12 @@ def dns_quic_server(
                         self._quic.stop_stream(stream_id, 0x2)
                     elif mode == "empty-datagram":
                         assert self._transport is not None
-                        self._transport.sendto(b"", self.client_address)
+                        # asyncio transports may discard empty sends. Emit the
+                        # actual zero-length UDP datagram from the bound socket.
+                        udp_socket = self._transport.get_extra_info("socket")
+                        getattr(udp_socket, "_sock", udp_socket).sendto(
+                            b"", self.client_address
+                        )
                     kind = int.from_bytes(query[-4:-2], "big")
                     if kind == 1:
                         rdata = socket.inet_pton(socket.AF_INET, "192.0.2.1")
