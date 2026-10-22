@@ -1183,11 +1183,11 @@ class HfaceBackend(BaseBackend):
                     self._protocol = None
                     self.close()
 
-                    # A server may end the transmission without error
-                    # to mark the end of SSE for example. While it's not ideal
-                    # it's not forbidden either.
+                    # Only HTTP/1 can delimit a response body by closing the connection.
+                    # HTTP/2 and HTTP/3 require the response stream to end explicitly.
                     if (
-                        event.error_code == 0
+                        self._svn is HttpVersion.h11
+                        and event.error_code == 0
                         and stream_id is not None
                         and (
                             event_type is DataReceived
