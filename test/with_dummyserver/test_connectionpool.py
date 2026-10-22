@@ -205,6 +205,30 @@ class TestConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 
 class TestConnectionPool(HTTPDummyServerTestCase):
+    def test_resolver_connection_without_ipv6(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3.util import connection
+
+        # Only override the capability probe; resolution and HTTP use real sockets.
+        monkeypatch.setattr(connection, "HAS_IPV6", False)
+        with HTTPConnectionPool(
+            self.host,
+            self.port,
+            socket_family=socket.AF_INET6,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            response = pool.request("GET", "/", preload_content=False)
+            try:
+                assert response.status == 200
+                assert response.connection is not None
+                assert response.connection.sock is not None
+                assert response.connection.sock.family == socket.AF_INET
+                response.drain_conn()
+            finally:
+                response.close()
+
     @pytest.mark.parametrize("as_list", [False, True])
     def test_pool_resolver_configuration(self, as_list: bool) -> None:
         resolver = ["system://default"] if as_list else "system://default"
