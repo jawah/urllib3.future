@@ -1026,12 +1026,10 @@ class AsyncTrafficPolice(typing.Generic[T]):
         The optional callback must not block. It returns None when ready, or a
         deferred wait to run without ownership. Reentrant borrows bypass it.
         """
-        deadline = None
+        deadline = time.monotonic() + timeout if timeout is not None else None
         if conn_pre_pick_callable is not None:
             if self.concurrency:
                 raise ValueError("Pre-pick callbacks require exclusive ownership")
-            if timeout is not None:
-                deadline = time.monotonic() + timeout
 
         while True:
             if deadline is not None:
