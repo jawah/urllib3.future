@@ -848,61 +848,58 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                 return conn_or_pool
 
-        if conn_or_pool is None:
-            if block:
-                if not_idle_only:
-                    states: tuple[TrafficState, ...] = (
-                        TrafficState.USED,
-                        TrafficState.SATURATED,
-                    )
-                elif non_saturated_only:
-                    states = (
-                        TrafficState.USED,
-                        TrafficState.IDLE,
-                    )
-                else:
-                    states = (
-                        TrafficState.IDLE,
-                        TrafficState.USED,
-                        TrafficState.SATURATED,
-                    )
-
-                signal = self._signals.register(
-                    None,
-                    *states,
+        if block:
+            if not_idle_only:
+                states: tuple[TrafficState, ...] = (
+                    TrafficState.USED,
+                    TrafficState.SATURATED,
+                )
+            elif non_saturated_only:
+                states = (
+                    TrafficState.USED,
+                    TrafficState.IDLE,
+                )
+            else:
+                states = (
+                    TrafficState.IDLE,
+                    TrafficState.USED,
+                    TrafficState.SATURATED,
                 )
 
-                try:
-                    if timeout is not None:
-                        try:
-                            async with ctx_expire_in(delay=timeout):
-                                await signal.event.wait()
-                        except TimeoutError as e:
-                            # A timed-out waiter must not receive a later handoff.
-                            self._signals.unregister(signal)
-                            raise UnavailableTraffic(
-                                f"No connection available within {timeout} second(s)"
-                            ) from e
-                    else:
-                        await signal.event.wait()
-                except asyncio.CancelledError:
-                    self._signals.unregister(signal)
-                    raise
+            signal = self._signals.register(
+                None,
+                *states,
+            )
 
-                if (
-                    signal.conn_or_pool is None
-                ):  # case where a slot is free. (previously killed)
-                    await self.put(
-                        ItemPlaceholder(),  # type: ignore[arg-type]
-                        immediately_unavailable=True,
-                        block=block,
-                    )
-                    return None
-                return signal.conn_or_pool
+            try:
+                if timeout is not None:
+                    try:
+                        async with ctx_expire_in(delay=timeout):
+                            await signal.event.wait()
+                    except TimeoutError as e:
+                        # A timed-out waiter must not receive a later handoff.
+                        self._signals.unregister(signal)
+                        raise UnavailableTraffic(
+                            f"No connection available within {timeout} second(s)"
+                        ) from e
+                else:
+                    await signal.event.wait()
+            except asyncio.CancelledError:
+                self._signals.unregister(signal)
+                raise
 
-            raise UnavailableTraffic("No connection available")
+            if (
+                signal.conn_or_pool is None
+            ):  # case where a slot is free. (previously killed)
+                await self.put(
+                    ItemPlaceholder(),  # type: ignore[arg-type]
+                    immediately_unavailable=True,
+                    block=block,
+                )
+                return None
+            return signal.conn_or_pool
 
-        return conn_or_pool
+        raise UnavailableTraffic("No connection available")
 
     def memorize(
         self, traffic_indicator: MappableTraffic, conn_or_pool: T | None = None
