@@ -1466,6 +1466,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             if sub.timer_fired:
                 continue
 
+            # TCP EOF cannot replenish flow-control credit.
+            if not data_in and self._svn is not HttpVersion.h3:
+                self._protocol.connection_lost()
+                raise ProtocolError("Connection closed while waiting for flow control")
+
             if isinstance(data_in, list):
                 for gro_segment in data_in:
                     self._protocol.bytes_received(gro_segment)
@@ -1803,6 +1808,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
                 if sub.timer_fired:
                     continue
+
+                # TCP EOF cannot replenish flow-control credit.
+                if not data_in and self._svn is not HttpVersion.h3:
+                    self._protocol.connection_lost()
+                    raise ProtocolError(
+                        "Connection closed while waiting for flow control"
+                    )
 
                 if not isinstance(data_in, list):
                     self._protocol.bytes_received(data_in)
