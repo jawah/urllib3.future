@@ -336,7 +336,12 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._connection_terminated()
 
     def eof_received(self) -> None:
-        self._connection_terminated()
+        # A clean TLS shutdown does not complete an HTTP/2 stream without END_STREAM.
+        incomplete = bool(self._open_streams)
+        self._connection_terminated(
+            int(jh2.errors.ErrorCodes.PROTOCOL_ERROR) if incomplete else 0,
+            "HTTP/2 connection closed before END_STREAM" if incomplete else None,
+        )
 
     def bytes_received(self, data: bytes) -> None:
         if not data:
