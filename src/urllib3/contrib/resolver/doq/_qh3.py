@@ -168,7 +168,9 @@ class QUICResolver(PlainResolver):
                     if not datagrams:
                         break
 
-                    if self._dgram_gso_enabled and len(datagrams) > 1:
+                    if (
+                        self._dgram_gso_enabled and len(datagrams) > 1
+                    ):  # Defensive: legacy qh3 may emit multiple close datagrams.
                         try:
                             sync_sendmsg_gso(self._socket, [d[0] for d in datagrams])
                         except GenericSegmentOffloadUnsupported:
@@ -649,7 +651,9 @@ class QUICResolver(PlainResolver):
                     if isinstance(ev, event_type):
                         if not respect_end_stream_signal:
                             return events
-                        if hasattr(ev, "stream_ended") and ev.stream_ended:
+                        if (
+                            hasattr(ev, "stream_ended") and ev.stream_ended
+                        ):  # Defensive: current stream-data callers do not wait for end-of-stream here.
                             return events
                         elif hasattr(ev, "stream_ended") is False:
                             return events

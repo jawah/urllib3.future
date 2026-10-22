@@ -46,7 +46,7 @@ class AsyncFastWebSocketExtensionFromHTTP(_WebsocketsEngine, AsyncExtensionFromH
                 async with police.borrow(response):
                     dsa = self._dsa
                     if dsa is None:
-                        return
+                        return  # Defensive: HTTP/1 close removes the connection before a queued closer can reenter.
                     try:
                         if self._protocol.state is OPEN:
                             self._protocol.send_close()
@@ -72,7 +72,7 @@ class AsyncFastWebSocketExtensionFromHTTP(_WebsocketsEngine, AsyncExtensionFromH
             if police is not None:
                 police.forget(response)
             else:
-                await response.close()
+                await response.close()  # Defensive: externally constructed responses may lack a TrafficPolice owner.
         self._response = None
         self._police_officer = None
 

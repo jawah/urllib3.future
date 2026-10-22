@@ -73,7 +73,7 @@ QUIC_RELEVANT_EVENT_TYPES = {
 if hasattr(quic_events, "StopSendingReceived"):
     STOP_SENDING_EVENT_AVAILABLE = True
     QUIC_RELEVANT_EVENT_TYPES.add(quic_events.StopSendingReceived)
-else:
+else:  # Defensive: older qh3 releases do not expose STOP_SENDING events.
     STOP_SENDING_EVENT_AVAILABLE = False
 
 _SHORT_NAME_ASSOC = {
@@ -222,7 +222,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
     @property
     def session_ticket(self) -> SessionTicket | None:
-        return self._quic.tls.session_ticket if self._quic and self._quic.tls else None
+        return (
+            self._quic.tls.session_ticket if self._quic and self._quic.tls else None
+        )  # Defensive: unused legacy session-ticket accessor.
 
     def get_available_stream_id(self) -> int:
         return self._quic.get_next_available_stream_id()
@@ -310,7 +312,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         quic = self._quic
         receive_many_datagrams = getattr(quic, "receive_many_datagrams", None)
 
-        if receive_many_datagrams is None:
+        if (
+            receive_many_datagrams is None
+        ):  # Defensive: older qh3 only exposes single-datagram input.
             for datagram in data:
                 self.bytes_received(datagram)
             return
@@ -439,7 +443,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         if event_type is quic_events.PingAcknowledged:
             try:
                 self._pending_ping_ack.remove(quic_event.uid)  # type: ignore[attr-defined]
-            except ValueError:
+            except ValueError:  # Defensive: duplicate or untracked acknowledgement.
                 pass
 
         return None
@@ -452,7 +456,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if event_type is h3_events.DataReceived:
             if h3_event.stream_id not in self._open_streams:  # type: ignore[attr-defined]
-                return None
+                return None  # Defensive: transport events for discarded streams are filtered earlier.
             stream_ended = h3_event.stream_ended  # type: ignore[attr-defined]
             if stream_ended:
                 self._open_streams.discard(h3_event.stream_id)  # type: ignore[attr-defined]
@@ -476,7 +480,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         if event_type is h3_events.InformationalHeadersReceived:
             if h3_event.stream_id not in self._open_streams:  # type: ignore[attr-defined]
-                return None
+                return None  # Defensive: transport events for discarded streams are filtered earlier.
             return EarlyHeadersReceived(
                 h3_event.stream_id,  # type: ignore[attr-defined]
                 h3_event.headers,  # type: ignore[attr-defined]
@@ -494,7 +498,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         # accessing our QUIC loss detector
         # yes, we now, it's private, and we
         # also maintain qh3, so we're aware.
-        if hasattr(self._quic, "_loss"):
+        if hasattr(
+            self._quic, "_loss"
+        ):  # Defensive: legacy qh3 loss-detector API, absent from CI versions.
             loss = self._quic._loss
 
             # At least 2 ack-eliciting packets outstanding.
@@ -519,7 +525,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         elif hasattr(self._quic, "should_wait_for_ack"):
             return self._quic.should_wait_for_ack(monotonic())
 
-        return False
+        return False  # Defensive: legacy qh3 without an ACK-wait query.
 
     @typing.overload
     def getissuercert(self, *, binary_form: Literal[True]) -> bytes | None: ...
@@ -535,7 +541,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         x509_certificate = self._quic.get_peercert()
 
         if x509_certificate is None:
-            raise ValueError("TLS handshake has not been done yet")
+            raise ValueError(  # Defensive: the backend reads certificates only after the handshake.
+                "TLS handshake has not been done yet"
+            )
 
         if not self._quic.get_issuercerts():
             return None
@@ -562,7 +570,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
             if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
-                continue
+                continue  # Defensive: omit certificate attributes outside the compatibility mapping.
             issuer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -574,7 +582,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
             if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
-                continue
+                continue  # Defensive: omit certificate attributes outside the compatibility mapping.
             issuer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -598,7 +606,9 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         x509_certificate = self._quic.get_peercert()
 
         if x509_certificate is None:
-            raise ValueError("TLS handshake has not been done yet")
+            raise ValueError(  # Defensive: the backend reads certificates only after the handshake.
+                "TLS handshake has not been done yet"
+            )
 
         if binary_form:
             return x509_certificate.public_bytes()
@@ -624,7 +634,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.subject:
             if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
-                continue
+                continue  # Defensive: omit certificate attributes outside the compatibility mapping.
             peer_info["subject"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -636,7 +646,7 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
 
         for raw_oid, rfc4514_attribute_name, value in x509_certificate.issuer:
             if rfc4514_attribute_name not in _SHORT_NAME_ASSOC:
-                continue
+                continue  # Defensive: omit certificate attributes outside the compatibility mapping.
             peer_info["issuer"].append(  # type: ignore[attr-defined]
                 (
                     (
@@ -702,13 +712,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         cipher_suite = self._quic.get_cipher()
 
         if cipher_suite is None:
-            raise ValueError("TLS handshake has not been done yet")
+            raise ValueError(  # Defensive: backend queries the cipher only after the handshake.
+                "TLS handshake has not been done yet"
+            )
 
         return f"TLS_{cipher_suite.name}"
 
     def ech_accepted(self) -> bool:
         if not hasattr(self._quic, "ech_accepted"):
-            return False
+            return False  # Defensive: older qh3 releases do not report ECH acceptance.
         return self._quic.ech_accepted
 
     def reshelve(self, *events: Event) -> None:

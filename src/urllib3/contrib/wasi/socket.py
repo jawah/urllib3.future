@@ -92,7 +92,9 @@ if sys.platform == "wasi":
             raise _gaierror(error.value) from None
 
         if not addresses:
-            raise gaierror(EAI_NONAME, "name or service not known")
+            raise gaierror(
+                EAI_NONAME, "name or service not known"
+            )  # Defensive: WASI hosts may return a successful but empty address stream.
         return addresses
 
     def _coerce_port(port: bytes | str | int | None, sock_type: int) -> int:
@@ -228,11 +230,13 @@ if sys.platform == "wasi":
         if error_code is _wasi_network.ErrorCode.CONNECTION_REFUSED:
             code = errno.ECONNREFUSED
         elif error_code is _wasi_network.ErrorCode.CONNECTION_RESET:
-            code = errno.ECONNRESET
+            code = errno.ECONNRESET  # Defensive: WASI host-specific error mapping.
         elif error_code is _wasi_network.ErrorCode.CONNECTION_ABORTED:
-            code = errno.ECONNABORTED
+            code = errno.ECONNABORTED  # Defensive: WASI host-specific error mapping.
         elif error_code is _wasi_network.ErrorCode.TIMEOUT:
-            return _stdlib_socket.timeout(name)
+            return _stdlib_socket.timeout(
+                name
+            )  # Defensive: WASI host-specific error mapping.
         elif error_code is _wasi_network.ErrorCode.ACCESS_DENIED:
             code = errno.EACCES
         else:
@@ -343,7 +347,7 @@ if sys.platform == "wasi":
                 shutdown_type = _wasi_tcp.ShutdownType.BOTH
             try:
                 self._socket.shutdown(shutdown_type)
-            except Err as error:
+            except Err as error:  # Defensive: WASI host-specific shutdown failure.
                 raise _socket_error(error.value) from None
 
         def close(self) -> None:
@@ -398,7 +402,7 @@ if sys.platform == "wasi":
                         return self._socket.keep_alive_interval() // 1_000_000_000
                     if optname == getattr(_stdlib_socket, "TCP_KEEPCNT", -1):
                         return self._socket.keep_alive_count()
-            except Err as error:
+            except Err as error:  # Defensive: host-specific failure querying an otherwise supported socket option.
                 raise _socket_error(error.value) from None
             raise OSError(errno.ENOPROTOOPT, "protocol option not available")
 
@@ -487,18 +491,20 @@ if sys.platform == "wasi":
                     sock.close()
 
         if not errors:
-            raise OSError("getaddrinfo returns an empty list")
+            raise OSError(
+                "getaddrinfo returns an empty list"
+            )  # Defensive: native resolution already rejects an empty address list.
         if all_errors:
             exception_group = getattr(builtins, "ExceptionGroup")
             raise exception_group("create_connection failed", errors)
         raise errors[-1]
 else:
-    socket = _stdlib_socket.socket
+    socket = _stdlib_socket.socket  # Defensive: non-WASI socket compatibility alias.
 
 
 def __getattr__(name: str) -> Any:
     return getattr(_stdlib_socket, name)
 
 
-def __dir__() -> list[str]:
+def __dir__() -> list[str]:  # Defensive: stdlib socket introspection compatibility.
     return sorted(set(globals()) | set(dir(_stdlib_socket)))

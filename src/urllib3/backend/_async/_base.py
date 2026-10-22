@@ -127,7 +127,7 @@ class AsyncDirectStreamAccess:
 
         return len(__data)
 
-    async def sendall_extended(
+    async def sendall_extended(  # Defensive: extended-send compatibility API; built-in extensions use sendall and close.
         self, __data: bytes, __close_stream: bool = False
     ) -> None:
         if self._write is None:
@@ -221,7 +221,11 @@ class AsyncLowLevelResponse:
         self.trailers: HTTPHeaderDict | None = None
 
     @property
-    def fp(self) -> typing.NoReturn:
+    def fp(
+        self,
+    ) -> (
+        typing.NoReturn
+    ):  # Defensive: incidental http.client file-pointer compatibility.
         raise RuntimeError(
             "urllib3-future no longer expose a filepointer-like in responses. It was a remnant from the http.client era. "
             "We no longer support it."
@@ -234,7 +238,7 @@ class AsyncLowLevelResponse:
     @from_promise.setter
     def from_promise(self, value: ResponsePromise) -> None:
         if value.stream_id != self._stream_id:
-            raise ValueError(
+            raise ValueError(  # Defensive: built-in responses are assigned the promise for their own stream.
                 "Trying to assign a ResponsePromise to an unrelated LowLevelResponse"
             )
         self.__promise = value

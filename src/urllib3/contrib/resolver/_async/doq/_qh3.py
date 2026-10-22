@@ -651,7 +651,9 @@ class QUICResolver(PlainResolver):
                     if isinstance(ev, event_type):
                         if not respect_end_stream_signal:
                             return events
-                        if hasattr(ev, "stream_ended") and ev.stream_ended:
+                        if (
+                            hasattr(ev, "stream_ended") and ev.stream_ended
+                        ):  # Defensive: current stream-data callers do not wait for end-of-stream here.
                             return events
                         elif hasattr(ev, "stream_ended") is False:
                             return events

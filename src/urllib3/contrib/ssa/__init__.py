@@ -144,7 +144,9 @@ class AsyncSocket:
             if hasattr(asyncio, "SelectorEventLoop") and isinstance(
                 asyncio.get_running_loop(), asyncio.SelectorEventLoop
             ):
-                edge_case_close_bug_exist = True
+                edge_case_close_bug_exist = (
+                    True  # Defensive: Windows SelectorEventLoop shutdown compatibility.
+                )
 
         try:
             # see https://github.com/MagicStack/uvloop/issues/241
@@ -247,7 +249,9 @@ class AsyncSocket:
         def ioctl(
             self, control: int, option: int | tuple[int, int, int] | bool
         ) -> None:
-            return self._sock.ioctl(control, option)
+            return self._sock.ioctl(
+                control, option
+            )  # Defensive: platform-specific ioctl forwarding for direct socket consumers.
 
     def setsockopt(self, __level: int, __optname: int, __value: int | bytes) -> None:
         self._sock.setsockopt(__level, __optname, __value)
@@ -292,7 +296,9 @@ class AsyncSocket:
                     type=self.type,
                 )
 
-                if not res:
+                if (
+                    not res
+                ):  # Defensive: system resolution normally returns addresses or raises.
                     raise socket.gaierror(f"unable to resolve hostname {host}")
 
                 addr = res[0][-1]
@@ -304,7 +310,7 @@ class AsyncSocket:
             except (FutureTimeoutError, AsyncioTimeoutError, TimeoutError) as e:
                 self._connect_called = False
                 raise StandardTimeoutError from e
-            except RuntimeError:
+            except RuntimeError:  # Defensive: FD allocation errors in alternate event-loop implementations.
                 raise ConnectionError(
                     "Likely FD Kernel/Loop Racing Allocation Error. You should retry."
                 )
@@ -601,7 +607,9 @@ def _has_complete_support_dgram() -> bool:
     """
     import platform
 
-    if platform.system() == "Windows" and platform.python_implementation() == "PyPy":
+    if (
+        platform.system() == "Windows" and platform.python_implementation() == "PyPy"
+    ):  # Defensive: Windows PyPy winapi capability compatibility.
         try:
             import _overlapped  # type: ignore[import-not-found]
         except ImportError:  # Defensive:

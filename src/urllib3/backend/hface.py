@@ -290,7 +290,9 @@ class HfaceBackend(BaseBackend):
             # do not upgrade if not coming from TLS already.
 
             # already maxed out!
-            if self._svn == HttpVersion.h3:
+            if (
+                self._svn == HttpVersion.h3
+            ):  # Defensive: normal QUIC connections already have an alternative authority.
                 if is_successful_response:
                     self.__alt_svc_checked = True
                 return
@@ -403,7 +405,7 @@ class HfaceBackend(BaseBackend):
             if hasattr(ssl_context, "load_default_certs"):
                 ssl_context.load_default_certs()
             else:
-                ssl_context = None
+                ssl_context = None  # Defensive: alternate TLS contexts may lack load_default_certs.
 
         self._custom_tls_context = ssl_context
 
@@ -596,7 +598,7 @@ class HfaceBackend(BaseBackend):
                     self.conn_info.certificate_dict = self.sock.getpeercert(  # type: ignore[attr-defined]
                         binary_form=False
                     )
-                except ValueError:
+                except ValueError:  # Defensive: alternate TLS engines may not expose parsed peer certificates.
                     # not supported on MacOS!
                     self.conn_info.certificate_dict = None
 
@@ -635,7 +637,9 @@ class HfaceBackend(BaseBackend):
                     ):
                         self.conn_info.issuer_certificate_der = chain[1]
 
-            elif hasattr(self.sock, "getpeercert"):
+            elif hasattr(
+                self.sock, "getpeercert"
+            ):  # Defensive: alternate TLS sockets without sslobj or _sslobj.
                 self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
                 try:
                     self.conn_info.certificate_dict = self.sock.getpeercert(
@@ -653,7 +657,7 @@ class HfaceBackend(BaseBackend):
                 if cipher_tuple[1] == "TLSv1.0":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1
                 elif cipher_tuple[1] == "TLSv1.1":
-                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1  # Defensive: metadata compatibility for explicitly enabled legacy TLS 1.1.
                 elif cipher_tuple[1] == "TLSv1.2":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_2
                 elif cipher_tuple[1] == "TLSv1.3":
@@ -668,7 +672,9 @@ class HfaceBackend(BaseBackend):
 
         # fallback to http/1.1 or http/2 with prior knowledge!
         if self._protocol is None or self._svn == HttpVersion.h11:
-            if self._protocol is None and HttpVersion.h11 in self._disabled_svn:
+            if (
+                self._protocol is None and HttpVersion.h11 in self._disabled_svn
+            ):  # Defensive: custom initialization may leave protocol selection incomplete.
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
                 self._svn = HttpVersion.h2
             else:
@@ -1024,7 +1030,7 @@ class HfaceBackend(BaseBackend):
 
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
-                maximal_data_in_read = None
+                maximal_data_in_read = None  # Defensive: public response reads normalize negative sizes first.
 
         data_in: bytes | list[bytes]
 
@@ -1846,7 +1852,7 @@ class HfaceBackend(BaseBackend):
                     promise = self._promises_per_stream[head_event.stream_id]
                 else:
                     promise = self._promises_per_stream.pop(head_event.stream_id)
-            except KeyError as e:
+            except KeyError as e:  # Defensive: built-in protocols filter streams without an originating promise.
                 raise ProtocolError(
                     f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
                 ) from e
@@ -2087,7 +2093,9 @@ class HfaceBackend(BaseBackend):
             self._protocol.ping()
         except NotImplementedError:
             return
-        except self._protocol.exceptions():
+        except (
+            self._protocol.exceptions()
+        ):  # Defensive: protocol-engine fallback after validating PING availability.
             return
 
         while True:

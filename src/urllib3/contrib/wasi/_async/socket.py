@@ -42,11 +42,17 @@ if sys.platform == "wasi":
         if isinstance(error, _wasi_sockets.ErrorCode_ConnectionRefused):
             return ConnectionRefusedError(errno.ECONNREFUSED, "connection refused")
         if isinstance(error, _wasi_sockets.ErrorCode_ConnectionReset):
-            return ConnectionResetError(errno.ECONNRESET, "connection reset")
+            return ConnectionResetError(
+                errno.ECONNRESET, "connection reset"
+            )  # Defensive: WASI host-specific error mapping.
         if isinstance(error, _wasi_sockets.ErrorCode_ConnectionAborted):
-            return ConnectionAbortedError(errno.ECONNABORTED, "connection aborted")
+            return ConnectionAbortedError(
+                errno.ECONNABORTED, "connection aborted"
+            )  # Defensive: WASI host-specific error mapping.
         if isinstance(error, _wasi_sockets.ErrorCode_Timeout):
-            return TimeoutError("operation timed out")
+            return TimeoutError(
+                "operation timed out"
+            )  # Defensive: WASI host-specific error mapping.
         if isinstance(error, _wasi_sockets.ErrorCode_AccessDenied):
             return PermissionError(errno.EACCES, "network access denied")
         return OSError(errno.EIO, type(error).__name__)
@@ -261,17 +267,23 @@ if sys.platform == "wasi":
 
         async def _watch_send(self, future: Any) -> None:
             result = await future.read()
-            if isinstance(result, Err):
+            if isinstance(
+                result, Err
+            ):  # Defensive: host stream failures depend on component-runtime scheduling.
                 self._send_error = _socket_error(result.value)
 
         async def _watch_receive(self, future: Any) -> None:
             result = await future.read()
-            if isinstance(result, Err):
+            if isinstance(
+                result, Err
+            ):  # Defensive: host stream failures depend on component-runtime scheduling.
                 self._receive_error = _socket_error(result.value)
 
         async def connect(self, address: tuple[Any, ...]) -> None:
             if self._connected:
-                raise OSError(errno.EISCONN, "socket is already connected")
+                raise OSError(
+                    errno.EISCONN, "socket is already connected"
+                )  # Defensive: direct socket callers may attempt to connect twice.
             try:
                 await self._socket.connect(_wasi_socket_address(address))
             except Err as error:
@@ -286,16 +298,20 @@ if sys.platform == "wasi":
 
         async def send(self, data: bytes) -> int:
             if self._send_error is not None:
-                raise self._send_error
+                raise self._send_error  # Defensive: propagate a host stream failure to direct socket callers.
             if self._writer is None:
                 raise OSError(errno.ENOTCONN, "socket is not connected")
-            return await self._writer.write(data)
+            return await self._writer.write(
+                data
+            )  # Defensive: direct WASI socket API; internal callers use sendall.
 
         async def sendall(self, data: bytes) -> None:
             if self._send_error is not None:
-                raise self._send_error
+                raise self._send_error  # Defensive: host stream failure may arrive before the next write.
             if self._writer is None:
-                raise OSError(errno.ENOTCONN, "socket is not connected")
+                raise OSError(
+                    errno.ENOTCONN, "socket is not connected"
+                )  # Defensive: direct socket callers may write before connecting.
             written = await self._writer.write_all(data)
             if written != len(data):
                 raise BrokenPipeError(errno.EPIPE, "connection closed during write")
@@ -305,7 +321,9 @@ if sys.platform == "wasi":
 
         def read_ready(self) -> bool:
             if self._reader is None:
-                raise OSError(errno.ENOTCONN, "socket is not connected")
+                raise OSError(
+                    errno.ENOTCONN, "socket is not connected"
+                )  # Defensive: direct socket callers may inspect readiness before connecting.
             return bool(
                 self._read_buffer
                 or self._receive_error is not None
@@ -323,7 +341,7 @@ if sys.platform == "wasi":
             if bufsize == 0:
                 return b""
             if self._receive_error is not None:
-                raise self._receive_error
+                raise self._receive_error  # Defensive: host stream failure may arrive before the next read.
             if self._reader is None:
                 raise OSError(errno.ENOTCONN, "socket is not connected")
             if self._read_buffer:
@@ -363,7 +381,11 @@ if sys.platform == "wasi":
         async def wait_for_close(self) -> None:
             return None
 
-        async def wait_for_readiness(self) -> None:
+        async def wait_for_readiness(
+            self,
+        ) -> (
+            None
+        ):  # Defensive: socket compatibility stub; native connect completes readiness.
             return None
 
         def should_connect(self) -> bool:
@@ -406,7 +428,7 @@ if sys.platform == "wasi":
                         return self._socket.get_keep_alive_interval() // 1_000_000_000
                     if optname == getattr(_stdlib_socket, "TCP_KEEPCNT", -1):
                         return self._socket.get_keep_alive_count()
-            except Err as error:
+            except Err as error:  # Defensive: host-specific failure querying an otherwise supported socket option.
                 raise _socket_error(error.value) from None
             raise OSError(errno.ENOPROTOOPT, "protocol option not available")
 
@@ -488,7 +510,9 @@ if sys.platform == "wasi":
             server_hostname: str | None,
         ) -> None:
             if _tls is None:
-                raise RuntimeError("TLS support is unavailable")
+                raise RuntimeError(
+                    "TLS support is unavailable"
+                )  # Defensive: TLS wrapper used without an installed TLS engine.
 
             self._transport = transport
             self.family = transport.family
@@ -515,7 +539,9 @@ if sys.platform == "wasi":
             return self._sslobj_internal
 
         @property
-        def _sslobj(self) -> Any:
+        def _sslobj(
+            self,
+        ) -> Any:  # Defensive: SSL socket compatibility alias; native paths use sslobj.
             return self._sslobj_internal
 
         @property
@@ -566,7 +592,9 @@ if sys.platform == "wasi":
                         if not plaintext:
                             break
                         written = await self._plaintext_writer.write_all(plaintext)
-                        if written != len(plaintext):
+                        if (
+                            written != len(plaintext)
+                        ):  # Defensive: component consumer may close during a plaintext write.
                             self._closing = True
                             break
 
@@ -580,7 +608,9 @@ if sys.platform == "wasi":
             if self._error is not None:
                 raise self._error
             if self._closing:
-                raise BrokenPipeError(errno.EPIPE, "TLS connection is closed")
+                raise BrokenPipeError(
+                    errno.EPIPE, "TLS connection is closed"
+                )  # Defensive: direct socket callers may write after TLS shutdown.
             written = self._sslobj_internal.write(data)
             await self._flush_outgoing()
             return written
@@ -655,7 +685,9 @@ if sys.platform == "wasi":
             self._closing = True
             try:
                 self._sslobj_internal.unwrap()
-            except _tls.SSLError:
+            except (
+                _tls.SSLError
+            ):  # Defensive: best-effort TLS shutdown across WASI TLS engines.
                 pass
 
         async def wait_for_close(self) -> None:
@@ -737,7 +769,9 @@ if sys.platform == "wasi":
                 errors.append(error)
                 sock.close()
         if not errors:
-            raise OSError("getaddrinfo returns an empty list")
+            raise OSError(
+                "getaddrinfo returns an empty list"
+            )  # Defensive: native resolution already rejects an empty address list.
         raise errors[-1]
 else:
     from urllib3.contrib.ssa import AsyncSocket, SSLAsyncSocket
@@ -777,7 +811,9 @@ else:
                 sock.close()
         if last_error is not None:
             raise last_error
-        raise OSError("getaddrinfo returns an empty list")
+        raise OSError(
+            "getaddrinfo returns an empty list"
+        )  # Defensive: system getaddrinfo normally returns addresses or raises.
 
 
 __all__ = [

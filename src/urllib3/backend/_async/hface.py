@@ -255,7 +255,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             # do not upgrade if not coming from TLS already.
 
             # already maxed out!
-            if self._svn == HttpVersion.h3:
+            if (
+                self._svn == HttpVersion.h3
+            ):  # Defensive: normal QUIC connections already have an alternative authority.
                 if is_successful_response:
                     self.__alt_svc_checked = True
                 return
@@ -370,7 +372,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             if hasattr(ssl_context, "load_default_certs"):
                 ssl_context.load_default_certs()
             else:
-                ssl_context = None
+                ssl_context = None  # Defensive: alternate TLS contexts may lack load_default_certs.
 
         self._custom_tls_context = ssl_context
 
@@ -567,7 +569,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     self.conn_info.certificate_dict = self.sock.sslobj.getpeercert(
                         binary_form=False
                     )
-                except ValueError:
+                except ValueError:  # Defensive: alternate TLS engines may not expose parsed peer certificates.
                     # not supported on MacOS!
                     self.conn_info.certificate_dict = None
 
@@ -610,7 +612,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                 if cipher_tuple[1] == "TLSv1.0":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1
                 elif cipher_tuple[1] == "TLSv1.1":
-                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1  # Defensive: metadata compatibility for explicitly enabled legacy TLS 1.1.
                 elif cipher_tuple[1] == "TLSv1.2":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_2
                 elif cipher_tuple[1] == "TLSv1.3":
@@ -625,7 +627,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         # fallback to http/1.1
         if self._protocol is None or self._svn == HttpVersion.h11:
-            if self._protocol is None and HttpVersion.h11 in self._disabled_svn:
+            if (
+                self._protocol is None and HttpVersion.h11 in self._disabled_svn
+            ):  # Defensive: custom initialization may leave protocol selection incomplete.
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
                 self._svn = HttpVersion.h2
             else:
@@ -928,7 +932,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
 
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
-                maximal_data_in_read = None
+                maximal_data_in_read = None  # Defensive: public response reads normalize negative sizes first.
 
         data_in: bytes | list[bytes]
 
@@ -988,7 +992,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     ):
                         try:
                             protocol.eof_received()
-                        except _proto_exc as e:
+                        except _proto_exc as e:  # Defensive: built-in EOF handlers report termination through events.
                             # overly protective, we hide exception that are behind urllib3.
                             # should not happen, but one truly never known.
                             raise ProtocolError(e) from e  # Defensive:
@@ -1679,7 +1683,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     promise = self._promises_per_stream[head_event.stream_id]
                 else:
                     promise = self._promises_per_stream.pop(head_event.stream_id)
-            except KeyError as e:
+            except KeyError as e:  # Defensive: built-in protocols filter streams without an originating promise.
                 raise ProtocolError(
                     f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
                 ) from e
@@ -1894,7 +1898,9 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             self._protocol.ping()
         except NotImplementedError:  # http/1 case.
             return
-        except self._protocol.exceptions():
+        except (
+            self._protocol.exceptions()
+        ):  # Defensive: protocol-engine fallback after validating PING availability.
             return
 
         while True:
