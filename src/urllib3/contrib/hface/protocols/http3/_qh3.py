@@ -28,7 +28,6 @@ if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
 from qh3 import (
-    CipherSuite,
     H3Connection,
     H3Error,
     ProtocolError,
@@ -128,24 +127,6 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
         # qh3 introduced its support since v1.7.0
         if hasattr(self._configuration, "ech_config_list"):
             self._configuration.ech_config_list = tls_config.ech_config_list
-
-        if tls_config.ciphers:
-            available_ciphers = {c.name: c for c in CipherSuite}
-            chosen_ciphers: list[CipherSuite] = []
-
-            for cipher in tls_config.ciphers:
-                if "name" in cipher and isinstance(cipher["name"], str):
-                    chosen_ciphers.append(
-                        available_ciphers[cipher["name"].replace("TLS_", "")]
-                    )
-
-            if not chosen_ciphers:
-                raise ValueError(
-                    f"Unable to find a compatible cipher in '{tls_config.ciphers}' to establish a QUIC connection. "
-                    f"QUIC support one of '{['TLS_' + e for e in available_ciphers.keys()]}' only."
-                )
-
-            self._configuration.cipher_suites = chosen_ciphers
 
         if tls_config.certfile:
             self._configuration.load_cert_chain(
