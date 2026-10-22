@@ -1513,7 +1513,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
-        can_shelve_conn: bool = conn.is_multiplexed and not conn.is_saturated
+        can_shelve_conn: bool = (
+            conn.is_multiplexed and not conn.is_saturated and rp is not None
+        )
 
         # Receive the response from the server
         http_vsn_str = (
