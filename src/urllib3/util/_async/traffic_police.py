@@ -746,6 +746,8 @@ class AsyncTrafficPolice(typing.Generic[T]):
                             del self._cursors[current_task]
             else:
                 self._registry[obj_id] = conn_or_pool
+                if not immediately_unavailable:
+                    self._container[obj_id] = conn_or_pool
 
             if immediately_unavailable:
                 # it's "registered" but not available to others. thus setting the cursor on it.
@@ -1096,6 +1098,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
                 signal = self._signals.register(
                     conn_or_pool,
+                    TrafficState.IDLE,  # The owner may finish its last response before handoff.
                     TrafficState.USED,
                     TrafficState.SATURATED,
                 )

@@ -698,9 +698,13 @@ class TrafficPolice(typing.Generic[T]):
 
             if signal is not None:
                 if not signal.event.wait(timeout=timeout):
-                    raise UnavailableTraffic(
-                        f"No connection available within {timeout} second(s)"
-                    )
+                    with self._lock:
+                        # Match locate(): a completed handoff wins the timeout race.
+                        if not signal.event.is_set():
+                            self._signals.remove(signal)
+                            raise UnavailableTraffic(
+                                f"No connection available within {timeout} second(s)"
+                            )
 
                 # in a very tight scenario (e.g. maxsize=1 and threads>=2)
                 # a first thread can get 'None' and a reserved spot from get(...)
@@ -918,9 +922,13 @@ class TrafficPolice(typing.Generic[T]):
                 self._lock.release()
 
                 if not signal_pre_locate.event.wait(timeout=timeout):
-                    raise TimeoutError(
-                        "Timed out while waiting for conn_or_pool to become available"
-                    )
+                    with self._lock:
+                        if not signal_pre_locate.event.is_set():
+                            if signal_pre_locate in self._signals:
+                                self._signals.remove(signal_pre_locate)
+                            raise TimeoutError(
+                                "Timed out while waiting for conn_or_pool to become available"
+                            )
                 continue
 
             # Keep lookup and borrower/waiter registration atomic.
