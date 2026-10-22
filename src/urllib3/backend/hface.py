@@ -1136,12 +1136,6 @@ class HfaceBackend(BaseBackend):
                         protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
-                        if (
-                            data_in_len_from is None
-                            and maximal_data_in_read is not None
-                        ):
-                            data_in_len += sum(map(len, data_in))
-
                         try:
                             protocol.many_bytes_received(data_in)  # type: ignore[union-attr]
                         except _proto_exc as e:
@@ -1154,12 +1148,6 @@ class HfaceBackend(BaseBackend):
                                 ) from e  # Defensive:
                             raise ProtocolError(e) from e  # Defensive:
                     else:
-                        if (
-                            data_in_len_from is None
-                            and maximal_data_in_read is not None
-                        ):
-                            data_in_len += len(data_in)
-
                         try:
                             protocol.bytes_received(data_in)
                         except _proto_exc as e:

@@ -1001,12 +1001,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
-                        if (
-                            data_in_len_from is None
-                            and maximal_data_in_read is not None
-                        ):
-                            data_in_len += sum(map(len, data_in))
-
                         try:
                             protocol.many_bytes_received(data_in)  # type: ignore[union-attr]
                         except _proto_exc as e:
@@ -1025,12 +1019,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                         self._recv_size_ema = (
                             self._recv_size_ema * 0.7 + incoming_buffer_size * 0.3
                         )
-
-                        if (
-                            data_in_len_from is None
-                            and maximal_data_in_read is not None
-                        ):
-                            data_in_len += incoming_buffer_size
 
                         try:
                             protocol.bytes_received(data_in)
