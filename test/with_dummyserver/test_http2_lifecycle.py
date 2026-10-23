@@ -42,7 +42,9 @@ def http2_peer(request: pytest.FixtureRequest) -> Iterator[HTTP2Peer]:
     mode = getattr(request, "param", "normal")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
-    context.set_alpn_protocols([] if mode in ("no-alpn", "no-compatible") else ["h2"])
+    # A fresh context advertises no ALPN; OpenSSL 1.0.2 rejects an empty list.
+    if mode not in ("no-alpn", "no-compatible"):
+        context.set_alpn_protocols(["h2"])
     stop = threading.Event()
     pings: queue.Queue[bytes] = queue.Queue()
     requests: queue.Queue[Any] = queue.Queue()
@@ -1044,4 +1046,117 @@ async def test_live_promise_and_connection_metadata(
         assert promise.response.method == "GET"
         await call(response.read)
     finally:
+        await call(pool.close)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("http2_peer", ["flow-control", "raw-eof"], indirect=True)
+async def test_raw_close_survives_failed_fin_write(
+    http2_peer: HTTP2Peer,
+    asynchronous: bool,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib3.contrib.webextensions.raw import RawExtensionFromHTTP
+    from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
+
+    peer_closed = request.node.callspec.params["http2_peer"] == "raw-eof"
+    pool = (AsyncHTTPSConnectionPool if asynchronous else HTTPSConnectionPool)(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    extension = AsyncRawExtensionFromHTTP() if asynchronous else RawExtensionFromHTTP()
+    if not asynchronous:
+        assert isinstance(extension, RawExtensionFromHTTP)
+        close = extension.close
+        closing = False
+
+        def bounded_close() -> None:
+            nonlocal closing
+            assert not closing, "Raw cleanup recursively entered close()"
+            closing = True
+            try:
+                close()
+            finally:
+                closing = False
+
+        monkeypatch.setattr(extension, "close", bounded_close)
+    conn = None
+    try:
+        response = await call(
+            pool.request,
+            "CONNECT",
+            "/",
+            extension=extension,
+            headers={":protocol": "bytestream"},
+            preload_content=False,
+        )
+        conn = pooled_connection(pool)
+        sock = conn.sock
+        stream_id = response._fp.from_promise.stream_id
+        assert sock is not None
+        if not peer_closed:
+            await call(extension.send_payload, b"hello")
+            assert await call(extension.next_payload) == b"hello"
+        sendall = type(sock).sendall
+        rejected = False
+
+        def reject_fin(current: Any, data: Any) -> None:
+            nonlocal rejected
+            if current is not sock or rejected:
+                return
+            offset = 0
+            while offset + 9 <= len(data):
+                length = int.from_bytes(data[offset : offset + 3], "big")
+                if (
+                    data[offset + 3] == 0
+                    and data[offset + 4] & 1
+                    and int.from_bytes(data[offset + 5 : offset + 9], "big")
+                    == stream_id
+                ):
+                    # jh2 already marked the sending side closed when it encoded FIN.
+                    # Model the TLS writer refusing the encoded bytes afterward.
+                    rejected = True
+                    raise ConnectionResetError("injected FIN write failure")
+                offset += 9 + length
+
+        def send_sync(current: Any, data: Any, *args: Any, **kwargs: Any) -> Any:
+            reject_fin(current, data)
+            return sendall(current, data, *args, **kwargs)
+
+        async def send_async(current: Any, data: Any, *args: Any, **kwargs: Any) -> Any:
+            reject_fin(current, data)
+            return await sendall(current, data, *args, **kwargs)
+
+        with monkeypatch.context() as failure:
+            failure.setattr(
+                type(sock), "sendall", send_async if asynchronous else send_sync
+            )
+            if peer_closed:
+                with pytest.raises(
+                    ProtocolError,
+                    match="Connection closed while waiting for flow control",
+                ):
+                    await call(extension.send_payload, b"body")
+            else:
+                await call(extension.close)
+        assert rejected
+        assert extension.closed and response.closed
+        await call(extension.close)
+        await call(response.close)
+        if peer_closed:
+            assert conn.is_closed
+        else:
+            assert (await call(pool.request, "GET", "/next")).status == 200
+            assert pool.num_connections == 1
+    finally:
+        if conn is not None:
+            await call(conn.close)
         await call(pool.close)

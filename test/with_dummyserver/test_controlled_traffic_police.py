@@ -330,7 +330,7 @@ class TestControlledTrafficPolice(HTTPDummyServerTestCase):
             )
             police = pool.pool
             assert isinstance(police, ObservedAsyncTrafficPolice)
-            conn = cast(AsyncHTTPConnection | None, response.connection)
+            conn = cast("AsyncHTTPConnection | None", response.connection)
             assert conn is not None
             if not police.busy:
                 assert await police.locate(response) is conn
