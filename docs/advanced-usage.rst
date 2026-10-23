@@ -1744,10 +1744,17 @@ and for ``None`` at the end of the stream:
             response.close()
 
 ``next_payload()`` returns a parsed ``ServerSentEvent``. Its ``data`` is text;
-call ``event.json()`` only when the server sends JSON. Passing ``raw=True``
-returns the event text instead. The reader does not automatically reconnect
-at EOF. Applications that reconnect can use event IDs and retry metadata to
-implement the server's resumption policy.
+multiple ``data:`` lines in one event are joined with ``\n``, including empty
+data lines. Call ``event.json()`` only when the server sends JSON. The reader
+accepts CRLF, LF, and CR line endings, ignores a leading UTF-8 BOM, and replaces
+malformed UTF-8 characters rather than interrupting the stream.
+
+Passing ``raw=True`` returns the event text with its original line endings.
+Distinguishing a trailing CR from CRLF can require reading the following byte.
+This low-level API also exposes metadata-only blocks as events with empty
+``data``; ``retry`` describes the value supplied in that block. The reader does
+not automatically reconnect at EOF. Applications that reconnect can use event
+IDs and retry metadata to implement the server's resumption policy.
 
 Debug your pool state
 ---------------------
