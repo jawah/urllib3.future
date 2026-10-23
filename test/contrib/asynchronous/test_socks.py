@@ -3,12 +3,12 @@ from __future__ import annotations
 import socket
 import threading
 import typing
-from test import SHORT_TIMEOUT
 
 import pytest
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import IPV4SocketDummyServerTestCase
+from test import SHORT_TIMEOUT
 from urllib3.contrib import socks
 from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
 
@@ -752,3 +752,49 @@ class TestSOCKSWithTLS(IPV4SocketDummyServerTestCase):
             assert response.status == 200
             assert await response.data == b""
             assert response.headers["Server"] == "SocksTestServer"
+
+
+class TestSOCKSProxyManager:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scheme", ["socks4", "socks4a", "socks5", "socks5h"])
+    @pytest.mark.parametrize(
+        "auth, overrides, expected",
+        [
+            ("", {}, (None, None)),
+            ("user:pass@", {}, ("user", "pass")),
+            ("user%3Aname:pa%40ss@", {}, ("user:name", "pa@ss")),
+            ("user:pa:ss@", {}, ("user", "pa:ss")),
+            ("user%253A:pa%2540@", {}, ("user%3A", "pa%40")),
+            ("user+name:pa+ss@", {}, ("user+name", "pa+ss")),
+            ("user%20name:pa%20ss@", {}, ("user name", "pa ss")),
+            ("user%C3%A9:pa%C3%9F@", {}, ("useré", "paß")),
+            ("user%3Aname@", {}, ("user:name", None)),
+            ("user:@", {}, ("user", "")),
+            (":pass@", {}, ("", "pass")),
+            ("user%zz:pass%@", {}, ("user%zz", "pass%")),
+            ("user:pass@", {"username": "explicit%40+"}, ("explicit%40+", None)),
+            ("user:pass@", {"password": "explicit%3A"}, (None, "explicit%3A")),
+            (
+                "user:pass@",
+                {"username": "explicit%40", "password": "explicit%3A"},
+                ("explicit%40", "explicit%3A"),
+            ),
+            ("user:pass@", {"username": "", "password": ""}, ("", "")),
+        ],
+    )
+    async def test_proxy_url_credentials(
+        self,
+        scheme: str,
+        auth: str,
+        overrides: dict[str, str],
+        expected: tuple[str | None, str | None],
+    ) -> None:
+        manager_cls = getattr(socks, "AsyncSOCKSProxyManager", None)
+        if manager_cls is None:
+            pytest.skip("Async SOCKS requires python-socks")
+        manager = manager_cls(f"{scheme}://{auth}127.0.0.1:1080", **overrides)
+        try:
+            options = manager.connection_pool_kw["_socks_options"]
+            assert (options["username"], options["password"]) == expected
+        finally:
+            await manager.clear()

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import socket
 import struct
-from base64 import b64encode
 import time
-from threading import Event
+from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from socket import AddressFamily, SocketKind
-from test import requires_network
-from test.conftest import DNSHTTPSServer, DNSQUICServer, DNSTLSServer, DNSUDPServer
+from threading import Event, get_ident
+from time import monotonic
+from typing import Any
 
 import pytest
 
+from test import requires_network
+from test.conftest import DNSHTTPSServer, DNSQUICServer, DNSTLSServer, DNSUDPServer
 from urllib3 import ConnectionInfo, HttpVersion
 from urllib3.contrib.anytls import ssl
 from urllib3.contrib.resolver import (
@@ -20,11 +22,17 @@ from urllib3.contrib.resolver import (
     ProtocolResolver,
     ResolverDescription,
 )
-from urllib3.contrib.resolver.doh import HTTPSResolver
 from urllib3.contrib.resolver._cache import AddrInfo
-
+from urllib3.contrib.resolver.doh import HTTPSResolver
+from urllib3.contrib.resolver.dot import TLSResolver  # noqa: E402
+from urllib3.contrib.resolver.dou import PlainResolver  # noqa: E402
 from urllib3.contrib.resolver.factories import ResolverFactory
-
+from urllib3.contrib.resolver.in_memory import InMemoryResolver  # noqa: E402
+from urllib3.contrib.resolver.null import NullResolver  # noqa: E402
+from urllib3.contrib.resolver.protocols import SupportedQueryType
+from urllib3.contrib.resolver.system import SystemResolver  # noqa: E402
+from urllib3.contrib.resolver.utils import _udp_retry_deadlines
+from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
 _MISSING_QUIC_SENTINEL = object()
 
@@ -32,13 +40,6 @@ try:
     from urllib3.contrib.resolver.doq._qh3 import QUICResolver
 except ImportError:
     QUICResolver = _MISSING_QUIC_SENTINEL  # type: ignore
-
-from urllib3.contrib.resolver.dot import TLSResolver  # noqa: E402
-from urllib3.contrib.resolver.dou import PlainResolver  # noqa: E402
-from urllib3.contrib.resolver.in_memory import InMemoryResolver  # noqa: E402
-from urllib3.contrib.resolver.null import NullResolver  # noqa: E402
-from urllib3.contrib.resolver.system import SystemResolver  # noqa: E402
-from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
 _DOQ_PARAM = pytest.param(
     "doq://dns.adguard-dns.com/?timeout=5&cert_reqs=0",
@@ -86,7 +87,9 @@ def test_doq_local_udp_offload_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from functools import partial
+
     from qh3.quic.configuration import QuicConfiguration
+
     from urllib3.contrib.resolver.doq import _qh3
 
     # A genuine large ClientHello guarantees a batch, including without PQ ciphers.
@@ -128,7 +131,6 @@ def test_doq_local_gso_rejection_after_handshake(
     dns_quic_server: DNSQUICServer, phase: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import errno
-    from typing import Any
 
     server = dns_quic_server
     resolver = QUICResolver(
@@ -237,7 +239,7 @@ def test_doq_local_certificate_options(
     socktype: socket.SocketKind,
 ) -> None:
     from pathlib import Path
-    from typing import Any
+
     from dummyserver.server import DEFAULT_CERTS
 
     server = dns_quic_server
@@ -2533,7 +2535,6 @@ def test_resolver_support_normalizes_hostnames(
 def test_resolver_recycle_custom_constructor(
     dns_udp_server: DNSUDPServer, keyword_constructor: bool
 ) -> None:
-    from typing import Any
 
     class KeywordResolver(PlainResolver):
         def __init__(self, **kwargs: Any) -> None:
@@ -2626,3 +2627,277 @@ def test_dns_name_rejects_malformed_wire_data(
 
     with pytest.raises(ValueError, match=error):
         read_name(data, offset)
+
+
+def test_udp_transaction_capacity_refusal_preserves_resolver(
+    dns_udp_server: DNSUDPServer,
+) -> None:
+    resolver: Any = PlainResolver(*dns_udp_server.address, timeout=5)
+    try:
+        with pytest.raises(socket.gaierror, match="ID space exhausted"):
+            resolver._reserve_queries(
+                "too-many.example", [SupportedQueryType.A] * 65537
+            )
+        assert not resolver._pending
+        records = resolver.getaddrinfo(
+            "next.example",
+            443,
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+        )
+        assert records[0][4] == ("192.0.2.1", 443)
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("dns_udp_server", ["https-ech"], indirect=True)
+@pytest.mark.parametrize("socket_kind", [0, socket.SOCK_RAW])
+def test_udp_other_socket_kinds_do_not_gain_quic_records(
+    dns_udp_server: DNSUDPServer, socket_kind: socket.SocketKind
+) -> None:
+    resolver: Any = PlainResolver(*dns_udp_server.address, timeout=5)
+    try:
+        records = resolver.getaddrinfo(
+            "kind.example",
+            443,
+            socket.AF_INET,
+            socket_kind,
+            quic_upgrade_via_dns_rr=True,
+        )
+        assert records and all(record[1] == socket_kind for record in records)
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("operation", ["send", "receive", "send-timeout"])
+def test_udp_recovers_from_socket_would_block(
+    dns_udp_server: DNSUDPServer, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib3.contrib.resolver.dou import _socket
+
+    resolver = PlainResolver(*dns_udp_server.address, timeout=5)
+    sock = resolver._socket
+    method = (
+        "sendall"
+        if operation.startswith("send")
+        else ("recvmsg" if resolver._gro_enabled else "recv")
+    )
+    original = getattr(type(sock), method)
+    failures = 0
+    expired = False
+
+    def write_deadline_reached(*args: Any) -> bool:
+        nonlocal expired
+        expired = True
+        return False
+
+    def would_block(current: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal failures
+        if current is sock and (not failures or operation == "send-timeout"):
+            failures += 1
+            raise BlockingIOError("injected UDP backpressure")
+        return original(current, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as pressure:
+            pressure.setattr(type(sock), method, would_block)
+            if operation == "send-timeout":
+                # Let setup finish, then expire this resolver's clock exactly
+                # when the injected readiness wait reports its timeout.
+                pressure.setattr(_socket, "wait_for_write", write_deadline_reached)
+                pressure.setattr(
+                    _socket,
+                    "monotonic",
+                    lambda: float("inf") if expired else monotonic(),
+                )
+                pressure.setattr(
+                    _socket, "_udp_retry_deadlines", lambda deadline: iter([deadline])
+                )
+                with pytest.raises(socket.gaierror, match="timed out"):
+                    resolver.getaddrinfo(
+                        "blocked.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                    )
+            else:
+                assert resolver.getaddrinfo(
+                    "blocked.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                )
+        assert failures
+        assert not resolver._pending and not resolver._completed
+        resolver._timeout = 5
+        assert resolver.getaddrinfo(
+            "next.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+    finally:
+        resolver.close()
+
+
+def test_udp_read_ownership_timeout_does_not_strand_queries(
+    dns_udp_server: DNSUDPServer,
+) -> None:
+    resolver = PlainResolver(*dns_udp_server.address, timeout=0.03)
+    try:
+        with resolver._read_lock:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                task = executor.submit(
+                    resolver.getaddrinfo,
+                    "held.example",
+                    443,
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                )
+                with pytest.raises(socket.gaierror, match="timed out"):
+                    task.result(5)
+        assert not resolver._pending and not resolver._completed
+        resolver._timeout = 5
+        assert resolver.getaddrinfo(
+            "next.example", 443, socket.AF_INET, socket.SOCK_STREAM
+        )
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize(
+    "dns_udp_server,checkpoint",
+    [("normal", "sent"), ("normal", "locked"), ("timeout", "deadline")],
+    indirect=["dns_udp_server"],
+)
+def test_udp_close_at_exchange_checkpoints(
+    dns_udp_server: DNSUDPServer, checkpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib3.contrib.resolver.dou import _socket
+
+    resolver = PlainResolver(
+        *dns_udp_server.address, timeout=0.03 if checkpoint == "deadline" else 5
+    )
+    sock = resolver._socket
+    if checkpoint == "sent":
+        sendall = type(sock).sendall
+        sends = 0
+
+        def sent(current: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal sends
+            result = sendall(current, *args, **kwargs)
+            if current is sock:
+                sends += 1
+                if sends == 2:
+                    resolver.close()
+            return result
+
+        monkeypatch.setattr(type(sock), "sendall", sent)
+    elif checkpoint == "locked":
+        lock = resolver._read_lock
+
+        class CloseOnAcquire:
+            def acquire(self, **kwargs: Any) -> bool:
+                acquired = lock.acquire(**kwargs)
+                if acquired:
+                    resolver.close()
+                return acquired
+
+            def release(self) -> None:
+                lock.release()
+
+        monkeypatch.setattr(resolver, "_read_lock", CloseOnAcquire())
+    else:
+        deadlines = _udp_retry_deadlines
+
+        def finish(deadline: float) -> Any:
+            yield from deadlines(deadline)
+            resolver.close()
+
+        monkeypatch.setattr(_socket, "_udp_retry_deadlines", finish)
+    try:
+        with pytest.raises(socket.gaierror, match="disconnected"):
+            resolver.getaddrinfo(
+                "closing.example", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+        assert not resolver._pending and not resolver._completed
+        assert sock.fileno() == -1
+    finally:
+        resolver.close()
+
+
+@pytest.mark.parametrize("dns_udp_server", ["reverse-two-lookups"], indirect=True)
+def test_udp_answer_collected_at_read_lock_deadline(
+    dns_udp_server: DNSUDPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib3.contrib.resolver.dou import _socket
+
+    first_reading, second_waiting, answers_ready = Event(), Event(), Event()
+    second_owner = None
+    second_ids: list[int] = []
+    dns_udp_server.respond.clear()
+
+    class Resolver(PlainResolver):
+        def _reserve_queries(self, host: str, query_types: Any) -> Any:
+            nonlocal second_owner, second_ids
+            queries = super()._reserve_queries(host, query_types)
+            if host == "second.example":
+                second_owner = get_ident()
+                second_ids = [q.id for q in queries]
+            return queries
+
+    resolver = Resolver(*dns_udp_server.address, timeout=5)
+    lock = resolver._read_lock
+    clock = monotonic
+
+    class Gate:
+        def acquire(self, **kwargs: Any) -> bool:
+            if get_ident() == second_owner:
+                # The first lookup owns the actual lock until the peer can
+                # respond. Advance only this waiter's deadline after that
+                # reader has parsed its answers from the real UDP packets.
+                assert not lock.acquire(blocking=False)
+                second_waiting.set()
+                assert answers_ready.wait(5)
+                return False
+            acquired = lock.acquire(**kwargs)
+            if acquired:
+                first_reading.set()
+            return acquired
+
+        def release(self) -> None:
+            if second_ids and all(i in resolver._completed for i in second_ids):
+                answers_ready.set()
+            lock.release()
+
+    monkeypatch.setattr(resolver, "_read_lock", Gate())
+    monkeypatch.setattr(
+        _socket,
+        "monotonic",
+        lambda: (
+            float("inf")
+            if get_ident() == second_owner and answers_ready.is_set()
+            else clock()
+        ),
+    )
+    monkeypatch.setattr(
+        _socket, "_udp_retry_deadlines", lambda deadline: iter([deadline])
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(
+                resolver.getaddrinfo,
+                "first.example",
+                443,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            assert first_reading.wait(5)
+            second = executor.submit(
+                resolver.getaddrinfo,
+                "second.example",
+                443,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            try:
+                assert second_waiting.wait(5)
+            finally:
+                dns_udp_server.respond.set()
+            assert second.result(5)[0][4] == ("192.0.2.1", 443)
+            assert first.result(5)[0][4] == ("192.0.2.1", 443)
+        assert not resolver._pending and not resolver._completed
+    finally:
+        dns_udp_server.respond.set()
+        resolver.close()

@@ -18,7 +18,6 @@ from urllib.request import Request, urlopen
 
 import nox
 
-
 _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
 
 
@@ -332,7 +331,9 @@ def test_ws_fast(session: nox.Session) -> None:
         session.posargs.extend(
             [
                 "test/contrib/test_websocket_fragmentation.py",
+                "test/contrib/asynchronous/test_websocket_fragmentation.py",
                 "test/with_dummyserver/test_websocket_full_duplex.py",
+                "test/with_dummyserver/asynchronous/test_websocket_full_duplex.py",
                 "test/with_traefik/test_webextensions.py",
                 "test/with_traefik/asynchronous/test_webextensions.py",
             ]

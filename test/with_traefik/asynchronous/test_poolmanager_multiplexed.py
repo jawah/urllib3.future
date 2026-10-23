@@ -4,15 +4,15 @@ import asyncio
 import typing
 from asyncio import sleep
 from random import randint
-from test import TIMEOUT_TOLERANCE, notMacOS
 from time import perf_counter
 
 import pytest
 
+from test import TIMEOUT_TOLERANCE, notMacOS
 from urllib3 import (
     AsyncHTTPConnectionPool,
-    AsyncHTTPSConnectionPool,
     AsyncHTTPResponse,
+    AsyncHTTPSConnectionPool,
     AsyncPoolManager,
     ConnectionInfo,
     HttpVersion,
@@ -690,3 +690,63 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
                 expected = min(4, max(0, request_count - iter_count * 4))
                 assert sum(r is not None for r in responses) == expected
                 assert all(r.status == 200 for r in responses if r is not None)
+
+    @pytest.mark.asyncio
+    async def test_clear_wakes_pool_capacity_waiter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+        import inspect
+        from threading import Event
+
+        from urllib3 import AsyncPoolManager
+
+        async def call(
+            fn: typing.Callable[..., typing.Any],
+            *args: typing.Any,
+            **kwargs: typing.Any,
+        ) -> typing.Any:
+            result = fn(*args, **kwargs)
+            return await result if inspect.isawaitable(result) else result
+
+        manager_type: typing.Any = AsyncPoolManager
+        manager = manager_type(
+            num_pools=1,
+            resolver=self.test_async_resolver,
+            ca_certs=self.ca_authority,
+            disabled_svn={HttpVersion.h3},
+            timeout=5,
+            retries=False,
+        )
+        promise = await call(
+            manager.urlopen, "GET", self.https_url + "/bytes/13", multiplexed=True
+        )
+        old_pool = next(iter(manager.pools._registry.values()))
+        waiting = Event()
+        signals = manager.pools._signals
+        owner, name = (signals, "register")
+        register = getattr(owner, name)
+
+        def record(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+            signal = register(*args, **kwargs)
+            waiting.set()
+            return signal
+
+        monkeypatch.setattr(owner, name, record)
+        loop = asyncio.get_running_loop()
+        target = self.https_url.replace(self.host, self.alt_host) + "/bytes/7"
+        worker = asyncio.create_task(manager.request("GET", target))
+        try:
+            assert await loop.run_in_executor(None, waiting.wait, 5)
+            await call(manager.clear)
+            response = await asyncio.wait_for(asyncio.shield(worker), 10)
+            assert response.status == 200
+            remaining = await call(manager.get_response, promise=promise)
+            assert remaining is not None and remaining.status == 200
+        finally:
+            # Release the waiter even when testing an implementation that fails to wake it.
+            await call(promise._conn.close)
+            await call(manager.pools.kill, old_pool)
+            worker.cancel()
+            await asyncio.wait_for(asyncio.gather(worker, return_exceptions=True), 10)
+            await call(manager.clear)

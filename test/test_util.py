@@ -7,13 +7,13 @@ import ssl
 import sys
 import typing
 import warnings
-from test import ImportBlocker, ModuleStash, notBrotli, notZstd, onlyBrotli, onlyZstd
 from unittest import mock
 from unittest.mock import MagicMock, Mock, patch
 from urllib.parse import urlparse
 
 import pytest
 
+from test import ImportBlocker, ModuleStash, notBrotli, notZstd, onlyBrotli, onlyZstd
 from urllib3 import ResolverDescription, add_stderr_logger, disable_warnings
 from urllib3._typing import ProxyConfig
 from urllib3.exceptions import (
@@ -25,7 +25,7 @@ from urllib3.exceptions import (
 from urllib3.util import is_fp_closed
 from urllib3.util.connection import _has_ipv6, allowed_gai_family
 from urllib3.util.proxy import connection_requires_http_tunnel
-from urllib3.util.request import _FAILEDTELL, arewind_body, make_headers, rewind_body
+from urllib3.util.request import _FAILEDTELL, make_headers, rewind_body
 from urllib3.util.ssl_ import (
     _TYPE_VERSION_INFO,
     _is_has_never_check_common_name_reliable,
@@ -43,7 +43,7 @@ from urllib3.util.url import (
 )
 from urllib3.util.util import to_bytes, to_str
 
-from . import clear_warnings, USING_SECONDARY_ENTRYPOINT
+from . import USING_SECONDARY_ENTRYPOINT, clear_warnings
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -972,36 +972,6 @@ class TestUtil:
 
         with pytest.raises(UnrewindableBodyError):
             rewind_body(NoSeek(), body_pos=2)
-
-    @pytest.mark.asyncio
-    async def test_arewind_body_no_seek(self) -> None:
-        class NoSeek(io.StringIO):
-            seek = None  # type: ignore[assignment]
-
-        with pytest.raises(UnrewindableBodyError):
-            await arewind_body(NoSeek(), body_pos=2)
-
-    @pytest.mark.asyncio
-    async def test_arewind_nonseekable_file(
-        self, async_file_wrapper: typing.Callable[[typing.BinaryIO], typing.Any]
-    ) -> None:
-        sender, receiver = socket.socketpair()
-        with sender, receiver, receiver.makefile("rb") as file:
-            with pytest.raises(UnrewindableBodyError, match="An error occurred") as exc:
-                await arewind_body(async_file_wrapper(file), 0)
-            assert isinstance(exc.value.__cause__, OSError)
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("position", [None, "0"])
-    async def test_arewind_body_invalid_position(
-        self,
-        position: typing.Any,
-        async_file_wrapper: typing.Callable[[typing.BinaryIO], typing.Any],
-    ) -> None:
-        with io.BytesIO(b"body") as file:
-            with pytest.raises(ValueError, match="body_pos must be of type integer"):
-                await arewind_body(async_file_wrapper(file), position)
-            assert file.tell() == 0
 
     def test_add_stderr_logger(self) -> None:
         handler = add_stderr_logger(level=logging.INFO)  # Don't actually print debug

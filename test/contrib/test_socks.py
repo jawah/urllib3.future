@@ -6,13 +6,13 @@ import threading
 import typing
 from socket import getaddrinfo as real_getaddrinfo
 from socket import timeout as SocketTimeout
-from test import SHORT_TIMEOUT
 from unittest.mock import Mock, patch
 
 import pytest
 
 from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
 from dummyserver.testcase import IPV4SocketDummyServerTestCase, consume_socket
+from test import SHORT_TIMEOUT
 from urllib3.contrib import socks
 from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
 
@@ -268,10 +268,6 @@ def handle_socks4_negotiation(
 
 
 class TestSOCKSProxyManager:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "manager_name", ["SOCKSProxyManager", "AsyncSOCKSProxyManager"]
-    )
     @pytest.mark.parametrize("scheme", ["socks4", "socks4a", "socks5", "socks5h"])
     @pytest.mark.parametrize(
         "auth, overrides, expected",
@@ -298,15 +294,14 @@ class TestSOCKSProxyManager:
             ("user:pass@", {"username": "", "password": ""}, ("", "")),
         ],
     )
-    async def test_proxy_url_credentials(
+    def test_proxy_url_credentials(
         self,
-        manager_name: str,
         scheme: str,
         auth: str,
         overrides: dict[str, str],
         expected: tuple[str | None, str | None],
     ) -> None:
-        manager_cls = getattr(socks, manager_name, None)
+        manager_cls = getattr(socks, "SOCKSProxyManager", None)
         if manager_cls is None:
             pytest.skip("Async SOCKS requires python-socks")
         manager = manager_cls(f"{scheme}://{auth}127.0.0.1:1080", **overrides)
@@ -314,10 +309,7 @@ class TestSOCKSProxyManager:
             options = manager.connection_pool_kw["_socks_options"]
             assert (options["username"], options["password"]) == expected
         finally:
-            if manager_name == "AsyncSOCKSProxyManager":
-                await manager.clear()
-            else:
-                manager.clear()
+            manager.clear()
 
     def test_invalid_socks_version_is_valueerror(self) -> None:
         with pytest.raises(ValueError, match="Unable to determine SOCKS version"):
