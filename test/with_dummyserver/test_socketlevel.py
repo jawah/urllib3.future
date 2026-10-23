@@ -4964,12 +4964,9 @@ class TestConnectionUtilities(SocketDummyServerTestCase):
             event = response.extension.next_payload()
             assert isinstance(event, ServerSentEvent)
             assert event.data == "first €"
-            if incomplete_utf8:
-                with pytest.raises(UnicodeDecodeError):
-                    response.extension.next_payload()
-            else:
-                assert response.extension.next_payload() is None
-                assert response.extension.closed
+            # SSE uses replacement decoding and discards an unterminated event.
+            assert response.extension.next_payload() is None
+            assert response.extension.closed
         assert manager.pools.rsize() == 0
 
     def test_early_hints_without_callback(self) -> None:

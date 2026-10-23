@@ -1219,12 +1219,9 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             event = await response.extension.next_payload()
             assert isinstance(event, ServerSentEvent)
             assert event.data == "first €"
-            if incomplete_utf8:
-                with pytest.raises(UnicodeDecodeError):
-                    await response.extension.next_payload()
-            else:
-                assert await response.extension.next_payload() is None
-                assert response.extension.closed
+            # SSE uses replacement decoding and discards an unterminated event.
+            assert await response.extension.next_payload() is None
+            assert response.extension.closed
         assert manager.pools.rsize() == 0
 
     @pytest.mark.parametrize("partial", [False, True])
