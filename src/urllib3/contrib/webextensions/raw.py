@@ -18,8 +18,11 @@ class RawExtensionFromHTTP(ExtensionFromHTTP):
     def close(self) -> None:
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
-            with self._write_error_catcher():
+            try:
                 self._dsa.close()
+            except OSError:
+                # A failed FIN write must not prevent response cleanup below.
+                pass
             self._dsa = None
         if self._response is not None:
             self._response.close()
