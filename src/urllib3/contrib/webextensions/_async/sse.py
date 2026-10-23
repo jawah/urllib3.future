@@ -8,7 +8,7 @@ if typing.TYPE_CHECKING:
     from ...._async.response import AsyncHTTPResponse
 
 from ....backend import HttpVersion
-from ..sse import ServerSentEvent
+from ..sse import ServerSentEvent, _VIEW_THRESHOLD, _cr_boundary, _parse_event
 from .protocol import AsyncExtensionFromHTTP
 
 
@@ -18,8 +18,9 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
 
         self._next_value_task: asyncio.Task[bytes] | None = None
         self._last_event_id: str | None = None
-        self._buffer: str = ""
-        self._decoder = codecs.getincrementaldecoder("utf-8")()
+        self._buffer: bytes = b""
+        self._buffer_start = 0
+        self._at_start = True
         self._stream: typing.AsyncGenerator[bytes, None] | None = None
 
     @staticmethod
@@ -58,6 +59,8 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
             self._stream = None
             self._response = None
             self._police_officer = None
+            self._buffer = b""
+            self._buffer_start = 0
 
     @property
     def closed(self) -> bool:
@@ -66,6 +69,9 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
     async def start(self, response: AsyncHTTPResponse) -> None:
         await super().start(response)
 
+        self._buffer = b""
+        self._buffer_start = 0
+        self._at_start = True
         self._stream = response.stream(-1, decode_content=True)
 
     def headers(self, http_version: HttpVersion) -> dict[str, str]:
@@ -84,73 +90,108 @@ class AsyncServerSideEventExtensionFromHTTP(AsyncExtensionFromHTTP):
         if self._response is None or self._stream is None:
             raise OSError("The HTTP extension is closed or uninitialized")
 
+        # Frame ASCII CR/LF bytes before UTF-8 decoding. Searches overlap by
+        # two bytes when new input arrives, including an unresolved final CR.
+        buffer = self._buffer
+        offset = self._buffer_start
+        buffer_end = len(buffer)
+        stream_ended = False
+        search_from = offset
         while True:
-            # Read chunks until the buffer contains at least one complete event
-            # (terminated by a blank line: \n\n or \r\n\r\n).
-            while "\n\n" not in self._buffer and "\r\n\r\n" not in self._buffer:
+            boundary = None
+            if offset < buffer_end:
+                if buffer[offset] == 10:
+                    boundary = offset, offset + 1
+                elif buffer[offset] == 13:
+                    if buffer_end - offset > 1 or not raw or stream_ended:
+                        boundary = (
+                            offset,
+                            offset
+                            + (2 if buffer[offset + 1 : offset + 2] == b"\n" else 1),
+                        )
+                else:
+                    lf = buffer.find(b"\n\n", search_from)
+                    cr = buffer.find(b"\r", search_from)
+                    if cr < 0 or (lf >= 0 and lf < cr):
+                        if lf >= 0:
+                            start = (
+                                lf - 1 if lf > offset and buffer[lf - 1] == 13 else lf
+                            )
+                            boundary = start, lf + 2
+                    else:
+                        candidate = buffer.find(b"\n\r", search_from)
+                        bare = buffer.find(b"\r\r", cr)
+                        if candidate < 0 or 0 <= bare < candidate:
+                            candidate = bare
+                        if candidate >= 0 and (lf < 0 or candidate < lf):
+                            boundary = _cr_boundary(
+                                buffer, candidate, raw=raw, final=stream_ended
+                            )
+                        elif lf >= 0:
+                            boundary = lf, lf + 2
+            if boundary is None:
+                if stream_ended:
+                    self._stream = None
+                    self._buffer = b""
+                    self._buffer_start = 0
+                    return None
                 try:
+                    search_from = buffer_end - offset - 2
+                    if search_from < 0:
+                        search_from = 0
                     self._next_value_task = asyncio.create_task(
                         self._stream.__anext__()
                     )
                     chunk = await self._next_value_task
-                    self._buffer += self._decoder.decode(chunk)
+                    if offset:
+                        buffer = b"".join((memoryview(buffer)[offset:], chunk))
+                        offset = 0
+                        self._buffer_start = 0
+                    else:
+                        buffer += chunk
+                    if self._at_start and buffer.startswith(codecs.BOM_UTF8):
+                        offset = 3
+                        self._buffer_start = offset
+                        search_from = offset
+                        self._at_start = False
+                    self._buffer = buffer
+                    buffer_end = len(buffer)
                 except asyncio.CancelledError:
                     return None
                 except StopAsyncIteration:
-                    # Strict UTF-8 finalization returns no text or raises on an incomplete character.
-                    self._decoder.decode(b"", final=True)
-                    # The exhausted generator may already be detached by close().
-                    self._stream = None
-                    self._decoder.reset()
-                    return None
+                    search_from = offset
+                    stream_ended = True
                 finally:
                     self._next_value_task = None
-
-            # Locate the first event boundary.
-            lf = self._buffer.find("\n\n")
-            crlf = self._buffer.find("\r\n\r\n")
-
-            if crlf != -1 and (lf == -1 or crlf < lf):
-                boundary, sep = crlf, "\r\n\r\n"
-            else:
-                boundary, sep = lf, "\n\n"
-
-            event_text = self._buffer[:boundary]
-            self._buffer = self._buffer[boundary + len(sep) :]
-
-            kwargs: dict[str, typing.Any] = {}
-
-            for line in event_text.splitlines():
-                if not line:
-                    continue
-                key, _, value = line.partition(":")
-                if key not in {"event", "data", "retry", "id"}:
-                    continue
-                if value.startswith(" "):
-                    value = value[1:]
-                if key == "id":
-                    if "\u0000" in value:
-                        continue
-                if key == "retry":
-                    try:
-                        value = int(value)  # type: ignore[assignment]
-                    except (ValueError, TypeError):
-                        continue
-                kwargs[key] = value
-
-            if not kwargs:
                 continue
 
-            if "id" not in kwargs and self._last_event_id is not None:
-                kwargs["id"] = self._last_event_id
-
-            event = ServerSentEvent(**kwargs)
-
-            if event.id:
-                self._last_event_id = event.id
+            start, end = boundary
+            payload_end = end if raw else start
+            if payload_end - offset >= _VIEW_THRESHOLD and (
+                offset or payload_end != buffer_end
+            ):
+                event_text = codecs.utf_8_decode(
+                    memoryview(buffer)[offset:payload_end], "replace", True
+                )[0]
+            else:
+                event_text = buffer[offset:payload_end].decode("utf-8", "replace")
+            if end == buffer_end:
+                buffer = b""
+                self._buffer = buffer
+                buffer_end = offset = 0
+            else:
+                offset = end
+            self._buffer_start = offset
+            search_from = offset
+            if self._at_start:
+                self._at_start = False
+            event = _parse_event(event_text, self._last_event_id)
+            if event is None:
+                continue
+            self._last_event_id = event.id
 
             if raw is True:
-                return event_text + sep
+                return event_text
 
             return event
 
