@@ -96,7 +96,7 @@ those defaults into artificial deployment limits.
 - Post-Quantum Security & ECH.
 - HTTP/2 with prior knowledge.
 - Support for free-threaded.
-- Server Side Event (SSE).
+- Server-Sent Events (SSE).
 - Multiplexed connection.
 - Mirrored Sync & Async.
 - Trailer Headers.
@@ -803,9 +803,9 @@ urllib3.future began with a practical question:
 In May 2023, an
 [experimental contribution to urllib3](https://github.com/urllib3/urllib3/pull/3030)
 demonstrated a unified HTTP/1.1, HTTP/2, and HTTP/3 backend outside
-`http.client`. The experiment reached full coverage of its prototype and
-identified the compatibility, streaming, proxy, TLS, and integration work
-required for a maintained implementation.
+`http.client`, while retaining `http.client` as the default. The experiment reached
+full coverage of its prototype and identified the compatibility, streaming,
+proxy, TLS, and integration work required for a maintained implementation.
 
 The projects ultimately chose different architectural scopes and development
 strategies. Upstream urllib3 continued its own roadmap, while the unified
@@ -819,6 +819,16 @@ Since then, urllib3.future has expanded beyond the original protocol prototype:
 it gained mirrored synchronous and asynchronous APIs, HTTP/3, multiplexing,
 advanced resolvers, multiple TLS backends, broad downstream compatibility, and
 WASI support.
+
+In July 2026, urllib3 [appointed](https://github.com/urllib3/urllib3/issues/3000#issuecomment-5227891874) a
+dedicated developer to [pursue an HTTP/2 implementation](https://github.com/urllib3/urllib3/pull/5278) after rejecting the idea that outside collaborators
+would help, especially in the LLM-led contribution era. At the time of writing,
+the implementation remains at the prototype stage. The project's Open Collective
+records two expenses for
+[HTTP/2 research, 18 July–10 September 2026](https://opencollective.com/urllib3/expenses/345507)
+and [HTTP/2 research, 10 September–10 October 2026](https://opencollective.com/urllib3/expenses/351560).
+So far, no public upstream urllib3 roadmap has described plans beyond a
+synchronous HTTP/2 implementation or provided an estimated delivery date.
 
 urllib3.future remains grateful for the foundation built by urllib3's
 maintainers and contributors. Applicable upstream fixes and security patches
