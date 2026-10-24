@@ -15,6 +15,8 @@ the fork and use ``import urllib3_future``, follow :doc:`cohabitation`.
    user-guide
    async
    advanced-usage
+   tls
+   troubleshooting
    cohabitation
    v2-migration-guide
    wasi
@@ -45,7 +47,7 @@ the fork and use ``import urllib3_future``, follow :doc:`cohabitation`.
 - HTTP/1.1, HTTP/2 and HTTP/3 support.
 - WebSocket over HTTP/2+ (RFC8441).
 - Proxy support for HTTP and SOCKS.
-- Post-Quantum Security with QUIC.
+- Post-Quantum Security and ECH (backend and server dependent; see :doc:`tls`).
 - Detailed connection inspection.
 - HTTP/2 with prior knowledge.
 - Multiplexed connection.

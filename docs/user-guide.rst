@@ -19,20 +19,27 @@ follow the :doc:`cohabitation` guide.
 HTTP/2 and HTTP/3 support
 -------------------------
 
-HTTP/2 support is enabled by default via the ``jh2`` dependency, HTTP/3 may or not be
-automatically available depending on the availability of the wheel on your platform.
+HTTP/2 is enabled through the ``jh2`` dependency. HTTP/3 requires ``qh3`` and a
+compatible interpreter/platform build. Use a current pip so it can recognize
+the available wheels.
 
-.. code-block:: bash
+The distribution currently requests qh3 automatically on supported Linux,
+Windows, and macOS architectures when using CPython newer than 3.7.10, or PyPy
+with Python language versions below 3.12. Supported architecture markers include
+x86/x86_64, ARM, s390x, PowerPC, and RISC-V variants. A matching dependency marker
+does not guarantee that every qh3 version publishes a wheel for that interpreter.
 
-  $ python -m pip install qh3
+CPython 3.7.0–3.7.10 and PyPy 3.12+ are excluded from automatic qh3 installation.
+This is an HTTP/3 dependency restriction, not removal of the library's other
+HTTP functionality. Outside the supported combinations, installing qh3 manually
+may require a toolchain and does not establish supported HTTP/3 compatibility.
+Native WASI supports TCP only; see :ref:`wasi-capabilities`.
 
-This may require some external toolchain to be available (compilation).
-
-.. note:: HTTP/3 is automatically installed and ready-to-use if you fulfill theses requirements: Linux, Windows or MacOS using Python (or PyPy) 3.7 onward with one of the supported architecture (aarch64/armv7l/s390x/x86_64/x86/i686/amd64/ppc64(le)).
-
-.. caution:: If the requirements aren't fulfilled for HTTP/3, your package manager won't pick qh3 for installation when installing urllib3-future and it will be silently disabled. We choose not to impose compilation and keep a safe pure Python fallback.
-
-.. note:: Very old ``pip`` versions may not be able to pick the pre-built wheel accordingly. Make sure to have the latest ``pip`` version installed first.
+Free-threaded CPython builds are supported and exercised in CI. Optional native
+dependencies must also support the selected free-threaded interpreter; installing
+an extra alone is not a guarantee of an entirely GIL-free dependency stack.
+See :doc:`contributing` for the current CI matrix and :doc:`tls` for backend
+capabilities.
 
 Making Requests
 ---------------
@@ -243,6 +250,10 @@ Or you can use the ``HTTPHeaderDict`` class to create multi-valued HTTP headers:
 Cookies
 ~~~~~~~
 
+``PoolManager`` does not maintain a cookie jar or automatically send cookies
+received in earlier responses. Set the ``Cookie`` header yourself, or use a
+higher-level client such as Niquests when you want session cookie management.
+
 Cookies are specified using the ``Cookie`` header with a string containing
 the ``;`` delimited key-value pairs:
 
@@ -261,7 +272,7 @@ the ``;`` delimited key-value pairs:
     print(resp.json())
     # {"cookies": {"id": "30", "session": "f3efe9db"}}  
 
-Cookies provided by the server are stored in the ``Set-Cookie`` header:
+Cookies provided by the server are exposed through its ``Set-Cookie`` headers:
 
 .. code-block:: python
 
@@ -275,6 +286,11 @@ Cookies provided by the server are stored in the ``Set-Cookie`` header:
 
     print(resp.headers["Set-Cookie"])
     # session=f3efe9db; Path=/
+
+Use ``resp.headers.getlist("Set-Cookie")`` to retrieve separate cookie fields;
+commas can occur inside cookie attributes, so splitting a combined header on
+commas is not a cookie parser. Receiving these headers does not update a cookie
+jar inside the pool.
 
 Query Parameters
 ~~~~~~~~~~~~~~~~
@@ -368,7 +384,8 @@ Files & Binary Data
 
 For uploading files using ``multipart/form-data`` encoding you can use the same
 approach as :ref:`form_data` and specify the file field as a tuple of
-``(file_name, file_data)``:
+``(file_name, file_data)``. This encoder builds the complete multipart body in
+memory; it does not stream the file fields:
 
 .. code-block:: python
 
@@ -404,27 +421,45 @@ to specify the file's MIME type explicitly:
         }
     )
 
-For sending raw binary data simply specify the ``body`` argument. It's also
-recommended to set the ``Content-Type`` header:
+To stream a raw file body, pass the open binary file itself to ``body=``.
+Do not call ``read()`` first if the file should not be loaded entirely into
+memory. Create ``upload.bin`` before running this example and supply an upload
+URL accepted by your server:
 
 .. code-block:: python
+    :name: streaming-file-upload-example
 
+    import sys
     import urllib3
 
-    with open("/home/samad/example.jpg", "rb") as fp:
-        binary_data = fp.read()
+    with urllib3.PoolManager(timeout=urllib3.Timeout(connect=5, read=10)) as pm:
+        with open("upload.bin", "rb") as body:
+            response = pm.request(
+                "POST", sys.argv[1], body=body,
+                headers={"Content-Type": "application/octet-stream"},
+                retries=False, redirect=False,
+            )
+            print(response.status)
 
-    resp = urllib3.request(
-        "POST",
-        "https://httpbin.org/post",
-        body=binary_data,
-        headers={"Content-Type": "image/jpeg"}
-    )
+Keep the file open until the request has finished sending it. ``body`` also
+accepts iterables of chunks. The library does not automatically measure a file
+object's remaining length, so these bodies normally use chunked transfer on
+HTTP/1.1 unless you supply an accurate Content-Length. Check whether the server
+accepts that framing. See :ref:`retry-policy` before enabling retries or redirects
+for a body that cannot be replayed.
 
-    print(resp.json()["data"])
-    # data:application/octet-stream;base64,...
+A raw file body is not multipart encoding. If the server requires multipart
+and buffering the whole body is unsuitable, supply a streaming multipart
+encoder through ``body=`` with its matching Content-Type header. Simply putting
+a file object into a ``fields=`` tuple does not turn the built-in encoder into
+a streaming one.
+
+Async callers should use an async iterable or an async file interface to avoid
+blocking the event loop during file reads; see :ref:`async-upload`.
 
 .. _ssl:
+
+.. _websockets:
 
 WebSocket
 ---------
@@ -434,7 +469,9 @@ WebSocket over HTTP/1.1
 
 Install ``urllib3-future[ws]`` to use the ``wsproto`` implementation. The
 ``wss://`` and ``ws://`` schemes select secure and plain WebSocket connections.
-They use HTTP/1.1 by default.
+They use HTTP/1.1 by default. See :doc:`reference/contrib/webextensions` for
+the implementation matrix and API reference, and :ref:`async-websocket` for
+a complete async example.
 
 .. code-block:: python
     :name: websocket-example
@@ -501,8 +538,10 @@ is HTTP/1.1-only.
 
 For example, replace the URL in the HTTP/1.1 example with
 ``wss+rfc8441://your-websocket-server.example/``. Successful extended CONNECT
-uses a 2xx response, rather than HTTP/1.1's ``101`` status. Check
-``response.extension`` and use the same cleanup pattern.
+normally returns ``200 OK`` (a successful CONNECT response is 2xx), rather
+than HTTP/1.1 WebSocket Upgrade's ``101`` status. This also applies to custom
+HTTP/2 and HTTP/3 tunnels. Check ``response.extension`` and use the same
+cleanup pattern.
 
 If you also pass ``multiplexed=True``, collect any returned promise before
 accessing its extension; see :ref:`multiplexed-responses`. A plain WSS request
@@ -769,6 +808,70 @@ specify the retry at the :class:`~urllib3.poolmanager.PoolManager` level:
 You still override this pool-level retry policy by specifying ``retries`` to
 :meth:`~urllib3.PoolManager.request`.
 
+.. _retry-policy:
+
+Backoff, status retries, and replaying bodies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A retry policy can bound each kind of retry as well as the total budget:
+
+.. code-block:: python
+    :name: retry-policy-example
+
+    import sys
+    import urllib3
+
+    policy = urllib3.Retry(
+        total=4,
+        connect=2,
+        read=2,
+        status=2,
+        redirect=2,
+        allowed_methods={"GET", "HEAD"},
+        status_forcelist={429, 502, 503, 504},
+        backoff_factor=0.25,
+        backoff_jitter=0.1,
+        backoff_max=3,
+        respect_retry_after_header=True,
+        retry_after_max=30,
+    )
+    with urllib3.PoolManager(
+        retries=policy, timeout=urllib3.Timeout(connect=5, read=10)
+    ) as pm:
+        response = pm.request("GET", sys.argv[1])
+        print(response.status)
+
+``total`` is the overall retry cap; a smaller category budget can stop retries
+sooner. ``allowed_methods`` restricts status and read-error retries. Connection
+failures that occur before sending a request and redirect handling have their
+own rules; this option is not a universal prohibition on another attempt.
+
+The first retry has no computed backoff. Subsequent backoff grows exponentially.
+``backoff_jitter`` adds a random delay to reduce synchronized retries from many
+clients; ``backoff_max`` caps that computed delay. An applicable positive
+``Retry-After`` value is used instead, capped separately by ``retry_after_max``.
+For async requests these waits are awaited rather than blocking the event loop.
+Neither cap turns the complete operation into a wall-clock deadline.
+
+By default, exhausting status retries raises ``MaxRetryError``. Use
+``raise_on_status=False`` to receive the final HTTP response instead.
+``raise_on_redirect`` controls the equivalent redirect behavior. Headers such
+as Authorization, Cookie, and Proxy-Authorization are removed on cross-origin
+redirects by default; ``remove_headers_on_redirect`` customizes that policy.
+
+Retries can repeat an operation the server already received. Add POST to
+``allowed_methods`` only when the application and server have a suitable
+replay/idempotency policy. A seekable file can be rewound to its original body
+position; a consumed generator cannot generally be replayed. A failed rewind
+can raise ``UnrewindableBodyError``. A 303 redirect switches to GET and drops the
+body, while redirects such as 307 and 308 preserve it.
+
+For a one-shot body, use ``retries=False`` and ``redirect=False``, as in the
+:ref:`async-upload` example. The same replay considerations apply when errors
+arrive during deferred ``get_response()`` collection.
+
+.. _retry-body-hooks:
+
 Inspecting response bodies in retry hooks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -779,9 +882,15 @@ status codes and methods; enabling caching does not make additional responses re
 
 For synchronous requests, override ``get_retry_after()`` and inspect ``response.data``
 or ``response.json()``. For asynchronous requests, override ``async_get_retry_after()``
-and await those accessors. For example, a service might return a JSON ``retry_delay``:
+and await those accessors. For example, a service might return a JSON ``delay`` value:
 
 .. code-block:: python
+    :name: retry-body-hook-example
+
+    import asyncio
+    import sys
+    import urllib3
+
 
     class BodyRetry(urllib3.Retry):
         async def async_get_retry_after(self, response):
@@ -789,16 +898,25 @@ and await those accessors. For example, a service might return a JSON ``retry_de
             if delay is not None:
                 return delay
             body = await response.json()
-            return min(self.retry_after_max, max(0, float(body["retry_delay"])))
+            return min(self.retry_after_max, max(0, float(body["delay"])))
 
-    async with urllib3.AsyncPoolManager() as pm:
-        response = await pm.request(
-            "GET", "https://example.com/api",
-            retries=BodyRetry(
-                total=2, status_forcelist=[503], cache_response_body=True
-            ),
-            preload_content=False,
-        )
+
+    async def main(url):
+        async with urllib3.AsyncPoolManager(timeout=10) as pm:
+            response = await pm.request(
+                "GET", url,
+                retries=BodyRetry(
+                    total=2, status_forcelist=[503], cache_response_body=True
+                ),
+                preload_content=False,
+            )
+            try:
+                print(response.status, await response.read())
+            finally:
+                await response.close()
+
+
+    asyncio.run(main(sys.argv[1]))
 
 The entire retry body is loaded into memory. Decompression follows the response's
 ``decode_content`` setting, and compressed bodies can expand substantially. Body read
@@ -822,7 +940,8 @@ urllib3 wraps lower-level exceptions, for example:
         print("Connection failed.")
     # Connection failed.
 
-See :mod:`~urllib3.exceptions` for the full list of all exceptions.
+See :mod:`~urllib3.exceptions` for the full list of exceptions and
+:ref:`network-errors` for protocol-specific failures and retry wrappers.
 
 Logging
 -------
@@ -833,4 +952,9 @@ standard logger interface to change the log level for urllib3's logger:
 
 .. code-block:: python
 
+    import logging
+
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+For debug logging, connection inspection, and QUIC traces, see
+:doc:`troubleshooting`.

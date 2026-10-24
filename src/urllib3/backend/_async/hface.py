@@ -828,17 +828,18 @@ class AsyncHfaceBackend(AsyncBaseBackend):
         self._protocol_factory = None
 
     async def peek_and_react(self, expect_frame: bool = False) -> bool:
-        """This method should be called by a thread using TrafficPolice when it is idle.
-        Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
-        or when reaching a WebSocket.
-        Return True when input or a connection failure was observed, so the caller
-        can recheck connection state. False means no new state was observed.
-        Some server implementation may be aggressive toward "idle" session
-        this is especially true when using QUIC.
-        For example, google/quiche expect regular ACKs, otherwise will
-        deduct that network conn is dead.
-        see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
-             https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
+        """Inspect unsolicited input while holding the connection checkout.
+
+        Return True when input or a connection failure was observed, so the
+        caller can recheck connection state. False means no new state was seen.
+        The idle watcher coordinates this operation through TrafficPolice.
+
+        Multiplexed peers can send control frames without a new request. QUIC
+        peers may also require acknowledgements to keep an idle connection alive.
+        See the `quiche idle-connection change
+        <https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6>`_.
+
+        :param expect_frame: Allow a short receive wait when a peer frame is expected.
         """
         if self.sock is None or self._protocol is None:
             return False

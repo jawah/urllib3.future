@@ -13,6 +13,8 @@ from .protocol import ExtensionFromHTTP
 
 
 class ServerSentEvent:
+    """A parsed SSE block with text data, event type, ID, and retry metadata."""
+
     def __init__(
         self,
         event: str | None = None,
@@ -36,21 +38,26 @@ class ServerSentEvent:
 
     @property
     def event(self) -> str:
+        """Event type, defaulting to ``message``."""
         return self._event
 
     @property
     def data(self) -> str:
+        """Text payload, with multiple data fields joined by newlines."""
         return self._data
 
     @property
     def id(self) -> str:
+        """Current event ID; an empty string clears the resumption cursor."""
         return self._id
 
     @property
     def retry(self) -> int | None:
+        """Retry delay in milliseconds from this block, or ``None`` if absent."""
         return self._retry
 
     def json(self) -> typing.Any:
+        """Parse the text payload as JSON, propagating JSON decoding errors."""
         return json.loads(self.data)
 
     def __repr__(self) -> str:

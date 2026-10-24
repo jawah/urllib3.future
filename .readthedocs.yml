@@ -15,6 +15,8 @@ python:
         - secure
         - socks
         - zstd
+        - ws
+        - ws-fast
 
 sphinx:
   fail_on_warning: true

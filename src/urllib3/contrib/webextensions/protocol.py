@@ -21,8 +21,11 @@ from ...exceptions import (
 
 
 class ExtensionFromHTTP(metaclass=ABCMeta):
-    """Represent an extension that can be negotiated just after a "101 Switching Protocol" HTTP response.
-    This will considerably ease downstream integration."""
+    """Exchange extension payloads through an HTTP response.
+
+    Implementations include HTTP/1.1 upgrades, HTTP/2 and HTTP/3 extended CONNECT,
+    and ordinary streaming responses such as Server-Sent Events.
+    """
 
     def __init__(self) -> None:
         self._dsa: DirectStreamAccess | None = None
@@ -75,7 +78,7 @@ class ExtensionFromHTTP(metaclass=ABCMeta):
         raise NotImplementedError
 
     def headers(self, http_version: HttpVersion) -> dict[str, str]:
-        """Specific HTTP headers required (request) before the 101 status response."""
+        """Return the opening request headers for the selected HTTP version."""
         raise NotImplementedError
 
     def close(self) -> None:
