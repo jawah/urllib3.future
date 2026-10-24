@@ -100,13 +100,13 @@ del NullHandler
 
 
 if (
-    environ.get("SSHKEYLOGFILE", None) is not None
+    environ.get("SSLKEYLOGFILE", None) is not None
     or environ.get("QUICLOGDIR", None) is not None
 ):
     warnings.warn(  # Defensive: security warning only. not feature.
         "urllib3.future detected that development/debug environment variable are set. "
         "If you are unaware of it please audit your environment. "
-        "Variables 'SSHKEYLOGFILE' and 'QUICLOGDIR' can only be set in a non-production environment.",
+        "Variables 'SSLKEYLOGFILE' and 'QUICLOGDIR' can only be set in a non-production environment.",
         exceptions.SecurityWarning,
     )
 
