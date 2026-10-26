@@ -1,4 +1,4 @@
-2.25.904 (2026-10-26)
+2.25.904 (2026-10-27)
 =====================
 
 - Fixed HTTP/3 uploads continuing to write after the peer's ``STOP_SENDING``
