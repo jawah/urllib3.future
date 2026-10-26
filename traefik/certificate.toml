@@ -12,3 +12,9 @@
 
 [http.middlewares.mtls-client-cert.passTLSClientCert]
   pem = true
+
+[http.middlewares.httpbin-retry.retry]
+  attempts = 4
+  initialInterval = "500ms"
+  timeout = "4s"
+  status = ["502"]
