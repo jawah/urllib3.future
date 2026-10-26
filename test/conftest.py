@@ -347,6 +347,73 @@ def doq_empty_ca_store(
         monkeypatch.setattr(ssl.SSLContext, "load_default_certs", load_default_certs)
 
 
+@pytest.fixture
+def default_ca_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> typing.Callable[[str, str], dict[str, typing.Any]]:
+    """Configure real OpenSSL default trust without an eagerly loaded bundle."""
+    import shutil
+    import subprocess
+
+    from urllib3.contrib.anytls import ssl as tls_backend
+
+    openssl = shutil.which("openssl")
+    if tls_backend is not ssl or os.name == "nt" or openssl is None:
+        pytest.skip(
+            "Requires OpenSSL CA paths controlled by environment and openssl CLI"
+        )
+
+    def configure(ca_data: str, mode: str) -> dict[str, typing.Any]:
+        directory = tmp_path / "trust"
+        directory.mkdir()
+        ca_file = tmp_path / "authority.pem"
+        ca_file.write_text(ca_data)
+        subject_hash = subprocess.check_output(
+            [openssl, "x509", "-in", str(ca_file), "-subject_hash", "-noout"],
+            universal_newlines=True,
+        ).strip()
+        name = subject_hash + ".0" if mode != "unhashed" else "unconfigured.pem"
+        (directory / name).write_text(ca_data)
+        (directory / "README").write_text("Not a certificate")
+        (directory / "11111111.0").write_text("Malformed certificate")
+        (directory / "22222222.0").mkdir()
+        (directory / "33333333.0").symlink_to(tmp_path / "missing.pem")
+        wrong_ca = tmp_path / "other.pem"
+        trustme.CA().cert_pem.write_to_path(wrong_ca)
+        monkeypatch.setenv(
+            "SSL_CERT_FILE",
+            str(ca_file if mode == "bundle" else tmp_path / "missing.pem"),
+        )
+        capath = str(directory)
+        if mode == "search-path":
+            empty = tmp_path / "empty"
+            empty.mkdir()
+            capath = os.pathsep.join((str(empty), capath))
+        monkeypatch.setenv("SSL_CERT_DIR", capath)
+        assert len(ssl.create_default_context().get_ca_certs()) == (
+            1 if mode == "bundle" else 0
+        )
+
+        if mode == "explicit-file":
+            return {"ca_certs": str(wrong_ca)}
+        if mode == "explicit-data":
+            return {"ca_cert_data": wrong_ca.read_text()}
+        if mode == "explicit-directory":
+            wrong_dir = tmp_path / "wrong-trust"
+            wrong_dir.mkdir()
+            (wrong_dir / "0123abcd.0").write_bytes(wrong_ca.read_bytes())
+            return {"ca_cert_dir": str(wrong_dir)}
+        if mode == "explicit-context":
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.load_verify_locations(cafile=str(wrong_ca))
+            return {"ssl_context": ctx}
+        if mode == "unverified":
+            return {"cert_reqs": ssl.CERT_NONE}
+        return {}
+
+    return configure
+
+
 @pytest.fixture(params=[False, True], ids=["normal-close-timer", "delayed-close-timer"])
 def doq_close_timer(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch

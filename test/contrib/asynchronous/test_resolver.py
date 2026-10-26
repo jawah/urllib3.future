@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from pathlib import Path
 import struct
 from base64 import b64encode
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -30,6 +31,62 @@ from urllib3.contrib.resolver.protocols import SupportedQueryType
 from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
 
 _MISSING_QUIC_SENTINEL = object()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "directory",
+        "search-path",
+        "bundle",
+        "unverified",
+        "explicit-file",
+        "explicit-data",
+    ],
+)
+async def test_doq_default_ca_directory(
+    dns_quic_server: DNSQUICServer,
+    default_ca_directory: Callable[[str, str], dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    server = dns_quic_server
+    options = default_ca_directory(Path(server.ca_certs).read_text(), mode)
+    if mode in ("bundle", "unverified") or mode.startswith("explicit-"):
+
+        def unexpected_scan(*args: Any) -> None:
+            pytest.fail("Default CA directory scanned outside the empty-store fallback")
+
+        monkeypatch.setattr(
+            "urllib3.contrib.resolver._async.doq._qh3._load_default_certs_eagerly",
+            unexpected_scan,
+        )
+
+    resolver = None
+    try:
+        if mode.startswith("explicit-"):
+            with pytest.raises((ssl.SSLError, socket.gaierror)):
+                resolver = QUICResolver(
+                    *server.address,
+                    server_hostname="httpbin.local",
+                    timeout=5,
+                    **options,
+                )
+                await resolver.getaddrinfo(
+                    "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                )
+        else:
+            resolver = QUICResolver(
+                *server.address, server_hostname="httpbin.local", timeout=5, **options
+            )
+            results = await resolver.getaddrinfo(
+                "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+            )
+            assert results and all(r[4] == ("192.0.2.1", 443) for r in results)
+    finally:
+        if resolver is not None:
+            await resolver.close()
 
 
 @pytest.mark.asyncio
