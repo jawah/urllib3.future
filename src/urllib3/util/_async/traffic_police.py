@@ -46,6 +46,8 @@ class ActiveCursor(typing.Generic[T]):
     obj_id: int
     conn_or_pool: T
     depth: int = 1
+    # Only an untouched checkout retained for a returned response may be reclaimed.
+    reserved_for: int | None = None
 
 
 def _current_task_or_die() -> asyncio.Task[typing.Any]:
@@ -331,6 +333,7 @@ class AsyncSignals(typing.Generic[T]):
             # transfer the cursor
             del self._cursors[current_task]
             self._cursors[early_unpack_signal.owner_task] = cursor
+            cursor.reserved_for = None
             cursor.depth = 1
 
             # mark task as currently in writing
@@ -357,6 +360,7 @@ class AsyncSignals(typing.Generic[T]):
             late_signal_elected.conn_or_pool = cursor.conn_or_pool
             del self._cursors[current_task]
             self._cursors[late_signal_elected.owner_task] = cursor
+            cursor.reserved_for = None
             cursor.depth = 1
 
             late_signal_elected.event.set()
@@ -412,10 +416,17 @@ class AsyncTrafficPolice(typing.Generic[T]):
         self._shutdown: bool = False
 
         self._cursors: dict[asyncio.Task[typing.Any], ActiveCursor[T]] = {}
+        self._gc_tasks: set[asyncio.Task[None]] = set()
 
         self.parent: AsyncTrafficPolice | None = None  # type: ignore[type-arg]
 
         self._signals = AsyncSignals(self._cursors)
+
+    def _schedule_gc_close(self, response: AsyncHTTPResponse) -> None:
+        # Invoked on the response's owning loop; retain tasks until they finish.
+        task = asyncio.create_task(response._close_from_gc())
+        self._gc_tasks.add(task)
+        task.add_done_callback(self._gc_tasks.discard)
 
     @property
     def _cursor(self) -> ActiveCursor[T] | None:
@@ -425,6 +436,23 @@ class AsyncTrafficPolice(typing.Generic[T]):
     @property
     def busy(self) -> bool:
         return self._cursor is not None
+
+    def _reclaim_reservation(self, traffic_indicator: MappableTraffic) -> T | None:
+        current = _current_task_or_die()
+        for owner, cursor in tuple(self._cursors.items()):
+            if cursor.reserved_for != id(traffic_indicator):
+                continue
+            if current != owner and current in self._cursors:
+                return None
+            cursor.reserved_for = None
+            if current != owner:
+                self._cursors[current] = cursor
+                del self._cursors[owner]
+                if owner in self._signals._writing_tasks:
+                    self._signals._writing_tasks.remove(owner)
+                    self._signals._writing_tasks.add(current)
+            return cursor.conn_or_pool
+        return None
 
     def is_held(self, conn_or_pool: T) -> bool:
         active_cursor = self._cursor
@@ -730,6 +758,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                             "You must release the previous connection prior to this."
                         )
 
+                    active_cursor.reserved_for = None
                     active_cursor.depth -= 1
 
                     if active_cursor.depth == 0:
@@ -904,8 +933,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
         raise UnavailableTraffic("No connection available")
 
     def memorize(
-        self, traffic_indicator: MappableTraffic, conn_or_pool: T | None = None
+        self,
+        traffic_indicator: MappableTraffic,
+        conn_or_pool: T | None = None,
+        *,
+        reserve: bool = False,
     ) -> None:
+        """Register a route; reserve marks an existing checkout at response return."""
         active_cursor = self._cursor
 
         if conn_or_pool is None and active_cursor is None:
@@ -928,8 +962,18 @@ class AsyncTrafficPolice(typing.Generic[T]):
             self._map_types[traffic_indicator] = type(traffic_indicator)
         else:
             traffic_indicator_id = id(traffic_indicator)
+            if reserve and self._map.get(traffic_indicator_id) is not conn_or_pool:
+                return  # A consumed response may already have lost its route.
             self._map[traffic_indicator_id] = conn_or_pool
             self._map_types[traffic_indicator_id] = type(traffic_indicator)
+            if (
+                reserve
+                and not self.concurrency
+                and active_cursor is not None
+                and active_cursor.depth == 1
+                and active_cursor.obj_id == obj_id
+            ):
+                active_cursor.reserved_for = traffic_indicator_id
 
     def forget(self, traffic_indicator: MappableTraffic) -> None:
         key: PoolKey | int = (
@@ -1081,6 +1125,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             if active_cursor is not None:
                 if active_cursor.obj_id == obj_id:
+                    active_cursor.reserved_for = None
                     active_cursor.depth += 1
                     return active_cursor.conn_or_pool
                 raise AtomicTraffic(
@@ -1201,6 +1246,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
                 # get_response PM -> get_response HPM -> read R
                 active_cursor = self._cursor
                 if active_cursor is not None:
+                    active_cursor.reserved_for = None
                     active_cursor.depth += 1
                     obj_id, conn_or_pool = (
                         active_cursor.obj_id,
@@ -1247,6 +1293,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
         active_cursor = self._cursors.get(current_task)
         cursor_transferred: bool = False
         if active_cursor is not None:
+            active_cursor.reserved_for = None
             active_cursor.depth -= 1
 
             if active_cursor.depth == 0:

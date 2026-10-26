@@ -2112,6 +2112,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 if retries.raise_on_redirect:
                     response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2148,6 +2150,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 if retries.raise_on_status:
                     response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2175,6 +2179,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 **response_kw,
             )
 
+        if not release_conn and self.pool is not None:
+            self.pool.memorize(response, conn, reserve=True)
         return response
 
     def __repr__(self) -> str:

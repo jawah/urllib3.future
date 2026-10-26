@@ -1391,12 +1391,18 @@ class HTTPResponse(io.IOBase):
         return True
 
     def __del__(self) -> None:
-        # GC may run in another thread; only explicit close() may borrow a connection.
         if not getattr(self, "closed", True):
-            if self._fp:
-                self._fp.close()
-            if not self.auto_close:
-                io.IOBase.close(self)
+            police = getattr(self, "_police_officer", None)
+            reclaimed = (
+                police._reclaim_reservation(self) if police is not None else None
+            )
+            try:
+                self.close()
+            finally:
+                if reclaimed is not None and police is not None:
+                    police.release()
+                    if police._shutdown:
+                        police.kill(reclaimed, idle_only=True)
 
     def close(self) -> None:
         if self.extension is not None and self.extension.closed is False:

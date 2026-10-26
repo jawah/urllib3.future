@@ -2128,6 +2128,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 if retries.raise_on_redirect:
                     await response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2166,6 +2168,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 if retries.raise_on_status:
                     await response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2193,6 +2197,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 **response_kw,
             )
 
+        if not release_conn and self.pool is not None:
+            self.pool.memorize(response, conn, reserve=True)
         return response
 
     def __repr__(self) -> str:
