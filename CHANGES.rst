@@ -4,16 +4,21 @@
 - Fixed HTTP/3 uploads continuing to write after the peer's ``STOP_SENDING``
   when final response headers arrive later. Both sync and async now stop the
   upload and retrieve the response through the existing early-response path.
-  The separate connection-credit failure still requires a qh3 >= 2.1 installed
-  the minimum supported qh3 version is unchanged. (#440)
+  The separate connection-credit fix requires qh3 >= 2.1; the minimum supported
+  qh3 version is unchanged. (#440)
 - Fixed HTTP/3 and DNS-over-QUIC certificate verification with system trust
   stores available only through OpenSSL CA directories, in both sync and async.
+- Fixed a regression introduced in 2.25.903 where abandoning unread responses
+  could exhaust a blocking connection pool. Restored best-effort cleanup, with
+  async cleanup scheduled on the response's owning event loop. (#441)
 - Fixed Server-Sent Events keeping only the last ``data:`` field in an event.
   Multiple data fields are now joined with newlines, in both sync and async. (#439)
 - Fixed SSE parsing of lone-CR and mixed line endings, leading UTF-8 BOMs,
   and empty event-ID resets. Unicode characters other than CR/LF are preserved
   inside field values. Malformed UTF-8 is now replaced instead of interrupting
   the stream, in both sync and async.
+- Fixed reusing an SSE extension retaining buffered data from its previous
+  stream, in both sync and async.
 - Fixed HTTP/2 uploads and raw-stream writes hanging when the connection closed
   while waiting for flow-control credit. These now raise ``ProtocolError``, in
   both sync and async.
@@ -46,6 +51,7 @@
   socket and TLS errors instead of the corresponding urllib3 exceptions.
 - Fixed an assertion failure when retrieving a synchronous HTTP/2 response
   after the legacy macOS ``EPROTOTYPE`` write-error fallback.
+- Fixed the missing ``SecurityWarning`` when ``SSLKEYLOGFILE`` is set.
 
 2.25.903 (2026-10-21)
 =====================
@@ -79,9 +85,8 @@
   checked out and preventing its cleanup during pool shutdown.
 - Fixed the synchronous idle connection watcher retaining its checkout and lock
   after an early exit when generator cleanup is delayed, notably on PyPy.
-- Restored best-effort closing of garbage-collected unread responses to prevent
-  connection-pool exhaustion. Async cleanup is scheduled on the response's owning
-  event loop. (#441)
+- Fixed garbage collection of unread synchronous responses blocking the collecting
+  thread while waiting for a connection checkout, notably on PyPy.
 - Fixed concurrent synchronous connection cleanup raising ``AttributeError``
   when another thread closed the same connection.
 - Fixed oversized QUIC probes aborting synchronous HTTP/3 sends or causing
