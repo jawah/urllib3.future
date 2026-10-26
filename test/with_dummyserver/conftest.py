@@ -309,13 +309,16 @@ class HTTP3Peer(NamedTuple):
 
 
 @pytest.fixture
-def http3_peer(tmp_path: Path, requires_http3: None) -> Iterator[HTTP3Peer]:
+def http3_peer(
+    tmp_path: Path, requires_http3: None, request: pytest.FixtureRequest
+) -> Iterator[HTTP3Peer]:
     """A real QUIC peer with actions executed on its owning event loop."""
     from qh3 import H3Connection, QuicConfiguration, h3_events
     from qh3.asyncio.protocol import QuicConnectionProtocol
     from qh3.asyncio.server import serve
 
     errors: list[BaseException] = []
+    mode = getattr(request, "param", "normal")
 
     class Peer(QuicConnectionProtocol):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -324,6 +327,18 @@ def http3_peer(tmp_path: Path, requires_http3: None) -> Iterator[HTTP3Peer]:
             self.blackhole = False
             self.pending_encoder = bytearray()
             self.pending_headers: list[Any] = []
+            self.received_body: dict[int, int] = {}
+            self.rejected_at: dict[int, int] = {}
+            self.held_rejections: set[int] = set()
+
+        def release_rejections(self) -> None:
+            for stream_id in self.held_rejections:
+                self.http.send_headers(
+                    stream_id,
+                    [(b":status", b"400"), (b"content-length", b"0")],
+                    end_stream=True,
+                )
+            self.held_rejections.clear()
 
         def datagram_received(self, data: bytes | str, addr: Any) -> None:
             if not self.blackhole:
@@ -336,10 +351,34 @@ def http3_peer(tmp_path: Path, requires_http3: None) -> Iterator[HTTP3Peer]:
                     events = self.pending_headers + events
                     self.pending_headers = []
                 for received in events:
+                    if mode in ("early-reject", "stop-before-response") and isinstance(
+                        received, h3_events.DataReceived
+                    ):
+                        stream_id = received.stream_id
+                        self.received_body[stream_id] = self.received_body.get(
+                            stream_id, 0
+                        ) + len(received.data)
+                        if stream_id not in self.rejected_at:
+                            self.rejected_at[stream_id] = self.received_body[stream_id]
+                            if mode == "stop-before-response":
+                                self._quic.stop_stream(stream_id, 0x100)
+                                self.held_rejections.add(stream_id)
+                            else:
+                                self.http.send_headers(
+                                    stream_id,
+                                    [(b":status", b"400"), (b"content-length", b"0")],
+                                    end_stream=True,
+                                )
+                        continue
                     if not isinstance(received, h3_events.HeadersReceived):
                         continue
                     headers = dict(received.headers)
                     stream_id = received.stream_id
+                    if (
+                        mode in ("early-reject", "stop-before-response")
+                        and headers[b":method"] == b"POST"
+                    ):
+                        continue  # Reject only after a real body fragment has arrived.
                     if (
                         headers[b":path"] == b"/blocked-trailers"
                         and self.http.received_settings is None
@@ -434,8 +473,13 @@ def http3_peer(tmp_path: Path, requires_http3: None) -> Iterator[HTTP3Peer]:
 
     async def start() -> Any:
         config = QuicConfiguration(
-            is_client=False, alpn_protocols=["h3"], max_datagram_frame_size=65536
+            is_client=False,
+            alpn_protocols=["h3"],
+            max_datagram_frame_size=65536,
         )
+        if mode in ("early-reject", "stop-before-response"):
+            config.max_data = 4096
+            config.max_stream_data = 1024 * 1024
         config.load_cert_chain(str(cert_file), str(key_file))
         return await serve("127.0.0.1", 0, configuration=config, create_protocol=Peer)
 

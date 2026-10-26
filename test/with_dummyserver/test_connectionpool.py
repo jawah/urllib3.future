@@ -233,6 +233,44 @@ class TestConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 
 class TestConnectionPool(HTTPDummyServerTestCase):
+    @pytest.mark.parametrize(
+        "path,status",
+        [("/", 200), ("/not_found", 404), ("/redirect?compressed=true", 303)],
+    )
+    @pytest.mark.parametrize("release_conn", [False, True])
+    def test_discarded_unread_responses_do_not_exhaust_pool(
+        self, release_conn: bool, path: str, status: int
+    ) -> None:
+        import gc
+
+        with HTTPConnectionPool(
+            self.host,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=Retry(
+                total=0,
+                status_forcelist=[404],
+                raise_on_status=False,
+                raise_on_redirect=False,
+            ),
+            background_watch_delay=None,
+        ) as pool:
+            for _ in range(3):
+                response = pool.request(
+                    "GET",
+                    path,
+                    preload_content=False,
+                    pool_timeout=5,
+                    release_conn=release_conn,
+                )
+                assert response.status == status
+                del response
+                gc.collect()
+            # Also wait for cleanup of the final abandoned response.
+            assert (pool.request("GET", "/", pool_timeout=5)).status == 200
+
     def test_resolver_connection_without_ipv6(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1035,8 +1073,13 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert pool.pool.qsize() == 0
 
             # Make request without releasing connection
-            pool.request("GET", "/", release_conn=False, preload_content=False)
+            response = pool.request(
+                "GET", "/", release_conn=False, preload_content=False
+            )
             assert pool.pool.qsize() == 0
+            assert response.read(1)
+            assert pool.pool.qsize() == 0
+            response.read()
 
     def test_dns_error(self) -> None:
         with HTTPConnectionPool(

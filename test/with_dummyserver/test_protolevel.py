@@ -29,6 +29,60 @@ def pooled_connection(pool: Any) -> Any:
     return next(iter(pool.pool._registry.values()))
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Unverified HTTPS request:urllib3.exceptions.InsecureRequestWarning"
+)
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "directory",
+        "search-path",
+        "bundle",
+        "unverified",
+        "unhashed",
+        "explicit-file",
+        "explicit-data",
+        "explicit-directory",
+        "explicit-context",
+    ],
+)
+def test_http3_default_ca_directory(
+    http3_peer: HTTP3Peer,
+    default_ca_directory: Callable[[str, str], dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    from urllib3.exceptions import SSLError
+
+    options = default_ca_directory(http3_peer.ca_data, mode)
+    if mode in ("bundle", "unverified") or mode.startswith("explicit-"):
+
+        def unexpected_scan(*args: Any) -> None:
+            pytest.fail("Default CA directory scanned outside the empty-store fallback")
+
+        monkeypatch.setattr(
+            "urllib3.backend.hface._load_default_certs_eagerly", unexpected_scan
+        )
+
+    with HTTPSConnectionPool(
+        "localhost",
+        http3_peer.port,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h2},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+        **options,
+    ) as pool:
+        if mode == "unhashed" or mode.startswith("explicit-"):
+            with pytest.raises(SSLError):
+                pool.request("GET", "/")
+        else:
+            response = pool.request("GET", "/")
+            assert response.status == 200
+            assert response.version == 30
+
+
 @pytest.mark.parametrize("http2_peer", ["body-eof", "body-eof-partial"], indirect=True)
 @pytest.mark.parametrize("read_size", [None, 8])
 def test_http2_body_eof(http2_peer: HTTP2Peer, read_size: int | None) -> None:
@@ -1252,6 +1306,92 @@ def test_http3_cancel_unfinished_upload_after_response(
     finally:
         if response is not None:
             response.close()
+        pool.close()
+
+
+@pytest.mark.parametrize("http3_peer", ["early-reject"], indirect=True)
+def test_http3_repeated_early_rejections_with_small_connection_credit(
+    http3_peer: HTTP3Peer,
+) -> None:
+    from qh3 import QuicConnectionError
+
+    # A stream can accept the body, but the connection cannot send it in one flight.
+    body = b'{"data":"' + b"A" * (300 * 1024) + b'"}'
+    pool = pool_for(http3_peer)
+    transport = None
+    protocol = None
+    try:
+        for _ in range(6):
+            response = pool.request("POST", "/reject", body=body)
+            try:
+                assert response.status == 400 and response.version == 30
+                assert response.data == b""
+            finally:
+                response.close()
+            conn = pooled_connection(pool)
+            if transport is None:
+                transport, protocol = conn.sock, conn._protocol
+            assert transport is not None and conn.sock is transport
+            assert conn._protocol is protocol
+        assert pool.num_connections == 1
+        rejected: dict[int, int] = {}
+        http3_peer.act(lambda peer: rejected.update(peer.rejected_at))
+        assert len(rejected) == 6
+        assert all(0 < received < len(body) for received in rejected.values())
+    except (ProtocolError, QuicConnectionError) as exc:
+        import qh3
+
+        # Keep older supported dependencies usable without hiding new failures.
+        version = getattr(qh3, "__version__", "").partition("+")[0]
+        if (
+            version in {"2.0.0", "2.0.1", "2.0.2", "2.0.3", "2.0.4"}
+            and not hasattr(qh3.QuicConnection, "get_send_buffer_size")
+            and "ConnectionSendLimit" in str(exc)
+        ):
+            pytest.xfail("Known qh3 connection-credit bug; urllib3.future issue #440")
+        raise
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("http3_peer", ["stop-before-response"], indirect=True)
+def test_http3_stop_sending_before_response_headers(http3_peer: HTTP3Peer) -> None:
+    pool = pool_for(http3_peer)
+    try:
+        assert pool.request("GET", "/warmup").status == 200
+        conn = pooled_connection(pool)
+        protocol = conn._protocol
+        if not hasattr(protocol._quic, "_core"):
+            pytest.skip("The ordering gate observes native qh3 ACK completion")
+
+        def body() -> Iterator[bytes]:
+            yield b"first"
+            deadline = time.monotonic() + 5
+            while (
+                conn._stream_id in protocol._sending_streams
+                or protocol._quic._core.outstanding_application_packets
+            ):
+                assert time.monotonic() < deadline, (
+                    "STOP_SENDING or its ACK was not processed"
+                )
+                conn.peek_and_react(expect_frame=True)
+            # No response has been sent yet and there are no ACKs left to wait for.
+            assert not protocol._quic.should_wait_for_ack(time.time())
+            http3_peer.act(lambda peer: peer.release_rejections())
+            yield b"must not be sent"
+
+        response = pool.request("POST", "/reject", body=body())
+        try:
+            assert response.status == 400 and response.version == 30
+        finally:
+            response.close()
+        assert pool.num_connections == 1
+        assert protocol.is_idle()
+        received: dict[int, int] = {}
+        http3_peer.act(lambda peer: received.update(peer.received_body))
+        assert list(received.values()) == [len(b"first")]
+        assert pool.request("GET", "/after").status == 200
+    finally:
         pool.close()
 
 

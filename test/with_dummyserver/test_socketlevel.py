@@ -1042,6 +1042,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 background_watch_delay=None,
             ) as other:
                 assert other.request("GET", "/").data == b"ok"
+            assert police.rsize() == police.qsize() == 0
             police = None
             finish_collection.set()
             assert peer_closed.wait(10), errors

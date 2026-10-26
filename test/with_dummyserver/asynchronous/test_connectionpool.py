@@ -265,6 +265,125 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestConnectionPool(HTTPDummyServerTestCase):
+    async def test_gc_tasks_stay_with_their_owning_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import gc
+        from concurrent.futures import ThreadPoolExecutor
+        from queue import Queue
+        from threading import get_ident
+
+        from urllib3.util._async.traffic_police import AsyncTrafficPolice
+
+        ready: Queue[None] = Queue()
+        scheduled: Queue[tuple[int, int, int]] = Queue()
+        release = Event()
+        abandoned: list[AsyncHTTPResponse] = []
+        original_schedule = AsyncTrafficPolice._schedule_gc_close
+
+        def observe(
+            police: AsyncTrafficPolice[Any], response: AsyncHTTPResponse
+        ) -> None:
+            owner = asyncio.get_running_loop()
+            assert owner is response._loop
+            original_schedule(police, response)
+            assert police._gc_tasks
+            assert all(task.get_loop() is owner for task in police._gc_tasks)
+            scheduled.put((id(police), id(police._gc_tasks), get_ident()))
+
+        monkeypatch.setattr(AsyncTrafficPolice, "_schedule_gc_close", observe)
+
+        async def client() -> tuple[int, int]:
+            loop = asyncio.get_running_loop()
+            async with AsyncHTTPConnectionPool(
+                self.host,
+                self.port,
+                maxsize=1,
+                block=True,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as pool:
+                police = pool.pool
+                assert police is not None
+                response = await pool.request("GET", "/", preload_content=False)
+                abandoned.append(response)
+                del response
+                ready.put(None)
+                assert await loop.run_in_executor(None, release.wait, 10)
+                assert (await pool.request("GET", "/", pool_timeout=5)).status == 200
+                await asyncio.gather(*tuple(police._gc_tasks))
+                await asyncio.sleep(0)  # Run the completed tasks' discard callbacks.
+                assert not police._gc_tasks
+                return id(police), get_ident()
+
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(2) as threads:
+            clients = [
+                loop.run_in_executor(threads, asyncio.run, client()) for _ in range(2)
+            ]
+            try:
+                for _ in range(2):
+                    await loop.run_in_executor(None, ready.get, True, 10)
+                # Finalization runs on this third thread, outside both owning loops.
+                abandoned.clear()
+                gc.collect()
+            finally:
+                release.set()
+            owners = await asyncio.wait_for(asyncio.gather(*clients), 15)
+
+        observed = [scheduled.get_nowait() for _ in range(2)]
+        assert {(police, thread) for police, _, thread in observed} == set(owners)
+        assert len({tasks for _, tasks, _ in observed}) == 2
+        assert len({thread for _, _, thread in observed}) == 2
+        assert all(thread != get_ident() for _, _, thread in observed)
+
+    @pytest.mark.parametrize(
+        "path,status",
+        [("/", 200), ("/not_found", 404), ("/redirect?compressed=true", 303)],
+    )
+    @pytest.mark.parametrize("release_conn", [False, True])
+    async def test_discarded_unread_responses_do_not_exhaust_pool(
+        self, release_conn: bool, path: str, status: int
+    ) -> None:
+        import gc
+
+        async with AsyncHTTPConnectionPool(
+            self.host,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=Retry(
+                total=0,
+                status_forcelist=[404],
+                raise_on_status=False,
+                raise_on_redirect=False,
+            ),
+            background_watch_delay=None,
+        ) as pool:
+            for _ in range(3):
+                response = await pool.request(
+                    "GET",
+                    path,
+                    preload_content=False,
+                    pool_timeout=5,
+                    release_conn=release_conn,
+                )
+                assert response.status == status
+                del response
+                gc.collect()
+                if not release_conn:
+                    # A retained checkout cannot serve this task again until
+                    # its scheduled finalizer has had a chance to run.
+                    await asyncio.sleep(0)
+                    assert pool.pool is not None
+                    await asyncio.wait_for(
+                        asyncio.gather(*tuple(pool.pool._gc_tasks)), 5
+                    )
+            # Also wait for cleanup of the final abandoned response.
+            assert (await pool.request("GET", "/", pool_timeout=5)).status == 200
+
     async def test_async_body_empty_and_text_chunks(self) -> None:
         async def body() -> typing.AsyncIterator[str]:
             yield ""
@@ -1077,6 +1196,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             r = await pool.request(
                 "GET", "/", release_conn=False, preload_content=False
             )
+            assert pool.pool.qsize() == 0
+            assert await r.read(1)
             assert pool.pool.qsize() == 0
             await r.data  # we must consume, or the conn ref will hang.
 
