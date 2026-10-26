@@ -97,7 +97,8 @@ common = [
   "aiofile==3.8.8; python_version == '3.7'",
   "aiofile>=3.9.0,<4; python_version >= '3.8'",
   "cryptography<40.0.0; python_version <= '3.8'",
-  "cryptography<47; python_version > '3.8'",
+  "cryptography<47; python_version < '3.11'",
+  "cryptography<51; python_version >= '3.11'",
   "python-socks>=2,<3",
 ]
 mypy = [
