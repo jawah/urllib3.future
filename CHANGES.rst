@@ -1,6 +1,13 @@
-2.25.904 (2026-10-23)
+2.25.904 (2026-10-26)
 =====================
 
+- Fixed HTTP/3 uploads continuing to write after the peer's ``STOP_SENDING``
+  when final response headers arrive later. Both sync and async now stop the
+  upload and retrieve the response through the existing early-response path.
+  The separate connection-credit failure still requires a qh3 >= 2.1 installed
+  the minimum supported qh3 version is unchanged. (#440)
+- Fixed HTTP/3 and DNS-over-QUIC certificate verification with system trust
+  stores available only through OpenSSL CA directories, in both sync and async.
 - Fixed Server-Sent Events keeping only the last ``data:`` field in an event.
   Multiple data fields are now joined with newlines, in both sync and async. (#439)
 - Fixed SSE parsing of lone-CR and mixed line endings, leading UTF-8 BOMs,
@@ -72,8 +79,9 @@
   checked out and preventing its cleanup during pool shutdown.
 - Fixed the synchronous idle connection watcher retaining its checkout and lock
   after an early exit when generator cleanup is delayed, notably on PyPy.
-- Fixed garbage collection of unread synchronous responses blocking the collecting
-  thread while waiting for a connection checkout, notably on PyPy.
+- Restored best-effort closing of garbage-collected unread responses to prevent
+  connection-pool exhaustion. Async cleanup is scheduled on the response's owning
+  event loop. (#441)
 - Fixed concurrent synchronous connection cleanup raising ``AttributeError``
   when another thread closed the same connection.
 - Fixed oversized QUIC probes aborting synchronous HTTP/3 sends or causing
