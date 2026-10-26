@@ -37,6 +37,7 @@ from ..contrib.hface.events import (
     HandshakeCompleted,
     HeadersReceived,
     StreamResetReceived,
+    StreamStopSendingReceived,
 )
 from ..contrib.ssa._gro import (
     GenericSegmentOffloadUnsupported,
@@ -1166,6 +1167,8 @@ class HfaceBackend(BaseBackend):
                     send_pending()
 
             for event in protocol.events(stream_id=stream_id):  # type: Event
+                if isinstance(event, StreamStopSendingReceived):
+                    continue  # Only the upload ended; keep waiting for the response.
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
@@ -1964,7 +1967,28 @@ class HfaceBackend(BaseBackend):
                 else:
                     self.sock.sendall(data_out)  # type: ignore[union-attr]
 
+        protocol, stream_id = self._protocol, self._stream_id
+
+        def check_early_response() -> None:
+            if protocol.has_pending_event(
+                stream_id=stream_id, excl_event=(EarlyHeadersReceived,)
+            ):
+                if self._start_last_request and self.conn_info:
+                    self.conn_info.request_sent_latency = (
+                        datetime.now(tz=timezone.utc) - self._start_last_request
+                    )
+
+                rp = ResponsePromise(self, stream_id, self.__headers)
+                self._promises[rp.uid] = rp
+                self._promises_per_stream[rp.stream_id] = rp
+
+                raise EarlyResponse(promise=rp)
+
         try:
+            # Check before another body chunk even when no ACK wait is needed.
+            # A FIN-only call can still complete an otherwise finished upload.
+            if data:
+                check_early_response()
             while (
                 self._protocol.should_wait_remote_flow_control(
                     self._stream_id, len(data)
@@ -1995,21 +2019,7 @@ class HfaceBackend(BaseBackend):
                     for gro_segment in data_in:
                         self._protocol.bytes_received(gro_segment)
 
-                # this is a bad sign. we should stop sending and instead retrieve the response.
-                # we exclude 'EarlyHeadersReceived' event because it is simply expected. e.g. 100-continue!
-                if self._protocol.has_pending_event(
-                    stream_id=self._stream_id, excl_event=(EarlyHeadersReceived,)
-                ):
-                    if self._start_last_request and self.conn_info:
-                        self.conn_info.request_sent_latency = (
-                            datetime.now(tz=timezone.utc) - self._start_last_request
-                        )
-
-                    rp = ResponsePromise(self, self._stream_id, self.__headers)
-                    self._promises[rp.uid] = rp
-                    self._promises_per_stream[rp.stream_id] = rp
-
-                    raise EarlyResponse(promise=rp)
+                check_early_response()
 
                 send_pending()
 

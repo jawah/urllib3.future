@@ -58,6 +58,7 @@ from ...events import (
     HandshakeCompleted as _HandshakeCompleted,
     HeadersReceived,
     StreamResetReceived,
+    StreamStopSendingReceived,
 )
 from .._protocols import HTTP3Protocol
 
@@ -433,7 +434,15 @@ class HTTP3ProtocolAioQuicImpl(HTTP3Protocol):
             STOP_SENDING_EVENT_AVAILABLE
             and event_type is quic_events.StopSendingReceived
         ):
-            self._sending_streams.discard(quic_event.stream_id)  # type: ignore[attr-defined]
+            stream_id = quic_event.stream_id  # type: ignore[attr-defined]
+            if stream_id in self._sending_streams:
+                self._sending_streams.discard(stream_id)
+                # A completed/discarded response must not regain pending events.
+                if stream_id in self._open_streams:
+                    return StreamStopSendingReceived(
+                        stream_id,
+                        quic_event.error_code,  # type: ignore[attr-defined]
+                    )
             return None
 
         if event_type is quic_events.PingAcknowledged:
