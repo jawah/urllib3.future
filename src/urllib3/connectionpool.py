@@ -185,7 +185,7 @@ def idle_conn_watch_task(
 
             # check again[...] due to mutable state
             if pool._background_monitoring_stop.is_set():
-                return
+                return  # Defensive: shutdown after wait(), including during PyPy GC.
 
             # pool could be closed.
             if pool.pool is None:
