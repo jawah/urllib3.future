@@ -49,7 +49,7 @@ from ...exceptions import (
     SSLError,
 )
 from ...util import parse_alt_svc, resolve_cert_reqs, parse_url
-from ...util.ssl_ import _cert_store_stats, _get_ca_certs
+from ...util.ssl_ import _cert_store_stats, _get_ca_certs, _load_default_certs_eagerly
 from ...util.socket_state import enable_keepalive
 from ...util.sub_timeout import AsyncSubTimeout
 from .._base import (
@@ -340,6 +340,7 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             return False
 
         cert_use_common_name = False
+        default_context = ssl_context is None
 
         allow_insecure: bool = False
 
@@ -393,6 +394,10 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     NotImplementedError,
                 ):  # Defensive: in case of ssl monkeypatch
                     ctx_root_certificates = []
+
+                if not ctx_root_certificates and not allow_insecure and default_context:
+                    _load_default_certs_eagerly(ssl_context)
+                    ctx_root_certificates = _get_ca_certs(ssl_context)
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(
