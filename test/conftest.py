@@ -167,6 +167,10 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
     received, respond = threading.Event(), threading.Event()
     respond.set()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            # Clients may close before our reply. A resulting ICMP error must
+            # not terminate this shared UDP server on Windows.
+            sock.ioctl(socket.SIO_UDP_CONNRESET, False)
         sock.bind(("127.0.0.1", 0))
         sock.settimeout(10)
         address = sock.getsockname()

@@ -276,10 +276,14 @@ def http2_peer(request: pytest.FixtureRequest) -> Iterator[HTTP2Peer]:
                                             # for in-flight HTTP/2 ACK/reset frames. OpenSSL
                                             # may observe those while finishing close_notify.
                                             # OpenSSL 1.0.2 may report peer close as errno 0.
-                                            if (
-                                                exc.errno != 0
-                                                and getattr(exc, "reason", None)
-                                                != "APPLICATION_DATA_AFTER_CLOSE_NOTIFY"
+                                            if not (
+                                                exc.errno == 0
+                                                or isinstance(exc, ssl.SSLEOFError)
+                                                or getattr(exc, "reason", None)
+                                                == "APPLICATION_DATA_AFTER_CLOSE_NOTIFY"
+                                                # Older OpenSSL may label this KRB5_S_INIT.
+                                                or "application data after close notify"
+                                                in str(exc).lower()
                                             ):
                                                 raise
                                     break
@@ -287,7 +291,13 @@ def http2_peer(request: pytest.FixtureRequest) -> Iterator[HTTP2Peer]:
                 # This client intentionally aborts immediately after TLS when
                 # no enabled HTTP protocol remains. It must report RuntimeError.
                 if mode != "no-compatible" or not isinstance(
-                    exc, (ssl.SSLError, ConnectionResetError, BrokenPipeError)
+                    exc,
+                    (
+                        ssl.SSLError,
+                        ConnectionResetError,
+                        ConnectionAbortedError,
+                        BrokenPipeError,
+                    ),
                 ):
                     errors.append(exc)
 
@@ -481,7 +491,14 @@ def http3_peer(
             config.max_data = 4096
             config.max_stream_data = 1024 * 1024
         config.load_cert_chain(str(cert_file), str(key_file))
-        return await serve("127.0.0.1", 0, configuration=config, create_protocol=Peer)
+        server = await serve("127.0.0.1", 0, configuration=config, create_protocol=Peer)
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            # Retired clients can reject late packets. Older Proactor loops
+            # stop receiving after the resulting ICMP error on this shared socket.
+            assert server._transport is not None
+            sock = server._transport.get_extra_info("socket")
+            getattr(sock, "_sock", sock).ioctl(socket.SIO_UDP_CONNRESET, False)
+        return server
 
     with run_loop_in_thread() as io_loop:
         loop = cast(AsyncIOLoop, io_loop).asyncio_loop

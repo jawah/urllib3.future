@@ -1061,12 +1061,13 @@ class TestSocketClosing(SocketDummyServerTestCase):
     ) -> None:
         from urllib3.exceptions import HTTPError
 
+        # Keep server/control deadlines above the five-second client I/O timeout.
         request_received, peer_closed, send_eof = Event(), Event(), Event()
 
         def handler(listener: socket.socket) -> None:
-            listener.settimeout(5)
+            listener.settimeout(10)
             with listener.accept()[0] as sock:
-                sock.settimeout(5)
+                sock.settimeout(10)
                 headers = bytearray()
                 while not headers.endswith(b"\r\n\r\n"):
                     chunk = sock.recv(65536)
@@ -1074,7 +1075,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
                     headers.extend(chunk)
                 request_received.set()
                 if overlap_close:
-                    assert send_eof.wait(5)
+                    assert send_eof.wait(10)
                     sock.shutdown(socket.SHUT_WR)
                 assert sock.recv(1) == b""
                 peer_closed.set()
@@ -1086,7 +1087,7 @@ class TestSocketClosing(SocketDummyServerTestCase):
             request = executor.submit(
                 manager.request, "GET", f"http://{self.host}:{self.port}/"
             )
-            assert request_received.wait(5)
+            assert request_received.wait(10)
             manager_cleared, cleanup_started = Event(), Event()
             if overlap_close:
                 pool = next(iter(manager.pools._registry.values()))
@@ -1102,10 +1103,10 @@ class TestSocketClosing(SocketDummyServerTestCase):
                             # Peer EOF wakes recv() on every OS; local SHUT_RD
                             # need not interrupt another thread's recv() on Windows.
                             send_eof.set()
-                            assert cleanup_started.wait(5)
+                            assert cleanup_started.wait(10)
                         else:
                             cleanup_started.set()
-                            assert manager_cleared.wait(5)
+                            assert manager_cleared.wait(10)
                     shutdown(sock, how)
 
                 monkeypatch.setattr(socket.socket, "shutdown", synchronized_shutdown)
@@ -1115,12 +1116,12 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 send_eof.set()
                 manager_cleared.set()
             with pytest.raises(HTTPError) as caught:
-                request.result(5)
+                request.result(10)
             if overlap_close:
                 # The forced overlap must not hide a cleanup failure. An arbitrary
                 # pre-headers close may invalidate other request state instead.
                 assert not isinstance(caught.value.__cause__, AttributeError)
-            assert peer_closed.wait(5)
+            assert peer_closed.wait(10)
             assert manager.pools.rsize() == 0
 
     def test_manager_clear_reaches_busy_child_pool(self) -> None:

@@ -523,12 +523,13 @@ class TestSocketClosing(SocketDummyServerTestCase):
     async def test_close_before_response_headers_releases_socket(self) -> None:
         from urllib3.exceptions import HTTPError
 
+        # Keep server/control deadlines above the five-second client I/O timeout.
         request_received, peer_closed = Event(), Event()
 
         def handler(listener: socket.socket) -> None:
-            listener.settimeout(5)
+            listener.settimeout(10)
             with listener.accept()[0] as sock:
-                sock.settimeout(5)
+                sock.settimeout(10)
                 headers = bytearray()
                 while not headers.endswith(b"\r\n\r\n"):
                     chunk = sock.recv(65536)
@@ -545,11 +546,11 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 manager.request("GET", f"http://{self.host}:{self.port}/")
             )
             try:
-                assert await loop.run_in_executor(None, request_received.wait, 5)
+                assert await loop.run_in_executor(None, request_received.wait, 10)
                 await manager.clear()
                 with pytest.raises((HTTPError, asyncio.CancelledError)):
-                    await asyncio.wait_for(request, 5)
-                assert await loop.run_in_executor(None, peer_closed.wait, 5)
+                    await asyncio.wait_for(request, 10)
+                assert await loop.run_in_executor(None, peer_closed.wait, 10)
                 assert manager.pools.rsize() == 0
             finally:
                 request.cancel()

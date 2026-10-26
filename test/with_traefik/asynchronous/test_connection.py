@@ -19,9 +19,15 @@ from .. import CA_PATH, TraefikTestCase
 @pytest.mark.asyncio
 class TestConnection(TraefikTestCase):
     @pytest.mark.usefixtures("requires_http3")
-    @pytest.mark.parametrize("in_memory", [False, True, None])
+    @pytest.mark.parametrize(
+        "in_memory,server_settings",
+        [(False, True), (True, True), (None, True), (None, False)],
+    )
     async def test_http3_client_certificate(
-        self, in_memory: bool | None, monkeypatch: pytest.MonkeyPatch
+        self,
+        in_memory: bool | None,
+        server_settings: bool,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         cert_dir = os.path.join(CA_PATH, "traefik", "mtls")
         cert_file = os.path.join(cert_dir, "server.pem")
@@ -46,7 +52,25 @@ class TestConnection(TraefikTestCase):
             def fetch_after_rejection(protocol: HTTP3ProtocolAioQuicImpl) -> None:
                 # Drain genuine SETTINGS and TLS-close events together, after rejection.
                 if getattr(protocol._quic, "_close_event", None) is not None:
-                    fetch_events(protocol)
+                    if server_settings:
+                        fetch_events(protocol)
+                    else:
+                        from qh3.quic.events import StreamDataReceived
+
+                        next_event = protocol._quic.next_event
+
+                        def next_tls_event() -> typing.Any:
+                            event = next_event()
+                            while isinstance(event, StreamDataReceived):
+                                event = next_event()
+                            return event
+
+                        # TLS rejection may arrive without application SETTINGS.
+                        # Keep the real handshake and close events, without an
+                        # HTTP/3 control write masking their ordering.
+                        with monkeypatch.context() as gate:
+                            gate.setattr(protocol._quic, "next_event", next_tls_event)
+                            fetch_events(protocol)
 
             monkeypatch.setattr(
                 HTTP3ProtocolAioQuicImpl, "_fetch_events", fetch_after_rejection

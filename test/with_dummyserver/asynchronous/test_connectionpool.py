@@ -2120,7 +2120,9 @@ class PoolChecks:
     async def test_direct_checkout_happy_eyeballs_preserves_options(
         self: Any,
     ) -> None:
-        ech = b"\x00\x05\xff\xff\x00\x01x"
+        # Exercise opaque ECH forwarding without submitting an unsupported
+        # configuration to the TLS backend (rtls rejects it).
+        ech = b"\x00\x05\xff\xff\x00\x01x" if self.scheme == "http" else None
         resolver = AsyncInMemoryResolver(
             "localhost:127.0.0.2", "localhost:127.0.0.1", ech_config=ech
         )
@@ -2143,7 +2145,7 @@ class PoolChecks:
                 socket.AF_INET,
                 socket.SOCK_STREAM,
             )
-            assert records[0][3] == ech
+            assert records[0][3] == (ech or "")
             assert conn._preemptive_quic_cache is cache
             await conn.request("GET", "/")
             response = await conn.getresponse()

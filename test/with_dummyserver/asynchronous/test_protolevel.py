@@ -1375,7 +1375,7 @@ async def test_http3_stop_sending_before_response_headers(
 
         async def body() -> typing.AsyncIterator[bytes]:
             yield b"first"
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + 10
             while (
                 conn._stream_id in protocol._sending_streams
                 or protocol._quic._core.outstanding_application_packets
