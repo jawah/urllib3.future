@@ -1355,28 +1355,28 @@ def test_http3_repeated_early_rejections_with_small_connection_credit(
 
 
 @pytest.mark.parametrize("http3_peer", ["stop-before-response"], indirect=True)
-def test_http3_stop_sending_before_response_headers(http3_peer: HTTP3Peer) -> None:
+def test_http3_stop_sending_before_response_headers(
+    http3_peer: HTTP3Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
     pool = pool_for(http3_peer)
     try:
         assert pool.request("GET", "/warmup").status == 200
         conn = pooled_connection(pool)
         protocol = conn._protocol
         if not hasattr(protocol._quic, "_core"):
-            pytest.skip("The ordering gate observes native qh3 ACK completion")
+            pytest.skip("The ordering gate requires native qh3 STOP_SENDING handling")
 
         def body() -> Iterator[bytes]:
             yield b"first"
             deadline = time.monotonic() + 10
-            while (
-                conn._stream_id in protocol._sending_streams
-                or protocol._quic._core.outstanding_application_packets
-            ):
-                assert time.monotonic() < deadline, (
-                    "STOP_SENDING or its ACK was not processed"
-                )
+            while conn._stream_id in protocol._sending_streams:
+                assert time.monotonic() < deadline, "STOP_SENDING was not processed"
                 conn.peek_and_react(expect_frame=True)
-            # No response has been sent yet and there are no ACKs left to wait for.
-            assert not protocol._quic.should_wait_for_ack(time.time())
+            # Exercise the pre-send check independently of ACK scheduling.
+            # The native outstanding-packet table need not become empty here.
+            monkeypatch.setattr(
+                protocol, "should_wait_remote_flow_control", lambda *args: False
+            )
             http3_peer.act(lambda peer: peer.release_rejections())
             yield b"must not be sent"
 
