@@ -23,6 +23,107 @@ def store(police: Any, traffic: Any, *markers: Any) -> None:
     police.release()
 
 
+def test_memorize_during_borrow_does_not_reserve_checkout() -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    conn: Any = Connection()
+    marker = HTTPResponse()
+    police.put(conn, marker)
+    with police.borrow(marker):
+        response = HTTPResponse(connection=conn, police_officer=police)
+        assert police.beacon(response)
+        assert police._reclaim_reservation(response) is None
+        assert police.is_held(conn)
+
+
+def test_reserving_forgotten_response_does_not_restore_route() -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    conn, response = Connection(), HTTPResponse()
+    police.put(conn, response, immediately_unavailable=True)
+    police.forget(response)
+    police.memorize(response, conn, reserve=True)
+    assert not police.beacon(response)
+    assert police._reclaim_reservation(response) is None
+    police.release()
+
+
+@pytest.mark.parametrize("unrelated_checkout", [False, True])
+def test_reclaim_response_reservation(unrelated_checkout: bool) -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    conn, other, response = Connection(), Connection(), HTTPResponse()
+
+    def reserve() -> None:
+        police.put(conn, response, immediately_unavailable=True)
+        police.memorize(response, conn, reserve=True)
+
+    with ThreadPoolExecutor(1) as executor:
+        executor.submit(reserve).result(5)
+        if unrelated_checkout:
+            police.put(other, immediately_unavailable=True)
+        assert police._reclaim_reservation(response) is (
+            None if unrelated_checkout else conn
+        )
+        assert police.is_held(other if unrelated_checkout else conn)
+        assert not police._reclaim_reservation(response)
+        police.release()
+        executor.submit(police.release).result(5)
+    assert not police._cursor
+
+
+@pytest.mark.parametrize(
+    "operation", ["borrow", "borrow_none", "locate", "release", "put"]
+)
+def test_intervening_operation_invalidates_reservation(operation: str) -> None:
+    police: TrafficPolice[Any] = TrafficPolice()
+    conn, response, neighbour = Connection(), HTTPResponse(), HTTPResponse()
+    police.put(conn, response, neighbour, immediately_unavailable=True)
+    police.memorize(response, conn, reserve=True)
+    if operation in ("borrow", "borrow_none"):
+        with police.borrow(neighbour if operation == "borrow" else None):
+            police.memorize(
+                neighbour, conn, reserve=True
+            )  # An active nested borrow cannot be reserved.
+            assert not police._reclaim_reservation(response)
+            assert not police._reclaim_reservation(neighbour)
+            # release_conn() can return ownership inside an active borrow.
+            police.release()
+    elif operation == "locate":
+        police.locate(neighbour)
+        police.release()
+    elif operation == "put":
+        police.put(conn)
+    else:
+        police.release()
+    assert not police._reclaim_reservation(response)
+    police.release()
+    assert not police._cursor
+
+
+def test_handoff_does_not_inherit_response_reservation() -> None:
+    police = ObservedPolice()
+    conn, response, neighbour = Connection(), HTTPResponse(), HTTPResponse()
+    police.put(conn, response, neighbour, immediately_unavailable=True)
+    police.memorize(response, conn, reserve=True)
+    acquired, finish = Event(), Event()
+
+    def read() -> None:
+        with police.borrow(neighbour):
+            acquired.set()
+            assert finish.wait(5)
+            assert police.is_held(conn)
+
+    with ThreadPoolExecutor(1) as executor:
+        reader = executor.submit(read)
+        try:
+            police.queued.get(timeout=5)
+            police.release()
+            assert acquired.wait(5)
+            assert not police._reclaim_reservation(response)
+        finally:
+            finish.set()
+        reader.result(5)
+    assert not police._cursor
+
+
 def test_kill_returned_target_preserves_unrelated_cursor() -> None:
     police: TrafficPolice[Any] = TrafficPolice()
     target, other = Connection(), Connection(saturated=True)

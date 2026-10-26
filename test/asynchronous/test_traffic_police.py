@@ -28,6 +28,121 @@ async def store(police: Any, traffic: Any, *markers: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_memorize_during_borrow_does_not_reserve_checkout() -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    conn: Any = AsyncConnection()
+    marker = AsyncHTTPResponse()
+    await police.put(conn, marker)
+    async with police.borrow(marker):
+        response = AsyncHTTPResponse(connection=conn, police_officer=police)
+        assert await police.beacon(response)
+        assert police._reclaim_reservation(response) is None
+        assert police.is_held(conn)
+
+
+@pytest.mark.asyncio
+async def test_reserving_forgotten_response_does_not_restore_route() -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    conn, response = AsyncConnection(), AsyncHTTPResponse()
+    await police.put(conn, response, immediately_unavailable=True)
+    police.forget(response)
+    police.memorize(response, conn, reserve=True)
+    assert not await police.beacon(response)
+    assert police._reclaim_reservation(response) is None
+    police.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unrelated_checkout", [False, True])
+async def test_reclaim_response_reservation(unrelated_checkout: bool) -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    conn, other, response = AsyncConnection(), AsyncConnection(), AsyncHTTPResponse()
+
+    async def reserve() -> None:
+        await police.put(conn, response, immediately_unavailable=True)
+        police.memorize(response, conn, reserve=True)
+
+    owner = asyncio.create_task(reserve())
+    await owner
+    if unrelated_checkout:
+        await police.put(other, immediately_unavailable=True)
+    assert police._reclaim_reservation(response) is (
+        None if unrelated_checkout else conn
+    )
+    assert police.is_held(other if unrelated_checkout else conn)
+    assert not police._reclaim_reservation(response)
+    police._signals.terminate_writing()
+    police.release()
+    if unrelated_checkout:
+        assert police._reclaim_reservation(response)
+        police._signals.terminate_writing()
+        police.release()
+    assert not police._cursors
+    assert not police._signals._writing_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation", ["borrow", "borrow_none", "locate", "release", "put"]
+)
+async def test_intervening_operation_invalidates_reservation(operation: str) -> None:
+    police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
+    conn, response, neighbour = (
+        AsyncConnection(),
+        AsyncHTTPResponse(),
+        AsyncHTTPResponse(),
+    )
+    await police.put(conn, response, neighbour, immediately_unavailable=True)
+    police.memorize(response, conn, reserve=True)
+    if operation in ("borrow", "borrow_none"):
+        async with police.borrow(neighbour if operation == "borrow" else None):
+            police.memorize(neighbour, conn, reserve=True)
+            assert not police._reclaim_reservation(response)
+            assert not police._reclaim_reservation(neighbour)
+            police.release()
+    elif operation == "locate":
+        await police.locate(neighbour)
+        police.release()
+    elif operation == "put":
+        await police.put(conn)
+    else:
+        police.release()
+    assert not police._reclaim_reservation(response)
+    police.release()
+    assert not police._cursors
+
+
+@pytest.mark.asyncio
+async def test_handoff_does_not_inherit_response_reservation() -> None:
+    police = ObservedAsyncPolice()
+    conn, response, neighbour = (
+        AsyncConnection(),
+        AsyncHTTPResponse(),
+        AsyncHTTPResponse(),
+    )
+    await police.put(conn, response, neighbour, immediately_unavailable=True)
+    police.memorize(response, conn, reserve=True)
+    acquired, finish = asyncio.Event(), asyncio.Event()
+
+    async def read() -> None:
+        async with police.borrow(neighbour):
+            acquired.set()
+            await asyncio.wait_for(finish.wait(), 5)
+            assert police.is_held(conn)
+
+    reader = asyncio.create_task(read())
+    try:
+        await asyncio.wait_for(police.queued.get(), 5)
+        police.release()
+        await asyncio.wait_for(acquired.wait(), 5)
+        assert not police._reclaim_reservation(response)
+    finally:
+        finish.set()
+        await asyncio.wait_for(reader, 5)
+    assert not police._cursors
+
+
+@pytest.mark.asyncio
 async def test_async_kill_returned_target_preserves_unrelated_cursor() -> None:
     police: AsyncTrafficPolice[Any] = AsyncTrafficPolice()
     target, other = AsyncConnection(), AsyncConnection(saturated=True)
