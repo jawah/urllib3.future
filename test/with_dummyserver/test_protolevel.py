@@ -12,6 +12,7 @@ import pytest
 from jh2.connection import H2Connection  # type: ignore[import-untyped]
 
 from dummyserver.server import DEFAULT_CA
+from test import notWindows
 from test.with_dummyserver.conftest import HTTP2Peer, HTTP3Peer
 from urllib3 import (
     HTTPConnectionPool,
@@ -863,6 +864,7 @@ def observe(conn: Any, ready: Callable[[], bool]) -> None:
         conn.peek_and_react(expect_frame=True)
 
 
+@notWindows()
 @pytest.mark.parametrize("retirement", ["unanswered-pings", "goaway", "idle-timeout"])
 def test_http3_connection_retirement(
     http3_peer: HTTP3Peer,
@@ -907,6 +909,7 @@ def test_http3_connection_retirement(
         pool.close()
 
 
+@notWindows()
 def test_http3_receive_error_retires_connection(
     http3_peer: HTTP3Peer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1234,6 +1237,7 @@ def test_http3_connection_close_does_not_complete_response(
         pool.close()
 
 
+@notWindows()
 def test_http3_peer_reset(
     http3_peer: HTTP3Peer,
 ) -> None:
