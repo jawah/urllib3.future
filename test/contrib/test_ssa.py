@@ -11,6 +11,31 @@ from urllib3._constant import UDP_LINUX_GRO, UDP_LINUX_SEGMENT
 from urllib3.contrib.ssa import _gro
 
 
+def test_sync_datagram_send_propagates_connection_error() -> None:
+    failure = ConnectionRefusedError(errno.ECONNREFUSED, "injected send failure")
+
+    class Sender(socket.socket):
+        fail_send = True
+
+        def send(self, data: Any, *args: Any, **kwargs: Any) -> int:
+            if self.fail_send:
+                raise failure
+            return super().send(data, *args, **kwargs)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver, Sender(
+        socket.AF_INET, socket.SOCK_DGRAM
+    ) as sender:
+        receiver.bind(("127.0.0.1", 0))
+        receiver.settimeout(5)
+        sender.connect(receiver.getsockname())
+        with pytest.raises(ConnectionRefusedError) as caught:
+            _gro.sync_send_dgram(sender, b"failed")
+        assert caught.value is failure
+        sender.fail_send = False
+        _gro.sync_send_dgram(sender, b"after")
+        assert receiver.recv(1024) == b"after"
+
+
 @pytest.mark.skipif(not hasattr(socket.socket, "sendmsg"), reason="POSIX sendmsg")
 @pytest.mark.parametrize("grouped", [False, True])
 @pytest.mark.parametrize("failure", [errno.EMSGSIZE, errno.ECONNREFUSED])

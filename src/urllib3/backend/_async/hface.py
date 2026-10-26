@@ -1223,8 +1223,6 @@ class AsyncHfaceBackend(AsyncBaseBackend):
             if event_type is HandshakeCompleted and any(
                 isinstance(event, HandshakeCompleted) for event in events
             ):
-                if reshelve_events:
-                    protocol.reshelve(*reshelve_events)
                 return events
 
     def putrequest(

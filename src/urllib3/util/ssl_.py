@@ -988,7 +988,7 @@ def _load_default_certs_eagerly(ctx: ssl.SSLContext) -> None:
     """Populate default trust when a lazy OpenSSL directory cannot be exported."""
     ctx.load_default_certs()
     if stdlib_ssl is None or not isinstance(ctx, stdlib_ssl.SSLContext):
-        return
+        return  # Defensive: alternative runtimes/contexts have no OpenSSL directory to scan.
 
     paths = stdlib_ssl.get_default_verify_paths()
     capath = os.environ.get(paths.openssl_capath_env, paths.openssl_capath)

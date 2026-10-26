@@ -1182,6 +1182,81 @@ def test_http3_close_raw_stream_preserves_connection(
         pool.close()
 
 
+def test_http3_trailers_before_separate_fin(http3_peer: HTTP3Peer) -> None:
+    pool = pool_for(http3_peer)
+    response = None
+    try:
+        response = pool.request("GET", "/partial-response", preload_content=False)
+        assert response.read(2) == b"ab"
+        conn = response.connection
+        assert conn is not None and conn._protocol is not None
+        protocol = conn._protocol
+        stream_id = typing.cast("Any", response._fp).from_promise.stream_id
+
+        def send_trailers(peer: Any) -> None:
+            peer.http.send_data(stream_id, b"cd", end_stream=False)
+            peer.http.send_headers(stream_id, [(b"x-trailer", b"present")])
+
+        http3_peer.act(send_trailers)
+        # Decode trailers before sending FIN so qh3 emits a separate empty DATA
+        # event, independently of how the OS batches the received datagrams.
+        observe(
+            conn,
+            lambda: (
+                protocol._http._stream[stream_id].headers_recv_state.name
+                == "AFTER_TRAILERS"
+            ),
+        )
+        http3_peer.act(
+            lambda peer: peer._quic.send_stream_data(stream_id, b"", end_stream=True)
+        )
+        assert response.read() == b"cd"
+        assert response.trailers == {"x-trailer": "present"}
+        assert pool.request("GET", "/next").status == 200
+        assert pool.num_connections == 1
+    finally:
+        if response is not None:
+            response.close()
+        pool.close()
+
+
+@pytest.mark.parametrize("http3_peer", ["early-reject"], indirect=True)
+def test_http3_stop_sending_after_response_ended(http3_peer: HTTP3Peer) -> None:
+    from qh3 import quic_events
+
+    if not hasattr(quic_events, "StopSendingReceived"):
+        pytest.skip("qh3 does not expose STOP_SENDING events")
+    pool = pool_for(http3_peer)
+    try:
+        assert pool.request("GET", "/warmup").status == 200
+        conn = pooled_connection(pool)
+        protocol = conn._protocol
+
+        def body() -> typing.Iterator[bytes]:
+            yield b"first"
+            stream_id = conn._stream_id
+            observe(conn, lambda: stream_id not in protocol._open_streams)
+            assert stream_id in protocol._sending_streams
+            assert protocol._events.count(stream_id) == 1
+            # The real response has ended while our upload is still open.
+            http3_peer.act(lambda peer: peer._quic.stop_stream(stream_id, 0x100))
+            observe(conn, lambda: stream_id not in protocol._sending_streams)
+            assert protocol._events.count(stream_id) == 1  # Only the response headers.
+            yield b"must not be sent"
+
+        response = pool.request("POST", "/reject", body=body())
+        assert response.status == 400 and response.data == b""
+        assert protocol.is_idle()
+        assert not protocol.has_pending_event()
+        received: dict[int, int] = {}
+        http3_peer.act(lambda peer: received.update(peer.received_body))
+        assert list(received.values()) == [len(b"first")]
+        assert pool.request("GET", "/after").status == 200
+        assert pool.num_connections == 1
+    finally:
+        pool.close()
+
+
 def test_http3_discard_blocked_trailers(
     http3_peer: HTTP3Peer,
 ) -> None:

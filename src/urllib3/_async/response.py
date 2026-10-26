@@ -774,7 +774,10 @@ class AsyncHTTPResponse(HTTPResponse):
                 try:
                     loop.call_soon_threadsafe(police._schedule_gc_close, self)
                     return
-                except (RuntimeError, NotImplementedError):
+                except (
+                    RuntimeError,
+                    NotImplementedError,
+                ):  # Defensive: loop closed after the check, or scheduling unsupported.
                     pass  # Closed loop or unsupported runtime: local cleanup only.
             if self._fp:
                 self._fp.close()

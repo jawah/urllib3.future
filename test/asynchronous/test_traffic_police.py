@@ -933,6 +933,39 @@ async def test_async_queued_operations_receive_the_returned_object(
 
 
 @pytest.mark.asyncio
+async def test_queued_reader_rejects_idle_handoff() -> None:
+    police = ObservedAsyncPolice(maxsize=1)
+    traffic = AsyncTraffic(TrafficState.USED)
+    await police.put(traffic, immediately_unavailable=True)
+
+    async def read() -> Any:
+        try:
+            return await police.get(not_idle_only=True)
+        finally:
+            police.release()
+
+    reader = asyncio.create_task(read())
+    try:
+        signal = await asyncio.wait_for(police.queued.get(), 5)
+        traffic.state = TrafficState.IDLE
+        police.release()
+        assert not signal.event.is_set()
+        assert not reader.done()
+        assert police.qsize() == 1
+
+        assert await police.get_nowait() is traffic
+        traffic.state = TrafficState.USED
+        police.release()
+        assert await asyncio.wait_for(reader, 5) is traffic
+        assert not police._cursors and police.qsize() == 1
+    finally:
+        police.release()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        await police.kill(traffic)
+
+
+@pytest.mark.asyncio
 async def test_async_idle_iterator_rechecks_state_after_yield() -> None:
     police = AsyncTrafficPolice[Any]()
     first, second = AsyncTraffic(), AsyncTraffic()
