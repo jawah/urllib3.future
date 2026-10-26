@@ -53,6 +53,51 @@ _DOQ_PARAM = pytest.param(
 )
 
 
+@pytest.mark.parametrize("constrained", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+def test_many_resolver_closes_selection_iterator(
+    dns_udp_server: DNSUDPServer,
+    monkeypatch: pytest.MonkeyPatch,
+    constrained: bool,
+    fails: bool,
+) -> None:
+    patterns = ("first.example",) if constrained else ()
+    child = PlainResolver(*dns_udp_server.address, *patterns, timeout=5)
+    resolver = ManyResolver(child)
+    select = resolver._ManyResolver__resolvers  # type: ignore[attr-defined]
+    held_iterators: list[Any] = []
+
+    def retain_iterator(*args: Any) -> Any:
+        iterator = select(*args)
+        # Retain the iterator to expose the bug even on refcounting interpreters.
+        held_iterators.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(resolver, "_ManyResolver__resolvers", retain_iterator)
+    if fails:
+
+        def fail(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("resolver failed")
+
+        monkeypatch.setattr(child, "getaddrinfo", fail)
+    try:
+        for _ in range(3):
+            if fails:
+                with pytest.raises(RuntimeError, match="resolver failed"):
+                    resolver.getaddrinfo(
+                        "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                    )
+            else:
+                results = resolver.getaddrinfo(
+                    "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                )
+                assert results and all(r[4] == ("192.0.2.1", 443) for r in results)
+            assert resolver._concurrent == 0
+            assert all(iterator.gi_frame is None for iterator in held_iterators)
+    finally:
+        resolver.close()
+
+
 @pytest.mark.parametrize(
     "mode",
     [

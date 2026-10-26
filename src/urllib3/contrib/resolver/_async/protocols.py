@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import asyncio
 import ipaddress
 import socket
@@ -343,12 +344,42 @@ class AsyncManyResolver(AsyncBaseResolver):
 
         any_constrained_tried: bool = False
 
-        for resolver in self.__resolvers(True):
-            can_resolve = resolver.support(host)
+        with contextlib.closing(self.__resolvers(True)) as candidates:
+            for resolver in candidates:
+                can_resolve = resolver.support(host)
 
-            if can_resolve is True:
-                any_constrained_tried = True
+                if can_resolve is True:
+                    any_constrained_tried = True
 
+                    try:
+                        results = await resolver.getaddrinfo(
+                            host,
+                            port,
+                            family,
+                            type,
+                            proto,
+                            flags,
+                            quic_upgrade_via_dns_rr=quic_upgrade_via_dns_rr,
+                        )
+
+                        if results:
+                            return results
+                    except socket.gaierror as exc:
+                        if isinstance(exc.args[0], str) and (
+                            "DNSSEC" in exc.args[0] or "DNSKEY" in exc.args[0]
+                        ):
+                            raise
+                        continue
+                elif can_resolve is False:
+                    tested_resolvers.append(resolver)
+
+        if any_constrained_tried:
+            raise socket.gaierror(
+                f"Name or service not known: {host} using {self._size - len(self._unconstrained)} resolver(s)"
+            )
+
+        with contextlib.closing(self.__resolvers()) as candidates:
+            for resolver in candidates:
                 try:
                     results = await resolver.getaddrinfo(
                         host,
@@ -368,34 +399,6 @@ class AsyncManyResolver(AsyncBaseResolver):
                     ):
                         raise
                     continue
-            elif can_resolve is False:
-                tested_resolvers.append(resolver)
-
-        if any_constrained_tried:
-            raise socket.gaierror(
-                f"Name or service not known: {host} using {self._size - len(self._unconstrained)} resolver(s)"
-            )
-
-        for resolver in self.__resolvers():
-            try:
-                results = await resolver.getaddrinfo(
-                    host,
-                    port,
-                    family,
-                    type,
-                    proto,
-                    flags,
-                    quic_upgrade_via_dns_rr=quic_upgrade_via_dns_rr,
-                )
-
-                if results:
-                    return results
-            except socket.gaierror as exc:
-                if isinstance(exc.args[0], str) and (
-                    "DNSSEC" in exc.args[0] or "DNSKEY" in exc.args[0]
-                ):
-                    raise
-                continue
 
         raise socket.gaierror(
             f"Name or service not known: {host} using {self._size - len(self._constrained)} resolver(s)"

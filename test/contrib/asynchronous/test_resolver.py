@@ -34,6 +34,52 @@ _MISSING_QUIC_SENTINEL = object()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("constrained", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_many_resolver_closes_selection_iterator(
+    dns_udp_server: DNSUDPServer,
+    monkeypatch: pytest.MonkeyPatch,
+    constrained: bool,
+    fails: bool,
+) -> None:
+    patterns = ("first.example",) if constrained else ()
+    child = PlainResolver(*dns_udp_server.address, *patterns, timeout=5)
+    resolver = AsyncManyResolver(child)
+    select = resolver._AsyncManyResolver__resolvers  # type: ignore[attr-defined]
+    held_iterators: list[Any] = []
+
+    def retain_iterator(*args: Any) -> Any:
+        iterator = select(*args)
+        # Retain the iterator to expose the bug even on refcounting interpreters.
+        held_iterators.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(resolver, "_AsyncManyResolver__resolvers", retain_iterator)
+    if fails:
+
+        async def fail(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("resolver failed")
+
+        monkeypatch.setattr(child, "getaddrinfo", fail)
+    try:
+        for _ in range(3):
+            if fails:
+                with pytest.raises(RuntimeError, match="resolver failed"):
+                    await resolver.getaddrinfo(
+                        "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                    )
+            else:
+                results = await resolver.getaddrinfo(
+                    "first.example", 443, socket.AF_INET, socket.SOCK_STREAM
+                )
+                assert results and all(r[4] == ("192.0.2.1", 443) for r in results)
+            assert resolver._concurrent == 0
+            assert all(iterator.gi_frame is None for iterator in held_iterators)
+    finally:
+        await resolver.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mode",
     [

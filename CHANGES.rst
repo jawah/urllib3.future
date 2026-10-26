@@ -8,6 +8,9 @@
   qh3 version is unchanged. (#440)
 - Fixed HTTP/3 and DNS-over-QUIC certificate verification with system trust
   stores available only through OpenSSL CA directories, in both sync and async.
+- Fixed completed DNS lookups remaining counted as active until garbage
+  collection in multi-resolver configurations. This could select an unintended
+  resolver on subsequent connections, notably on PyPy, in both sync and async.
 - Fixed a regression introduced in 2.25.903 where abandoning unread responses
   could exhaust a blocking connection pool. Restored best-effort cleanup, with
   async cleanup scheduled on the response's owning event loop. (#441)
@@ -28,8 +31,9 @@
 - Fixed HTTP/3 response reads accepting truncated bodies after a QUIC
   ``NO_ERROR`` connection close, in both sync and async.
 - Fixed HTTP/3 TLS rejections being masked by a generic closed-connection error
-  while processing buffered protocol events. The original TLS failure is now
-  preserved as ``SSLError``, in both sync and async.
+  while processing buffered protocol events or returning a queued handshake
+  success. The original TLS failure is preserved as ``SSLError``, in both sync
+  and async.
 - Fixed closing upgraded responses leaving their receiving streams open.
   HTTP/3 tunnel cleanup also handles peers that have already stopped the upload,
   avoiding protocol errors and recursive cleanup, in both sync and async.
