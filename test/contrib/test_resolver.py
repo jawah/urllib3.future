@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 from pathlib import Path
 import struct
 import time
@@ -34,6 +35,12 @@ from urllib3.contrib.resolver.protocols import SupportedQueryType
 from urllib3.contrib.resolver.system import SystemResolver  # noqa: E402
 from urllib3.contrib.resolver.utils import _udp_retry_deadlines
 from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
+
+_WINDOWS_UDP_CLOSE = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Winsock can reset the UDP test server after deliberate client close",
+)
+
 
 _MISSING_QUIC_SENTINEL = object()
 
@@ -2859,7 +2866,11 @@ def test_udp_read_ownership_timeout_does_not_strand_queries(
 
 @pytest.mark.parametrize(
     "dns_udp_server,checkpoint",
-    [("normal", "sent"), ("normal", "locked"), ("timeout", "deadline")],
+    [
+        pytest.param("normal", "sent", marks=_WINDOWS_UDP_CLOSE),
+        pytest.param("normal", "locked", marks=_WINDOWS_UDP_CLOSE),
+        ("timeout", "deadline"),
+    ],
     indirect=["dns_udp_server"],
 )
 def test_udp_close_at_exchange_checkpoints(

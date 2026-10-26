@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import sys
 from pathlib import Path
 import struct
 from base64 import b64encode
@@ -29,6 +30,12 @@ from urllib3.contrib.resolver._async.null import NullResolver  # noqa: E402
 from urllib3.contrib.resolver._async.system import SystemResolver  # noqa: E402
 from urllib3.contrib.resolver.protocols import SupportedQueryType
 from urllib3.exceptions import InsecureRequestWarning  # noqa: E402
+
+_WINDOWS_UDP_CLOSE = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Winsock can reset the UDP test server after deliberate client close",
+)
+
 
 _MISSING_QUIC_SENTINEL = object()
 
@@ -2897,6 +2904,7 @@ async def test_async_udp_connection_deadline_and_close(
 
 
 @pytest.mark.asyncio
+@_WINDOWS_UDP_CLOSE
 async def test_async_udp_close_after_queries_are_sent(
     dns_udp_server: DNSUDPServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2929,7 +2937,10 @@ async def test_async_udp_close_after_queries_are_sent(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "dns_udp_server,checkpoint",
-    [("normal", "locked"), ("timeout", "deadline")],
+    [
+        pytest.param("normal", "locked", marks=_WINDOWS_UDP_CLOSE),
+        ("timeout", "deadline"),
+    ],
     indirect=["dns_udp_server"],
 )
 async def test_async_udp_close_at_read_checkpoints(
