@@ -1162,6 +1162,11 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     else:
                         reshelve_events.append(event)
 
+                # Finish inspecting queued events before accepting the handshake.
+                # A peer may already have rejected it; no further socket read is needed.
+                if event_type is HandshakeCompleted:
+                    continue
+
                 target_cap_reached: bool = (
                     maximal_data_in_read is not None
                     and data_in_len >= maximal_data_in_read
@@ -1214,6 +1219,13 @@ class AsyncHfaceBackend(AsyncBaseBackend):
                     if reshelve_events:
                         protocol.reshelve(*reshelve_events)
                     return events
+
+            if event_type is HandshakeCompleted and any(
+                isinstance(event, HandshakeCompleted) for event in events
+            ):
+                if reshelve_events:
+                    protocol.reshelve(*reshelve_events)
+                return events
 
     def putrequest(
         self,
