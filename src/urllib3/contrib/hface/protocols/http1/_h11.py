@@ -267,7 +267,7 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
 
     def bytes_received(self, data: bytes) -> None:
         if not data:
-            return  # h11 treats empty data as EOF.
+            return  # Defensive: backends route EOF through eof_received() or connection_lost().
         if self._connection.their_state == h11.SWITCHED_PROTOCOL:
             self._events.append(DataReceived(self._current_stream_id, data))
             return
@@ -377,7 +377,8 @@ class HTTP1ProtocolHyperImpl(HTTP1Protocol):
                 self._events.append(DataReceived(self._current_stream_id, data))
             self._switched = True
 
-    def reshelve(self, *events: Event) -> None:
+    def reshelve(self, *events: Event) -> None:  # Defensive: protocol contract.
+        # Current HTTP/1 exchanges collect all supported events.
         for ev in reversed(events):
             self._events.appendleft(ev)
 

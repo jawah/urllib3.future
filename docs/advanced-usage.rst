@@ -186,6 +186,44 @@ Choosing a read method
 nor incremental reads preserve TCP packet, TLS record, or HTTP frame boundaries.
 Content decompression can also change chunk sizes.
 
+.. _response-consumption:
+
+Consumption and cached bodies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With ``preload_content=False``, ``read()`` and ``stream()`` advance through the
+response. Switching methods does not rewind it. If there is no previously cached
+body, ``response.data`` reads from the current position, and ``response.json()``
+parses that data rather than reconstructing bytes already consumed.
+
+.. code-block:: python
+    :name: response-consumption-example
+
+    import sys
+    import urllib3
+
+    with urllib3.PoolManager(timeout=10) as pm:
+        response = pm.request("GET", sys.argv[1], preload_content=False)
+        try:
+            prefix = response.read(16)
+            remainder = response.data
+            print("Prefix bytes:", len(prefix))
+            print("Remaining bytes:", len(remainder))
+        finally:
+            response.close()
+
+After the prefix has been consumed, ``remainder`` is not the complete original
+body. A partial uncached read also prevents later reads from being stored as a
+complete cached response. Do not expect a later ``data`` or ``json()`` access to
+replay the stream.
+
+If repeated body access is required, use the default ``preload_content=True``,
+access ``data`` before starting an uncached read, or start with
+``read(cache_content=True)`` without a size argument. These approaches retain
+the full body in memory. Positive-size reads do not cache the complete body,
+even when passed ``cache_content=True``. For async responses, await these
+operations; the same consumption rules apply.
+
 File-like readers
 ~~~~~~~~~~~~~~~~~
 
@@ -237,6 +275,13 @@ you're contacting.
 Note that regardless of HTTP version support, the tunneling will always start a HTTP/1.1 connection.
 HTTP/2 can be negotiated afterward. Also note that using a proxy disable HTTP/3 if supported, the connection
 will never be upgraded.
+
+``PoolManager`` does not automatically consume ``HTTP_PROXY``, ``HTTPS_PROXY``,
+``ALL_PROXY``, or ``NO_PROXY``. Configure ``ProxyManager`` or a SOCKS manager
+explicitly, and apply any environment-based proxy selection or bypass policy in
+the calling application. Requests and Niquests can provide that higher-level
+policy; settings in those clients should not be mistaken for behavior of a
+standalone urllib3.future manager.
 
 HTTP and HTTPS Proxies
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -476,6 +521,7 @@ hostname or the SNI hostname, you can use ``assert_hostname``:
 
 
 .. _ssl_client:
+.. _client-certificates:
 
 Client Certificates
 -------------------
@@ -594,58 +640,99 @@ Finally, you can suppress the warnings at the interpreter level by setting the
 Brotli Encoding
 ---------------
 
-Brotli is a compression algorithm created by Google with better compression
-than gzip and deflate and is supported by urllib3 if the
-`Brotli <https://pypi.org/Brotli>`_ package or
-`brotlicffi <https://github.com/python-hyper/brotlicffi>`_ package is installed.
-You may also request the package be installed via the ``urllib3[brotli]`` extra:
+Brotli decompression is available when ``Brotli`` or ``brotlicffi`` is installed.
+Install the fork's extra to select the dependency for your interpreter:
 
 .. code-block:: bash
 
-    $ python -m pip install urllib3.future[brotli]
+    python -m pip install 'urllib3-future[brotli]'
 
-Here's an example using brotli encoding via the ``Accept-Encoding`` header:
-
-.. code-block:: python
-
-    import urllib3
-
-    urllib3.request(
-        "GET",
-        "https://www.google.com/",
-        headers={"Accept-Encoding": "br"}
-    )
+When both packages are installed, the reader prefers ``brotlicffi``.
+``Accept-Encoding: br`` asks a server for Brotli; response decompression is
+controlled by ``decode_content``. See :ref:`compression-memory` for output-limit
+support in older decoder versions.
 
 Zstandard Encoding
 ------------------
 
-`Zstandard <https://datatracker.ietf.org/doc/html/rfc8878>`_
-is a compression algorithm created by Facebook with better compression
-than brotli, gzip and deflate (see `benchmarks <https://facebook.github.io/zstd/#benchmarks>`_)
-and is supported by urllib3 if the `zstandard package <https://pypi.org/project/zstandard/>`_ is installed.
-You may also request the package be installed via the ``urllib3.future[zstd]`` extra:
+Python 3.14 and newer provide ``compression.zstd``. urllib3.future uses that
+implementation when the third-party ``zstandard`` package is absent. On older
+Python versions, install the extra:
 
 .. code-block:: bash
 
-    $ python -m pip install urllib3.future[zstd]
+    python -m pip install 'urllib3-future[zstd]'
 
-.. note::
+The supported third-party package starts at version 0.18.0. If it is installed,
+it takes precedence over the stdlib implementation, including on Python 3.14+.
+The ``zstd`` extra does not install that package on Python 3.14+.
 
-    Zstandard support in urllib3 requires using v0.18.0 or later of the ``zstandard`` package.
-    If the version installed is less than v0.18.0 then Zstandard support won't be enabled.
+Request compression through ``Accept-Encoding: zstd`` when the decoder is
+available. This controls response negotiation; urllib3.future does not
+compress an outgoing request body simply because this header is present.
 
-Here's an example using zstd encoding via the ``Accept-Encoding`` header:
+.. _compression-memory:
+
+Streaming compressed responses and memory use
+---------------------------------------------
+
+``preload_content=True``, ``response.data``, and an unrestricted ``read()`` can
+load the full decoded body into memory. Use ``preload_content=False`` and
+``stream(chunk_size)`` or bounded reads for large responses. The stream chunk
+size is an application-facing size, not an HTTP frame or TCP packet size.
+``blocksize`` configures lower-level I/O chunking and is not a response-size limit.
+
+The reader bounds decoder output where the installed codec supports it:
+
+.. list-table::
+    :header-rows: 1
+
+    * - Decoder
+      - Output limiting
+    * - gzip / deflate
+      - Uses zlib's bounded-output support.
+    * - Brotli
+      - Depends on the installed implementation's ``output_buffer_limit`` support. Use a current Brotli/brotlicffi version; legacy implementations may expand input before the reader can slice it.
+    * - stdlib ``compression.zstd``
+      - Supports bounded decoder output.
+    * - Third-party ``zstandard``
+      - Its ``decompressobj()`` path does not accept an output cap and can allocate more than the requested read size.
+
+This is not a hard process-memory limit. Buffered protocol data, concurrent
+responses, decoder state, and whole WebSocket/SSE messages also consume memory.
+For an application size policy, count decoded bytes and stop when the budget
+is exceeded:
 
 .. code-block:: python
+    :name: bounded-download-example
 
+    import sys
     import urllib3
 
-    urllib3.request(
-        "GET",
-        "https://www.facebook.com/",
-        headers={"Accept-Encoding": "zstd"}
-    )
+    limit = 10 * 1024 * 1024
+    with urllib3.PoolManager(timeout=urllib3.Timeout(connect=5, read=10)) as pm:
+        response = pm.request("GET", sys.argv[1], preload_content=False)
+        try:
+            total = 0
+            for chunk in response.stream(64 * 1024):
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError("Decoded response exceeds the application limit")
+                # Process or write this chunk without retaining every chunk.
+            print(total)
+        finally:
+            response.close()
 
+The check bounds what the application accepts; it cannot undo an allocation
+already made by a decoder. ``Content-Length`` describes the encoded body when
+content encoding is used, so it is not a decoded-size bound.
+
+Set ``decode_content=False`` from the first read when you need the encoded
+bytes. Do not switch to undecoded reads after decoding has begun. Retry-body
+caching also loads the full body; see :ref:`retry-body-hooks` before enabling it
+for large responses.
+
+.. _tls-key-logging:
 
 Decrypting Captured TLS Sessions with Wireshark
 -----------------------------------------------
@@ -727,6 +814,36 @@ the example does not guarantee a particular entry or protocol. Coordinate
 access if your application shares the mapping across threads, and manage
 persistence yourself. Cached Alt-Svc entries cannot switch hostnames.
 
+.. list-table:: QUIC cache entries
+    :header-rows: 1
+
+    * - Value for ``(origin_host, origin_port)``
+      - Meaning when selecting a new connection
+    * - No entry
+      - There is no cached endpoint hint. Normal discovery and protocol policy apply.
+    * - ``(alternative_host, alternative_port)``
+      - Try the remembered QUIC endpoint preemptively. The original hostname is retained for connection security; the alternative port can be used.
+    * - ``None``
+      - Decline a cache-driven preemptive QUIC attempt for that entry. This is not an unconditional HTTP/3 prohibition.
+
+A later Alt-Svc discovery can replace a ``None`` value in an ordinary dictionary,
+and DNS-based HTTP/3 discovery is a separate path. Use
+``disabled_svn={HttpVersion.h3}`` when the requirement is to forbid HTTP/3,
+rather than relying on a cache entry as policy.
+
+A plain dictionary has no automatic TTL or size limit. The library can update
+entries after discovery and remove an endpoint after certain failed QUIC
+attempts, but this is not a general expiry policy. Remove a remembered entry
+with ``quic_cache.pop((host, port), None)`` or clear the mapping when the
+application's network knowledge changes. Coordinate changes with other users
+of a shared mapping.
+
+Changing the mapping does not close existing connections or discard their
+negotiated protocol. Finish active responses and use a fresh manager when a
+diagnostic needs to exercise connection setup again. This cache stores protocol
+endpoint hints, whereas :ref:`dns-caching` stores DNS answers with DNS TTLs;
+clearing either one does not clear the other.
+
 .. _explicitly-disable-http-2-and-or-http-3:
 
 Selecting HTTP versions
@@ -805,29 +922,55 @@ when collecting without a specified promise instead of assuming that requests
 complete in submission order. A response collected with
 ``get_response(promise=promise)`` belongs to that promise.
 
-In-memory client (mTLS) certificate
------------------------------------
+.. _in-memory-mtls:
 
-.. note:: Available since version 2.2
+In-memory client (mTLS) certificates
+------------------------------------
 
-Using newly added ``cert_data`` and ``key_data`` arguments in ``HTTPSConnection``, ``HTTPSPoolConnection`` and ``PoolManager``.
-you will be capable of passing the certificate along with its key without getting nowhere near your filesystem.
+Pass PEM certificate-chain and private-key data with ``cert_data`` and
+``key_data`` to ``PoolManager`` or ``HTTPSConnectionPool``. These accept data
+obtained from a secret store without requiring the application to create
+certificate files. ``key_password`` is available for an encrypted private key.
 
-This feature compensate for the complete removal of ``pyOpenSSL``.
+This example reads existing PEM files to demonstrate the data format. Replace
+those reads with your secret-store lookup in an application. The URL must
+identify a server that accepts this client identity:
 
-You may give your certificate to urllib3.future this way::
+.. code-block:: python
+    :name: in-memory-mtls-example
 
-    with HTTPSConnectionPool(
-        self.host,
-        self.port,
-        key_data=CLIENT_INTERMEDIATE_KEY,
-        cert_data=CLIENT_INTERMEDIATE_PEM,
-    ) as https_pool:
-        r = https_pool.request("GET", "/")
+    import sys
+    from pathlib import Path
+    import urllib3
 
-.. note:: If the selected backend cannot load an in-memory client identity, setup
-    raises an error. Supply ``cert_file`` and ``key_file`` paths when in-memory
-    certificate loading is unavailable.
+    certificate = Path("client-chain.pem").read_bytes()
+    private_key = Path("client-key.pem").read_bytes()
+    with urllib3.PoolManager(
+        cert_data=certificate,
+        key_data=private_key,
+        ca_certs="server-ca.pem",
+        timeout=urllib3.Timeout(connect=5, read=10),
+    ) as pm:
+        response = pm.request("GET", sys.argv[1])
+        print(response.status)
+
+``ca_certs`` verifies the server; it is separate from the identity the client
+presents. Include any required intermediate client certificates in the chain.
+The same arguments work with ``AsyncPoolManager``; await its request and close
+operations.
+
+Availability depends on the TLS backend and platform. rtls, utls, and qh3 have
+native identity-loading paths; the stdlib path uses platform-specific IMCC
+support. If that stdlib IMCC path is unavailable, it emits a ``UserWarning``
+and continues without loading the in-memory identity. A successful request
+therefore does not by itself prove that a client certificate was presented.
+When the identity is required, use ``cert_file`` / ``key_file`` or a supported
+native backend, or treat that warning as an error. Invalid certificate/key
+material can raise a separate loading or handshake error.
+
+For HTTP/3, provide the identity explicitly: one loaded only inside an
+SSLContext is not extracted for qh3.
+See :ref:`tls-context-portability`.
 
 Inspect connection information and timings
 ------------------------------------------
@@ -871,6 +1014,8 @@ Here is a basic example on how to inspect a connection that was picked / created
    - The time taken to reach a complete TLS liaison between the remote peer and us (not the proxy).
 - resolution_latency *timedelta*
    - Time taken to resolve a domain name into a reachable IP address.
+- tls_ech_accepted *bool | None*
+   - Whether ECH was accepted on the selected connection; see :ref:`ech`.
 - request_sent_latency *timedelta*
    - Time taken to encode and send the whole request through the socket.
 
@@ -939,16 +1084,20 @@ performance by leveraging a multiplexed connection.
 
 You can add the optional keyword parameter ``resolver=...`` into your ``PoolManager`` and ``HTTP(S)PoolManager`` constructors.
 
-``resolver=...`` takes either a ``Resolver``, a ``list[Resolver]`` or a ``str``.
+Accepted ``resolver=`` values are a URL string, a ``ResolverDescription``,
+a sequence of URL strings/descriptions, or one live ``BaseResolver`` instance.
+Use the corresponding async descriptions and instances with the async APIs.
+A sequence contains configurations, not live resolver instances; use
+``ManyResolver`` to compose instances explicitly. See :ref:`resolver-lifetime`.
 
-The string is a URL representing how you want to configure your resolver. See bellow for how you can write said URLs
-for each protocols.
-
-.. note:: Thanks to our generic architecture, you can, at your own discretion combine multiple resolvers with or without specific conditions.
+The URL syntax below selects the transport, endpoint, and resolver options.
+Multiple configured resolvers can be combined with hostname constraints.
 
 .. warning:: Using a hostname instead of an IP address is accepted when specifying your resolver. The caveat, here, is that the name resolution will proceed using your system default.
 
 .. attention:: Only DNS over HTTPS support built-in support for proxies for now. We will support it in a future version.
+
+.. _dns-caching:
 
 DNS caching
 ~~~~~~~~~~~
@@ -1206,8 +1355,9 @@ For example::
 Combining DNS Resolvers
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-You can leverage multiple DNS servers and resolution methods by passing an array of ``Resolver`` objects.
-The given list will implicitly set order/preference.
+Pass a list of resolver URLs or descriptions to configure multiple DNS servers.
+The order establishes preference among eligible resolvers, subject to concurrency
+and hostname constraints.
 
 For example::
 
@@ -1229,40 +1379,68 @@ You would write the following::
 
 This tiny code will prevent any resolution of `www.idontwantthis.tld`, therefore raising an exception if ever happening.
 
-Multi-threading considerations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Resolver concurrency
+~~~~~~~~~~~~~~~~~~~~
 
-In normal conditions, this::
+Each network resolver instance has its own cache and coalesces identical
+concurrent lookups, as described in :ref:`dns-caching`. Distinct lookups still
+share that resolver's transport and synchronization. DNS over HTTPS can use
+HTTP multiplexing; DNS over UDP, TLS, and QUIC have their own query and I/O
+coordination. These are not interchangeable connection-capacity models.
 
-    from urllib3 import PoolManager
+Multiple configurations create independent instances. They can distribute
+concurrent work, but also duplicate caches and transport resources. Add them
+for measured capacity needs or endpoint redundancy rather than assuming one
+resolver per application worker is necessary.
 
-    with PoolManager(resolver=["doh+google://"]) as pm:
-        pm.urlopen(...)
+``ManyResolver`` tries eligible resolvers in preference order, adjusting the
+starting point during concurrent use. It does not race every configured DNS
+server for every lookup and does not promise round-robin balancing for
+sequential requests. Resolution errors ordinarily permit another eligible
+resolver to be tried; failures currently classified as DNSSEC/DNSKEY failures
+are propagated immediately. See :ref:`dnssec` for that classification's limits.
 
-Open a single connection to Google DNS over HTTPS server. It will be a multiplexed connection by default.
-So each time urllib3.future need to transform a hostname into a IP address, it will send up to 3 concurrent requests
-(or questions) at once.
+.. _resolver-lifetime:
 
-On a single threaded application, it will be more than enough to enjoy a fast experience.
-The story isn't the same when you decide to spawn multiple threads. As per our thread safety policy, we lock a resolver
-two times, once when we send the queries, and finally when we wait for the answers.
+Resolver lifetime and ownership
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You will most likely reach a bottleneck when querying a lot of different domain names.
-Fortunately, you can easily circumvent that limitation!
+When a manager or standalone pool receives resolver URLs or descriptions, it
+creates and owns the resolver. Closing that owner closes the resolver. A
+manager that is reused after ``clear()`` can create a replacement using
+``recycle()`` when it next creates a pool.
 
-Simply put. Pass multiple DNS urls, duplicated or not::
+When you pass a live resolver instance, you retain responsibility for closing
+it. This allows several managers to share its cache and transport. Keep it
+available until all users, responses, and pending exchanges have finished:
 
-    from urllib3 import PoolManager
+.. code-block:: python
+    :name: shared-resolver-example
 
-    with PoolManager(resolver=["doh+google://", "doh+cloudflare://", "doh+cloudflare://", "doq+adguard://"]) as pm:
-        pm.urlopen(...)
+    import sys
+    import urllib3
+    from urllib3.contrib.resolver import ResolverDescription
 
-This example will provide you with 4 distinct resolver each having its own connection. They will be able to work
-concurrently.
+    resolver = ResolverDescription.from_url("doh+cloudflare://").new()
+    try:
+        with urllib3.PoolManager(resolver=resolver, timeout=10) as first:
+            print(first.request("GET", sys.argv[1]).status)
+        # Closing the first manager did not close the caller-owned resolver.
+        with urllib3.PoolManager(resolver=resolver, timeout=10) as second:
+            print(second.request("GET", sys.argv[1]).status)
+    finally:
+        resolver.close()
 
-.. note:: It is scalable at will. So long that you own the required resources.
+For explicit composition, pass ``ManyResolver(first_resolver, second_resolver)``
+as the instance. Closing this composite closes its children, so share the
+composite with one application owner rather than independently closing its
+children. Async callers use ``AsyncManyResolver`` and await ``close()``;
+keep async resolver instances and their managers on the same event loop.
 
-.. warning:: In a non multi-threaded environment, the first resolver is most likely to be used alone. No load-balancing is to be expected.
+``recycle()`` returns a new instance; it does not reopen the original object.
+Custom resolvers with additional constructor state should preserve it in their
+recycling implementation. Pass configuration descriptions rather than a live
+instance when you want the manager to handle this lifecycle for you.
 
 Restrict a resolver with specific domains
 -----------------------------------------
@@ -1278,7 +1456,11 @@ Here's how::
         pm.urlopen(...)
 
 With this, all domains that match ``*.company.internal`` will be resolved using ``10.10.22.22`` server.
-Otherwise, DNS over HTTPS by Google will be tried.
+Otherwise, DNS over HTTPS by Google will be tried. If a matching constrained
+resolver fails, only other matching constrained resolvers are eligible; the
+lookup does not fall through to an unrestricted public resolver. This keeps
+private names within their configured resolution path. An explicitly matching
+``null`` resolver similarly prevents unrestricted fallback.
 
 .. note:: More complex infrastructure may have two or more top level domains. Use the comma in the **hosts** query parameter to separate entries. Like so: ``?hosts=*.company.internal,*.company.second-site`` or even ``?hosts=*.company.internal&hosts=*.company.second-site``.
 
@@ -1380,20 +1562,93 @@ The optional ``wassima`` package (``python -m pip install wassima``) reads the O
 trust store. The configured description is passed to the manager, so its CA data
 is used to verify the DNS server.
 
-Create your own Resolver
+.. _custom-resolvers:
+
+Create your own resolver
 ------------------------
 
-You can create a resolver from scratch by inheriting ``BaseResolver`` that is located at ``urllib3.contrib.resolver``.
-Then, once ready, you can instantiate it and pass it directly into the keyword argument ``resolver=...``.
+Pass a resolver subclass instance to ``resolver=`` to add application policy,
+service discovery, metrics, or a different source of addresses. There is no
+need to register a new resolver URL scheme just to use your class.
 
-The minimum viable resolver requires you to implement the methods ``getaddrinfo(...)``, ``close()``, and ``is_available()``.
+When extending an existing transport, override ``getaddrinfo()`` and call
+``super().getaddrinfo()``. Preserve its arguments and return entries unless the
+policy intentionally rejects a result. In particular, retain the socket family,
+kind, protocol, and address information rather than reconstructing incomplete
+entries from only the IP strings.
 
-Use cases:
+A public-address policy
+~~~~~~~~~~~~~~~~~~~~~~~
 
-- DNS over PostgreSQL (Using a database to translate hostnames)
-- DNS over Redis (Implementing a sharable persistent cache)
+The following ``PublicOnlyResolver`` builds on system resolution and rejects
+an entire answer if any returned address is non-global or multicast. It checks
+IPv4-mapped IPv6 addresses as IPv4 as well. The async subclass performs the
+same validation after awaiting its base resolver:
 
-.. note:: You can inherit any of ``urllib3.contrib.resolver.dot.TLSResolver``, ``urllib3.contrib.resolver.doq.QUICResolver``, ``urllib3.contrib.resolver.dou.PlainResolver``, or ``urllib3.contrib.resolver.doh.HTTPSResolver`` and add your own layer. e.g. the redis sharable cache layer.
+.. literalinclude:: ../examples/public_resolver.py
+    :language: python
+    :end-before: def main
+
+Download :download:`public_resolver.py <../examples/public_resolver.py>` or use
+the copy in ``examples/``. Use the restrictive instance
+as the manager's resolver, and close it after the manager:
+
+.. code-block:: python
+    :name: public-only-client-example
+
+    import sys
+    import urllib3
+    from public_resolver import PublicOnlyResolver
+
+    resolver = PublicOnlyResolver()
+    try:
+        with urllib3.PoolManager(resolver=resolver, timeout=10, retries=False) as pm:
+            print(pm.request("GET", sys.argv[1]).status)
+    finally:
+        resolver.close()
+
+Async callers use ``AsyncPublicOnlyResolver`` with ``AsyncPoolManager`` and
+await the resolver's ``close()``. To retain HTTPS-record discovery, the same
+post-resolution policy can wrap a network resolver such as
+``urllib3.contrib.resolver.doh.HTTPSResolver`` and its async counterpart.
+
+This is a useful layer against server-side request forgery (SSRF), not a
+complete URL authorization policy. With direct connections through this
+resolver, the checked addresses are used for socket creation, including
+IP-literal URLs. Keep the restrictive resolver on every manager handling
+untrusted destinations, including redirects. Do not compose it with an
+unrestricted fallback resolver: ``ManyResolver`` can treat the policy's
+``gaierror`` as a reason to try that fallback.
+
+A proxy can resolve the destination itself and bypass local destination-address
+checks. Validate allowed URL schemes, origins, and ports at the application
+boundary, and enforce appropriate network egress restrictions. The definition
+of ``is_global`` follows the installed Python ``ipaddress`` version; maintain
+and test your address policy for the environments you deploy. Do not reuse
+connections established under a different policy.
+
+Implementing another resolution source
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For a database or service registry, inherit ``BaseResolver`` or
+``AsyncBaseResolver`` directly. Set ``protocol = ProtocolResolver.CUSTOM`` and
+an ``implementation`` name. Initialize the base with ``super().__init__(None)``
+when there is no DNS server endpoint, then implement:
+
+* ``getaddrinfo(host, port, family, type, proto=0, flags=0,
+  *, quic_upgrade_via_dns_rr=False)``: return socket-style five-tuples
+  ``(family, type, proto, canonical_name, sockaddr)`` or raise ``socket.gaierror``.
+* ``close()``: release the instance's resources; await it in the async version.
+* ``is_available()``: report whether the instance can still accept lookups.
+
+Keep the async lookup non-blocking. If a constructor needs application-specific
+state, override ``recycle()`` to create a replacement with that state; a custom
+resolver should not assume the default constructor reconstruction can reproduce
+its database client or registry settings. Follow :ref:`resolver-lifetime` when
+sharing or composing instances. The system-backed example above inherits a
+no-op ``close()`` and remains available because it owns no DNS transport.
+
+.. _dnssec:
 
 DNSSEC
 ------
@@ -1480,6 +1735,53 @@ By writing exactly this::
 
 In this example, you are enforcing connecting to a IPv4 only address, and thanks to the callback ``on_post_connection``
 you will be able to inspect the ``ConnectionInfo`` and verify the destination address.
+
+.. _outgoing-sockets:
+
+Binding outgoing sockets and setting options
+--------------------------------------------
+
+``source_address=(local_ip, local_port)`` selects the local bind address for
+new connections. The IP must belong to the local host; port ``0`` lets the OS
+choose an ephemeral port. This does not override the destination address and
+is not an interface-name selector.
+
+The following example takes a request URL and a local IPv4 address as command
+arguments. It retains the library's default socket options and adds OS TCP
+keepalive:
+
+.. code-block:: python
+    :name: outgoing-socket-options-example
+
+    import socket
+    import sys
+    import urllib3
+    from urllib3.connection import HTTPConnection
+
+    options = list(HTTPConnection.default_socket_options)
+    options.append((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1, "tcp"))
+    with urllib3.PoolManager(
+        source_address=(sys.argv[2], 0),
+        socket_family=socket.AF_INET,
+        socket_options=options,
+        timeout=urllib3.Timeout(connect=5, read=10),
+    ) as pm:
+        print(pm.request("GET", sys.argv[1]).status)
+
+For IPv6, supply a local IPv6 address and use ``socket.AF_INET6``. Copy the
+default options before extending them rather than modifying the shared class
+attribute. Passing ``socket_options=[]`` disables the configured defaults.
+
+An option is a ``(level, option, value)`` tuple for TCP. A fourth item,
+``"tcp"`` or ``"udp"``, explicitly selects the transport; use ``"udp"`` for
+options intended for QUIC sockets. Options are applied before connecting and
+must be supported by the OS. OS TCP keepalive is separate from the library's
+HTTP/2 and HTTP/3 PING-based keepalive.
+
+``AsyncPoolManager`` accepts the same settings. For a proxy, the local socket
+connects to the proxy, so binding and socket options apply to that connection.
+These settings apply to new sockets, not ones already connected. Native WASI
+has additional binding and socket-option limits; see :ref:`wasi-capabilities`.
 
 Happy Eyeballs
 --------------
@@ -1693,9 +1995,13 @@ For a custom HTTP/1.1 upgrade, the following example requires a server on
         finally:
             response.close()
 
-HTTP/2 and HTTP/3 use extended CONNECT rather than these HTTP/1.1 upgrade
-headers. The server must advertise the required support. Select an extension
-that supports that protocol, as described for WebSockets in the user guide.
+HTTP/1.1 Upgrade uses status ``101 Switching Protocols``. Ordinary HTTP/1.1
+CONNECT tunneling instead normally returns ``200 OK``. HTTP/2 and HTTP/3
+WebSockets and custom tunnels use extended CONNECT, normally returning
+``200 OK`` (a successful CONNECT status is 2xx); they do not use a 101 upgrade.
+The server must advertise the required extended-CONNECT support. Select an
+extension that supports that protocol, as described for WebSockets in the user
+guide and :doc:`reference/contrib/webextensions`.
 
 Background unsolicited data
 ----------------------------
@@ -1713,6 +2019,8 @@ Setting it to ``None`` makes it disabled.
 .. note:: By default, it checks for incoming data and react to it every 5000ms.
 
 .. warning:: Disabling this will void the effect of our automated keepalive.
+
+.. _server-sent-events:
 
 Server-Sent Events
 ------------------
@@ -1744,10 +2052,19 @@ and for ``None`` at the end of the stream:
             response.close()
 
 ``next_payload()`` returns a parsed ``ServerSentEvent``. Its ``data`` is text;
-call ``event.json()`` only when the server sends JSON. Passing ``raw=True``
-returns the event text instead. The reader does not automatically reconnect
-at EOF. Applications that reconnect can use event IDs and retry metadata to
-implement the server's resumption policy.
+multiple ``data:`` lines in one event are joined with ``\n``, including empty
+data lines. Call ``event.json()`` only when the server sends JSON. The reader
+accepts CRLF, LF, and CR line endings, ignores a leading UTF-8 BOM, and replaces
+malformed UTF-8 characters rather than interrupting the stream.
+
+Passing ``raw=True`` returns the event text with its original line endings.
+Distinguishing a trailing CR from CRLF can require reading the following byte.
+This low-level API also exposes metadata-only blocks as events with empty
+``data``; ``retry`` describes the value supplied in that block. The reader does
+not automatically reconnect at EOF. Applications that reconnect can use event
+IDs and retry metadata to implement the server's resumption policy.
+See :ref:`sse-resumption` for an async example and
+:doc:`reference/contrib/webextensions` for the event fields and extension APIs.
 
 Debug your pool state
 ---------------------
@@ -1777,6 +2094,9 @@ Wonder no more! starting from urllib3-future 2.12.913+ you can have a proper rep
 
 Alternative TLS backends (``anytls``)
 -------------------------------------
+
+See :doc:`tls` for a capability comparison, ECH and post-quantum negotiation,
+utls profile behavior, and custom-context portability. The selection rules are:
 
 urllib3-future can transparently use one of three TLS backends:
 

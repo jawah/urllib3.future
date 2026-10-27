@@ -37,6 +37,7 @@ from ..contrib.hface.events import (
     HandshakeCompleted,
     HeadersReceived,
     StreamResetReceived,
+    StreamStopSendingReceived,
 )
 from ..contrib.ssa._gro import (
     GenericSegmentOffloadUnsupported,
@@ -56,7 +57,7 @@ from ..exceptions import (
     SSLError,
 )
 from ..util import parse_alt_svc, resolve_cert_reqs, parse_url, wait_for_read
-from ..util.ssl_ import _cert_store_stats, _get_ca_certs
+from ..util.ssl_ import _cert_store_stats, _get_ca_certs, _load_default_certs_eagerly
 from ..util.socket_state import enable_keepalive
 from ..util.ssltransport import SSLTransport
 from ..util.sub_timeout import SubTimeout
@@ -290,7 +291,9 @@ class HfaceBackend(BaseBackend):
             # do not upgrade if not coming from TLS already.
 
             # already maxed out!
-            if self._svn == HttpVersion.h3:
+            if (
+                self._svn == HttpVersion.h3
+            ):  # Defensive: normal QUIC connections already have an alternative authority.
                 if is_successful_response:
                     self.__alt_svc_checked = True
                 return
@@ -372,6 +375,7 @@ class HfaceBackend(BaseBackend):
             return False
 
         cert_use_common_name = False
+        default_context = ssl_context is None
 
         allow_insecure: bool = False
 
@@ -403,7 +407,7 @@ class HfaceBackend(BaseBackend):
             if hasattr(ssl_context, "load_default_certs"):
                 ssl_context.load_default_certs()
             else:
-                ssl_context = None
+                ssl_context = None  # Defensive: alternate TLS contexts may lack load_default_certs.
 
         self._custom_tls_context = ssl_context
 
@@ -423,6 +427,10 @@ class HfaceBackend(BaseBackend):
                     NotImplementedError,
                 ):  # Defensive: in case of ssl monkeypatch
                     ctx_root_certificates = []
+
+                if not ctx_root_certificates and not allow_insecure and default_context:
+                    _load_default_certs_eagerly(ssl_context)
+                    ctx_root_certificates = _get_ca_certs(ssl_context)
 
                 if ctx_root_certificates:
                     ca_cert_data = "\n".join(
@@ -596,7 +604,7 @@ class HfaceBackend(BaseBackend):
                     self.conn_info.certificate_dict = self.sock.getpeercert(  # type: ignore[attr-defined]
                         binary_form=False
                     )
-                except ValueError:
+                except ValueError:  # Defensive: alternate TLS engines may not expose parsed peer certificates.
                     # not supported on MacOS!
                     self.conn_info.certificate_dict = None
 
@@ -635,7 +643,9 @@ class HfaceBackend(BaseBackend):
                     ):
                         self.conn_info.issuer_certificate_der = chain[1]
 
-            elif hasattr(self.sock, "getpeercert"):
+            elif hasattr(
+                self.sock, "getpeercert"
+            ):  # Defensive: alternate TLS sockets without sslobj or _sslobj.
                 self.conn_info.certificate_der = self.sock.getpeercert(binary_form=True)
                 try:
                     self.conn_info.certificate_dict = self.sock.getpeercert(
@@ -653,7 +663,7 @@ class HfaceBackend(BaseBackend):
                 if cipher_tuple[1] == "TLSv1.0":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1
                 elif cipher_tuple[1] == "TLSv1.1":
-                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1
+                    self.conn_info.tls_version = ssl.TLSVersion.TLSv1_1  # Defensive: metadata compatibility for explicitly enabled legacy TLS 1.1.
                 elif cipher_tuple[1] == "TLSv1.2":
                     self.conn_info.tls_version = ssl.TLSVersion.TLSv1_2
                 elif cipher_tuple[1] == "TLSv1.3":
@@ -668,7 +678,9 @@ class HfaceBackend(BaseBackend):
 
         # fallback to http/1.1 or http/2 with prior knowledge!
         if self._protocol is None or self._svn == HttpVersion.h11:
-            if self._protocol is None and HttpVersion.h11 in self._disabled_svn:
+            if (
+                self._protocol is None and HttpVersion.h11 in self._disabled_svn
+            ):  # Defensive: custom initialization may leave protocol selection incomplete.
                 self._protocol = HTTPProtocolFactory.new(HTTP2Protocol)  # type: ignore[type-abstract]
                 self._svn = HttpVersion.h2
             else:
@@ -837,7 +849,8 @@ class HfaceBackend(BaseBackend):
         events = self.__exchange_until(
             HeadersReceived,
             receive_first=False,
-            event_type_collectable=(HeadersReceived,),
+            # Consume informational proxy responses; only final headers decide success.
+            event_type_collectable=(HeadersReceived, EarlyHeadersReceived),
             # special case for CONNECT
             respect_end_stream_signal=False,
         )
@@ -867,17 +880,18 @@ class HfaceBackend(BaseBackend):
         self._protocol_factory = None
 
     def peek_and_react(self, expect_frame: bool = False) -> bool:
-        """This method should be called by a thread using TrafficPolice when it is idle.
-        Multiplexed protocols can receive incoming data unsolicited. Like when using QUIC
-        or when reaching a WebSocket.
-        Return True when input or a connection failure was observed, so the caller
-        can recheck connection state. False means no new state was observed.
-        Some server implementation may be aggressive toward "idle" session
-        this is especially true when using QUIC.
-        For example, google/quiche send regular unsolicited data and expect regular ACKs, otherwise will
-        deduct that network conn is dead.
-        see: https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6
-        and: https://github.com/google/quiche/blob/92b45f743288ea2f43ae8cdc4a783ef252e41d93/quiche/quic/core/quic_connection.cc#L6322
+        """Inspect unsolicited input while holding the connection checkout.
+
+        Return True when input or a connection failure was observed, so the
+        caller can recheck connection state. False means no new state was seen.
+        The idle watcher coordinates this operation through TrafficPolice.
+
+        Multiplexed peers can send control frames without a new request. QUIC
+        peers may also require acknowledgements to keep an idle connection alive.
+        See the `quiche idle-connection change
+        <https://github.com/google/quiche/commit/c4bb0723f0a03e135bc9328b59a39382761f3de6>`_.
+
+        :param expect_frame: Allow a short receive wait when a peer frame is expected.
         """
         if self.sock is None or self._protocol is None:
             return False
@@ -1024,7 +1038,7 @@ class HfaceBackend(BaseBackend):
 
         if maximal_data_in_read is not None:
             if not (maximal_data_in_read >= 0 or maximal_data_in_read == -1):
-                maximal_data_in_read = None
+                maximal_data_in_read = None  # Defensive: public response reads normalize negative sizes first.
 
         data_in: bytes | list[bytes]
 
@@ -1129,12 +1143,6 @@ class HfaceBackend(BaseBackend):
                         protocol.connection_lost()
                 else:
                     if isinstance(data_in, list):
-                        if (
-                            data_in_len_from is None
-                            and maximal_data_in_read is not None
-                        ):
-                            data_in_len += sum(map(len, data_in))
-
                         try:
                             protocol.many_bytes_received(data_in)  # type: ignore[union-attr]
                         except _proto_exc as e:
@@ -1147,12 +1155,6 @@ class HfaceBackend(BaseBackend):
                                 ) from e  # Defensive:
                             raise ProtocolError(e) from e  # Defensive:
                     else:
-                        if (
-                            data_in_len_from is None
-                            and maximal_data_in_read is not None
-                        ):
-                            data_in_len += len(data_in)
-
                         try:
                             protocol.bytes_received(data_in)
                         except _proto_exc as e:
@@ -1170,17 +1172,19 @@ class HfaceBackend(BaseBackend):
                     send_pending()
 
             for event in protocol.events(stream_id=stream_id):  # type: Event
+                if isinstance(event, StreamStopSendingReceived):
+                    continue  # Only the upload ended; keep waiting for the response.
                 stream_related_event: bool = hasattr(event, "stream_id")
 
                 if not stream_related_event and isinstance(event, ConnectionTerminated):
                     self._protocol = None
                     self.close()
 
-                    # A server may end the transmission without error
-                    # to mark the end of SSE for example. While it's not ideal
-                    # it's not forbidden either.
+                    # Only HTTP/1 can delimit a response body by closing the connection.
+                    # HTTP/2 and HTTP/3 require the response stream to end explicitly.
                     if (
-                        event.error_code == 0
+                        self._svn is HttpVersion.h11
+                        and event.error_code == 0
                         and stream_id is not None
                         and (
                             event_type is DataReceived
@@ -1290,6 +1294,11 @@ class HfaceBackend(BaseBackend):
                     else:
                         reshelve_events.append(event)
 
+                # Finish inspecting queued events before accepting the handshake.
+                # A peer may already have rejected it; no further socket read is needed.
+                if event_type is HandshakeCompleted:
+                    continue
+
                 target_cap_reached: bool = (
                     maximal_data_in_read is not None
                     and data_in_len >= maximal_data_in_read
@@ -1342,6 +1351,11 @@ class HfaceBackend(BaseBackend):
                     if reshelve_events:
                         protocol.reshelve(*reshelve_events)
                     return events
+
+            if event_type is HandshakeCompleted and any(
+                isinstance(event, HandshakeCompleted) for event in events
+            ):
+                return events
 
     def putrequest(
         self,
@@ -1630,6 +1644,11 @@ class HfaceBackend(BaseBackend):
             if sub.timer_fired:
                 continue
 
+            # TCP EOF cannot replenish flow-control credit.
+            if not data_in and self._svn is not HttpVersion.h3:
+                self._protocol.connection_lost()
+                raise ProtocolError("Connection closed while waiting for flow control")
+
             if isinstance(data_in, list):
                 for gro_segment in data_in:
                     self._protocol.bytes_received(gro_segment)
@@ -1846,7 +1865,7 @@ class HfaceBackend(BaseBackend):
                     promise = self._promises_per_stream[head_event.stream_id]
                 else:
                     promise = self._promises_per_stream.pop(head_event.stream_id)
-            except KeyError as e:
+            except KeyError as e:  # Defensive: built-in protocols filter streams without an originating promise.
                 raise ProtocolError(
                     f"Response received (stream: {head_event.stream_id}) but no promise in-flight"
                 ) from e
@@ -1963,7 +1982,28 @@ class HfaceBackend(BaseBackend):
                 else:
                     self.sock.sendall(data_out)  # type: ignore[union-attr]
 
+        protocol, stream_id = self._protocol, self._stream_id
+
+        def check_early_response() -> None:
+            if protocol.has_pending_event(
+                stream_id=stream_id, excl_event=(EarlyHeadersReceived,)
+            ):
+                if self._start_last_request and self.conn_info:
+                    self.conn_info.request_sent_latency = (
+                        datetime.now(tz=timezone.utc) - self._start_last_request
+                    )
+
+                rp = ResponsePromise(self, stream_id, self.__headers)
+                self._promises[rp.uid] = rp
+                self._promises_per_stream[rp.stream_id] = rp
+
+                raise EarlyResponse(promise=rp)
+
         try:
+            # Check before another body chunk even when no ACK wait is needed.
+            # A FIN-only call can still complete an otherwise finished upload.
+            if data:
+                check_early_response()
             while (
                 self._protocol.should_wait_remote_flow_control(
                     self._stream_id, len(data)
@@ -1981,27 +2021,20 @@ class HfaceBackend(BaseBackend):
                 if sub.timer_fired:
                     continue
 
+                # TCP EOF cannot replenish flow-control credit.
+                if not data_in and self._svn is not HttpVersion.h3:
+                    self._protocol.connection_lost()
+                    raise ProtocolError(
+                        "Connection closed while waiting for flow control"
+                    )
+
                 if not isinstance(data_in, list):
                     self._protocol.bytes_received(data_in)
                 else:
                     for gro_segment in data_in:
                         self._protocol.bytes_received(gro_segment)
 
-                # this is a bad sign. we should stop sending and instead retrieve the response.
-                # we exclude 'EarlyHeadersReceived' event because it is simply expected. e.g. 100-continue!
-                if self._protocol.has_pending_event(
-                    stream_id=self._stream_id, excl_event=(EarlyHeadersReceived,)
-                ):
-                    if self._start_last_request and self.conn_info:
-                        self.conn_info.request_sent_latency = (
-                            datetime.now(tz=timezone.utc) - self._start_last_request
-                        )
-
-                    rp = ResponsePromise(self, self._stream_id, self.__headers)
-                    self._promises[rp.uid] = rp
-                    self._promises_per_stream[rp.stream_id] = rp
-
-                    raise EarlyResponse(promise=rp)
+                check_early_response()
 
                 send_pending()
 
@@ -2087,7 +2120,9 @@ class HfaceBackend(BaseBackend):
             self._protocol.ping()
         except NotImplementedError:
             return
-        except self._protocol.exceptions():
+        except (
+            self._protocol.exceptions()
+        ):  # Defensive: protocol-engine fallback after validating PING availability.
             return
 
         while True:

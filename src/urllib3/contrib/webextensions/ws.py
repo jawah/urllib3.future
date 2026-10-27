@@ -177,7 +177,7 @@ class WebSocketExtensionFromHTTP(ExtensionFromHTTP):
             if police is not None:
                 police.forget(response)
             else:
-                response.close()
+                response.close()  # Defensive: externally constructed responses may lack a TrafficPolice owner.
         self._response = None
         self._police_officer = None
 

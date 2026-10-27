@@ -1,38 +1,56 @@
 from __future__ import annotations
 
-import os
 import asyncio
+import codecs
 import contextlib
+import os
+import os.path
+import socket
 import ssl
 import typing
+import zlib
+from threading import Event
+from unittest import mock
 
 import pytest
 from jh2.config import H2Configuration  # type: ignore[import-untyped]
 from jh2.connection import H2Connection  # type: ignore[import-untyped]
 from jh2.events import RequestReceived  # type: ignore[import-untyped]
-from urllib3 import HttpVersion, ResponsePromise, AsyncProxyManager
-from urllib3 import AsyncHTTPConnectionPool, AsyncHTTPSConnectionPool, AsyncPoolManager
+
+from dummyserver.server import (
+    DEFAULT_CA,
+    DEFAULT_CERTS,
+)
+from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
+from test.conftest import ServerConfig
+from test.with_dummyserver.conftest import SSE_EVENT_CASES
+from urllib3 import (
+    AsyncHTTPConnectionPool,
+    AsyncHTTPSConnectionPool,
+    AsyncPoolManager,
+    AsyncProxyManager,
+    HttpVersion,
+    ResponsePromise,
+)
 from urllib3._async.connection import AsyncHTTPConnection
+from urllib3._collections import HTTPHeaderDict
 from urllib3.contrib.ssa import AsyncSocket
 from urllib3.contrib.webextensions._async.raw import AsyncRawExtensionFromHTTP
 from urllib3.contrib.webextensions._async.sse import (
     AsyncServerSideEventExtensionFromHTTP,
 )
-from urllib3.contrib.webextensions.sse import ServerSentEvent
+from urllib3.contrib.webextensions.sse import (
+    ServerSentEvent,
+)
 from urllib3.exceptions import (
     IncompleteRead,
-    MaxRetryError,
     InvalidHeader,
+    MaxRetryError,
     ProtocolError,
     ReadTimeoutError,
     SSLError,
 )
-
-from dummyserver.server import DEFAULT_CA, DEFAULT_CERTS
-from dummyserver.testcase import SocketDummyServerTestCase, consume_socket
-from test.conftest import ServerConfig
-from threading import Event
-import socket
+from urllib3.util.retry import Retry
 
 
 @pytest.mark.asyncio
@@ -291,18 +309,227 @@ class TestServerSentEvents(SocketDummyServerTestCase):
             with pytest.raises(OSError, match="closed"):
                 await extension.next_payload()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", [False, True])
+    async def test_large_event_and_following_event(
+        self, raw: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        payload = "x" * 65536
+        event_text = "data: " + payload + "\n\n"
+        self.serve_events(codecs.BOM_UTF8 + event_text.encode() + b"data: tail\n\n")
+        decode = codecs.utf_8_decode
+        views = 0
+
+        def observe_decode(data: typing.Any, *args: typing.Any) -> typing.Any:
+            nonlocal views
+            if isinstance(data, memoryview):
+                assert data.readonly
+                views += 1
+            return decode(data, *args)
+
+        monkeypatch.setattr(codecs, "utf_8_decode", observe_decode)
+        manager = AsyncPoolManager(
+            timeout=5, retries=False, background_watch_delay=None
+        )
+        response = None
+        try:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, AsyncServerSideEventExtensionFromHTTP)
+            event = (
+                await extension.next_payload(raw=True)
+                if raw
+                else await extension.next_payload()
+            )
+            if raw:
+                assert event == event_text
+            else:
+                assert isinstance(event, ServerSentEvent) and event.data == payload
+                assert views > 0
+            tail = await extension.next_payload()
+            assert isinstance(tail, ServerSentEvent) and tail.data == "tail"
+            assert await extension.next_payload() is None
+            assert extension._buffer == b""
+            assert extension._buffer_start == 0
+        finally:
+            if response is not None:
+                await response.close()
+            await manager.clear()
+
+    @pytest.mark.asyncio
+    async def test_reused_extension_starts_with_fresh_text(
+        self,
+    ) -> None:
+        extension = AsyncServerSideEventExtensionFromHTTP()
+        manager = AsyncPoolManager(
+            timeout=5, retries=False, background_watch_delay=None
+        )
+        try:
+            for body, expected in (
+                (b"id: cursor\ndata: first\n\ndata: stale", "first"),
+                (b"\xef\xbb\xbfdata: second\n\n", "second"),
+            ):
+                self.serve_events(body)
+                response = await manager.urlopen(
+                    "GET",
+                    f"http://{self.host}:{self.port}/",
+                    extension=extension,
+                    preload_content=False,
+                )
+                try:
+                    event = await extension.next_payload()
+                    assert isinstance(event, ServerSentEvent)
+                    assert event.data == expected and event.id == "cursor"
+                    # Close before consuming the incomplete tail, then reuse the extension.
+                finally:
+                    await response.close()
+        finally:
+            await manager.clear()
+
+    @pytest.mark.asyncio
+    async def test_close_interrupts_pending_read(self) -> None:
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+                )
+                assert sock.recv(1) == b""
+
+        self._start_server(handler)
+        async with AsyncPoolManager(
+            timeout=5, retries=False, background_watch_delay=None
+        ) as manager:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, AsyncServerSideEventExtensionFromHTTP)
+            stream = extension._stream
+            assert stream is not None
+            reading = asyncio.Event()
+
+            async def observed_stream() -> typing.AsyncGenerator[bytes, None]:
+                reading.set()
+                async for chunk in stream:
+                    yield chunk
+
+            extension._stream = observed_stream()
+            reader = asyncio.create_task(extension.next_payload())
+            try:
+                await asyncio.wait_for(reading.wait(), 5)
+                await asyncio.wait_for(extension.close(), 5)
+                assert await asyncio.wait_for(reader, 5) is None
+                assert extension.closed
+            finally:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+                await response.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blocksize", [1, 65536])
+    @pytest.mark.parametrize("body, expected", SSE_EVENT_CASES)
+    async def test_event_stream(
+        self,
+        blocksize: int,
+        body: bytes,
+        expected: list[tuple[str, str, str, int | None]],
+    ) -> None:
+        self.serve_events(body)
+        manager = AsyncPoolManager(
+            blocksize=blocksize, timeout=5, retries=False, background_watch_delay=None
+        )
+        response = None
+        try:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, AsyncServerSideEventExtensionFromHTTP)
+            events = []
+            while not extension.closed:
+                event = await extension.next_payload()
+                if event is not None:
+                    assert isinstance(event, ServerSentEvent)
+                    events.append((event.event, event.data, event.id, event.retry))
+            assert events == expected
+        finally:
+            if response is not None:
+                await response.close()
+            await manager.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blocksize", [1, 65536])
+    @pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r", b"\n\r"])
+    async def test_raw_keeps_original_event_text(
+        self,
+        blocksize: int,
+        ending: bytes,
+    ) -> None:
+        body = b"data: first\r\ndata: second" + ending + ending
+        self.serve_events(b"\xef\xbb\xbf\r\n" + body)
+        manager = AsyncPoolManager(
+            blocksize=blocksize, timeout=5, retries=False, background_watch_delay=None
+        )
+        response = None
+        try:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            extension = response.extension
+            assert isinstance(extension, AsyncServerSideEventExtensionFromHTTP)
+            raw = await extension.next_payload(raw=True)
+            # For LF/CR mixed endings, the earliest blank line terminates the event.
+            expected = body if ending != b"\n\r" else body[:-1]
+            assert raw == expected.decode()
+            assert await extension.next_payload() is None
+        finally:
+            if response is not None:
+                await response.close()
+            await manager.clear()
+
+    @pytest.mark.asyncio
+    async def test_lone_cr_dispatches_before_peer_closes(
+        self,
+    ) -> None:
+        release = Event()
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n9\r\ndata: x\r\r\r\n"
+                )
+                assert release.wait(10)
+                sock.sendall(b"0\r\n\r\n")
+
+        self._start_server(handler)
+        manager = AsyncPoolManager(
+            timeout=5, retries=False, background_watch_delay=None
+        )
+        response = None
+        try:
+            response = await manager.urlopen("GET", f"psse://{self.host}:{self.port}/")
+            assert response.extension is not None
+            event = await response.extension.next_payload()
+            assert isinstance(event, ServerSentEvent) and event.data == "x"
+            release.set()
+            assert await response.extension.next_payload() is None
+        finally:
+            release.set()
+            if response is not None:
+                await response.close()
+            await manager.clear()
+
 
 @pytest.mark.asyncio
 class TestSocketClosing(SocketDummyServerTestCase):
     async def test_close_before_response_headers_releases_socket(self) -> None:
         from urllib3.exceptions import HTTPError
 
+        # Keep server/control deadlines above the five-second client I/O timeout.
         request_received, peer_closed = Event(), Event()
 
         def handler(listener: socket.socket) -> None:
-            listener.settimeout(5)
+            listener.settimeout(10)
             with listener.accept()[0] as sock:
-                sock.settimeout(5)
+                sock.settimeout(10)
                 headers = bytearray()
                 while not headers.endswith(b"\r\n\r\n"):
                     chunk = sock.recv(65536)
@@ -319,11 +546,11 @@ class TestSocketClosing(SocketDummyServerTestCase):
                 manager.request("GET", f"http://{self.host}:{self.port}/")
             )
             try:
-                assert await loop.run_in_executor(None, request_received.wait, 5)
+                assert await loop.run_in_executor(None, request_received.wait, 10)
                 await manager.clear()
                 with pytest.raises((HTTPError, asyncio.CancelledError)):
-                    await asyncio.wait_for(request, 5)
-                assert await loop.run_in_executor(None, peer_closed.wait, 5)
+                    await asyncio.wait_for(request, 10)
+                assert await loop.run_in_executor(None, peer_closed.wait, 10)
                 assert manager.pools.rsize() == 0
             finally:
                 request.cancel()
@@ -1124,6 +1351,81 @@ class TestRemoteClosedWithoutResponse(SocketDummyServerTestCase):
             assert pool.num_requests == pool.num_connections == 1
         assert received == [body]
 
+    @pytest.mark.asyncio
+    async def test_http2_completed_response_survives_upload_reset(
+        self,
+    ) -> None:
+        from jh2.settings import SettingCodes, Settings  # type: ignore[import-untyped]
+
+        from urllib3 import AsyncHTTPSConnectionPool
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        context.set_alpn_protocols(["h2"])
+        errors: list[BaseException] = []
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                listener.settimeout(10)
+                with listener.accept()[0] as raw:
+                    raw.settimeout(10)
+                    with context.wrap_socket(raw, server_side=True) as sock:
+                        peer = H2Connection(H2Configuration(client_side=False))
+                        # Keep the upload open while returning the complete response.
+                        peer.local_settings = Settings(
+                            client=False,
+                            initial_values={SettingCodes.INITIAL_WINDOW_SIZE: 0},
+                        )
+                        peer.initiate_connection()
+                        sock.sendall(peer.data_to_send())
+                        while True:
+                            data = sock.recv(65536)
+                            if not data:
+                                break
+                            for event in peer.receive_data(data):
+                                if isinstance(event, RequestReceived):
+                                    uploading = (b":method", b"POST") in event.headers
+                                    peer.send_headers(
+                                        event.stream_id,
+                                        [
+                                            (
+                                                b":status",
+                                                b"413" if uploading else b"200",
+                                            ),
+                                            (b"content-length", b"0"),
+                                        ],
+                                        end_stream=True,
+                                    )
+                                    if uploading:
+                                        peer.reset_stream(event.stream_id, error_code=0)
+                            pending = peer.data_to_send()
+                            if pending:
+                                sock.sendall(pending)
+            except BaseException as exc:
+                errors.append(exc)
+
+        self._start_server(handler)
+        options: dict[str, typing.Any] = {
+            "ca_certs": DEFAULT_CA,
+            "timeout": 5,
+            "retries": False,
+            "disabled_svn": {HttpVersion.h11, HttpVersion.h3},
+            "background_watch_delay": None,
+        }
+        try:
+            async with AsyncHTTPSConnectionPool(
+                self.host, self.port, **options
+            ) as pool:
+                response = await pool.request("POST", "/", body=b"body")
+                assert response.status == 413
+                assert await response.data == b""
+                assert (await pool.request("GET", "/")).status == 200
+                assert pool.num_connections == 1
+        finally:
+            self.server_thread.join(10)
+        assert not self.server_thread.is_alive()
+        assert not errors, errors
+
 
 @pytest.mark.asyncio
 class TestInvalidHTTPResponse(SocketDummyServerTestCase):
@@ -1179,7 +1481,6 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
     async def test_read1_size_preserves_remainder(
         self, compressed: bool, decode_content: bool
     ) -> None:
-        import zlib
 
         payload = b"response body" * 100
         body = zlib.compress(payload) if compressed else payload
@@ -1219,12 +1520,9 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             event = await response.extension.next_payload()
             assert isinstance(event, ServerSentEvent)
             assert event.data == "first €"
-            if incomplete_utf8:
-                with pytest.raises(UnicodeDecodeError):
-                    await response.extension.next_payload()
-            else:
-                assert await response.extension.next_payload() is None
-                assert response.extension.closed
+            # SSE uses replacement decoding and discards an unterminated event.
+            assert await response.extension.next_payload() is None
+            assert response.extension.closed
         assert manager.pools.rsize() == 0
 
     @pytest.mark.parametrize("partial", [False, True])
@@ -1398,3 +1696,221 @@ class TestResponseReadEdges(SocketDummyServerTestCase):
             assert event.data == "first"
             await response.extension.close()
             await response.close()
+
+
+class TestProxyManager(SocketDummyServerTestCase):
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target_scheme", ["http", "https"])
+    async def test_https_forwarding_proxy_is_verified(self, target_scheme: str) -> None:
+        from urllib3 import AsyncProxyManager
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        received: list[bytes] = []
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    received.append(consume_socket(tls))
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+
+        self._start_server(handler)
+        manager = AsyncProxyManager(
+            f"https://{self.host}:{self.port}",
+            ca_certs=DEFAULT_CA,
+            use_forwarding_for_https=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        )
+        try:
+            response = await manager.request(
+                "GET",
+                f"{target_scheme}://example.invalid/resource",
+                preload_content=False,
+            )
+            conn = response.connection
+            assert conn is not None and conn.proxy_is_verified is True
+            assert conn.is_verified is False
+            assert await response.read() == b"ok"
+        finally:
+            await manager.clear()
+        self.server_thread.join(5)
+        assert received[0].startswith(
+            f"GET {target_scheme}://example.invalid/resource HTTP/1.1\r\n".encode()
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_scoped_tls_hostname_uses_ip_without_zone(self) -> None:
+        from urllib3 import AsyncHTTPSConnectionPool
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        names: list[str | None] = []
+        context.set_servername_callback(lambda sock, name, ctx: names.append(name))
+
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as raw:
+                raw.settimeout(5)
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    consume_socket(tls)
+                    tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        self._start_server(handler)
+        async with AsyncHTTPSConnectionPool(
+            self.host,
+            self.port,
+            ca_certs=DEFAULT_CA,
+            server_hostname="[::1%scope]",
+            assert_hostname="localhost",
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            assert (await pool.request("GET", "/")).status == 200
+        self.server_thread.join(5)
+        assert names == [None], "An IPv6 literal must not be sent as DNS SNI"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("proxy_host", ["localhost:443", "other.example:443"])
+    async def test_connect_host_header_and_informational_response(
+        self, monkeypatch: pytest.MonkeyPatch, proxy_host: str
+    ) -> None:
+        from urllib3 import AsyncProxyManager
+        from urllib3.contrib.hface.protocols.http1._h11 import HTTP1ProtocolHyperImpl
+
+        reshelve = mock.Mock(side_effect=HTTP1ProtocolHyperImpl.reshelve)
+
+        def observe_reshelve(
+            protocol: HTTP1ProtocolHyperImpl, *events: typing.Any
+        ) -> None:
+            reshelve(protocol, *events)
+
+        monkeypatch.setattr(HTTP1ProtocolHyperImpl, "reshelve", observe_reshelve)
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(DEFAULT_CERTS["certfile"], DEFAULT_CERTS["keyfile"])
+        received: list[bytes] = []
+        errors: list[BaseException] = []
+
+        def handler(listener: socket.socket) -> None:
+            try:
+                listener.settimeout(10)
+                with listener.accept()[0] as sock:
+                    sock.settimeout(10)
+                    if proxy_host != "localhost:443":
+                        # A conflicting proxy Host must fail before sending CONNECT.
+                        assert sock.recv(1) == b""
+                        return
+                    received.append(consume_socket(sock))
+                    # The backend defers the informational event until it has
+                    # received the final CONNECT response.
+                    sock.sendall(
+                        b"HTTP/1.1 100 Continue\r\n\r\n"
+                        b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                    )
+                    with context.wrap_socket(sock, server_side=True) as tls:
+                        received.append(consume_socket(tls))
+                        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            except BaseException as exc:
+                errors.append(exc)
+
+        self._start_server(handler)
+        proxy = f"http://{self.host}:{self.port}"
+
+        async def request() -> None:
+            async with AsyncProxyManager(
+                proxy,
+                ca_certs=DEFAULT_CA,
+                proxy_headers={"Host": proxy_host},
+                timeout=5,
+                retries=False,
+            ) as manager:
+                response = await manager.request("GET", "https://localhost/")
+                assert response.version == 11
+                assert await response.data == b"ok"
+
+        try:
+            if proxy_host != "localhost:443":
+                with pytest.raises(
+                    ValueError, match="Host header does not match :authority"
+                ):
+                    await request()
+            else:
+                await request()
+        finally:
+            self.server_thread.join(10)
+        assert not self.server_thread.is_alive()
+        assert not errors, errors
+        if proxy_host == "localhost:443":
+            reshelve.assert_not_called()
+            assert received[0].startswith(b"CONNECT localhost:443 HTTP/1.1\r\n")
+            assert received[0].count(b"Host: localhost:443\r\n") == 1
+            assert received[1].startswith(b"GET / HTTP/1.1\r\n")
+        else:
+            assert not received
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("remove_sensitive", [False, True])
+    @pytest.mark.parametrize("target", ["same", "default-port", "cross", "proxy"])
+    async def test_redirect_rewrites_host_and_strips_credentials(
+        self, remove_sensitive: bool, target: str
+    ) -> None:
+        from urllib3 import AsyncProxyManager
+
+        requests: list[bytearray] = []
+
+        def handler(listener: socket.socket) -> None:
+            listener.settimeout(10)
+            for first in (True, False):
+                with listener.accept()[0] as sock:
+                    sock.settimeout(10)
+                    requests.append(consume_socket(sock))
+                    if first:
+                        sock.sendall(
+                            b"HTTP/1.1 302 Found\r\nLocation: "
+                            + location.encode()
+                            + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    else:
+                        sock.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+
+        self._start_server(handler)
+        proxy_url = f"http://{self.host}:{self.port}"
+        location, expected_host = {
+            "same": ("http://google.com/second", "google.com"),
+            "default-port": ("http://google.com:80/second", "google.com"),
+            "cross": ("http://example.com/second", "example.com"),
+            "proxy": (proxy_url + "/second", f"{self.host}:{self.port}"),
+        }[target]
+        headers = {"Authorization": "Bearer secret", "Cookie": "private=yes"}
+        retries = Retry(
+            total=1,
+            remove_headers_on_redirect=(
+                Retry.DEFAULT_REMOVE_HEADERS_ON_REDIRECT if remove_sensitive else ()
+            ),
+        )
+        async with AsyncProxyManager(
+            proxy_url, headers=headers, timeout=5, retries=retries
+        ) as manager_async:
+            response_async = await manager_async.request(
+                "GET", "http://google.com/first"
+            )
+            assert response_async.status == 200
+
+        assert len(requests) == 2
+        assert requests[1].startswith(b"GET " + location.encode() + b" HTTP/1.1\r\n")
+        received = HTTPHeaderDict()
+        for line in requests[1].split(b"\r\n")[1:]:
+            if line:
+                name, value = line.decode().split(":", 1)
+                received.add(name, value.strip())
+        assert received["Host"] == expected_host
+        retain_credentials = target in {"same", "default-port"} or not remove_sensitive
+        assert ("Authorization" in received) is retain_credentials
+        assert ("Cookie" in received) is retain_credentials
+        assert headers == {"Authorization": "Bearer secret", "Cookie": "private=yes"}

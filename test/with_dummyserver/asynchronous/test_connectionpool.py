@@ -1,33 +1,58 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import os
 import platform
 import socket
+import ssl
 import sys
 import time
 import typing
 import warnings
+from builtins import TimeoutError as BuiltinTimeoutError
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
 from threading import Event
+from typing import Any, cast
 from unittest import mock
 from urllib.parse import urlencode
 
 import aiofile
 import pytest
 
-from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
-from dummyserver.testcase import HTTPDummyServerTestCase, SocketDummyServerTestCase
-from urllib3 import AsyncHTTPConnectionPool, ResponsePromise, encode_multipart_formdata
+from dummyserver.server import DEFAULT_CA, HAS_IPV6_AND_DNS, NoIPv6Warning
+from dummyserver.testcase import (
+    HTTPDummyServerTestCase,
+    HTTPSDummyServerTestCase,
+    SocketDummyServerTestCase,
+)
+from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
+from test.traffic_police_helpers import (
+    ObservedAsyncPool,
+    ObservedAsyncTrafficPolice,
+)
+from test.with_dummyserver.conftest import HTTP2Peer
+from urllib3 import (
+    AsyncHTTPSConnectionPool,
+    AsyncPoolManager,
+    AsyncResolverDescription,
+    HttpVersion,
+    ResponsePromise,
+    encode_multipart_formdata,
+)
 from urllib3._async.connection import AsyncHTTPConnection
-from urllib3 import AsyncResolverDescription
+from urllib3._async.connectionpool import AsyncHTTPConnectionPool
+from urllib3._async.response import AsyncHTTPResponse
 from urllib3._collections import HTTPHeaderDict
 from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
 from urllib3.connection import _get_default_user_agent
+from urllib3.contrib.resolver._async.in_memory import (
+    InMemoryResolver as AsyncInMemoryResolver,
+)
 from urllib3.exceptions import (
+    ClosedPoolError,
     ConnectTimeoutError,
     DecodeError,
     EmptyPoolError,
@@ -35,15 +60,21 @@ from urllib3.exceptions import (
     NameResolutionError,
     NewConnectionError,
     ProtocolError,
+    ReadTimeoutError,
+    SSLError,
     TimeoutError,
     UnrewindableBodyError,
 )
+from urllib3.response import HTTPResponse
 from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS
 from urllib3.util.retry import RequestHistory, Retry
 from urllib3.util.timeout import Timeout
+from urllib3.util.traffic_police import (
+    UnavailableTraffic,
+)
 
-from ...conftest import DNSHTTPSServer
 from ... import INVALID_SOURCE_ADDRESSES, TARPIT_HOST, VALID_SOURCE_ADDRESSES
+from ...conftest import DNSHTTPSServer
 from ...port_helpers import find_unused_port
 
 
@@ -234,6 +265,177 @@ class TestAsyncConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 @pytest.mark.asyncio
 class TestConnectionPool(HTTPDummyServerTestCase):
+    async def test_gc_tasks_stay_with_their_owning_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import gc
+        from concurrent.futures import ThreadPoolExecutor
+        from queue import Queue
+        from threading import get_ident
+
+        from urllib3.util._async.traffic_police import AsyncTrafficPolice
+
+        ready: Queue[None] = Queue()
+        scheduled: Queue[tuple[int, int, int]] = Queue()
+        release = Event()
+        abandoned: list[AsyncHTTPResponse] = []
+        original_schedule = AsyncTrafficPolice._schedule_gc_close
+
+        def observe(
+            police: AsyncTrafficPolice[Any], response: AsyncHTTPResponse
+        ) -> None:
+            owner = asyncio.get_running_loop()
+            assert owner is response._loop
+            original_schedule(police, response)
+            assert police._gc_tasks
+            assert all(task.get_loop() is owner for task in police._gc_tasks)
+            scheduled.put((id(police), id(police._gc_tasks), get_ident()))
+
+        monkeypatch.setattr(AsyncTrafficPolice, "_schedule_gc_close", observe)
+
+        async def client() -> tuple[int, int]:
+            loop = asyncio.get_running_loop()
+            async with AsyncHTTPConnectionPool(
+                self.host,
+                self.port,
+                maxsize=1,
+                block=True,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as pool:
+                police = pool.pool
+                assert police is not None
+                response = await pool.request("GET", "/", preload_content=False)
+                abandoned.append(response)
+                del response
+                ready.put(None)
+                assert await loop.run_in_executor(None, release.wait, 10)
+                assert (await pool.request("GET", "/", pool_timeout=5)).status == 200
+                await asyncio.gather(*tuple(police._gc_tasks))
+                await asyncio.sleep(0)  # Run the completed tasks' discard callbacks.
+                assert not police._gc_tasks
+                return id(police), get_ident()
+
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(2) as threads:
+            clients = [
+                loop.run_in_executor(threads, asyncio.run, client()) for _ in range(2)
+            ]
+            try:
+                for _ in range(2):
+                    await loop.run_in_executor(None, ready.get, True, 10)
+                # Finalization runs on this third thread, outside both owning loops.
+                abandoned.clear()
+                gc.collect()
+            finally:
+                release.set()
+            owners = await asyncio.wait_for(asyncio.gather(*clients), 15)
+
+        observed = [scheduled.get_nowait() for _ in range(2)]
+        assert {(police, thread) for police, _, thread in observed} == set(owners)
+        assert len({tasks for _, tasks, _ in observed}) == 2
+        assert len({thread for _, _, thread in observed}) == 2
+        assert all(thread != get_ident() for _, _, thread in observed)
+
+    @pytest.mark.parametrize(
+        "path,status",
+        [("/", 200), ("/not_found", 404), ("/redirect?compressed=true", 303)],
+    )
+    @pytest.mark.parametrize("release_conn", [False, True])
+    async def test_discarded_unread_responses_do_not_exhaust_pool(
+        self, release_conn: bool, path: str, status: int
+    ) -> None:
+        import gc
+
+        async with AsyncHTTPConnectionPool(
+            self.host,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=Retry(
+                total=0,
+                status_forcelist=[404],
+                raise_on_status=False,
+                raise_on_redirect=False,
+            ),
+            background_watch_delay=None,
+        ) as pool:
+            for _ in range(3):
+                response = await pool.request(
+                    "GET",
+                    path,
+                    preload_content=False,
+                    pool_timeout=5,
+                    release_conn=release_conn,
+                )
+                assert response.status == status
+                del response
+                gc.collect()
+                if not release_conn:
+                    # A retained checkout cannot serve this task again until
+                    # its scheduled finalizer has had a chance to run.
+                    await asyncio.sleep(0)
+                    assert pool.pool is not None
+                    await asyncio.wait_for(
+                        asyncio.gather(*tuple(pool.pool._gc_tasks)), 5
+                    )
+            # Also wait for cleanup of the final abandoned response.
+            assert (await pool.request("GET", "/", pool_timeout=5)).status == 200
+
+    async def test_async_body_empty_and_text_chunks(self) -> None:
+        async def body() -> typing.AsyncIterator[str]:
+            yield ""
+            yield "café"
+            yield ""
+
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            response = await pool.request(
+                "POST", "/echo", body=body(), preload_content=False
+            )
+            assert await response.read() == "café".encode()
+
+    async def test_async_readable_body_accepts_text_after_bytes(self) -> None:
+        class Body:
+            chunks: typing.Iterator[bytes | str] = iter([b"caf", "é", b""])
+
+            def __aiter__(self) -> typing.Any:
+                return self
+
+            async def read(self, size: int) -> bytes | str:
+                return next(self.chunks)
+
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            response = await pool.request(
+                "POST", "/echo", body=Body(), preload_content=False
+            )
+            assert await response.read() == "café".encode()
+
+    async def test_string_body_warns_about_conflicting_charset(self) -> None:
+        async with AsyncHTTPConnectionPool(
+            self.host, self.port, timeout=5, retries=False
+        ) as pool:
+            with pytest.warns(UserWarning, match="conflicting charset"):
+                response = await pool.request(
+                    "POST",
+                    "/echo",
+                    body="café",
+                    headers={"Content-Type": "text/plain; charset=latin-1"},
+                    preload_content=False,
+                )
+            assert await response.read() == "café".encode()
+
+    async def test_invalid_tunnel_scheme_is_rejected_before_connecting(self) -> None:
+        conn = AsyncHTTPConnection(self.host, self.port)
+        with pytest.raises(ValueError):
+            conn.set_tunnel("example.invalid", scheme="ftp")
+        assert conn.sock is None
+
     @pytest.mark.parametrize("as_list", [False, True])
     async def test_pool_resolver_configuration(self, as_list: bool) -> None:
         resolver = ["system://default"] if as_list else "system://default"
@@ -994,6 +1196,8 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             r = await pool.request(
                 "GET", "/", release_conn=False, preload_content=False
             )
+            assert pool.pool.qsize() == 0
+            assert await r.read(1)
             assert pool.pool.qsize() == 0
             await r.data  # we must consume, or the conn ref will hang.
 
@@ -1774,3 +1978,556 @@ class TestRedirectPoolSize(HTTPDummyServerTestCase):
             r = await pool.urlopen("GET", "/redirect", preload_content=False)
             assert pool.num_connections == 1
             await r.data  # we have to consume it afterward, or we'll have a dangling conn somewhere.
+
+
+class TestControlledTrafficPolice(HTTPDummyServerTestCase):
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["release", "kill", "timeout", "cancel"])
+    async def test_async_queued_request_recovers(self, action: str) -> None:
+        async with ObservedAsyncPool(
+            self.host_alt,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            assert (await pool.request("GET", "/")).status == 200
+            police = pool.pool
+            assert isinstance(police, ObservedAsyncTrafficPolice)
+            conn = await police.get()
+            assert conn is not None
+            queued = police.checkpoints["queued"] = asyncio.Event()
+            waiting = asyncio.create_task(
+                pool.request(
+                    "GET", "/", pool_timeout=0.01 if action == "timeout" else 5
+                )
+            )
+            try:
+                await asyncio.wait_for(queued.wait(), 10)
+                if action in ("cancel", "timeout"):
+                    if action == "cancel":
+                        waiting.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await waiting
+                    else:
+                        with pytest.raises(EmptyPoolError):
+                            await asyncio.wait_for(waiting, 10)
+                    assert not police._signals._priority_signals
+                    assert not police._signals._furthest_signals
+                    police.release()
+                else:
+                    if action == "kill":
+                        await police.kill(conn)
+                    else:
+                        police.release()
+                    assert (await asyncio.wait_for(waiting, 10)).status == 200
+                assert not police._signals._priority_signals
+                assert not police._signals._furthest_signals
+                assert not police._cursors
+                assert (await pool.request("GET", "/after")).status == 200
+            finally:
+                police.release()
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["release", "kill", "timeout", "cancel"])
+    async def test_async_queued_response_reader(self, action: str) -> None:
+        async with ObservedAsyncPool(
+            self.host_alt,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            response = await pool.request(
+                "POST", "/echo", body=b"body", preload_content=False
+            )
+            police = pool.pool
+            assert isinstance(police, ObservedAsyncTrafficPolice)
+            conn = cast("AsyncHTTPConnection | None", response.connection)
+            assert conn is not None
+            if not police.busy:
+                assert await police.locate(response) is conn
+            queued = police.checkpoints["queued"] = asyncio.Event()
+
+            async def read() -> bytes:
+                async with police.borrow(
+                    response, timeout=0.01 if action == "timeout" else 5
+                ):
+                    return await response.read()
+
+            waiting = asyncio.create_task(read())
+            try:
+                await asyncio.wait_for(queued.wait(), 10)
+                if action in ("cancel", "timeout"):
+                    if action == "cancel":
+                        waiting.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await waiting
+                    else:
+                        # Shield distinguishes a resolver timeout from our test watchdog.
+                        with pytest.raises(BuiltinTimeoutError):
+                            await asyncio.wait_for(asyncio.shield(waiting), 2)
+                        assert waiting.done(), (
+                            "borrow(timeout=...) ignored its deadline"
+                        )
+                    assert not police._signals._priority_signals
+                    assert not police._signals._furthest_signals
+                    assert await response.read() == b"body"
+                elif action == "kill":
+                    await police.kill(conn)
+                    with pytest.raises(UnavailableTraffic):
+                        await asyncio.wait_for(waiting, 10)
+                else:
+                    police.release()
+                    assert await asyncio.wait_for(waiting, 10) == b"body"
+                await response.close()
+                assert (
+                    await pool.request("GET", "/after", pool_timeout=0.1)
+                ).status == 200
+                assert not police._cursors
+                assert not police._signals._priority_signals
+                assert not police._signals._furthest_signals
+            finally:
+                police.release()
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+                await response.close()
+
+
+class PoolChecks:
+    def make_pool(self: Any, **kwargs: Any) -> Any:
+        tls = self.scheme == "https"
+        cls = AsyncHTTPSConnectionPool if tls else AsyncHTTPConnectionPool
+        if tls:
+            kwargs["ca_certs"] = DEFAULT_CA
+        return cls(
+            self.host,
+            self.port,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+            disabled_svn={HttpVersion.h2, HttpVersion.h3},
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_direct_checkout_happy_eyeballs_preserves_options(
+        self: Any,
+    ) -> None:
+        # Exercise opaque ECH forwarding without submitting an unsupported
+        # configuration to the TLS backend (rtls rejects it).
+        ech = b"\x00\x05\xff\xff\x00\x01x" if self.scheme == "http" else None
+        resolver = AsyncInMemoryResolver(
+            "localhost:127.0.0.2", "localhost:127.0.0.1", ech_config=ech
+        )
+        cache: dict[Any, Any] = {}
+        pool = self.make_pool(
+            resolver=resolver,
+            happy_eyeballs=True,
+            source_address=("127.0.0.1", 0),
+            preemptive_quic_cache=cache,
+        )
+        conn = None
+        try:
+            conn = await pool._get_conn()
+            assert conn.sock is not None
+            raw_socket = conn.sock._sock
+            assert raw_socket.getsockname()[0] == "127.0.0.1"
+            records = await conn._resolver.getaddrinfo(
+                "localhost",
+                self.port,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            assert records[0][3] == (ech or "")
+            assert conn._preemptive_quic_cache is cache
+            await conn.request("GET", "/")
+            response = await conn.getresponse()
+            assert response.status == 200
+            await response.read()
+            await pool._put_conn(conn)
+            assert self.host in repr(pool)
+        finally:
+            await pool.close()
+        assert "Closed" in repr(pool)
+        with pytest.raises(ClosedPoolError):
+            await pool._get_conn()
+        assert conn is not None
+        await pool._put_conn(conn)
+        assert conn.sock is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("phase", ["response", "promise", "error", "unavailable"])
+    async def test_close_between_request_and_result(self: Any, phase: str) -> None:
+        pool = self.make_pool()
+        base: Any = pool.ConnectionCls
+
+        async def async_request(conn: Any, *args: Any, **kwargs: Any) -> Any:
+            result = await base.request(conn, *args, **kwargs)
+            await pool.close()
+            if phase == "unavailable":
+                raise UnavailableTraffic("pool was closed")
+            if phase == "error":
+                raise ValueError("backend state disappeared")
+            return result
+
+        pool.ConnectionCls = type(
+            "ClosingConnection",
+            (base,),
+            {
+                "request": async_request,
+            },
+        )
+        try:
+            with pytest.raises(ClosedPoolError):
+                await pool.request("GET", "/", multiplexed=phase == "promise")
+        finally:
+            await pool.close()
+
+
+class TestHTTPPoolEdges(PoolChecks, HTTPDummyServerTestCase):
+    @pytest.mark.asyncio
+    async def test_nonblocking_checkout_recovers_after_wait_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = self.make_pool(block=False, maxsize=1)
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = pool._new_conn
+
+        async def hold_connection() -> None:
+            async with pool.pool.borrow():
+                entered.set()
+                await release.wait()
+
+        holder = None
+        try:
+            assert (await pool.request("GET", "/")).status == 200
+            holder = asyncio.create_task(hold_connection())
+            await asyncio.wait_for(entered.wait(), 5)
+
+            async def new_after_timeout(**kwargs: Any) -> Any:
+                release.set()
+                await holder
+                return await original(**kwargs)
+
+            monkeypatch.setattr(pool, "_new_conn", new_after_timeout)
+            conn = await asyncio.wait_for(pool._get_conn(timeout=0.01), 5)
+            await conn.request("GET", "/")
+            response = await conn.getresponse()
+            assert response.status == 200
+            await response.read()
+            await pool._put_conn(conn)
+        finally:
+            release.set()
+            if holder is not None:
+                await holder
+            await pool.close()
+
+
+class TestHTTPSPoolEdges(PoolChecks, HTTPSDummyServerTestCase):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http2_peer", ["ignore-ping"], indirect=True)
+async def test_checkout_retires_an_unanswered_ping(
+    http2_peer: HTTP2Peer,
+) -> None:
+    pool: Any = AsyncHTTPSConnectionPool(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    try:
+        assert (await pool.request("GET", "/")).status == 200
+        conn = next(iter(pool.pool._registry.values()))
+        old_socket = conn.sock
+        await conn.ping()
+        await asyncio.get_running_loop().run_in_executor(
+            None, http2_peer.pings.get, True, 5
+        )
+        assert (await pool.request("GET", "/next")).status == 200
+        assert conn.sock is not old_socket
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blind", [False, True])
+@pytest.mark.parametrize("failure", ["socket", "ssl", "would-block", "timeout"])
+async def test_deferred_response_errors_are_normalized(
+    http2_peer: HTTP2Peer,
+    blind: bool,
+    failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool: Any = AsyncHTTPSConnectionPool(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    error = {
+        "socket": OSError("injected read failure"),
+        "ssl": ssl.SSLError("bad record"),
+        "would-block": BlockingIOError(errno.EAGAIN, "injected would-block"),
+        "timeout": socket.timeout("timed out"),
+    }[failure]
+    expected = {
+        "socket": ProtocolError,
+        "ssl": SSLError,
+        "would-block": ReadTimeoutError,
+        "timeout": ReadTimeoutError,
+    }[failure]
+    conn = None
+    try:
+        promise = await pool.request("GET", "/", multiplexed=True)
+        conn = next(iter(pool.pool._registry.values()))
+        sock = conn.sock
+        receive = type(sock).recv
+        failed = False
+
+        def fail_once(current: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal failed
+            if current is sock and not failed:
+                failed = True
+                raise error
+            return receive(current, *args, **kwargs)
+
+        with monkeypatch.context() as io:
+            io.setattr(type(sock), "recv", fail_once)
+            with pytest.raises(expected):
+                await pool.get_response(**({} if blind else {"promise": promise}))
+        assert failed
+        # The injected exception did not consume or alter the actual peer reply.
+        assert (await pool.get_response(promise=promise)).status == 200
+    finally:
+        if conn is not None:
+            await conn.close()
+        await pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["close-promise", "read-timeout", "read-error", "write-error", "write-eprototype"],
+)
+async def test_pool_error_boundaries_after_sending_request(
+    http2_peer: HTTP2Peer,
+    failure: str,
+) -> None:
+    pool: Any = AsyncHTTPSConnectionPool(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    base: Any = pool.ConnectionCls
+    observed = False
+
+    async def after_request(conn: Any, promise: Any) -> None:
+        nonlocal observed
+        # Wait for actual peer input before injecting the failure. This also
+        # prevents tearing down TLS while the server is still sending its reply.
+        deadline = time.monotonic() + 5
+        while not conn._protocol.has_pending_event(stream_id=promise.stream_id):
+            assert time.monotonic() < deadline, "Peer response did not arrive"
+            await conn.peek_and_react(expect_frame=True)
+        observed = True
+        if failure == "close-promise":
+            await pool.close()
+        elif failure.startswith("write-"):
+            raise OSError(
+                errno.EPROTOTYPE if failure == "write-eprototype" else errno.EIO,
+                "injected write failure",
+            )
+
+    async def async_request(conn: Any, *args: Any, **kwargs: Any) -> Any:
+        result = await base.request(conn, *args, **kwargs)
+        await after_request(conn, result)
+        return result
+
+    def read_error() -> None:
+        if failure == "read-timeout":
+            raise socket.timeout("injected read timeout")
+        if failure == "read-error":
+            raise OSError(errno.EIO, "injected read failure")
+
+    async def async_getresponse(conn: Any, *args: Any, **kwargs: Any) -> Any:
+        read_error()
+        return await base.getresponse(conn, *args, **kwargs)
+
+    pool.ConnectionCls = type(
+        "FailingConnection",
+        (base,),
+        {
+            "request": async_request,
+            "getresponse": async_getresponse,
+        },
+    )
+    try:
+        if failure == "write-eprototype":
+            assert (await pool.request("GET", "/")).status == 200
+        else:
+            expected = (
+                ClosedPoolError
+                if failure == "close-promise"
+                else ReadTimeoutError
+                if failure == "read-timeout"
+                else ProtocolError
+            )
+            with pytest.raises(expected):
+                await pool.request("GET", "/", multiplexed=failure == "close-promise")
+        assert observed
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache", [False, True])
+@pytest.mark.parametrize(
+    "scenario",
+    ["plain", "gzip", "raw-gzip", "empty", "invalid-gzip", "truncated", "stalled"],
+)
+async def test_live_retry_body(cache: bool, scenario: str, retry_server: Any) -> None:
+    observed = []
+    errors = {
+        "invalid-gzip": DecodeError,
+        "truncated": ProtocolError,
+        "stalled": ReadTimeoutError,
+    }
+    async with retry_server(scenario) as (port, payload, _, requests):
+
+        class BodyRetry(Retry):
+            def get_retry_after(self, response: HTTPResponse) -> float | None:
+                assert response._pool is not None and response._pool.pool is not None
+                assert not response._pool.pool.busy
+                observed.append(response.data if cache else response._body)
+                return None
+
+            async def async_get_retry_after(
+                self, response: AsyncHTTPResponse
+            ) -> float | None:
+                assert response._pool is not None and response._pool.pool is not None
+                assert not response._pool.pool.busy
+                observed.append(await response.data if cache else response._body)
+                return None
+
+        retry = BodyRetry(total=1, status_forcelist=[503], cache_response_body=cache)
+
+        async with AsyncHTTPConnectionPool(
+            "127.0.0.1", port, maxsize=1, timeout=Timeout(connect=5, read=0.2)
+        ) as pool:
+            if cache and scenario in errors:
+                with pytest.raises(errors[scenario]):
+                    await pool.urlopen("GET", "/", retries=retry, preload_content=False)
+                assert not pool.pool.busy  # type: ignore[union-attr]
+                response = await pool.urlopen("GET", "/", retries=False)
+            else:
+                response = await pool.urlopen(
+                    "GET",
+                    "/",
+                    retries=retry,
+                    preload_content=False,
+                    decode_content=scenario != "raw-gzip",
+                )
+            assert await response.data == b"ok"
+        assert len(requests) == 2
+        assert observed == (
+            [] if cache and scenario in errors else [payload if cache else None]
+        )
+        if scenario in ("plain", "gzip", "raw-gzip", "empty"):
+            assert requests[0] == requests[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http2", [False, True])
+@pytest.mark.parametrize("scenario", ["plain", "gzip", "empty"])
+async def test_retry_exhaustion_drains_body_and_reuses_connection(
+    http2: bool, scenario: str, retry_server: Any
+) -> None:
+    observed: list[typing.Any] = []
+
+    class ObserveRetry(Retry):
+        def increment(self, *args: typing.Any, **kwargs: typing.Any) -> Retry:
+            response = kwargs.get("response")
+            if response is not None:
+                assert response._body is None
+                observed.append(response)
+            return super().increment(*args, **kwargs)
+
+    async with retry_server(scenario, http2=http2) as (port, _, _, requests):
+        url = f"{'https' if http2 else 'http'}://localhost:{port}/"
+        options: dict[str, typing.Any] = dict(
+            # The fixture listens on IPv4; localhost's IPv6 port may belong to another test.
+            resolver="in-memory://default?hosts=localhost:127.0.0.1",
+            maxsize=1,
+            block=True,
+            timeout=5,
+            ca_certs=DEFAULT_CA,
+            disabled_svn={HttpVersion.h3},
+            background_watch_delay=None,
+        )
+        retry = ObserveRetry(total=0, status_forcelist=[503], cache_response_body=False)
+        request_options: dict[str, typing.Any] = dict(
+            retries=retry, preload_content=False, multiplexed=http2
+        )
+
+        async with AsyncPoolManager(**options) as manager:
+            with pytest.raises(MaxRetryError):
+                result = await manager.urlopen("GET", url, **request_options)
+                if http2:
+                    assert isinstance(result, ResponsePromise)
+                    await manager.get_response(promise=result)
+            assert len(observed) == 1 and observed[0].closed
+            assert observed[0]._body is None
+            response = await manager.urlopen("GET", url, retries=False)
+            assert await response.data == b"ok"
+            assert response.version == (20 if http2 else 11)
+        assert len(requests) == 2
+        assert requests[0] == requests[1]
+
+
+@pytest.mark.asyncio
+async def test_cancel_retry_body_read(retry_server: Any) -> None:
+    async with retry_server("cancel") as (port, _, body_started, requests):
+        async with AsyncHTTPConnectionPool("127.0.0.1", port, maxsize=1) as pool:
+            task = asyncio.create_task(
+                pool.urlopen(
+                    "GET",
+                    "/",
+                    preload_content=False,
+                    retries=Retry(
+                        total=1, status_forcelist=[503], cache_response_body=True
+                    ),
+                )
+            )
+            await asyncio.wait_for(body_started.wait(), 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert pool.pool is not None and not pool.pool._cursors
+            response = await asyncio.wait_for(
+                pool.urlopen("GET", "/", retries=False), 2
+            )
+            assert await response.data == b"ok"
+            assert len(requests) == 2

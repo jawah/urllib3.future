@@ -11,4 +11,5 @@
 coverage.xml
 traefik/httpbin.local.pem
 traefik/httpbin.local.pem.key
+traefik/mtls/
 rootCA.pem

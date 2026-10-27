@@ -18,7 +18,12 @@ from qh3.quic.events import (
     StreamReset,
 )
 
-from .....util.ssl_ import IS_FIPS, _get_ca_certs, resolve_cert_reqs
+from .....util.ssl_ import (
+    IS_FIPS,
+    _get_ca_certs,
+    _load_default_certs_eagerly,
+    resolve_cert_reqs,
+)
 from .....util.sub_timeout import AsyncSubTimeout
 from ..._cache import (
     ResolutionResult,
@@ -63,7 +68,7 @@ class QUICResolver(PlainResolver):
     ):
         super().__init__(server, port or 853, *patterns, **kwargs)
 
-        # qh3 load_default_certs seems off. need to investigate.
+        # Export default trust for qh3; OpenSSL CA directories may still be lazy.
         if "ca_cert_data" not in kwargs and "ca_certs" not in kwargs:
             kwargs["ca_cert_data"] = []
 
@@ -72,7 +77,16 @@ class QUICResolver(PlainResolver):
             try:
                 ctx.load_default_certs()
 
-                for der in _get_ca_certs(ctx):
+                certificates = _get_ca_certs(ctx)
+                if (
+                    not certificates
+                    and "ca_cert_dir" not in kwargs
+                    and resolve_cert_reqs(kwargs.get("cert_reqs")) != ssl.CERT_NONE
+                ):
+                    _load_default_certs_eagerly(ctx)
+                    certificates = _get_ca_certs(ctx)
+
+                for der in certificates:
                     assert isinstance(der, bytes)
                     kwargs["ca_cert_data"].append(ssl.DER_cert_to_PEM_cert(der))
 
@@ -651,7 +665,9 @@ class QUICResolver(PlainResolver):
                     if isinstance(ev, event_type):
                         if not respect_end_stream_signal:
                             return events
-                        if hasattr(ev, "stream_ended") and ev.stream_ended:
+                        if (
+                            hasattr(ev, "stream_ended") and ev.stream_ended
+                        ):  # Defensive: current stream-data callers do not wait for end-of-stream here.
                             return events
                         elif hasattr(ev, "stream_ended") is False:
                             return events

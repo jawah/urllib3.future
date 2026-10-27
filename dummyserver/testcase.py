@@ -7,7 +7,6 @@ import ssl
 import threading
 import typing
 import warnings
-from test import LONG_TIMEOUT
 
 import pytest
 from tornado import httpserver, ioloop, web
@@ -21,6 +20,7 @@ from dummyserver.server import (
     run_loop_in_thread,
     run_tornado_app,
 )
+from test import LONG_TIMEOUT
 from urllib3.connection import HTTPConnection
 from urllib3.util.ssltransport import SSLTransport
 
@@ -138,6 +138,19 @@ class SocketDummyServerTestCase:
             if key == header_name_bytes and expected_value_bytes is not None:
                 assert value == expected_value_bytes
         assert header_name_bytes in header_titles
+
+    def serve_events(self, body: bytes) -> None:
+        def handler(listener: socket.socket) -> None:
+            with listener.accept()[0] as sock:
+                sock.settimeout(5)
+                consume_socket(sock)
+                sock.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                    + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                    + body
+                )
+
+        self._start_server(handler)
 
 
 class IPV4SocketDummyServerTestCase(SocketDummyServerTestCase):

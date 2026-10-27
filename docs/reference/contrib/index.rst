@@ -8,5 +8,6 @@ or that require optional third-party dependencies.
 
    socks
    resolver
+   webextensions
    ssa
    anytls

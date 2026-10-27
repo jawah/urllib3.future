@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import gzip
 import http.client as httplib
+import io
 import ssl
 import threading
 import typing
 from socket import error as SocketError
 from ssl import SSLError as BaseSSLError
-from test import SHORT_TIMEOUT
 from unittest.mock import Mock, patch
 
 import pytest
 
 from dummyserver.server import DEFAULT_CA
-from urllib3 import Retry
-from urllib3.backend import ResponsePromise
+from test import SHORT_TIMEOUT
+from urllib3 import HTTPHeaderDict, PoolManager, Retry
+from urllib3._async.response import AsyncHTTPResponse
+from urllib3.backend import LowLevelResponse, ResponsePromise
 from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import (
     HTTPConnectionPool,
@@ -860,3 +863,253 @@ def test_response_wait_validation_and_closed_pool(pool_cls: typing.Any) -> None:
         pool.get_response()
     with pytest.raises(ClosedPoolError):
         pool.urlopen("GET", "/")
+
+
+@pytest.mark.parametrize("managed", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("status", [303, 503])
+@pytest.mark.parametrize("cache", [False, True])
+@pytest.mark.parametrize("preloaded", [False, True])
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("total", [0, 1])
+def test_retry_delay_body(
+    monkeypatch: pytest.MonkeyPatch,
+    managed: bool,
+    deferred: bool,
+    status: int,
+    cache: bool,
+    preloaded: bool,
+    compressed: bool,
+    total: int,
+) -> None:
+    """Read real response bodies through immediate and deferred retry dispatch."""
+    manager_cls: typing.Any = PoolManager
+    pool_cls: typing.Any = HTTPConnectionPool
+    response_cls: typing.Any = HTTPResponse
+    fp_cls: typing.Any = LowLevelResponse
+    owner = manager_cls() if managed else pool_cls("example.test", maxsize=1)
+    payload = b'{"delay": 2.5}'
+    wire_body = gzip.compress(payload) if compressed else payload
+    responses: list[HTTPResponse] = []
+    observed_bodies = []
+    sleeps = []
+    status_checks = 0
+
+    class BodyRetry(Retry):
+        def is_retry(
+            self, method: str, status_code: int, has_retry_after: bool = False
+        ) -> bool:
+            nonlocal status_checks
+            if managed and deferred and status_code == 503:
+                status_checks += 1
+                if status_checks == 1:
+                    # Exercise the manager's own deferred status retry branch.
+                    return False
+            return super().is_retry(method, status_code, has_retry_after)
+
+        def get_retry_after(self, response: HTTPResponse) -> float | None:
+            # Default-off must leave an unpreloaded body discarded, even compressed.
+            if not cache and not preloaded:
+                observed_bodies.append(response._body)
+                return None
+            observed_bodies.append(response.data)
+            return float(response.json()["delay"])
+
+        async def async_get_retry_after(
+            self, response: AsyncHTTPResponse
+        ) -> float | None:
+            if not cache and not preloaded:
+                observed_bodies.append(response._body)
+                return None
+            observed_bodies.append(await response.data)
+            return float((await response.json())["delay"])
+
+    def async_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("urllib3.util.retry.time.sleep", sleeps.append)
+    monkeypatch.setattr("urllib3.util.retry.asyncio.sleep", async_sleep)
+    try:
+        if managed:
+            pool = owner.connection_from_host("example.test")
+        else:
+            pool = owner
+
+        def make_request(
+            conn: typing.Any, method: str, url: str, **kwargs: typing.Any
+        ) -> typing.Any:
+            response_status = status if not responses else 200
+            headers = HTTPHeaderDict({"content-length": str(len(wire_body))})
+            if compressed:
+                headers["content-encoding"] = "gzip"
+            if response_status == 303:
+                headers["location"] = "/next"
+            buffer = io.BytesIO(wire_body)
+
+            def read_body(
+                amt: int | None, stream_id: int | None
+            ) -> tuple[list[bytes], bool, None]:
+                data = buffer.read(amt)
+                return [data], buffer.tell() == len(wire_body), None
+
+            fp = fp_cls(
+                method,
+                response_status,
+                20 if deferred else 11,
+                "",
+                headers,
+                read_body,
+            )
+            response = response_cls(
+                body=payload if preloaded else fp,
+                status=response_status,
+                headers=headers,
+                preload_content=False,
+            )
+            responses.append(response)
+            if not deferred:
+                return response
+
+            # Mock only transport delivery; use actual promise registration and retries.
+            promise = ResponsePromise(conn, len(responses), [])
+
+            def getresponse(**_kwargs: typing.Any) -> typing.Any:
+                return response
+
+            monkeypatch.setattr(conn, "getresponse", getresponse)
+            return promise
+
+        monkeypatch.setattr(pool, "_make_request", make_request)
+        response = owner.urlopen(
+            "GET",
+            "http://example.test/start" if managed else "/start",
+            retries=BodyRetry(
+                total=total,
+                status_forcelist=[503],
+                cache_response_body=cache,
+                raise_on_status=False,
+                raise_on_redirect=False,
+            ),
+            preload_content=False,
+            multiplexed=deferred,
+        )
+        if deferred:
+            response = owner.get_response(promise=response)
+        assert response.status == (200 if total else status)
+        assert len(responses) == total + 1
+        if not total or (managed and not deferred and status == 303):
+            # The existing manager redirect path does not call retry-delay hooks.
+            assert observed_bodies == []
+        else:
+            assert observed_bodies == [payload if cache or preloaded else None]
+            assert [delay for delay in sleeps if delay] == (
+                [2.5] if cache or preloaded else []
+            )
+        # Final responses, including exhausted retries, remain available to the caller.
+        if not preloaded:
+            assert response._body is None
+            assert response.tell() == 0
+    finally:
+        owner.clear() if managed else owner.close()
+
+
+@pytest.mark.parametrize("managed", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize(
+    "status, body_kind",
+    [
+        (303, "file"),
+        (303, "auto_file"),
+        (303, "iterable"),
+        (307, "file"),
+        (307, "iterable"),
+        (308, "file"),
+        (308, "iterable"),
+    ],
+)
+@pytest.mark.parametrize("chunked_via", ["kwarg", "header"])
+def test_redirect_body_state(
+    monkeypatch: pytest.MonkeyPatch,
+    managed: bool,
+    deferred: bool,
+    status: int,
+    body_kind: str,
+    chunked_via: str,
+) -> None:
+    """Exercise immediate/deferred redirects through both pools and managers."""
+    manager_cls: typing.Any = PoolManager
+    pool_cls: typing.Any = HTTPConnectionPool
+    response_cls: typing.Any = HTTPResponse
+    owner = manager_cls() if managed else pool_cls("example.test")
+    headers = {"Content-Type": "application/octet-stream", "X-Keep": "yes"}
+    if chunked_via == "header":
+        headers["tRaNsFeR-EnCoDiNg"] = "chunked"
+    original_headers = headers.copy()
+    body = (b"pay", b"load") if body_kind == "iterable" else io.BytesIO(b"payload")
+    requests: list[tuple[str, bytes, bool, HTTPHeaderDict]] = []
+
+    try:
+        if managed:
+            pool = owner.connection_from_host("example.test")
+        else:
+            pool = owner
+
+        def make_request(
+            conn: typing.Any, method: str, url: str, **kwargs: typing.Any
+        ) -> typing.Any:
+            outgoing_body = kwargs["body"]
+            if outgoing_body is None:
+                data = b""
+            elif hasattr(outgoing_body, "read"):
+                data = outgoing_body.read()
+            else:
+                data = b"".join(outgoing_body)
+            requests.append(
+                (method, data, kwargs["chunked"], HTTPHeaderDict(kwargs["headers"]))
+            )
+            response = response_cls(
+                status=status if len(requests) == 1 else 200,
+                headers={"location": "/next"} if len(requests) == 1 else {},
+            )
+            if not deferred:
+                return response
+
+            # Supply protocol responses while exercising real promise registration,
+            # get_response(), and redirect dispatch above the transport boundary.
+            promise = ResponsePromise(conn, len(requests), [])
+
+            def getresponse(**_kwargs: typing.Any) -> typing.Any:
+                return response
+
+            monkeypatch.setattr(conn, "getresponse", getresponse)
+            return promise
+
+        monkeypatch.setattr(pool, "_make_request", make_request)
+        response = owner.urlopen(
+            "POST",
+            "http://example.test/start" if managed else "/start",
+            body=body,
+            body_pos=0 if body_kind == "file" else None,
+            headers=headers,
+            chunked=chunked_via == "kwarg",
+            retries=Retry(total=1, redirect=1),
+            multiplexed=deferred,
+        )
+        if deferred:
+            response = owner.get_response(promise=response)
+        assert response.status == 200
+    finally:
+        owner.clear() if managed else owner.close()
+
+    assert len(requests) == 2
+    assert requests[0][0:2] == ("POST", b"payload")
+    method, data, chunked, redirected_headers = requests[1]
+    if status == 303:
+        assert (method, data, chunked) == ("GET", b"", False)
+        assert "Transfer-Encoding" not in redirected_headers
+        assert "Content-Type" not in redirected_headers
+    else:
+        assert (method, data, chunked) == ("POST", b"payload", chunked_via == "kwarg")
+        assert redirected_headers == HTTPHeaderDict(original_headers)
+    assert redirected_headers["X-Keep"] == "yes"
+    assert headers == original_headers

@@ -159,7 +159,7 @@ class AsyncWebSocketExtensionFromHTTP(AsyncExtensionFromHTTP):
             if police is not None:
                 police.forget(response)
             else:
-                await response.close()
+                await response.close()  # Defensive: externally constructed responses may lack a TrafficPolice owner.
         self._response = None
         self._police_officer = None
 

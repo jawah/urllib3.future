@@ -86,6 +86,8 @@ class ActiveCursor(typing.Generic[T]):
     obj_id: int
     conn_or_pool: T
     depth: int = 1
+    # Only an untouched checkout retained for a returned response may be reclaimed.
+    reserved_for: int | None = None
 
 
 @dataclass
@@ -243,6 +245,22 @@ class TrafficPolice(typing.Generic[T]):
             return cursor_key in self._cursor and isinstance(
                 self._cursor[cursor_key].conn_or_pool, ItemPlaceholder
             )
+
+    def _reclaim_reservation(self, traffic_indicator: MappableTraffic) -> T | None:
+        with self._lock:
+            current = get_ident()
+            for owner, cursor in tuple(self._cursor.items()):
+                if cursor.reserved_for != id(traffic_indicator):
+                    continue
+                if current != owner and current in self._cursor:
+                    return None
+                cursor.reserved_for = None
+                if current != owner:
+                    # Publish the new owner before removing the old one.
+                    self._cursor[current] = cursor
+                    del self._cursor[owner]
+                return cursor.conn_or_pool
+            return None
 
     def is_held(self, conn_or_pool: T) -> bool:
         with self._lock:
@@ -529,6 +547,7 @@ class TrafficPolice(typing.Generic[T]):
                 else:
                     active_cursor = self._cursor[cursor_key]
 
+                    active_cursor.reserved_for = None
                     active_cursor.depth -= 1
 
                     if active_cursor.depth == 0:
@@ -579,6 +598,7 @@ class TrafficPolice(typing.Generic[T]):
                         self._cursor[cursor_key] = ActiveCursor(obj_id, conn_or_pool)
                     else:  # Defensive: unreachable
                         # this branch SHOULD never be evaluated!
+                        self._cursor[cursor_key].reserved_for = None
                         self._cursor[cursor_key].depth += 1
 
                     if self.concurrency:
@@ -673,7 +693,8 @@ class TrafficPolice(typing.Generic[T]):
 
                     if cursor_key not in self._cursor:
                         self._cursor[cursor_key] = ActiveCursor(obj_id, conn_or_pool)
-                    else:
+                    else:  # Defensive: tolerate reentrant custom traffic objects.
+                        self._cursor[cursor_key].reserved_for = None
                         self._cursor[cursor_key].depth += 1
 
                     if self.concurrency:
@@ -698,9 +719,13 @@ class TrafficPolice(typing.Generic[T]):
 
             if signal is not None:
                 if not signal.event.wait(timeout=timeout):
-                    raise UnavailableTraffic(
-                        f"No connection available within {timeout} second(s)"
-                    )
+                    with self._lock:
+                        # Match locate(): a completed handoff wins the timeout race.
+                        if not signal.event.is_set():
+                            self._signals.remove(signal)
+                            raise UnavailableTraffic(
+                                f"No connection available within {timeout} second(s)"
+                            )
 
                 # in a very tight scenario (e.g. maxsize=1 and threads>=2)
                 # a first thread can get 'None' and a reserved spot from get(...)
@@ -722,17 +747,22 @@ class TrafficPolice(typing.Generic[T]):
         raise UnavailableTraffic("No connection available")
 
     def memorize(
-        self, traffic_indicator: MappableTraffic, conn_or_pool: T | None = None
+        self,
+        traffic_indicator: MappableTraffic,
+        conn_or_pool: T | None = None,
+        *,
+        reserve: bool = False,
     ) -> None:
+        """Register a route; reserve marks an existing checkout at response return."""
         with self._lock:
-            if conn_or_pool is None and self.busy is False:
-                raise AtomicTraffic("No connection active on this thread")
-
+            active_cursor = (
+                self._cursor.get(get_ident())
+                if conn_or_pool is None or reserve
+                else None
+            )
             if conn_or_pool is None:
-                cursor_key = get_ident()
-
-                active_cursor = self._cursor[cursor_key]
-
+                if active_cursor is None:
+                    raise AtomicTraffic("No connection active on this thread")
                 obj_id, conn_or_pool = active_cursor.obj_id, active_cursor.conn_or_pool
             else:
                 obj_id, conn_or_pool = id(conn_or_pool), conn_or_pool
@@ -748,8 +778,18 @@ class TrafficPolice(typing.Generic[T]):
                 self._map_types[traffic_indicator] = type(traffic_indicator)
             else:
                 traffic_indicator_id = id(traffic_indicator)
+                if reserve and self._map.get(traffic_indicator_id) is not conn_or_pool:
+                    return  # A consumed response may already have lost its route.
                 self._map[traffic_indicator_id] = conn_or_pool
                 self._map_types[traffic_indicator_id] = type(traffic_indicator)
+                if (
+                    reserve
+                    and not self.concurrency
+                    and active_cursor is not None
+                    and active_cursor.depth == 1
+                    and active_cursor.obj_id == obj_id
+                ):
+                    active_cursor.reserved_for = traffic_indicator_id
 
     def forget(self, traffic_indicator: MappableTraffic) -> None:
         """Remove any referenced holder to map a traffic_indicator to his owner conn_or_pool."""
@@ -918,9 +958,13 @@ class TrafficPolice(typing.Generic[T]):
                 self._lock.release()
 
                 if not signal_pre_locate.event.wait(timeout=timeout):
-                    raise TimeoutError(
-                        "Timed out while waiting for conn_or_pool to become available"
-                    )
+                    with self._lock:
+                        if not signal_pre_locate.event.is_set():
+                            if signal_pre_locate in self._signals:
+                                self._signals.remove(signal_pre_locate)
+                            raise TimeoutError(
+                                "Timed out while waiting for conn_or_pool to become available"
+                            )
                 continue
 
             # Keep lookup and borrower/waiter registration atomic.
@@ -935,6 +979,7 @@ class TrafficPolice(typing.Generic[T]):
                 active_cursor = self._cursor.get(cursor_key)
                 if active_cursor is not None:
                     if active_cursor.obj_id == obj_id:
+                        active_cursor.reserved_for = None
                         active_cursor.depth += 1
 
                         return active_cursor.conn_or_pool
@@ -958,7 +1003,8 @@ class TrafficPolice(typing.Generic[T]):
                             self._cursor[cursor_key] = ActiveCursor(
                                 obj_id, conn_or_pool
                             )
-                        else:
+                        else:  # Defensive: a custom readiness callback may reenter ownership.
+                            self._cursor[cursor_key].reserved_for = None
                             self._cursor[cursor_key].depth += 1
 
                         return conn_or_pool
@@ -1047,6 +1093,7 @@ class TrafficPolice(typing.Generic[T]):
                         active_cursor.obj_id,
                         active_cursor.conn_or_pool,
                     )
+                    active_cursor.reserved_for = None
                     active_cursor.depth += 1
                 else:
                     conn_or_pool = self.get(
@@ -1093,6 +1140,7 @@ class TrafficPolice(typing.Generic[T]):
                 # due to legacy urllib3 constraints[...]
                 return
 
+            active_cursor.reserved_for = None
             active_cursor.depth -= 1
 
             if active_cursor.depth == 0:
@@ -1191,7 +1239,7 @@ class TrafficPolice(typing.Generic[T]):
             return len(self._registry)
 
     def empty(self) -> bool:
-        return bool(self.rsize())
+        return not self.rsize()
 
     def beacon(self, traffic_indicator: MappableTraffic | type) -> bool:
         """Answer the following question: Do this PoliceTraffic know about the traffic_indicator?"""

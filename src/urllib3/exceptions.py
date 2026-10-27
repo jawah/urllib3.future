@@ -353,7 +353,7 @@ class UnrewindableBodyError(HTTPError):
 
 
 class EarlyResponse(HTTPError):
-    """urllib3 received a response prior to sending the whole body"""
+    """Stop the upload and collect its response, which may still be pending."""
 
     def __init__(self, promise: ResponsePromise) -> None:
         self.promise = promise

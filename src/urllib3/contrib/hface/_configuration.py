@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclasses.dataclass
@@ -53,8 +53,6 @@ class QuicTLSConfig:
 
     verify_hostname: bool = True
     assert_hostname: str | None = None
-
-    ciphers: list[Mapping[str, Any]] | None = None
 
     idle_timeout: float = 300.0
 

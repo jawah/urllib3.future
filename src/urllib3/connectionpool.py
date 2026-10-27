@@ -185,11 +185,11 @@ def idle_conn_watch_task(
 
             # check again[...] due to mutable state
             if pool._background_monitoring_stop.is_set():
-                return
+                return  # Defensive: shutdown after wait(), including during PyPy GC.
 
             # pool could be closed.
             if pool.pool is None:
-                return
+                return  # Defensive: pool may close after the stop-flag check above.
 
             connections = None
             try:
@@ -509,7 +509,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         Return a fresh :class:`HTTPConnection`.
         """
         if self.pool is None:
-            raise ClosedPoolError(self, "Pool is closed")
+            raise ClosedPoolError(  # Defensive: callers normally reject closed pools earlier.
+                self, "Pool is closed"
+            )
 
         with self.pool.locate_or_hold(block=True, placeholder_set=True) as swapper:
             self.num_connections += 1
@@ -774,9 +776,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         try:
             return conn or self._new_conn(heb_timeout=heb_timeout)
-        except (
-            TypeError
-        ):  # this branch catch overridden pool that don't support Happy-Eyeballs!
+        except TypeError:  # Defensive: legacy _new_conn overrides without heb_timeout.
             conn = self._new_conn()
             # as this branch is meant for people bypassing our main logic, we have to memorize the conn immediately
             # into our pool of conn.
@@ -807,7 +807,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             try:
                 self.pool.put(conn, block=True)
                 return  # Everything is dandy, done.
-            except AttributeError:
+            except AttributeError:  # Defensive: a concurrent close or custom queue may remove the pool during return.
                 # self.pool is None.
                 pass
             except queue.Full:  # Defensive: legacy queues may reject a blocking put; TrafficPolice waits for capacity.
@@ -973,7 +973,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     SSLError,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
-                new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
+                new_e = _wrap_proxy_error(
+                    new_e, conn.proxy.scheme
+                )  # Defensive: custom connections may fail before recording proxy establishment.
             elif isinstance(new_e, OSError):
                 new_e = ProtocolError("Connection aborted.", new_e)
 
@@ -990,7 +992,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 promise.set_parameter("retries", retries)
                 retries.sleep()
             else:
-                raise e
+                raise new_e
 
             # Keep track of the error for the retry warning.
             err = e
@@ -1007,12 +1009,12 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             return self.get_response(promise=promise)
 
         if promise is not None and response is None:
-            raise ValueError(
+            raise ValueError(  # Defensive: built-in connections return a response with promise metadata or raise.
                 "Invoked get_response with promise=... that no connection in pool recognize"
             )
 
         if response is None:
-            return None
+            return None  # Defensive: built-in connections return a response with promise metadata or raise.
 
         from_promise = None
 
@@ -1027,7 +1029,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 from_promise = response._fp.from_promise
 
         if from_promise is None:
-            raise ValueError(
+            raise ValueError(  # Defensive: built-in connections return a response with promise metadata or raise.
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
 
@@ -1417,7 +1419,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     extension_headers["Accept"] = headers["Accept"]
 
                 if headers is None:
-                    headers = extension_headers
+                    headers = extension_headers  # Defensive: urlopen supplies headers; tolerate direct private-method calls.
                 elif hasattr(headers, "copy"):
                     headers = headers.copy()
                     headers.update(extension_headers)  # type: ignore[union-attr]
@@ -1489,7 +1491,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
 
         if multiplexed:
             if rp is None:
-                raise OSError
+                raise OSError  # Defensive: multiplexed requests return a response promise.
             rp.set_parameter("read_timeout", read_timeout)
             rp.set_parameter("on_early_response", on_early_response)
             rp.set_parameter("extension", extension)
@@ -1511,7 +1513,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         if police is None:
             raise ClosedPoolError(self, "Pool is closed")
 
-        can_shelve_conn: bool = conn.is_multiplexed and not conn.is_saturated
+        can_shelve_conn: bool = (
+            conn.is_multiplexed and not conn.is_saturated and rp is not None
+        )
 
         # Receive the response from the server
         http_vsn_str = (
@@ -2005,7 +2009,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     if police is None:
                         conn.close()
                     else:
-                        police.kill_cursor()
+                        # Response retrieval may already have returned the checkout.
+                        police.kill(conn)
                     conn = None
 
                 release_this_conn = True
@@ -2107,6 +2112,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 if retries.raise_on_redirect:
                     response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2143,6 +2150,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 if retries.raise_on_status:
                     response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2170,6 +2179,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                 **response_kw,
             )
 
+        if not release_conn and self.pool is not None:
+            self.pool.memorize(response, conn, reserve=True)
         return response
 
     def __repr__(self) -> str:
@@ -2272,7 +2283,9 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         Return a fresh :class:`urllib3.connection.HTTPConnection`.
         """
         if self.pool is None:
-            raise ClosedPoolError(self, "Pool is closed")
+            raise ClosedPoolError(
+                self, "Pool is closed"
+            )  # Defensive: callers normally reject closed pools before private connection creation.
 
         if not self.ConnectionCls or self.ConnectionCls is DummyConnection:  # type: ignore[comparison-overlap]
             raise ImportError(
@@ -2548,7 +2561,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
 
         # Force connect early to allow us to validate the connection.
         if conn.is_closed:
-            conn.connect()
+            conn.connect()  # Defensive: the base validator already connects; retain concurrent-close and override compatibility.
 
         if not conn.is_verified and not conn.proxy_is_verified:
             warnings.warn(

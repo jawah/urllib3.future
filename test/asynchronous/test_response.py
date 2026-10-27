@@ -8,13 +8,13 @@ import typing
 import zlib
 from base64 import b64decode
 from io import BytesIO
-from test import onlyBrotli, onlyZstd
 from unittest import mock
 
 import pytest
 
-from urllib3._collections import HTTPHeaderDict
+from test import onlyBrotli, onlyZstd
 from urllib3._async.response import AsyncHTTPResponse
+from urllib3._collections import HTTPHeaderDict
 from urllib3.backend._async._base import AsyncLowLevelResponse
 from urllib3.exceptions import (
     DecodeError,

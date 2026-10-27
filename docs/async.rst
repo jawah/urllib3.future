@@ -7,6 +7,9 @@ urllib3.future provides native async APIs alongside its synchronous APIs.
 They share request options and response models, with differences in how you
 read bodies, iterate streams, and manage cancellation.
 
+For a complete reusable client with executable source and CI checks, see
+:ref:`cookbook-service-client`.
+
 .. code-block:: bash
 
     python -m pip install urllib3-future
@@ -244,6 +247,8 @@ Callbacks such as ``on_post_connection`` must be async functions:
 
     asyncio.run(main())
 
+.. _async-upload:
+
 Sending an async iterable
 -------------------------
 
@@ -281,6 +286,170 @@ performs file reads in an executor so they do not block the event loop:
 Create ``upload.bin`` before running this example. A generator cannot normally
 be rewound, so this example disables automatic retries and redirects. Use a
 replayable body when a request might need to be sent again.
+
+Sharing a resolver
+------------------
+
+An async resolver instance can be shared by managers on its event loop. The
+application owns an explicitly supplied instance and closes it after all its
+users finish:
+
+.. code-block:: python
+    :name: async-shared-resolver-example
+
+    import asyncio
+    import sys
+    import urllib3
+    from urllib3.contrib.resolver._async import AsyncResolverDescription
+
+
+    async def main(url):
+        resolver = AsyncResolverDescription.from_url("doh+cloudflare://").new()
+        try:
+            async with urllib3.AsyncPoolManager(resolver=resolver, timeout=10) as first:
+                print((await first.request("GET", url)).status)
+            async with urllib3.AsyncPoolManager(resolver=resolver, timeout=10) as second:
+                print((await second.request("GET", url)).status)
+        finally:
+            await resolver.close()
+
+
+    asyncio.run(main(sys.argv[1]))
+
+Use a resolver URL or description when you want the manager to create and own
+its instance. See :ref:`resolver-lifetime` for composition and recycling.
+
+.. _async-websocket:
+
+WebSocket messages
+------------------
+
+Install ``urllib3-future[ws]`` or ``urllib3-future[ws-fast]``. Use an appropriate
+``ws://`` / ``wss://`` URL; :ref:`websockets` explains backend selection and the
+extended-CONNECT variants. This example runs a reader task while sending a
+message, then closes the response when the conversation is finished:
+
+.. code-block:: python
+    :name: async-websocket-example
+
+    import asyncio
+    import sys
+    import urllib3
+
+
+    async def exchange(url):
+        async with urllib3.AsyncPoolManager(timeout=10) as pm:
+            response = await pm.urlopen("GET", url)
+            reader = None
+            try:
+                extension = response.extension
+                if extension is None:
+                    raise RuntimeError(f"WebSocket was not accepted: {response.status}")
+
+                async def receive():
+                    while True:
+                        message = await extension.next_payload()
+                        if message is None:
+                            return
+                        print(message)
+
+                reader = asyncio.create_task(receive())
+                await extension.send_payload("Hello World!")
+                await asyncio.sleep(1)  # Application-selected conversation duration.
+            finally:
+                try:
+                    await response.close()
+                finally:
+                    if reader is not None:
+                        if not reader.done():
+                            reader.cancel()
+                        await asyncio.gather(reader, return_exceptions=True)
+            if reader is not None and not reader.cancelled():
+                reader.result()  # Propagate receive errors after cleanup.
+
+
+    asyncio.run(exchange(sys.argv[1]))
+
+The server may send unsolicited messages. Read timeouts raise
+``ReadTimeoutError``; ``None`` is a clean end of the extension stream. A read
+timeout does not itself require discarding a WebSocket, so an application can
+choose to continue reading. Other I/O or protocol errors can close it.
+The example closes deliberately after one second rather than depending on a
+particular server's echo behavior. See :ref:`async-cancellation` for cancellation
+limits and :doc:`reference/contrib/webextensions` for the methods.
+
+.. _sse-resumption:
+
+Server-Sent Events and resumption
+---------------------------------
+
+For a single connection, use ``sse://`` for HTTPS or ``psse://`` for plain HTTP,
+await ``extension.next_payload()``, and close the response in ``finally``.
+The parsed payload is a ``ServerSentEvent``; its ``data`` is text and its
+``retry`` field is a delay in **milliseconds**, not seconds.
+
+The library does not automatically reconnect. This example adds a bounded
+application policy: reconnect twice after EOF, retain the last event ID, and
+send it as ``Last-Event-ID``. It uses a regular HTTP(S) URL with an explicit
+SSE extension so the same extension can retain its ID state across successive
+connections:
+
+.. code-block:: python
+    :name: async-sse-resumption-example
+
+    import asyncio
+    import sys
+    import urllib3
+    from urllib3.contrib.webextensions._async.sse import (
+        AsyncServerSideEventExtensionFromHTTP,
+    )
+
+
+    async def consume(url):
+        extension = AsyncServerSideEventExtensionFromHTTP()
+        last_event_id = ""
+        reconnect_delay = 1.0
+        async with urllib3.AsyncPoolManager(timeout=30) as pm:
+            for attempt in range(3):
+                headers = {"Last-Event-ID": last_event_id} if last_event_id else {}
+                response = await pm.request(
+                    "GET", url, headers=headers, extension=extension,
+                    preload_content=False, retries=False, redirect=False,
+                )
+                try:
+                    if response.status == 204:
+                        return  # The server asks the client to stop reconnecting.
+                    if response.status != 200 or response.extension is None:
+                        raise RuntimeError(f"SSE was not accepted: {response.status}")
+                    while True:
+                        event = await extension.next_payload()
+                        if event is None:
+                            break
+                        print(event.event, event.data)
+                        last_event_id = event.id  # An empty ID clears the cursor.
+                        if event.retry is not None:
+                            reconnect_delay = min(30.0, max(0.0, event.retry / 1000))
+                finally:
+                    await response.close()
+                if attempt < 2:
+                    await asyncio.sleep(reconnect_delay)
+
+
+    asyncio.run(consume(sys.argv[1]))
+
+This example limits reconnection delays to 30 seconds and propagates transport,
+read-timeout, and processing errors. Adapt those policies to the application;
+automatic request retries are separate from SSE resumption. A server must
+implement ``Last-Event-ID`` replay for resumption to work, and the application
+must decide when an event has been processed successfully before persisting
+its cursor.
+
+Reusing the extension sequentially preserves its event-ID state when a later
+connection contains events without an ``id:`` field. Do not share an extension
+between concurrent responses. For a fresh process, restore the cursor from
+application storage and follow the server's replay contract. Metadata-only
+blocks, ID resets, and raw event text are described in
+:ref:`server-sent-events` and :doc:`reference/contrib/webextensions`.
 
 .. _async-cancellation:
 

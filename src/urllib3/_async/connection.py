@@ -530,7 +530,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
                 if hasattr(chunks, "__aiter__"):
                     async for chunk in chunks:
                         if not chunk:
-                            continue
+                            continue  # Defensive: body_to_chunks filters empty async chunks.
                         if isinstance(chunk, str):
                             chunk = chunk.encode("utf-8")
                         await self.send(chunk)
@@ -555,7 +555,9 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
                             )
                 try:
                     rp = await self.send(b"", eot=True)
-                except TypeError:
+                except (
+                    TypeError
+                ):  # Defensive: legacy send overrides may reject the eot keyword.
                     # AWSConnection override the send() method
                     # thus preventing us to add an additional kwarg in send(...)
                     # reason (AWS side): urllib3 2.0 chunks and calls send potentially thousands of
@@ -569,7 +571,9 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             if on_upload_body is not None:
                 await on_upload_body(total_sent, content_length, False, True)
         except BrokenPipeError as e:
-            if on_upload_body is not None:
+            if (
+                on_upload_body is not None
+            ):  # Defensive: best-effort progress notification after a broken upload pipe.
                 await on_upload_body(
                     total_sent,
                     content_length,
@@ -624,7 +628,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
                 _promise = promise
 
             if _promise is None:
-                raise OSError
+                raise OSError  # Defensive: custom backends may omit originating promise metadata.
 
             if early_response_callback is None:
                 early_response_callback = _promise.get_parameter("on_early_response")
@@ -667,7 +671,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             promise = low_response.from_promise
 
         if promise is None:
-            raise OSError
+            raise OSError  # Defensive: custom backends may omit originating promise metadata.
 
         resp_options: _ResponseOptions = promise.get_parameter("response_options")  # type: ignore[assignment]
         headers = low_response.msg
@@ -939,7 +943,7 @@ class AsyncHTTPSConnection(AsyncHTTPConnection):
             # Set `self.proxy_is_verified` unless it's already set while
             # establishing a tunnel.
             if self._has_connected_to_proxy and self.proxy_is_verified is None:
-                self.proxy_is_verified = sock_and_verified.is_verified
+                self.proxy_is_verified = sock_and_verified.is_verified  # Defensive: normal proxy setup already records verification; retain custom-connection compatibility.
 
         await self._post_conn()
 

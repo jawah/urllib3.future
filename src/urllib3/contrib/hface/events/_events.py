@@ -135,6 +135,13 @@ class StreamResetReceived(StreamReset):
 
 
 @dataclass
+class StreamStopSendingReceived(StreamEvent):
+    """The peer stopped our sending direction; its response can still arrive."""
+
+    error_code: int = 0
+
+
+@dataclass
 class HandshakeCompleted(Event):
     alpn_protocol: str | None
 

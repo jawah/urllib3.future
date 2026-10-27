@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import io
 import os
+import re
 import socket
 import sys
 import threading
@@ -981,6 +982,23 @@ def _inspect_cert_store(ctx: ssl.SSLContext, operation: typing.Callable[[], _T])
 
 def _cert_store_stats(ctx: ssl.SSLContext) -> dict[str, int]:
     return _inspect_cert_store(ctx, ctx.cert_store_stats)
+
+
+def _load_default_certs_eagerly(ctx: ssl.SSLContext) -> None:
+    """Populate default trust when a lazy OpenSSL directory cannot be exported."""
+    ctx.load_default_certs()
+    if stdlib_ssl is None or not isinstance(ctx, stdlib_ssl.SSLContext):
+        return  # Defensive: alternative runtimes/contexts have no OpenSSL directory to scan.
+
+    paths = stdlib_ssl.get_default_verify_paths()
+    capath = os.environ.get(paths.openssl_capath_env, paths.openssl_capath)
+    # Only OpenSSL's hashed certificate entries belong to this trust source.
+    for directory in capath.split(os.pathsep):
+        with contextlib.suppress(OSError), os.scandir(directory) as entries:
+            for entry in entries:
+                if re.fullmatch(r"[a-fA-F0-9]{8}\.[0-9]+", entry.name):
+                    with contextlib.suppress(OSError, ValueError):
+                        ctx.load_verify_locations(cafile=entry.path)
 
 
 def _get_ca_certs(ctx: ssl.SSLContext) -> list[bytes]:

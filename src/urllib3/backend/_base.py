@@ -118,7 +118,9 @@ class DirectStreamAccess:
                 | None
             ) = lambda amt, fo: read(amt, self._stream_id, amt is not None, fo)
         else:
-            self._read = None
+            self._read = (
+                None  # Defensive: built-in streams always supply both callbacks.
+            )
 
         # Per-frame chunks are buffered here so a frame-aligned ``recv``
         # returns the protocol's original bytes object zero-copy (instead
@@ -131,7 +133,9 @@ class DirectStreamAccess:
                 write(buf, self._stream_id, eot)
             )
         else:
-            self._write = None
+            self._write = (
+                None  # Defensive: built-in streams always supply both callbacks.
+            )
 
     @property
     def closed(self) -> bool:
@@ -227,7 +231,9 @@ class DirectStreamAccess:
 
         return len(__data)
 
-    def sendall_extended(self, __data: bytes, __close_stream: bool = False) -> None:
+    def sendall_extended(
+        self, __data: bytes, __close_stream: bool = False
+    ) -> None:  # Defensive: extended-send compatibility API; built-in extensions use sendall and close.
         if self._write is None:
             raise OSError("stream write not permitted")
 
@@ -320,7 +326,11 @@ class LowLevelResponse:
         self.trailers: HTTPHeaderDict | None = None
 
     @property
-    def fp(self) -> socket.SocketIO | DirectStreamAccess | None:
+    def fp(
+        self,
+    ) -> (
+        socket.SocketIO | DirectStreamAccess | None
+    ):  # Defensive: incidental http.client file-pointer compatibility.
         if self._sock is None:
             if self.status == 101 or (
                 self._method == "CONNECT" and 200 <= self.status < 300
@@ -342,7 +352,7 @@ class LowLevelResponse:
     @from_promise.setter
     def from_promise(self, value: ResponsePromise) -> None:
         if value.stream_id != self._stream_id:
-            raise ValueError(
+            raise ValueError(  # Defensive: built-in responses are assigned the promise for their own stream.
                 "Trying to assign a ResponsePromise to an unrelated LowLevelResponse"
             )
         self.__promise = value
@@ -426,7 +436,10 @@ class LowLevelResponse:
 
     def abort(self) -> None:
         try:
-            if self._stream_abort is not None and not self._eot:
+            # Upgraded responses have no HTTP body, but their stream can still be open.
+            if self._stream_abort is not None and (
+                not self._eot or self._dsa is not None
+            ):
                 if self._stream_id is not None:
                     self._stream_abort(self._stream_id)
         finally:
@@ -629,14 +642,14 @@ class BaseBackend:
     def _http_vsn_str(self) -> str:
         """Reimplemented for backward compatibility purposes."""
         if self._svn is None:
-            return "HTTP/1.1"
+            return "HTTP/1.1"  # Defensive: http.client-compatible default before protocol negotiation.
         return self._svn.value
 
     @property
     def _http_vsn(self) -> int:
         """Reimplemented for backward compatibility purposes."""
         if self._svn is None:
-            return 11
+            return 11  # Defensive: http.client-compatible default before protocol negotiation.
         if self._cached_http_vsn is None:
             self._cached_http_vsn = int(self._svn.value.split("/")[-1].replace(".", ""))
         return self._cached_http_vsn

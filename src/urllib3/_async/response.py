@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import asyncio
 import json as _json
 import sys
 import typing
@@ -149,6 +150,7 @@ class AsyncHTTPResponse(HTTPResponse):
 
         self._preloaded_content: bool = preload_content
 
+        self._loop = asyncio.get_running_loop() if police_officer is not None else None
         if self._police_officer is not None:
             self._police_officer.memorize(self, self._connection)
             # we can utilize a ConnectionPool without level-0 PoolManager!
@@ -752,10 +754,32 @@ class AsyncHTTPResponse(HTTPResponse):
         if buffer:
             yield b"".join(buffer)
 
+    async def _close_from_gc(self) -> None:
+        police = self._police_officer
+        reclaimed = police._reclaim_reservation(self) if police is not None else None
+        try:
+            await self.close()
+        finally:
+            if reclaimed is not None and police is not None:
+                police._signals.terminate_writing()
+                police.release()
+                if police._shutdown:
+                    await police.kill(reclaimed, idle_only=True)
+
     def __del__(self) -> None:
-        if not self.closed:
+        if not getattr(self, "closed", True):
+            loop = getattr(self, "_loop", None)
+            police = getattr(self, "_police_officer", None)
+            if loop is not None and not loop.is_closed() and police is not None:
+                try:
+                    loop.call_soon_threadsafe(police._schedule_gc_close, self)
+                    return
+                except (
+                    RuntimeError,
+                    NotImplementedError,
+                ):  # Defensive: loop closed after the check, or scheduling unsupported.
+                    pass  # Closed loop or unsupported runtime: local cleanup only.
             if self._fp:
                 self._fp.close()
-
             if not self.auto_close:
                 io.IOBase.close(self)

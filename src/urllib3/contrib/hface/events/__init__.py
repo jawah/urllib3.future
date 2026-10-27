@@ -27,6 +27,7 @@ from ._events import (
     StreamEvent,
     StreamReset,
     StreamResetReceived,
+    StreamStopSendingReceived,
 )
 
 __all__ = (
@@ -36,6 +37,7 @@ __all__ = (
     "StreamEvent",
     "StreamReset",
     "StreamResetReceived",
+    "StreamStopSendingReceived",
     "HeadersReceived",
     "DataReceived",
     "HandshakeCompleted",

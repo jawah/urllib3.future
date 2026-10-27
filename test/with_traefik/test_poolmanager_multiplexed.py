@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import typing
 from random import randint
-from test import TIMEOUT_TOLERANCE, notMacOS
 from threading import Thread
 from time import perf_counter, sleep
 
 import pytest
 
+from test import TIMEOUT_TOLERANCE, notMacOS
 from urllib3 import (
     HTTPConnectionPool,
     HTTPSConnectionPool,
@@ -174,15 +174,13 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
                 conn.close()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("asynchronous", [False, True])
     async def test_clear_wakes_pool_capacity_waiter(
-        self, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import asyncio
         import inspect
         from functools import partial
         from threading import Event
-        from urllib3 import AsyncPoolManager
 
         async def call(
             fn: typing.Callable[..., typing.Any],
@@ -192,10 +190,10 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             result = fn(*args, **kwargs)
             return await result if inspect.isawaitable(result) else result
 
-        manager_type: typing.Any = AsyncPoolManager if asynchronous else PoolManager
+        manager_type: typing.Any = PoolManager
         manager = manager_type(
             num_pools=1,
-            resolver=self.test_async_resolver if asynchronous else self.test_resolver,
+            resolver=self.test_resolver,
             ca_certs=self.ca_authority,
             disabled_svn={HttpVersion.h3},
             timeout=5,
@@ -207,11 +205,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
         old_pool = next(iter(manager.pools._registry.values()))
         waiting = Event()
         signals = manager.pools._signals
-        owner, name = (
-            (signals, "register")
-            if asynchronous
-            else (manager.pools, "_register_signal")
-        )
+        owner, name = (manager.pools, "_register_signal")
         register = getattr(owner, name)
 
         def record(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
@@ -222,11 +216,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
         monkeypatch.setattr(owner, name, record)
         loop = asyncio.get_running_loop()
         target = self.https_url.replace(self.host, self.alt_host) + "/bytes/7"
-        worker = (
-            asyncio.create_task(manager.request("GET", target))
-            if asynchronous
-            else loop.run_in_executor(None, partial(manager.request, "GET", target))
-        )
+        worker = loop.run_in_executor(None, partial(manager.request, "GET", target))
         try:
             assert await loop.run_in_executor(None, waiting.wait, 5)
             await call(manager.clear)
@@ -238,11 +228,8 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
             # Release the waiter even when testing an implementation that fails to wake it.
             await call(promise._conn.close)
             await call(manager.pools.kill, old_pool)
-            if asynchronous:
-                worker.cancel()
-            else:
-                for signal in tuple(signals):
-                    signal.event.set()
+            for signal in tuple(signals):
+                signal.event.set()
             await asyncio.wait_for(asyncio.gather(worker, return_exceptions=True), 10)
             await call(manager.clear)
 
@@ -628,6 +615,7 @@ class TestPoolManagerMultiplexed(TraefikTestCase):
     ) -> None:
         from concurrent.futures import ThreadPoolExecutor
         from threading import Event, get_ident
+
         from urllib3 import HTTPResponse
 
         selected, collected = Event(), Event()

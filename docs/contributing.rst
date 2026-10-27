@@ -123,8 +123,10 @@ Choosing a test suite
   scenarios. Shared DNS fixtures also live in ``test/conftest.py``.
 * ``test/with_traefik/`` tests negotiated protocols, multiplexing, proxies, and
   extensions against the Docker stack.
-* Async cases are commonly under ``asynchronous/`` subdirectories. Some files
-  parameterize the same scenario over both interfaces.
+* Keep sync and async client cases in matching modules, with the async mirror
+  under ``asynchronous/``. For example, ``test/test_response.py`` is mirrored by
+  ``test/asynchronous/test_response.py``. The same layout applies inside
+  ``contrib``, ``with_dummyserver``, and ``with_traefik``.
 * ``test/within_wasi/`` runs inside WebAssembly components through the dedicated
   WASI runner, not normal pytest discovery.
 
@@ -209,6 +211,18 @@ and ``.github/workflows/integration.yml``.
 
 Writing reliable regression tests
 ---------------------------------
+
+Extend an existing module for the component being tested before adding a new
+test file. Controlled HTTP/2 and HTTP/3 cases belong in the mirrored
+``with_dummyserver/test_protolevel.py`` modules. Put shared fixtures in the
+nearest ``conftest.py`` and reusable peer or synchronization helpers in helper
+modules; do not import fixtures or helpers from another test module. The local
+protocol peers are defined in ``test/with_dummyserver/conftest.py``.
+
+Keep each test's client API explicit rather than parameterizing sync versus
+async. A synchronous client test may still need an async test harness when its
+peer runs on the test event loop; dispatch blocking client calls to an executor
+in that case.
 
 Prefer a public client operation against a local dummyserver or the Traefik
 stack when testing network behavior. For malformed frames, incomplete messages,

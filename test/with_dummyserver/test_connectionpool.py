@@ -1,28 +1,51 @@
 from __future__ import annotations
 
+import asyncio
+import errno
 import io
 import socket
+import ssl
 import sys
 import time
 import typing
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
 from threading import Event, Thread
+from typing import Any
 from unittest import mock
 from urllib.parse import urlencode
 
 import pytest
 
-from dummyserver.server import HAS_IPV6_AND_DNS, NoIPv6Warning
-from dummyserver.testcase import HTTPDummyServerTestCase, SocketDummyServerTestCase
-from urllib3 import HTTPConnectionPool, ResponsePromise, encode_multipart_formdata
-from urllib3 import ResolverDescription
+from dummyserver.server import DEFAULT_CA, HAS_IPV6_AND_DNS, NoIPv6Warning
+from dummyserver.testcase import (
+    HTTPDummyServerTestCase,
+    HTTPSDummyServerTestCase,
+    SocketDummyServerTestCase,
+)
+from test import LONG_TIMEOUT, SHORT_TIMEOUT, TIMEOUT_TOLERANCE
+from test.traffic_police_helpers import (
+    ObservedPool,
+    ObservedTrafficPolice,
+)
+from test.with_dummyserver.conftest import HTTP2Peer
+from urllib3 import (
+    HTTPSConnectionPool,
+    HttpVersion,
+    PoolManager,
+    ResolverDescription,
+    ResponsePromise,
+    encode_multipart_formdata,
+)
+from urllib3._async.response import AsyncHTTPResponse
 from urllib3._collections import HTTPHeaderDict
 from urllib3._typing import _TYPE_FIELD_VALUE_TUPLE, _TYPE_TIMEOUT
 from urllib3.connection import HTTPConnection, _get_default_user_agent
-from urllib3.connectionpool import idle_conn_watch_task
+from urllib3.connectionpool import HTTPConnectionPool, idle_conn_watch_task
+from urllib3.contrib.resolver.in_memory import InMemoryResolver
 from urllib3.exceptions import (
+    ClosedPoolError,
     ConnectTimeoutError,
     DecodeError,
     EmptyPoolError,
@@ -31,14 +54,19 @@ from urllib3.exceptions import (
     NewConnectionError,
     ProtocolError,
     ReadTimeoutError,
+    SSLError,
     UnrewindableBodyError,
 )
+from urllib3.response import HTTPResponse
 from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS
 from urllib3.util.retry import RequestHistory, Retry
 from urllib3.util.timeout import Timeout
+from urllib3.util.traffic_police import (
+    UnavailableTraffic,
+)
 
-from ..conftest import DNSHTTPSServer
 from .. import INVALID_SOURCE_ADDRESSES, TARPIT_HOST, VALID_SOURCE_ADDRESSES
+from ..conftest import DNSHTTPSServer
 from ..port_helpers import find_unused_port
 
 
@@ -205,6 +233,68 @@ class TestConnectionPoolTimeouts(SocketDummyServerTestCase):
 
 
 class TestConnectionPool(HTTPDummyServerTestCase):
+    @pytest.mark.parametrize(
+        "path,status",
+        [("/", 200), ("/not_found", 404), ("/redirect?compressed=true", 303)],
+    )
+    @pytest.mark.parametrize("release_conn", [False, True])
+    def test_discarded_unread_responses_do_not_exhaust_pool(
+        self, release_conn: bool, path: str, status: int
+    ) -> None:
+        import gc
+
+        with HTTPConnectionPool(
+            self.host,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=Retry(
+                total=0,
+                status_forcelist=[404],
+                raise_on_status=False,
+                raise_on_redirect=False,
+            ),
+            background_watch_delay=None,
+        ) as pool:
+            for _ in range(3):
+                response = pool.request(
+                    "GET",
+                    path,
+                    preload_content=False,
+                    pool_timeout=5,
+                    release_conn=release_conn,
+                )
+                assert response.status == status
+                del response
+                gc.collect()
+            # Also wait for cleanup of the final abandoned response.
+            assert (pool.request("GET", "/", pool_timeout=5)).status == 200
+
+    def test_resolver_connection_without_ipv6(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib3.util import connection
+
+        # Only override the capability probe; resolution and HTTP use real sockets.
+        monkeypatch.setattr(connection, "HAS_IPV6", False)
+        with HTTPConnectionPool(
+            self.host,
+            self.port,
+            socket_family=socket.AF_INET6,
+            timeout=5,
+            retries=False,
+        ) as pool:
+            response = pool.request("GET", "/", preload_content=False)
+            try:
+                assert response.status == 200
+                assert response.connection is not None
+                assert response.connection.sock is not None
+                assert response.connection.sock.family == socket.AF_INET
+                response.drain_conn()
+            finally:
+                response.close()
+
     @pytest.mark.parametrize("as_list", [False, True])
     def test_pool_resolver_configuration(self, as_list: bool) -> None:
         resolver = ["system://default"] if as_list else "system://default"
@@ -983,8 +1073,13 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             assert pool.pool.qsize() == 0
 
             # Make request without releasing connection
-            pool.request("GET", "/", release_conn=False, preload_content=False)
+            response = pool.request(
+                "GET", "/", release_conn=False, preload_content=False
+            )
             assert pool.pool.qsize() == 0
+            assert response.read(1)
+            assert pool.pool.qsize() == 0
+            response.read()
 
     def test_dns_error(self) -> None:
         with HTTPConnectionPool(
@@ -1725,3 +1820,540 @@ class TestRedirectPoolSize(HTTPDummyServerTestCase):
         ) as pool:
             pool.urlopen("GET", "/redirect", preload_content=False)
             assert pool.num_connections == 1
+
+
+class TestControlledTrafficPolice(HTTPDummyServerTestCase):
+    def test_handoff_after_wait_timeout_preserves_connection(self) -> None:
+        timed_out, resume_wait = Event(), Event()
+
+        class PausedTimeout(Event):
+            def wait(self, timeout: float | None = None) -> bool:
+                ready = super().wait(timeout)
+                if not ready:
+                    # Model descheduling after the OS wait times out, before get()
+                    # can reacquire its lock and inspect the handoff.
+                    timed_out.set()
+                    assert resume_wait.wait(10)
+                return ready
+
+        with ObservedPool(
+            self.host_alt,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            assert pool.request("GET", "/").status == 200
+            police = pool.pool
+            assert isinstance(police, ObservedTrafficPolice)
+            assert police.get() is not None
+            police.signal_event_factory = PausedTimeout
+            with ThreadPoolExecutor(1) as executor:
+                waiting = executor.submit(pool.request, "GET", "/", pool_timeout=0.01)
+                try:
+                    assert timed_out.wait(10)
+                    police.release()
+                    resume_wait.set()
+                    assert waiting.result(10).status == 200
+                    assert not police._signals
+                    assert not police._cursor
+                    assert pool.request("GET", "/after", pool_timeout=0.1).status == 200
+                finally:
+                    police.signal_event_factory = None
+                    resume_wait.set()
+                    police.release()
+
+    @pytest.mark.parametrize("action", ["release", "kill", "timeout"])
+    def test_queued_request_recovers(self, action: str) -> None:
+        with ObservedPool(
+            self.host_alt,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            assert pool.request("GET", "/").status == 200
+            police = pool.pool
+            assert isinstance(police, ObservedTrafficPolice)
+            conn = police.get()
+            assert conn is not None
+            queued = police.checkpoints["queued"] = Event()
+            with ThreadPoolExecutor(1) as executor:
+                waiting = executor.submit(
+                    pool.request,
+                    "GET",
+                    "/",
+                    pool_timeout=0.01 if action == "timeout" else 5,
+                )
+                try:
+                    assert queued.wait(10), "The request never registered its waiter"
+                    if action == "timeout":
+                        with pytest.raises(EmptyPoolError):
+                            waiting.result(10)
+                        police.release()
+                    else:
+                        if action == "kill":
+                            police.kill(conn)
+                        else:
+                            police.release()
+                        assert waiting.result(10).status == 200
+                    assert pool.request("GET", "/after", pool_timeout=0.1).status == 200
+                    assert not police._signals
+                    assert not police._cursor
+                finally:
+                    police.release()
+
+    @pytest.mark.parametrize("action", ["release", "kill", "timeout"])
+    def test_queued_response_reader(self, action: str) -> None:
+        with ObservedPool(
+            self.host_alt,
+            self.port,
+            maxsize=1,
+            block=True,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as pool:
+            response = pool.request(
+                "POST", "/echo", body=b"body", preload_content=False
+            )
+            police = pool.pool
+            assert isinstance(police, ObservedTrafficPolice)
+            conn = response.connection
+            assert conn is not None
+            if not police.busy:
+                assert police.locate(response) is conn
+            queued = police.checkpoints["queued"] = Event()
+
+            def read() -> bytes:
+                with police.borrow(
+                    response, timeout=0.01 if action == "timeout" else 5
+                ):
+                    return response.read()
+
+            with ThreadPoolExecutor(1) as executor:
+                waiting = executor.submit(read)
+                try:
+                    assert queued.wait(10)
+                    if action == "timeout":
+                        with pytest.raises(TimeoutError):
+                            waiting.result(10)
+                        assert not police._signals
+                        assert response.read() == b"body"
+                    elif action == "kill":
+                        police.kill(conn)
+                        with pytest.raises(UnavailableTraffic):
+                            waiting.result(10)
+                    else:
+                        police.release()
+                        assert waiting.result(10) == b"body"
+                    response.close()
+                    assert pool.request("GET", "/after", pool_timeout=0.1).status == 200
+                    assert not police._cursor and not police._signals
+                finally:
+                    police.release()
+                    response.close()
+
+
+class PoolChecks:
+    def make_pool(self: Any, **kwargs: Any) -> Any:
+        tls = self.scheme == "https"
+        cls = HTTPSConnectionPool if tls else HTTPConnectionPool
+        if tls:
+            kwargs["ca_certs"] = DEFAULT_CA
+        return cls(
+            self.host,
+            self.port,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+            disabled_svn={HttpVersion.h2, HttpVersion.h3},
+            **kwargs,
+        )
+
+    def test_direct_checkout_happy_eyeballs_preserves_options(
+        self: Any,
+    ) -> None:
+        # Exercise opaque ECH forwarding without submitting an unsupported
+        # configuration to the TLS backend (rtls rejects it).
+        ech = b"\x00\x05\xff\xff\x00\x01x" if self.scheme == "http" else None
+        resolver = InMemoryResolver(
+            "localhost:127.0.0.2", "localhost:127.0.0.1", ech_config=ech
+        )
+        cache: dict[Any, Any] = {}
+        pool = self.make_pool(
+            resolver=resolver,
+            happy_eyeballs=True,
+            source_address=("127.0.0.1", 0),
+            preemptive_quic_cache=cache,
+        )
+        conn = None
+        try:
+            conn = pool._get_conn()
+            assert conn.sock is not None
+            raw_socket = conn.sock
+            assert raw_socket.getsockname()[0] == "127.0.0.1"
+            records = conn._resolver.getaddrinfo(
+                "localhost",
+                self.port,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            assert records[0][3] == (ech or "")
+            assert conn._preemptive_quic_cache is cache
+            conn.request("GET", "/")
+            response = conn.getresponse()
+            assert response.status == 200
+            response.read()
+            pool._put_conn(conn)
+            assert self.host in repr(pool)
+        finally:
+            pool.close()
+        assert "Closed" in repr(pool)
+        with pytest.raises(ClosedPoolError):
+            pool._get_conn()
+        assert conn is not None
+        pool._put_conn(conn)
+        assert conn.sock is None
+
+    @pytest.mark.parametrize("phase", ["response", "promise", "error", "unavailable"])
+    def test_close_between_request_and_result(self: Any, phase: str) -> None:
+        pool = self.make_pool()
+        base: Any = pool.ConnectionCls
+
+        def sync_request(conn: Any, *args: Any, **kwargs: Any) -> Any:
+            result = base.request(conn, *args, **kwargs)
+            pool.close()
+            if phase == "unavailable":
+                raise UnavailableTraffic("pool was closed")
+            if phase == "error":
+                raise ValueError("backend state disappeared")
+            return result
+
+        pool.ConnectionCls = type(
+            "ClosingConnection",
+            (base,),
+            {
+                "request": sync_request,
+            },
+        )
+        try:
+            with pytest.raises(ClosedPoolError):
+                pool.request("GET", "/", multiplexed=phase == "promise")
+        finally:
+            pool.close()
+
+
+class TestHTTPPoolEdges(PoolChecks, HTTPDummyServerTestCase):
+    def test_happy_eyeballs_closes_a_connected_loser(self) -> None:
+        connected, finish, stopped = Event(), Event(), Event()
+        created: list[Any] = []
+
+        class Resolver(InMemoryResolver):
+            def getaddrinfo(self, *args: Any, **kwargs: Any) -> Any:
+                return super().getaddrinfo(*args, **kwargs) * 2
+
+        class Connection(HTTPConnection):
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                created.append(self)
+
+            def connect(self) -> None:
+                if self is not created[0]:
+                    assert connected.wait(5)
+                super().connect()
+                if self is created[0]:
+                    connected.set()
+                    try:
+                        assert finish.wait(10)
+                    finally:
+                        stopped.set()
+
+        resolver = Resolver("localhost:127.0.0.1")
+        pool = self.make_pool(resolver=resolver, happy_eyeballs=True)
+        pool.ConnectionCls = Connection
+        try:
+            response = pool.request("GET", "/")
+            assert response.status == 200
+            assert len(created) == 2 and created[0].sock is None
+        finally:
+            finish.set()
+            assert stopped.wait(5)
+            pool.close()
+
+
+class TestHTTPSPoolEdges(PoolChecks, HTTPSDummyServerTestCase):
+    pass
+
+
+@pytest.mark.parametrize("http2_peer", ["ignore-ping"], indirect=True)
+def test_checkout_retires_an_unanswered_ping(
+    http2_peer: HTTP2Peer,
+) -> None:
+    pool: Any = HTTPSConnectionPool(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    try:
+        assert pool.request("GET", "/").status == 200
+        conn = next(iter(pool.pool._registry.values()))
+        old_socket = conn.sock
+        conn.ping()
+        http2_peer.pings.get(True, 5)
+        assert pool.request("GET", "/next").status == 200
+        assert conn.sock is not old_socket
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("blind", [False, True])
+@pytest.mark.parametrize("failure", ["socket", "ssl", "would-block", "timeout"])
+def test_deferred_response_errors_are_normalized(
+    http2_peer: HTTP2Peer,
+    blind: bool,
+    failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool: Any = HTTPSConnectionPool(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    error = {
+        "socket": OSError("injected read failure"),
+        "ssl": ssl.SSLError("bad record"),
+        "would-block": BlockingIOError(errno.EAGAIN, "injected would-block"),
+        "timeout": socket.timeout("timed out"),
+    }[failure]
+    expected = {
+        "socket": ProtocolError,
+        "ssl": SSLError,
+        "would-block": ReadTimeoutError,
+        "timeout": ReadTimeoutError,
+    }[failure]
+    conn = None
+    try:
+        promise = pool.request("GET", "/", multiplexed=True)
+        conn = next(iter(pool.pool._registry.values()))
+        sock = conn.sock
+        receive = type(sock).recv
+        failed = False
+
+        def fail_once(current: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal failed
+            if current is sock and not failed:
+                failed = True
+                raise error
+            return receive(current, *args, **kwargs)
+
+        with monkeypatch.context() as io:
+            io.setattr(type(sock), "recv", fail_once)
+            with pytest.raises(expected):
+                pool.get_response(**({} if blind else {"promise": promise}))
+        assert failed
+        # The injected exception did not consume or alter the actual peer reply.
+        assert pool.get_response(promise=promise).status == 200
+    finally:
+        if conn is not None:
+            conn.close()
+        pool.close()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["close-promise", "read-timeout", "read-error", "write-error", "write-eprototype"],
+)
+def test_pool_error_boundaries_after_sending_request(
+    http2_peer: HTTP2Peer,
+    failure: str,
+) -> None:
+    pool: Any = HTTPSConnectionPool(
+        "localhost",
+        http2_peer.port,
+        ca_certs=DEFAULT_CA,
+        resolver="in-memory://default?hosts=localhost:127.0.0.1",
+        disabled_svn={HttpVersion.h11, HttpVersion.h3},
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    )
+    base: Any = pool.ConnectionCls
+    observed = False
+
+    def sync_request(conn: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal observed
+        result = base.request(conn, *args, **kwargs)
+        deadline = time.monotonic() + 5
+        while not conn._protocol.has_pending_event(stream_id=result.stream_id):
+            assert time.monotonic() < deadline, "Peer response did not arrive"
+            conn.peek_and_react(expect_frame=True)
+        observed = True
+        if failure == "close-promise":
+            pool.close()
+        elif failure.startswith("write-"):
+            raise OSError(
+                errno.EPROTOTYPE if failure == "write-eprototype" else errno.EIO,
+                "injected write failure",
+            )
+        return result
+
+    def read_error() -> None:
+        if failure == "read-timeout":
+            raise socket.timeout("injected read timeout")
+        if failure == "read-error":
+            raise OSError(errno.EIO, "injected read failure")
+
+    def sync_getresponse(conn: Any, *args: Any, **kwargs: Any) -> Any:
+        read_error()
+        return base.getresponse(conn, *args, **kwargs)
+
+    pool.ConnectionCls = type(
+        "FailingConnection",
+        (base,),
+        {
+            "request": sync_request,
+            "getresponse": sync_getresponse,
+        },
+    )
+    try:
+        if failure == "write-eprototype":
+            assert pool.request("GET", "/").status == 200
+        else:
+            expected = (
+                ClosedPoolError
+                if failure == "close-promise"
+                else ReadTimeoutError
+                if failure == "read-timeout"
+                else ProtocolError
+            )
+            with pytest.raises(expected):
+                pool.request("GET", "/", multiplexed=failure == "close-promise")
+        assert observed
+    finally:
+        pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache", [False, True])
+@pytest.mark.parametrize(
+    "scenario",
+    ["plain", "gzip", "raw-gzip", "empty", "invalid-gzip", "truncated", "stalled"],
+)
+async def test_live_retry_body(cache: bool, scenario: str, retry_server: Any) -> None:
+    observed = []
+    errors = {
+        "invalid-gzip": DecodeError,
+        "truncated": ProtocolError,
+        "stalled": ReadTimeoutError,
+    }
+    async with retry_server(scenario) as (port, payload, _, requests):
+
+        class BodyRetry(Retry):
+            def get_retry_after(self, response: HTTPResponse) -> float | None:
+                assert response._pool is not None and response._pool.pool is not None
+                assert not response._pool.pool.busy
+                observed.append(response.data if cache else response._body)
+                return None
+
+            async def async_get_retry_after(
+                self, response: AsyncHTTPResponse
+            ) -> float | None:
+                assert response._pool is not None and response._pool.pool is not None
+                assert not response._pool.pool.busy
+                observed.append(await response.data if cache else response._body)
+                return None
+
+        retry = BodyRetry(total=1, status_forcelist=[503], cache_response_body=cache)
+
+        def run_sync() -> None:
+            with HTTPConnectionPool(
+                "127.0.0.1", port, maxsize=1, timeout=Timeout(connect=5, read=0.2)
+            ) as pool:
+                if cache and scenario in errors:
+                    with pytest.raises(errors[scenario]):
+                        pool.urlopen("GET", "/", retries=retry, preload_content=False)
+                    assert not pool.pool.busy  # type: ignore[union-attr]
+                    response = pool.urlopen("GET", "/", retries=False)
+                else:
+                    response = pool.urlopen(
+                        "GET",
+                        "/",
+                        retries=retry,
+                        preload_content=False,
+                        decode_content=scenario != "raw-gzip",
+                    )
+                assert response.data == b"ok"
+
+        await asyncio.get_running_loop().run_in_executor(None, run_sync)
+        assert len(requests) == 2
+        assert observed == (
+            [] if cache and scenario in errors else [payload if cache else None]
+        )
+        if scenario in ("plain", "gzip", "raw-gzip", "empty"):
+            assert requests[0] == requests[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http2", [False, True])
+@pytest.mark.parametrize("scenario", ["plain", "gzip", "empty"])
+async def test_retry_exhaustion_drains_body_and_reuses_connection(
+    http2: bool, scenario: str, retry_server: Any
+) -> None:
+    observed: list[typing.Any] = []
+
+    class ObserveRetry(Retry):
+        def increment(self, *args: typing.Any, **kwargs: typing.Any) -> Retry:
+            response = kwargs.get("response")
+            if response is not None:
+                assert response._body is None
+                observed.append(response)
+            return super().increment(*args, **kwargs)
+
+    async with retry_server(scenario, http2=http2) as (port, _, _, requests):
+        url = f"{'https' if http2 else 'http'}://localhost:{port}/"
+        options: dict[str, typing.Any] = dict(
+            # The fixture listens on IPv4; localhost's IPv6 port may belong to another test.
+            resolver="in-memory://default?hosts=localhost:127.0.0.1",
+            maxsize=1,
+            block=True,
+            timeout=5,
+            ca_certs=DEFAULT_CA,
+            disabled_svn={HttpVersion.h3},
+            background_watch_delay=None,
+        )
+        retry = ObserveRetry(total=0, status_forcelist=[503], cache_response_body=False)
+        request_options: dict[str, typing.Any] = dict(
+            retries=retry, preload_content=False, multiplexed=http2
+        )
+
+        def run_sync() -> None:
+            with PoolManager(**options) as manager:
+                with pytest.raises(MaxRetryError):
+                    result = manager.urlopen("GET", url, **request_options)
+                    if http2:
+                        assert isinstance(result, ResponsePromise)
+                        manager.get_response(promise=result)
+                assert len(observed) == 1 and observed[0].closed
+                assert observed[0]._body is None
+                response = manager.urlopen("GET", url, retries=False)
+                assert response.data == b"ok"
+                assert response.version == (20 if http2 else 11)
+
+        await asyncio.get_running_loop().run_in_executor(None, run_sync)
+        assert len(requests) == 2
+        assert requests[0] == requests[1]

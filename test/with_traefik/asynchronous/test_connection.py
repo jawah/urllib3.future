@@ -13,11 +13,94 @@ from urllib3.backend.hface import _HAS_HTTP3_SUPPORT
 from urllib3.exceptions import ResponseNotReady, SSLError
 from urllib3.util import create_urllib3_context
 
-from .. import TraefikTestCase
+from .. import CA_PATH, TraefikTestCase
 
 
 @pytest.mark.asyncio
 class TestConnection(TraefikTestCase):
+    @pytest.mark.usefixtures("requires_http3")
+    @pytest.mark.parametrize(
+        "in_memory,server_settings",
+        [(False, True), (True, True), (None, True), (None, False)],
+    )
+    async def test_http3_client_certificate(
+        self,
+        in_memory: bool | None,
+        server_settings: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cert_dir = os.path.join(CA_PATH, "traefik", "mtls")
+        cert_file = os.path.join(cert_dir, "server.pem")
+        key_file = os.path.join(cert_dir, "server.key")
+        with open(cert_file, "rb") as certificate:
+            cert_data = certificate.read()
+        with open(key_file, "rb") as key:
+            key_data = key.read()
+        identity = (
+            {"cert_data": cert_data, "key_data": key_data}
+            if in_memory
+            else {"cert_file": cert_file, "key_file": key_file}
+        )
+        if in_memory is None:
+            identity = {}
+            from urllib3.contrib.hface.protocols.http3._qh3 import (
+                HTTP3ProtocolAioQuicImpl,
+            )
+
+            fetch_events = HTTP3ProtocolAioQuicImpl._fetch_events
+
+            def fetch_after_rejection(protocol: HTTP3ProtocolAioQuicImpl) -> None:
+                # Drain genuine SETTINGS and TLS-close events together, after rejection.
+                if getattr(protocol._quic, "_close_event", None) is not None:
+                    if server_settings:
+                        fetch_events(protocol)
+                    else:
+                        from qh3.quic.events import StreamDataReceived
+
+                        next_event = protocol._quic.next_event
+
+                        def next_tls_event() -> typing.Any:
+                            event = next_event()
+                            while isinstance(event, StreamDataReceived):
+                                event = next_event()
+                            return event
+
+                        # TLS rejection may arrive without application SETTINGS.
+                        # Keep the real handshake and close events, without an
+                        # HTTP/3 control write masking their ordering.
+                        with monkeypatch.context() as gate:
+                            gate.setattr(protocol._quic, "next_event", next_tls_event)
+                            fetch_events(protocol)
+
+            monkeypatch.setattr(
+                HTTP3ProtocolAioQuicImpl, "_fetch_events", fetch_after_rejection
+            )
+        async with AsyncHTTPSConnectionPool(
+            self.mtls_host,
+            self.https_port,
+            resolver=self.test_async_resolver,
+            ca_certs=os.path.join(cert_dir, "client.pem"),
+            disabled_svn={HttpVersion.h11, HttpVersion.h2},
+            timeout=5,
+            retries=False,
+            **identity,
+        ) as pool:
+            if in_memory is None:
+                with pytest.raises(SSLError, match="CERTIFICATE_REQUIRED"):
+                    await pool.request("GET", "/headers")
+                return
+            response = await pool.request("GET", "/headers")
+            assert response.status == 200
+            assert response.version == 30
+            expected = "".join(
+                line
+                for line in cert_data.decode().splitlines()
+                if not line.startswith("-----")
+            )
+            assert (await response.json())["headers"][
+                "X-Forwarded-Tls-Client-Cert"
+            ] == [expected]
+
     @pytest.mark.usefixtures("requires_http3")
     @pytest.mark.parametrize("allow_upgrade", [False, True])
     async def test_dns_https_record_selects_quic(

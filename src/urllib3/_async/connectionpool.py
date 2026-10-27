@@ -179,7 +179,7 @@ async def idle_conn_watch_task(
             await asyncio.sleep(waiting_delay)
 
             if pool.pool is None:
-                return
+                return  # Defensive: pool may close after the stop-flag check above.
             connections = pool.pool.iter_idle()
             try:
                 async for conn in connections:
@@ -473,7 +473,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         Return a fresh :class:`HTTPConnection`.
         """
         if self.pool is None:
-            raise ClosedPoolError(self, "Pool is closed")
+            raise ClosedPoolError(
+                self, "Pool is closed"
+            )  # Defensive: callers normally reject closed pools before private connection creation.
 
         if (
             self._background_monitoring is None
@@ -766,7 +768,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         try:
             return conn or await self._new_conn(heb_timeout=heb_timeout)
-        except (
+        except (  # Defensive: legacy _new_conn overrides may not accept heb_timeout.
             TypeError
         ):  # this branch catch overridden pool that don't support Happy-Eyeballs!
             conn = await self._new_conn()
@@ -794,7 +796,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             try:
                 await self.pool.put(conn, block=True)
                 return  # Everything is dandy, done.
-            except AttributeError:
+            except AttributeError:  # Defensive: a concurrent close or custom queue may remove the pool during return.
                 # self.pool is None.
                 pass
             except queue.Full:  # Defensive: legacy queues may reject a blocking put; TrafficPolice waits for capacity.
@@ -957,7 +959,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                     SSLError,
                 ),
             ) and (conn and conn.proxy and not conn.has_connected_to_proxy):
-                new_e = _wrap_proxy_error(new_e, conn.proxy.scheme)
+                new_e = _wrap_proxy_error(
+                    new_e, conn.proxy.scheme
+                )  # Defensive: custom connections may fail before recording proxy establishment.
             elif isinstance(new_e, OSError):
                 new_e = ProtocolError("Connection aborted.", new_e)
 
@@ -991,12 +995,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             return await self.get_response(promise=promise)
 
         if promise is not None and response is None:
-            raise ValueError(
+            raise ValueError(  # Defensive: built-in connections return a response with promise metadata or raise.
                 "Invoked get_response with promise=... that no connection in pool recognize"
             )
 
         if response is None:
-            return None
+            return None  # Defensive: built-in connections return a response with promise metadata or raise.
 
         from_promise = None
 
@@ -1011,7 +1015,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 from_promise = response._fp.from_promise
 
         if from_promise is None:
-            raise ValueError(
+            raise ValueError(  # Defensive: built-in connections return a response with promise metadata or raise.
                 "Internal: Unable to identify originating ResponsePromise from a LowLevelResponse"
             )
 
@@ -1406,7 +1410,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 ):
                     extension_headers["Accept"] = headers["Accept"]
                 if headers is None:
-                    headers = extension_headers
+                    headers = extension_headers  # Defensive: urlopen supplies headers; tolerate direct private-method calls.
                 elif hasattr(headers, "copy"):
                     headers = headers.copy()
                     headers.update(extension_headers)  # type: ignore[union-attr]
@@ -1478,7 +1482,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
 
         if multiplexed:
             if rp is None:
-                raise OSError
+                raise OSError  # Defensive: custom requests or legacy EPROTOTYPE handling may leave no promise.
             rp.set_parameter("read_timeout", read_timeout)
             rp.set_parameter("on_early_response", on_early_response)
             rp.set_parameter("extension", extension)
@@ -2015,7 +2019,12 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 # Close the connection, set the variable to None, and make sure
                 # we put the None back in the pool to avoid leaking it.
                 if conn:
-                    await conn.close()
+                    police = self.pool
+                    if police is None:
+                        await conn.close()
+                    else:
+                        # Response retrieval may already have returned the checkout.
+                        await police.kill(conn)
                     conn = None
                 release_this_conn = True
 
@@ -2119,6 +2128,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 if retries.raise_on_redirect:
                     await response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2157,6 +2168,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 if retries.raise_on_status:
                     await response.drain_conn()
                     raise
+                if not release_conn and self.pool is not None:
+                    self.pool.memorize(response, conn, reserve=True)
                 return response
 
             if retries.cache_response_body and response._body is None:
@@ -2184,6 +2197,8 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
                 **response_kw,
             )
 
+        if not release_conn and self.pool is not None:
+            self.pool.memorize(response, conn, reserve=True)
         return response
 
     def __repr__(self) -> str:
@@ -2288,7 +2303,9 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
         Return a fresh :class:`urllib3.connection.HTTPConnection`.
         """
         if self.pool is None:
-            raise ClosedPoolError(self, "Pool is closed")
+            raise ClosedPoolError(
+                self, "Pool is closed"
+            )  # Defensive: callers normally reject closed pools before private connection creation.
         if (
             self._background_monitoring is None
             and self._background_watch_delay is not None

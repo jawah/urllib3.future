@@ -18,7 +18,6 @@ from urllib.request import Request, urlopen
 
 import nox
 
-
 _IS_GIL_DISABLED = hasattr(sys, "_is_gil_enabled") and sys._is_gil_enabled() is False
 
 
@@ -86,6 +85,17 @@ def traefik_boot(
             os.unlink("./rootCA.pem")
 
         shutil.move("./traefik/client.pem", "./rootCA.pem")
+
+    # A separate CA and identity keep the mTLS router isolated from ordinary tests.
+    mtls_dir = "./traefik/mtls"
+    if not all(
+        os.path.exists(os.path.join(mtls_dir, name))
+        for name in ("server.pem", "server.key", "client.pem")
+    ):
+        os.makedirs(mtls_dir, exist_ok=True)
+        session.run(
+            "python", "-m", "trustme", "-i", "mtls.httpbin.local", "-d", mtls_dir
+        )
 
     try:
         session.log("Attempt to start Traefik with go-httpbin[...]")
@@ -321,7 +331,9 @@ def test_ws_fast(session: nox.Session) -> None:
         session.posargs.extend(
             [
                 "test/contrib/test_websocket_fragmentation.py",
+                "test/contrib/asynchronous/test_websocket_fragmentation.py",
                 "test/with_dummyserver/test_websocket_full_duplex.py",
+                "test/with_dummyserver/asynchronous/test_websocket_full_duplex.py",
                 "test/with_traefik/test_webextensions.py",
                 "test/with_traefik/asynchronous/test_webextensions.py",
             ]
@@ -737,7 +749,7 @@ def mypy(session: nox.Session) -> None:
 @nox.session
 def docs(session: nox.Session) -> None:
     session.install("-r", "docs/requirements.txt")
-    session.install(".[socks,brotli,zstd,ws]")
+    session.install(".[socks,brotli,zstd,ws,ws-fast]")
 
     session.chdir("docs")
     if os.path.exists("_build"):

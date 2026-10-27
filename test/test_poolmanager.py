@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import gc
 import socket
-from test import resolvesLocalhostFQDN
+import typing
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from urllib3 import HttpVersion, connection_from_url
+from test import requires_network, resolvesLocalhostFQDN
+from urllib3 import ConnectionInfo, HttpVersion, connection_from_url
 from urllib3._constant import DEFAULT_BLOCKSIZE
+from urllib3.backend.hface import _HAS_HTTP3_SUPPORT as _SYNC_HAS_HTTP3_SUPPORT
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.contrib.webextensions import (
     FastWebSocketExtensionFromHTTP,
@@ -621,3 +623,59 @@ class TestPoolManager:
 
         # Connection should be closed, because reference to pool_1 is gone.
         assert conn_queue.qsize() == 0
+
+
+@requires_network()
+@pytest.mark.parametrize(
+    "happy_eyeballs",
+    [False, True],
+    ids=["heb_off", "heb_on"],
+)
+@pytest.mark.parametrize(
+    "http_version",
+    [11, 20, 30],
+    ids=["h1", "h2", "h3"],
+)
+def test_sync_ech_accepted(happy_eyeballs: bool, http_version: int) -> None:
+    if http_version == 30 and not _SYNC_HAS_HTTP3_SUPPORT():
+        pytest.skip("Test requires HTTP/3 support")
+    if http_version != 30:
+        from urllib3.contrib.anytls import IS_NONSTDLIB
+
+        if not IS_NONSTDLIB:
+            pytest.skip("Test requires rtls/utls for ECH at TCP level")
+
+    disabled_svn: set[HttpVersion] = set()
+
+    if http_version == 11:
+        disabled_svn.add(HttpVersion.h3)
+        disabled_svn.add(HttpVersion.h2)
+    elif http_version == 20:
+        disabled_svn.add(HttpVersion.h11)
+        disabled_svn.add(HttpVersion.h3)
+    elif http_version == 30:
+        disabled_svn.add(HttpVersion.h11)
+        disabled_svn.add(HttpVersion.h2)
+
+    conn_info_ref: ConnectionInfo | None = None
+
+    def on_post_connection(conn_info: ConnectionInfo) -> None:
+        nonlocal conn_info_ref
+        conn_info_ref = conn_info
+
+    pm_kwargs: dict[str, typing.Any] = {
+        "resolver": "doh+google://",
+        "disabled_svn": disabled_svn,
+        "happy_eyeballs": happy_eyeballs,
+    }
+
+    with PoolManager(**pm_kwargs) as pm:
+        pm.urlopen(
+            "GET",
+            "https://encryptedsni.com/",
+            redirect=False,
+            on_post_connection=on_post_connection,
+        )
+
+    assert conn_info_ref is not None
+    assert conn_info_ref.tls_ech_accepted is True

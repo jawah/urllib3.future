@@ -1,3 +1,62 @@
+2.25.904 (2026-10-27)
+=====================
+
+- Fixed HTTP/3 uploads continuing to write after the peer's ``STOP_SENDING``
+  when final response headers arrive later. Both sync and async now stop the
+  upload and retrieve the response through the existing early-response path.
+  The separate connection-credit fix requires qh3 >= 2.1; the minimum supported
+  qh3 version is unchanged. (#440)
+- Fixed HTTP/3 and DNS-over-QUIC certificate verification with system trust
+  stores available only through OpenSSL CA directories, in both sync and async.
+- Fixed completed DNS lookups remaining counted as active until garbage
+  collection in multi-resolver configurations. This could select an unintended
+  resolver on subsequent connections, notably on PyPy, in both sync and async.
+- Fixed a regression introduced in 2.25.903 where abandoning unread responses
+  could exhaust a blocking connection pool. Restored best-effort cleanup, with
+  async cleanup scheduled on the response's owning event loop. (#441)
+- Fixed Server-Sent Events keeping only the last ``data:`` field in an event.
+  Multiple data fields are now joined with newlines, in both sync and async. (#439)
+- Fixed SSE parsing of lone-CR and mixed line endings, leading UTF-8 BOMs,
+  and empty event-ID resets. Unicode characters other than CR/LF are preserved
+  inside field values. Malformed UTF-8 is now replaced instead of interrupting
+  the stream, in both sync and async.
+- Fixed reusing an SSE extension retaining buffered data from its previous
+  stream, in both sync and async.
+- Fixed HTTP/2 uploads and raw-stream writes hanging when the connection closed
+  while waiting for flow-control credit. These now raise ``ProtocolError``, in
+  both sync and async.
+- Fixed HTTP/2 response reads accepting truncated bodies when the peer closed
+  the connection before ending the response stream. Premature EOF now raises
+  ``ProtocolError``, in both sync and async.
+- Fixed HTTP/3 response reads accepting truncated bodies after a QUIC
+  ``NO_ERROR`` connection close, in both sync and async.
+- Fixed HTTP/3 TLS rejections being masked by a generic closed-connection error
+  while processing buffered protocol events or returning a queued handshake
+  success. The original TLS failure is preserved as ``SSLError``, in both sync
+  and async.
+- Fixed closing upgraded responses leaving their receiving streams open.
+  HTTP/3 tunnel cleanup also handles peers that have already stopped the upload,
+  avoiding protocol errors and recursive cleanup, in both sync and async.
+- Fixed raw-stream cleanup masking the original error or attempting to close
+  the stream repeatedly when its final write failed, in both sync and async.
+- Fixed failed multiplexed connections remaining available for reuse, which
+  could repeatedly retry a protocol rejected by the server or reuse stale
+  protocol state during fallback, in both sync and async.
+- Fixed timed-out synchronous connection waiters retaining their place in the
+  queue or receiving later connection handoffs. Subsequent requests could
+  otherwise remain blocked or fail with ``EmptyPoolError``.
+- Fixed explicit timeouts being ignored when waiting to acquire an asynchronous
+  connection without a readiness callback.
+- Fixed asynchronous connection waiters remaining blocked after the previous
+  request completed, including concurrent WebSocket close calls on a shared
+  multiplexed connection.
+- Fixed newly added asynchronous connections not becoming available for reuse.
+- Fixed synchronous ``get_response()`` without a specified promise exposing raw
+  socket and TLS errors instead of the corresponding urllib3 exceptions.
+- Fixed an assertion failure when retrieving a synchronous HTTP/2 response
+  after the legacy macOS ``EPROTOTYPE`` write-error fallback.
+- Fixed the missing ``SecurityWarning`` when ``SSLKEYLOGFILE`` is set.
+
 2.25.903 (2026-10-21)
 =====================
 

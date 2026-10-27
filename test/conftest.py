@@ -167,11 +167,17 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
     received, respond = threading.Event(), threading.Event()
     respond.set()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            # Clients may close before our reply. A resulting ICMP error must
+            # not terminate this shared UDP server on Windows.
+            sock.ioctl(socket.SIO_UDP_CONNRESET, False)
         sock.bind(("127.0.0.1", 0))
         sock.settimeout(10)
         address = sock.getsockname()
 
         def serve() -> None:
+            held_replies: list[tuple[bytes, typing.Any]] = []
+            released_batch = False
             try:
                 while True:
                     query, client = sock.recvfrom(4096)
@@ -182,7 +188,8 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
                     received.set()
                     if mode == "timeout" or (mode == "drop-first" and first_attempt):
                         continue
-                    assert respond.wait(5), "DNS response was never released"
+                    if mode != "reverse-two-lookups":
+                        assert respond.wait(5), "DNS response was never released"
                     query_type, query_class = struct.unpack("!HH", query[-4:])
                     assert query_class == 1 and query_type in (1, 28, 65)
                     if query_type == 1:
@@ -232,6 +239,14 @@ def dns_udp_server(request: pytest.FixtureRequest) -> typing.Iterator[DNSUDPServ
                             + struct.pack("!HHHHH", 0x8180 | rcode, 1, 0, 0, 0)
                             + query[12:]
                         )
+                    if mode == "reverse-two-lookups" and not released_batch:
+                        held_replies.append((response, client))
+                        if len(held_replies) == 4:
+                            assert respond.wait(5), "DNS batch was never released"
+                            for packet, target in reversed(held_replies):
+                                sock.sendto(packet, target)
+                            released_batch = True
+                        continue
                     sock.sendto(response, client)
             except Exception as exc:
                 errors.append(exc)
@@ -336,6 +351,73 @@ def doq_empty_ca_store(
         monkeypatch.setattr(ssl.SSLContext, "load_default_certs", load_default_certs)
 
 
+@pytest.fixture
+def default_ca_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> typing.Callable[[str, str], dict[str, typing.Any]]:
+    """Configure real OpenSSL default trust without an eagerly loaded bundle."""
+    import shutil
+    import subprocess
+
+    from urllib3.contrib.anytls import ssl as tls_backend
+
+    openssl = shutil.which("openssl")
+    if tls_backend is not ssl or os.name == "nt" or openssl is None:
+        pytest.skip(
+            "Requires OpenSSL CA paths controlled by environment and openssl CLI"
+        )
+
+    def configure(ca_data: str, mode: str) -> dict[str, typing.Any]:
+        directory = tmp_path / "trust"
+        directory.mkdir()
+        ca_file = tmp_path / "authority.pem"
+        ca_file.write_text(ca_data)
+        subject_hash = subprocess.check_output(
+            [openssl, "x509", "-in", str(ca_file), "-subject_hash", "-noout"],
+            universal_newlines=True,
+        ).strip()
+        name = subject_hash + ".0" if mode != "unhashed" else "unconfigured.pem"
+        (directory / name).write_text(ca_data)
+        (directory / "README").write_text("Not a certificate")
+        (directory / "11111111.0").write_text("Malformed certificate")
+        (directory / "22222222.0").mkdir()
+        (directory / "33333333.0").symlink_to(tmp_path / "missing.pem")
+        wrong_ca = tmp_path / "other.pem"
+        trustme.CA().cert_pem.write_to_path(wrong_ca)
+        monkeypatch.setenv(
+            "SSL_CERT_FILE",
+            str(ca_file if mode == "bundle" else tmp_path / "missing.pem"),
+        )
+        capath = str(directory)
+        if mode == "search-path":
+            empty = tmp_path / "empty"
+            empty.mkdir()
+            capath = os.pathsep.join((str(empty), capath))
+        monkeypatch.setenv("SSL_CERT_DIR", capath)
+        assert len(ssl.create_default_context().get_ca_certs()) == (
+            1 if mode == "bundle" else 0
+        )
+
+        if mode == "explicit-file":
+            return {"ca_certs": str(wrong_ca)}
+        if mode == "explicit-data":
+            return {"ca_cert_data": wrong_ca.read_text()}
+        if mode == "explicit-directory":
+            wrong_dir = tmp_path / "wrong-trust"
+            wrong_dir.mkdir()
+            (wrong_dir / "0123abcd.0").write_bytes(wrong_ca.read_bytes())
+            return {"ca_cert_dir": str(wrong_dir)}
+        if mode == "explicit-context":
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.load_verify_locations(cafile=str(wrong_ca))
+            return {"ssl_context": ctx}
+        if mode == "unverified":
+            return {"cert_reqs": ssl.CERT_NONE}
+        return {}
+
+    return configure
+
+
 @pytest.fixture(params=[False, True], ids=["normal-close-timer", "delayed-close-timer"])
 def doq_close_timer(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
@@ -428,7 +510,12 @@ def dns_quic_server(
                         self._quic.stop_stream(stream_id, 0x2)
                     elif mode == "empty-datagram":
                         assert self._transport is not None
-                        self._transport.sendto(b"", self.client_address)
+                        # asyncio transports may discard empty sends. Emit the
+                        # actual zero-length UDP datagram from the bound socket.
+                        udp_socket = self._transport.get_extra_info("socket")
+                        getattr(udp_socket, "_sock", udp_socket).sendto(
+                            b"", self.client_address
+                        )
                     kind = int.from_bytes(query[-4:-2], "big")
                     if kind == 1:
                         rdata = socket.inet_pton(socket.AF_INET, "192.0.2.1")

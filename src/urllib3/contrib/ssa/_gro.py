@@ -121,7 +121,9 @@ def _split_gro_buffer(buf: bytes, segment_size: int) -> list[bytes]:
     """
     n = len(buf)
     if segment_size <= 0 or n <= segment_size:
-        return [buf]
+        return [
+            buf
+        ]  # Defensive: callers split only buffers larger than a valid GRO segment.
     return [buf[i : i + segment_size] for i in range(0, n, segment_size)]
 
 
@@ -187,10 +189,14 @@ def _parse_gro_segment_size(ancdata: list[tuple[int, int, bytes]]) -> int | None
             n = len(cmsg_data)
             if n >= _GRO_CMSG.size:
                 return _GRO_CMSG.unpack_from(cmsg_data, 0)[0]  # type: ignore[no-any-return]
-            if n >= _UINT16.size:
+            if (
+                n >= _UINT16.size
+            ):  # Defensive: alternate kernels may provide a short UDP_GRO control message.
                 # Older kernels / unusual builds emit a u16 here.
                 return _UINT16.unpack_from(cmsg_data, 0)[0]  # type: ignore[no-any-return]
-            return 0
+            return (
+                0  # Defensive: malformed or unsupported UDP_GRO control-message format.
+            )
     return None
 
 
@@ -226,7 +232,9 @@ def sync_recv_gro(
         return data
     segment_size = parsed if parsed > 0 else gro_segment_size
 
-    if len(data) <= segment_size:
+    if (
+        len(data) <= segment_size
+    ):  # Defensive: alternate UDP stacks may attach GRO metadata to an uncoalesced datagram.
         return data
     return _split_gro_buffer(data, segment_size)
 
@@ -433,7 +441,7 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
 
         try:
             sockname = sock.getsockname()
-        except OSError:
+        except OSError:  # Defensive: optional socket-address metadata must not prevent transport construction.
             sockname = None
 
         self._extra = {
@@ -497,7 +505,7 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
         finally:
             try:
                 self._sock.close()
-            except OSError:
+            except OSError:  # Defensive: descriptor cleanup may fail after transport bookkeeping finishes.
                 pass
             if not self._closed_fut.done():
                 self._closed_fut.set_result(None)
@@ -829,7 +837,7 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
             except BlockingIOError:
                 return
             except InterruptedError:
-                continue
+                continue  # Defensive: modern Python retries EINTR; retain alternate socket compatibility.
             except OSError as exc:
                 try:
                     protocol.error_received(exc)
@@ -883,7 +891,9 @@ class _NativeOptimizedDatagramTransport(asyncio.DatagramTransport):
                 continue
 
             segment_size = parsed if parsed > 0 else default_segment_size
-            if len(data) <= segment_size:
+            if (
+                len(data) <= segment_size
+            ):  # Defensive: alternate UDP stacks may attach GRO metadata to an uncoalesced datagram.
                 datagram_received(data, addr)
                 continue
 

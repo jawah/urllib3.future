@@ -18,7 +18,11 @@ class AsyncRawExtensionFromHTTP(AsyncExtensionFromHTTP):
     async def close(self) -> None:
         """End/Notify close for sub protocol."""
         if self._dsa is not None:
-            await self._dsa.close()
+            try:
+                await self._dsa.close()
+            except OSError:
+                # A failed FIN write must not prevent response cleanup below.
+                pass
             self._dsa = None
         if self._response is not None:
             await self._response.close()

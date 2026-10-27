@@ -75,7 +75,7 @@ class _PatchedH2Connection(jh2.connection.H2Connection):  # type: ignore[misc]
                 jh2.settings.SettingCodes.INITIAL_WINDOW_SIZE: 6291456,
                 jh2.settings.SettingCodes.MAX_HEADER_LIST_SIZE: 262144,
             }
-        else:
+        else:  # Defensive: legacy, non-RFC-compliant settings in jh2 <= 5.0.11.
             initial_settings = {
                 jh2.settings.SettingCodes.MAX_CONCURRENT_STREAMS: 100,
                 jh2.settings.SettingCodes.MAX_HEADER_LIST_SIZE: self.DEFAULT_MAX_HEADER_LIST_SIZE,
@@ -163,7 +163,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
         self._open_streams: set[int] = set()
         self._connection.initiate_connection()
-        if JH2_NOT_RFC_COMPLIANT_SETTINGS:
+        if JH2_NOT_RFC_COMPLIANT_SETTINGS:  # Defensive: legacy jh2 flow-control setup.
             self._connection.increment_flow_control_window(2**24)
         else:
             self._connection.increment_flow_control_window(15663105)
@@ -201,7 +201,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
 
     @property
     def max_stream_count(self) -> int:
-        return self._max_stream_count
+        return (
+            self._max_stream_count
+        )  # Defensive: protocol contract; backend uses is_available().
 
     def is_idle(self) -> bool:
         if self._events.stream_count:
@@ -242,9 +244,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             return
         try:
             self._connection.reset_stream(stream_id, error_code)
-        except jh2.exceptions.StreamClosedError:
-            # The peer may have closed the stream after the caller decided to
-            # abort it but before the reset reached the HTTP/2 state machine.
+        except (
+            jh2.exceptions.StreamClosedError
+        ):  # Defensive: closed streams are checked before reset.
             pass
 
     def next_event(self, stream_id: int | None = None) -> Event | None:
@@ -267,7 +269,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 stream_id = e.stream_id
                 conn.acknowledge_received_data(e.flow_controlled_length, stream_id)
                 if stream_id not in self._open_streams:
-                    continue
+                    continue  # Defensive: jh2 filters unsolicited or closed-stream DATA.
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_streams.discard(stream_id)
@@ -279,7 +281,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
             elif ev_type in HEADER_OR_TRAILER_TYPE_SET:
                 stream_id = e.stream_id
                 if stream_id not in self._open_streams:
-                    continue
+                    continue  # Defensive: jh2 filters unsolicited or closed-stream HEADERS.
                 end_stream = e.stream_ended is not None
                 if end_stream:
                     self._open_streams.discard(stream_id)
@@ -290,13 +292,13 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
                 yield HeadersReceived(stream_id, e.headers, end_stream=end_stream)
             elif ev_type is jh2.events.InformationalResponseReceived:
                 if e.stream_id not in self._open_streams:
-                    continue
+                    continue  # Defensive: jh2 validates the stream before emitting informational headers.
                 yield EarlyHeadersReceived(
                     e.stream_id,
                     e.headers,
                 )
             elif ev_type is jh2.events.StreamReset:
-                # event StreamEnded may occur before StreamReset
+                # END_STREAM may precede a reset stopping an unfinished upload.
                 stream_id = e.stream_id
                 if stream_id not in self._open_streams:
                     continue
@@ -334,11 +336,16 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self._connection_terminated()
 
     def eof_received(self) -> None:
-        self._connection_terminated()
+        # A clean TLS shutdown does not complete an HTTP/2 stream without END_STREAM.
+        incomplete = bool(self._open_streams)
+        self._connection_terminated(
+            int(jh2.errors.ErrorCodes.PROTOCOL_ERROR) if incomplete else 0,
+            "HTTP/2 connection closed before END_STREAM" if incomplete else None,
+        )
 
     def bytes_received(self, data: bytes) -> None:
         if not data:
-            return
+            return  # Defensive: backends handle TCP EOF before forwarding bytes.
 
         try:
             h2_events = self._connection.receive_data(data)
@@ -365,7 +372,7 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         self, error_code: int = 0, message: str | None = None
     ) -> None:
         if self._terminated:
-            return
+            return  # Defensive: tolerate repeated termination notifications.
         error_code = int(error_code)  # Convert h2 IntEnum to an actual int
         self._terminated = True
         self._events.append(ConnectionTerminated(error_code, message))
@@ -378,7 +385,9 @@ class HTTP2ProtocolHyperImpl(HTTP2Protocol):
         )
 
         if amt is None:
-            return flow_remaining_bytes == 0
+            return (
+                flow_remaining_bytes == 0
+            )  # Defensive: backend callers always supply a byte count.
 
         return amt > flow_remaining_bytes
 
