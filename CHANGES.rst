@@ -1,3 +1,9 @@
+2.25.905 (2026-10-28)
+=====================
+
+- Fixed pool cleanup failing with ``ImportError`` during interpreter shutdown. (#444)
+  Regression introduced in 2.25.903 with a fix for a gc collection deadlock.
+
 2.25.904 (2026-10-27)
 =====================
 

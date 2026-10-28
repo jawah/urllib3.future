@@ -142,6 +142,15 @@ class TrafficPolice(typing.Generic[T]):
             Delegating thread safety to another level.
         :param strict_maxsize: If True the scheduler does not increase maxsize for a temporary increase.
         """
+        # Resolve after module loading and retain for cleanup after imports stop.
+        # need to load class ref here to avoid cyclic deps and also avoid import
+        # machinery in del gc teardown interpreter.
+        from ..backend import ResponsePromise
+        from ..response import HTTPResponse
+
+        self._promise_type = ResponsePromise
+        self._response_type = HTTPResponse
+
         self.maxsize = maxsize
         self.concurrency = concurrency
         self.strict_maxsize = strict_maxsize
@@ -1170,15 +1179,15 @@ class TrafficPolice(typing.Generic[T]):
     @property
     def _has_pending_promises(self) -> bool:
         """Inspect promise routes without borrowing a connection."""
-        from ..backend import ResponsePromise
+        ResponsePromise = self._promise_type
 
         with self._lock:
             return bool(self._map_types.keys_for(ResponsePromise))
 
     def clear(self) -> None:
         """Close child pools, retaining routes for returned promises until collected."""
-        from ..backend import ResponsePromise
-        from ..response import HTTPResponse
+        ResponsePromise = self._promise_type
+        HTTPResponse = self._response_type
 
         with self._lock:
             self._shutdown = True

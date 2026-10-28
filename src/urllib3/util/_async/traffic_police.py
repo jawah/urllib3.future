@@ -401,6 +401,13 @@ class AsyncTrafficPolice(typing.Generic[T]):
         :param concurrency: Whether to allow a single item to be used across multiple tasks.
         :param strict_maxsize: If True the scheduler does not increase maxsize for a temporary increase.
         """
+        # Resolve after module loading and retain for cleanup after imports stop.
+        from ...backend import ResponsePromise
+        from ..._async.response import AsyncHTTPResponse
+
+        self._promise_type = ResponsePromise
+        self._response_type = AsyncHTTPResponse
+
         self.maxsize = maxsize
         self.concurrency = concurrency
         self.strict_maxsize = strict_maxsize
@@ -1330,14 +1337,14 @@ class AsyncTrafficPolice(typing.Generic[T]):
     @property
     def _has_pending_promises(self) -> bool:
         """Inspect promise routes without borrowing a connection."""
-        from ...backend import ResponsePromise
+        ResponsePromise = self._promise_type
 
         return bool(self._map_types.keys_for(ResponsePromise))
 
     async def clear(self) -> None:
         """Close child pools, retaining routes for returned promises until collected."""
-        from ...backend import ResponsePromise
-        from ..._async.response import AsyncHTTPResponse
+        ResponsePromise = self._promise_type
+        AsyncHTTPResponse = self._response_type
 
         self._shutdown = True
         current_task = _current_task_or_die()
