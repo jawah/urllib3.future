@@ -278,7 +278,11 @@ def http2_peer(request: pytest.FixtureRequest) -> Iterator[HTTP2Peer]:
                                             # OpenSSL 1.0.2 may report peer close as errno 0.
                                             if not (
                                                 exc.errno == 0
-                                                or isinstance(exc, ssl.SSLEOFError)
+                                                # The peer may abort/reset while we finish shutdown.
+                                                or isinstance(
+                                                    exc,
+                                                    (ssl.SSLEOFError, ConnectionError),
+                                                )
                                                 or getattr(exc, "reason", None)
                                                 == "APPLICATION_DATA_AFTER_CLOSE_NOTIFY"
                                                 # Older OpenSSL may label this KRB5_S_INIT.
