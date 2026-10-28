@@ -1,0 +1,31 @@
+diff --git a/clickhouse_connect/driver/httputil.py b/clickhouse_connect/driver/httputil.py
+--- a/clickhouse_connect/driver/httputil.py
++++ b/clickhouse_connect/driver/httputil.py
+@@ -55,11 +55,9 @@
+ 
+ def _close_pool_manager(manager: PoolManager) -> None:
+     try:
+-        with manager.pools.lock:
+-            pools = [manager.pools[key] for key in manager.pools.keys()]
+-            manager.clear()
+-        for pool in pools:
+-            pool.close()
++        # urllib3-future uses TrafficPolice, and PoolManager.clear() already
++        # guarantees clean teardown of connection pools.
++        manager.clear()
+     finally:
+         all_managers.pop(manager, None)
+ 
+diff --git a/tests/integration_tests/test_httpclient_pools.py b/tests/integration_tests/test_httpclient_pools.py
+--- a/tests/integration_tests/test_httpclient_pools.py
++++ b/tests/integration_tests/test_httpclient_pools.py
+@@ -19,8 +19,7 @@
+     client = client_factory(dedicated_pool=True, compress=False)
+     assert client.command("SELECT 13") == 13
+     manager = client.http
+-    with manager.pools.lock:
+-        (pool,) = [manager.pools[key] for key in manager.pools.keys()]
++    pool = manager.connection_from_url(client.url)
+     connection = pool._get_conn()
+     assert connection.sock is not None
+     pool._put_conn(connection)

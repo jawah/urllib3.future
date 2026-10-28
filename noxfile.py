@@ -604,6 +604,12 @@ def downstream_clickhouse_connect(session: nox.Session) -> None:
     git_clone(session, "https://github.com/ClickHouse/clickhouse-connect")
     session.chdir("clickhouse-connect")
 
+    session.run(
+        "git",
+        "apply",
+        f"{root}/ci/0008-ClickHouse-use-PoolManager-cleanup.patch",
+        external=True,
+    )
     session.run("git", "rev-parse", "HEAD", external=True)
     session.install("-r", "tests/test_requirements.txt", silent=False)
     session.run("python", "setup.py", "build_ext", "--inplace")
