@@ -808,6 +808,14 @@ class HTTPResponse(io.IOBase):
             # decoder to avoid keeping unnecessary data in memory.
             self._decoded_buffer = BytesQueueBuffer()
             self._decoder = None
+        if (
+            self._police_officer is not None
+            and self._fp is not None
+            and is_fp_closed(self._fp)
+            and getattr(self._fp, "_dsa", None) is None
+        ):
+            self._police_officer.forget(self)
+            self._police_officer = None
 
     @property
     def data(self) -> bytes:
@@ -1295,7 +1303,10 @@ class HTTPResponse(io.IOBase):
         finally:
             if (
                 hasattr(self._fp, "_eot")
-                and self._fp._eot  # type: ignore[union-attr]
+                and (
+                    self._fp._eot  # type: ignore[union-attr]
+                    or is_fp_closed(self._fp)
+                )
                 and self._police_officer is not None
             ):
                 # an HTTP extension could be live, we don't want to accidentally kill it!

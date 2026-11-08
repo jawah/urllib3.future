@@ -990,8 +990,11 @@ class AsyncTrafficPolice(typing.Generic[T]):
         )
 
         if key in self._map:
+            conn_or_pool = self._map[key]
             del self._map[key]
             del self._map_types[key]
+            if self.concurrency and self._signals._priority_signals:
+                self._notify_idle(conn_or_pool)
 
         if self.parent is not None:
             try:
@@ -1305,6 +1308,7 @@ class AsyncTrafficPolice(typing.Generic[T]):
 
             if active_cursor.depth == 0:
                 if not self.concurrency:
+                    self._signals.terminate_writing()
                     cursor_transferred = self._signals.next()
                     if not cursor_transferred:
                         self._container[active_cursor.obj_id] = (
@@ -1313,26 +1317,24 @@ class AsyncTrafficPolice(typing.Generic[T]):
                         del self._cursors[current_task]
                 else:
                     del self._cursors[current_task]
-                    if (
-                        self._signals._priority_signals
-                        and traffic_state_of(active_cursor.conn_or_pool)
-                        is TrafficState.IDLE
-                        and not any(
-                            cursor.obj_id == active_cursor.obj_id
-                            for cursor in self._cursors.values()
-                        )
-                    ):
-                        # The last borrower released an idle pool. Eviction
-                        # waiters may retry without taking ownership of it.
-                        # Wake all so cancellation cannot consume the notification.
-                        for signal in tuple(self._signals._priority_signals):
-                            if signal.target_conn_or_pool is None and signal.states == (
-                                TrafficState.IDLE,
-                            ):
-                                self._signals.unregister(signal, unblock=True)
-                        self._signals._refresh_generic_waiters()
+                    if self._signals._priority_signals:
+                        self._notify_idle(active_cursor.conn_or_pool)
 
         return cursor_transferred
+
+    def _notify_idle(self, conn_or_pool: T) -> None:
+        """Wake eviction waiters after a pool is released or its response finishes."""
+        obj_id = id(conn_or_pool)
+        if traffic_state_of(conn_or_pool) is TrafficState.IDLE and not any(
+            cursor.obj_id == obj_id for cursor in self._cursors.values()
+        ):
+            # Wake all so cancellation cannot consume the notification.
+            for signal in tuple(self._signals._priority_signals):
+                if signal.target_conn_or_pool is None and signal.states == (
+                    TrafficState.IDLE,
+                ):
+                    self._signals.unregister(signal, unblock=True)
+            self._signals._refresh_generic_waiters()
 
     @property
     def _has_pending_promises(self) -> bool:
