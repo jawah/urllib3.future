@@ -19,8 +19,8 @@ from urllib3 import AsyncHTTPResponse, HTTPHeaderDict, HttpVersion
 from urllib3._async.poolmanager import AsyncPoolManager
 from urllib3.connectionpool import port_by_scheme
 from urllib3.exceptions import (
+    ConnectTimeoutError,
     MaxRetryError,
-    NewConnectionError,
     ProtocolError,
     URLSchemeUnknown,
 )
@@ -103,9 +103,9 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
                 await asyncio.gather(waiting, return_exceptions=True)
 
     async def test_failed_request_releases_manager_hold(self) -> None:
-        with socket.socket() as refused:
-            refused.bind(("127.0.0.1", 0))
-            url = f"http://127.0.0.1:{refused.getsockname()[1]}/"
+        with socket.socket() as reserved:
+            reserved.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{reserved.getsockname()[1]}/"
             async with AsyncPoolManager(
                 num_pools=1,
                 timeout=5,
@@ -113,8 +113,10 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
                 background_watch_delay=None,
             ) as manager:
                 failed = asyncio.create_task(manager.request("GET", url))
-                with pytest.raises(NewConnectionError):
-                    await asyncio.wait_for(failed, 5)
+                # macOS may time out instead of refusing (NewConnectionError,
+                # a ConnectTimeoutError subclass). Let the socket deadline win.
+                with pytest.raises(ConnectTimeoutError):
+                    await asyncio.wait_for(failed, 10)
                 assert not manager.pools._cursors
                 assert (await manager.request("GET", self.base_url)).status == 200
 

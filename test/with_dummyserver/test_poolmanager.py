@@ -17,8 +17,8 @@ from dummyserver.testcase import HTTPDummyServerTestCase, IPv6HTTPDummyServerTes
 from urllib3 import HTTPHeaderDict, HTTPResponse, HttpVersion, request
 from urllib3.connectionpool import port_by_scheme
 from urllib3.exceptions import (
+    ConnectTimeoutError,
     MaxRetryError,
-    NewConnectionError,
     ProtocolError,
     URLSchemeUnknown,
 )
@@ -96,18 +96,20 @@ class TestPoolManager(HTTPDummyServerTestCase):
                     manager.clear()
 
     def test_failed_request_releases_manager_hold(self) -> None:
-        with socket.socket() as refused, PoolManager(
+        with socket.socket() as reserved, PoolManager(
             num_pools=1,
             timeout=5,
             retries=False,
             background_watch_delay=None,
         ) as manager:
-            refused.bind(("127.0.0.1", 0))
-            url = f"http://127.0.0.1:{refused.getsockname()[1]}/"
+            reserved.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{reserved.getsockname()[1]}/"
             with ThreadPoolExecutor(max_workers=1) as executor:
                 failed = executor.submit(manager.request, "GET", url)
-                with pytest.raises(NewConnectionError):
-                    failed.result(5)
+                # macOS may time out instead of refusing (NewConnectionError,
+                # a ConnectTimeoutError subclass). Let the socket deadline win.
+                with pytest.raises(ConnectTimeoutError):
+                    failed.result(10)
             assert not manager.pools._cursor
             assert manager.request("GET", self.base_url).status == 200
 
