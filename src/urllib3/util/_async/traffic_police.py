@@ -336,10 +336,7 @@ class AsyncSignals(typing.Generic[T]):
             cursor.reserved_for = None
             cursor.depth = 1
 
-            # mark task as currently in writing
-            if current_task in self._writing_tasks:
-                self._writing_tasks.remove(current_task)
-
+            # The caller cleared the previous writer; register the new owner.
             self._writing_tasks.add(early_unpack_signal.owner_task)
 
             early_unpack_signal.event.set()
