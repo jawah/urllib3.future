@@ -1,3 +1,9 @@
+2.25.906 (2026-11-08)
+=====================
+
+- Fixed pool cleanup after requests and streamed responses, preventing pool
+  acquisition hangs in sync and async and retention of completed async tasks. (#447)
+
 2.25.905 (2026-10-28)
 =====================
 
