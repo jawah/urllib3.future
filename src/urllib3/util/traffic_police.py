@@ -810,8 +810,11 @@ class TrafficPolice(typing.Generic[T]):
 
         with self._lock:
             if key in self._map:
+                conn_or_pool = self._map[key]
                 del self._map[key]
                 del self._map_types[key]
+                if self.concurrency and self._signals:
+                    self._notify_idle(conn_or_pool)
 
         if self.parent is not None:
             try:
@@ -1157,24 +1160,24 @@ class TrafficPolice(typing.Generic[T]):
                     self._next_signal_or_container_insert(cursor_key)
                 else:
                     del self._cursor[cursor_key]
-                    if (
-                        self._signals
-                        and traffic_state_of(active_cursor.conn_or_pool)
-                        is TrafficState.IDLE
-                        and not any(
-                            cursor.obj_id == active_cursor.obj_id
-                            for cursor in self._cursor.values()
-                        )
-                    ):
-                        # The last borrower released an idle pool. Eviction
-                        # waiters may retry without taking ownership of it.
-                        # Wake all so cancellation cannot consume the notification.
-                        for signal in tuple(self._signals):
-                            if signal.target_conn_or_pool is None and signal.states == (
-                                TrafficState.IDLE,
-                            ):
-                                self._signals.remove(signal)
-                                signal.event.set()
+                    if self._signals:
+                        self._notify_idle(active_cursor.conn_or_pool)
+
+    def _notify_idle(self, conn_or_pool: T) -> None:
+        """Wake eviction waiters after a pool is released or its response finishes.
+
+        The caller holds our lock; waiters recheck availability before evicting.
+        """
+        obj_id = id(conn_or_pool)
+        if traffic_state_of(conn_or_pool) is TrafficState.IDLE and not any(
+            cursor.obj_id == obj_id for cursor in self._cursor.values()
+        ):
+            for signal in tuple(self._signals):
+                if signal.target_conn_or_pool is None and signal.states == (
+                    TrafficState.IDLE,
+                ):
+                    self._signals.remove(signal)
+                    signal.event.set()
 
     @property
     def _has_pending_promises(self) -> bool:

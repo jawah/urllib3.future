@@ -7,9 +7,6 @@ urllib3.future provides native async APIs alongside its synchronous APIs.
 They share request options and response models, with differences in how you
 read bodies, iterate streams, and manage cancellation.
 
-For a complete reusable client with executable source and CI checks, see
-:ref:`cookbook-service-client`.
-
 .. code-block:: bash
 
     python -m pip install urllib3-future

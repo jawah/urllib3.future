@@ -783,26 +783,27 @@ class AsyncPoolManager(AsyncRequestMethods):
             pool_kwargs=pool_kwargs,
         )
 
-        if u.scheme not in (None, "http", "https"):
-            from ..contrib.webextensions._async import load_extension
+        try:
+            if u.scheme not in (None, "http", "https"):
+                from ..contrib.webextensions._async import load_extension
 
-            extension = load_extension(*parse_extension(u.scheme))  # type: ignore[arg-type]
-            kw["extension"] = extension()
-            kw.update(kw["extension"].urlopen_kwargs)
+                extension = load_extension(*parse_extension(u.scheme))  # type: ignore[arg-type]
+                kw["extension"] = extension()
+                kw.update(kw["extension"].urlopen_kwargs)
 
-        kw["assert_same_host"] = False
-        kw["redirect"] = False
+            kw["assert_same_host"] = False
+            kw["redirect"] = False
 
-        if "headers" not in kw:
-            kw["headers"] = self.headers
+            if "headers" not in kw:
+                kw["headers"] = self.headers
 
-        if self._proxy_requires_url_absolute_form(u):
-            # Leave URL normalization to the pool to avoid decoding zone IDs twice.
-            response = await conn.urlopen(method, url.split("#", 1)[0], **kw)
-        else:
-            response = await conn.urlopen(method, u.request_uri, **kw)
-
-        self.pools.release()
+            if self._proxy_requires_url_absolute_form(u):
+                # Leave URL normalization to the pool to avoid decoding zone IDs twice.
+                response = await conn.urlopen(method, url.split("#", 1)[0], **kw)
+            else:
+                response = await conn.urlopen(method, u.request_uri, **kw)
+        finally:
+            self.pools.release()
 
         if kw.get("multiplexed"):
             if isinstance(response, ResponsePromise):

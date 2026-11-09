@@ -241,6 +241,14 @@ class AsyncHTTPResponse(HTTPResponse):
             # decoder to avoid keeping unnecessary data in memory.
             self._decoded_buffer = BytesQueueBuffer()
             self._decoder = None
+        if (
+            self._police_officer is not None
+            and self._fp is not None
+            and is_fp_closed(self._fp)
+            and getattr(self._fp, "_dsa", None) is None
+        ):
+            self._police_officer.forget(self)
+            self._police_officer = None
 
     @property
     def trailers(self) -> HTTPHeaderDict | None:
@@ -621,7 +629,7 @@ class AsyncHTTPResponse(HTTPResponse):
         finally:
             if (
                 self._fp
-                and getattr(self._fp, "_eot", False)
+                and (getattr(self._fp, "_eot", False) or is_fp_closed(self._fp))
                 and self._police_officer is not None
             ):
                 # an HTTP extension could be live, we don't want to accidentally kill it!

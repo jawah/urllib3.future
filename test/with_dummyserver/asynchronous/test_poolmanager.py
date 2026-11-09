@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import gzip
+import socket
+import weakref
 import typing
 
 from test import LONG_TIMEOUT
+from test.traffic_police_helpers import ObservedAsyncPolice
+from test.with_dummyserver.conftest import HTTP2Peer
 
 import pytest
 
-from dummyserver.server import HAS_IPV6
+from dummyserver.server import DEFAULT_CA, HAS_IPV6
 from dummyserver.testcase import HTTPDummyServerTestCase, IPv6HTTPDummyServerTestCase
-from urllib3 import AsyncHTTPResponse, HTTPHeaderDict
+from urllib3 import AsyncHTTPResponse, HTTPHeaderDict, HttpVersion
 from urllib3._async.poolmanager import AsyncPoolManager
 from urllib3.connectionpool import port_by_scheme
-from urllib3.exceptions import MaxRetryError, URLSchemeUnknown
+from urllib3.exceptions import (
+    ConnectTimeoutError,
+    MaxRetryError,
+    ProtocolError,
+    URLSchemeUnknown,
+)
 from urllib3.util.retry import Retry
 
 
@@ -23,6 +34,118 @@ class TestAsyncPoolManager(HTTPDummyServerTestCase):
         super().setup_class()
         cls.base_url = f"http://{cls.host}:{cls.port}"
         cls.base_url_alt = f"http://{cls.host_alt}:{cls.port}"
+
+    @pytest.mark.parametrize("finish", ["read", "close", "drain"])
+    async def test_stream_completion_wakes_pool_eviction(self, finish: str) -> None:
+        async with AsyncPoolManager(
+            num_pools=1,
+            maxsize=2,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as manager:
+            police = ObservedAsyncPolice(maxsize=1, concurrency=True)
+            manager.pools = police
+            first = await manager.request("GET", self.base_url, preload_content=False)
+            neighbour = await manager.request(
+                "GET", self.base_url, preload_content=False
+            )
+            waiting = asyncio.create_task(manager.request("GET", self.base_url_alt))
+            try:
+                signal = await asyncio.wait_for(police.queued.get(), 5)
+                assert await first.read() == b"Dummy server!"
+                # One response still needs this pool; it cannot be evicted yet.
+                assert not signal.event.is_set()
+                if finish == "read":
+                    assert await neighbour.read() == b"Dummy server!"
+                elif finish == "close":
+                    await neighbour.close()
+                else:
+                    await neighbour.drain_conn()
+                response = await asyncio.wait_for(waiting, 5)
+                assert await response.data == b"Dummy server!"
+                assert not police._signals._priority_signals
+            finally:
+                await first.close()
+                await neighbour.close()
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+
+    @pytest.mark.parametrize("http2_peer", ["body-eof"], indirect=True)
+    async def test_failed_body_read_wakes_pool_eviction(
+        self, http2_peer: HTTP2Peer
+    ) -> None:
+        async with AsyncPoolManager(
+            num_pools=1,
+            ca_certs=DEFAULT_CA,
+            disabled_svn={HttpVersion.h3},
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as manager:
+            police = ObservedAsyncPolice(maxsize=1, concurrency=True)
+            manager.pools = police
+            first = await manager.request(
+                "GET",
+                f"https://localhost:{http2_peer.port}/",
+                preload_content=False,
+            )
+            waiting = asyncio.create_task(manager.request("GET", self.base_url))
+            try:
+                await asyncio.wait_for(police.queued.get(), 5)
+                with pytest.raises(ProtocolError):
+                    await first.read()
+                response = await asyncio.wait_for(waiting, 5)
+                assert await response.data == b"Dummy server!"
+            finally:
+                await first.close()
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+
+    async def test_failed_request_releases_manager_hold(self) -> None:
+        with socket.socket() as reserved:
+            reserved.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{reserved.getsockname()[1]}/"
+            async with AsyncPoolManager(
+                num_pools=1,
+                timeout=5,
+                retries=False,
+                background_watch_delay=None,
+            ) as manager:
+                failed = asyncio.create_task(manager.request("GET", url))
+                # macOS may time out instead of refusing (NewConnectionError,
+                # a ConnectTimeoutError subclass). Let the socket deadline win.
+                with pytest.raises(ConnectTimeoutError):
+                    await asyncio.wait_for(failed, 10)
+                assert not manager.pools._cursors
+                assert (await manager.request("GET", self.base_url)).status == 200
+
+    @pytest.mark.parametrize("preload", [False, True])
+    async def test_finished_request_tasks_are_reclaimed(self, preload: bool) -> None:
+        async with AsyncPoolManager(
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as manager:
+
+            async def request() -> None:
+                response = await manager.request(
+                    "GET",
+                    self.base_url,
+                    preload_content=preload,
+                )
+                assert await response.data == b"Dummy server!"
+
+            references = []
+            for _ in range(3):
+                task = asyncio.create_task(request())
+                references.append(weakref.ref(task))
+                await task
+            del task
+            # Let the loop discard its last task-wakeup handle before collecting.
+            await asyncio.sleep(0)
+            gc.collect()
+            assert all(reference() is None for reference in references)
 
     async def test_resolver_options_recycle_and_http1_fallback(self) -> None:
         from pathlib import Path

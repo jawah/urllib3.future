@@ -1585,13 +1585,42 @@ an entire answer if any returned address is non-global or multicast. It checks
 IPv4-mapped IPv6 addresses as IPv4 as well. The async subclass performs the
 same validation after awaiting its base resolver:
 
-.. literalinclude:: ../examples/public_resolver.py
-    :language: python
-    :end-before: def main
+.. code-block:: python
+    :name: public-only-resolver-example
 
-Download :download:`public_resolver.py <../examples/public_resolver.py>` or use
-the copy in ``examples/``. Use the restrictive instance
-as the manager's resolver, and close it after the manager:
+    import ipaddress
+    import socket
+
+    from urllib3.contrib.resolver.system import SystemResolver
+    from urllib3.contrib.resolver._async.system import (
+        SystemResolver as AsyncSystemResolver,
+    )
+
+
+    def public_addresses(addresses):
+        for family, kind, proto, canonical_name, sockaddr in addresses:
+            address = ipaddress.ip_address(sockaddr[0].split("%", 1)[0])
+            if isinstance(address, ipaddress.IPv6Address):
+                address = address.ipv4_mapped or address
+            if not address.is_global or address.is_multicast:
+                raise socket.gaierror(
+                    socket.EAI_NONAME, "Resolver policy rejected a non-public address"
+                )
+        return addresses
+
+
+    class PublicOnlyResolver(SystemResolver):
+        def getaddrinfo(self, *args, **kwargs):
+            return public_addresses(super().getaddrinfo(*args, **kwargs))
+
+
+    class AsyncPublicOnlyResolver(AsyncSystemResolver):
+        async def getaddrinfo(self, *args, **kwargs):
+            return public_addresses(await super().getaddrinfo(*args, **kwargs))
+
+Save these classes in your application, for example as ``public_resolver.py``.
+Use the restrictive instance as the manager's resolver, and close it after the
+manager:
 
 .. code-block:: python
     :name: public-only-client-example

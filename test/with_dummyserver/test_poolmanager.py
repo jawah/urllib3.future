@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import gzip
+import socket
+from concurrent.futures import ThreadPoolExecutor
 import typing
 
 from test import LONG_TIMEOUT
+from test.traffic_police_helpers import ObservedPolice
+from test.with_dummyserver.conftest import HTTP2Peer
 from unittest import mock
 
 import pytest
 
-from dummyserver.server import HAS_IPV6
+from dummyserver.server import DEFAULT_CA, HAS_IPV6
 from dummyserver.testcase import HTTPDummyServerTestCase, IPv6HTTPDummyServerTestCase
-from urllib3 import HTTPHeaderDict, HTTPResponse, request
+from urllib3 import HTTPHeaderDict, HTTPResponse, HttpVersion, request
 from urllib3.connectionpool import port_by_scheme
-from urllib3.exceptions import MaxRetryError, URLSchemeUnknown
+from urllib3.exceptions import (
+    ConnectTimeoutError,
+    MaxRetryError,
+    ProtocolError,
+    URLSchemeUnknown,
+)
 from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
 
@@ -23,6 +32,86 @@ class TestPoolManager(HTTPDummyServerTestCase):
         super().setup_class()
         cls.base_url = f"http://{cls.host}:{cls.port}"
         cls.base_url_alt = f"http://{cls.host_alt}:{cls.port}"
+
+    @pytest.mark.parametrize("finish", ["read", "close", "drain"])
+    def test_stream_completion_wakes_pool_eviction(self, finish: str) -> None:
+        with PoolManager(
+            num_pools=1,
+            maxsize=2,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as manager:
+            police = ObservedPolice(maxsize=1, concurrency=True)
+            manager.pools = police
+            first = manager.request("GET", self.base_url, preload_content=False)
+            neighbour = manager.request("GET", self.base_url, preload_content=False)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                waiting = executor.submit(manager.request, "GET", self.base_url_alt)
+                try:
+                    signal = police.queued.get(timeout=5)
+                    assert first.read() == b"Dummy server!"
+                    # One response still needs this pool; it cannot be evicted yet.
+                    assert not signal.event.is_set()
+                    if finish == "read":
+                        assert neighbour.read() == b"Dummy server!"
+                    elif finish == "close":
+                        neighbour.close()
+                    else:
+                        neighbour.drain_conn()
+                    assert waiting.result(5).data == b"Dummy server!"
+                    assert not police._signals
+                finally:
+                    first.close()
+                    neighbour.close()
+                    # Unblock the worker even if the wakeup regression returns.
+                    manager.clear()
+
+    @pytest.mark.parametrize("http2_peer", ["body-eof"], indirect=True)
+    def test_failed_body_read_wakes_pool_eviction(self, http2_peer: HTTP2Peer) -> None:
+        with PoolManager(
+            num_pools=1,
+            ca_certs=DEFAULT_CA,
+            disabled_svn={HttpVersion.h3},
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as manager:
+            police = ObservedPolice(maxsize=1, concurrency=True)
+            manager.pools = police
+            first = manager.request(
+                "GET",
+                f"https://localhost:{http2_peer.port}/",
+                preload_content=False,
+            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                waiting = executor.submit(manager.request, "GET", self.base_url)
+                try:
+                    police.queued.get(timeout=5)
+                    with pytest.raises(ProtocolError):
+                        first.read()
+                    assert waiting.result(5).data == b"Dummy server!"
+                finally:
+                    first.close()
+                    manager.clear()
+
+    def test_failed_request_releases_manager_hold(self) -> None:
+        with socket.socket() as reserved, PoolManager(
+            num_pools=1,
+            timeout=5,
+            retries=False,
+            background_watch_delay=None,
+        ) as manager:
+            reserved.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{reserved.getsockname()[1]}/"
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                failed = executor.submit(manager.request, "GET", url)
+                # macOS may time out instead of refusing (NewConnectionError,
+                # a ConnectTimeoutError subclass). Let the socket deadline win.
+                with pytest.raises(ConnectTimeoutError):
+                    failed.result(10)
+            assert not manager.pools._cursor
+            assert manager.request("GET", self.base_url).status == 200
 
     def test_resolver_options_recycle_and_http1_fallback(self) -> None:
         from pathlib import Path
