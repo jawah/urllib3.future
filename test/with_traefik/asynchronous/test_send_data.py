@@ -30,11 +30,9 @@ class TestPostBody(TraefikTestCase):
             )
 
             assert resp.status == 200
-            assert "Content-Length" in (await resp.json())["headers"]
-            assert (await resp.json())["headers"]["Content-Length"][0] == "4"
-            assert (await resp.json())["headers"]["Content-Type"][
-                0
-            ] == "text/plain; charset=utf-8"
+            headers = (await resp.json())["headers"]
+            assert "Content-Type" not in headers
+            assert headers["Content-Length"][0] == "4"
 
     async def test_overrule_unicode_content_length_with_bytes_content_type(
         self,

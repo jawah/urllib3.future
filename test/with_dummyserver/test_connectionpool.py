@@ -447,6 +447,14 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             r = pool.request("POST", "/echo", fields=fields)
             assert r.data.count(b'name="foo"') == 2
 
+    def test_text_body_without_content_type(self) -> None:
+        text = '{"name":"café"}'
+        with io.TextIOWrapper(io.BytesIO(text.encode()), encoding="utf-8") as file:
+            with HTTPConnectionPool(self.host, self.port) as pool:
+                for body in (text, io.StringIO(text), file):
+                    response = pool.request("POST", "/headers", body=body)
+                    assert "Content-Type" not in response.json()
+
     def test_request_method_body(self) -> None:
         with HTTPConnectionPool(self.host, self.port) as pool:
             body = b"hi"

@@ -372,13 +372,16 @@ In addition, when ``json`` is provided, the ``"Content-Type"`` in headers is set
         "POST",
         "https://httpbin.org/post",
         json={"attribute": "value"},
-        headers={"Content-Type": "application/json"}
     )
 
     print(resp.json())
     # {'headers': {'Content-Type': 'application/json', ...}, 
     #  'data': '{"attribute":"value"}', 'json': {'attribute': 'value'}, ...}
-    
+
+If you already serialized the JSON to a string, pass it as ``body=`` and set
+``Content-Type: application/json`` yourself. urllib3 encodes raw strings as
+UTF-8 and leaves the media type to the caller.
+
 Files & Binary Data
 ~~~~~~~~~~~~~~~~~~~
 

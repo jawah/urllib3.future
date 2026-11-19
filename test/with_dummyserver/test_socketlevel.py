@@ -4163,10 +4163,8 @@ class TestContentFraming(SocketDummyServerTestCase):
             assert resp.status == 200
 
         sent_bytes = bytes(buffer)
-        if body_type == "file_text":
-            assert sent_bytes.count(b":") == 6
-        else:
-            assert sent_bytes.count(b":") == 5
+        assert sent_bytes.count(b":") == 5
+        assert b"\r\ncontent-type:" not in sent_bytes.lower()
         assert b"Host: localhost:" in sent_bytes
         assert b"Accept-Encoding: identity\r\n" in sent_bytes
         assert b"User-Agent: urllib3.future/" in sent_bytes
@@ -4180,38 +4178,6 @@ class TestContentFraming(SocketDummyServerTestCase):
             assert b"Content-Length: 10\r\n" in sent_bytes
             assert b"transfer-encoding" not in sent_bytes.lower()
             assert sent_bytes.endswith(b"\r\n\r\nxxxxxxxxxx")
-
-    def test_overrule_str_content_type(self) -> None:
-        buffer = bytearray()
-
-        def socket_handler(listener: socket.socket) -> None:
-            nonlocal buffer
-            sock = listener.accept()[0]
-            sock.settimeout(0)
-
-            start = time.time()
-            while time.time() - start < (LONG_TIMEOUT / 2):
-                try:
-                    buffer += sock.recv(65536)
-                except OSError:
-                    continue
-
-            sock.sendall(
-                b"HTTP/1.1 200 OK\r\nServer: example.com\r\nContent-Length: 0\r\n\r\n"
-            )
-            sock.close()
-
-        self._start_server(socket_handler)
-
-        with HTTPConnectionPool(
-            self.host, self.port, timeout=LONG_TIMEOUT, retries=False
-        ) as pool:
-            resp = pool.request("POST", "/", body="fooéàè" * 3)
-            assert resp.status == 200
-
-        sent_bytes = bytes(buffer)
-
-        assert b"Content-Type: text/plain; charset=utf-8\r\n" in sent_bytes
 
     def test_partial_overrule_str_content_type(self) -> None:
         buffer = bytearray()
