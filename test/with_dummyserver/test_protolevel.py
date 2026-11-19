@@ -630,6 +630,58 @@ def test_upgrade_cache_can_decline_an_advertised_alternative(
         pool.close()
 
 
+@pytest.mark.parametrize("http2_peer", ["goaway-headers"], indirect=True)
+@pytest.mark.parametrize("source", ["cache", "dns-https", "happy-eyeballs", "h3-only"])
+def test_http3_udp_send_permission_denied(
+    http2_peer: HTTP2Peer,
+    requires_http3: None,
+    denied_quic_sends: list[bytes],
+    source: str,
+) -> None:
+    from urllib3.backend import QuicPreemptiveCacheType
+    from urllib3.contrib.resolver.in_memory import InMemoryResolver
+
+    class Resolver(InMemoryResolver):
+        def getaddrinfo(self, *args: Any, **kwargs: Any) -> Any:
+            records = super().getaddrinfo(*args, **kwargs)
+            if source in ("dns-https", "happy-eyeballs") and kwargs.get(
+                "quic_upgrade_via_dns_rr"
+            ):
+                # The result of resolving an HTTPS record advertising h3.
+                return [
+                    (af, socket.SOCK_DGRAM, socket.IPPROTO_UDP, name, addr)
+                    for af, _, _, name, addr in records
+                ] + records
+            return records
+
+    origin = ("localhost", http2_peer.port)
+    disabled = {HttpVersion.h11, HttpVersion.h2} if source == "h3-only" else set()
+    cache: QuicPreemptiveCacheType = {origin: origin} if source == "cache" else {}
+    with HTTPSConnectionPool(
+        *origin,
+        resolver=Resolver("localhost:127.0.0.1"),
+        ca_certs=DEFAULT_CA,
+        preemptive_quic_cache=cache,
+        happy_eyeballs=1 if source == "happy-eyeballs" else False,
+        disabled_svn=disabled,
+        timeout=5,
+        retries=False,
+        background_watch_delay=None,
+    ) as pool:
+        if source == "h3-only":
+            with pytest.raises(ProtocolError) as caught:
+                pool.request("GET", "/download")
+            assert isinstance(caught.value.args[1], PermissionError)
+            assert http2_peer.requests.empty()
+        else:
+            response = pool.request("GET", "/download")
+            assert (response.status, response.version) == (200, 20)
+            assert dict(http2_peer.requests.get_nowait())[b":path"] == b"/download"
+        assert denied_quic_sends
+        assert origin not in cache
+        assert HttpVersion.h3 not in disabled  # Other pools may share these options.
+
+
 @pytest.mark.parametrize("http2_peer", ["no-compatible"], indirect=True)
 def test_negative_quic_cache_with_only_quic_enabled_reports_incompatibility(
     http2_peer: HTTP2Peer, requires_http3: None

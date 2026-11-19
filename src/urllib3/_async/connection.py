@@ -437,12 +437,10 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             blocksize=self.max_frame_size,
             force=self._svn != HttpVersion.h11,
         )
-        is_sending_string = chunks_and_cl.is_string
         chunks = chunks_and_cl.chunks
         content_length = chunks_and_cl.content_length
 
         overrule_content_length: bool = False
-        enforce_charset_transparency: bool = False
 
         # users may send plain 'str' and assign a Content-Length that will
         # disagree with the actual amount of data to send (encoded, aka. bytes)
@@ -452,15 +450,6 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
             and len(body) != content_length
         ):
             overrule_content_length = True
-
-        # We shall make our intent clear as we are sending a string.
-        # Not being explicit is like doing the same mistake as the early 2k years.
-        # No more guessing game based on "Our time make X prevalent, no need to say it! It will never change!" ><'
-        if is_sending_string:
-            if "content-type" in header_keys:
-                enforce_charset_transparency = True
-            else:
-                self.putheader("Content-Type", "text/plain; charset=utf-8")
 
         # When chunked is explicit set to 'True' we respect that.
         if chunked:
@@ -484,7 +473,7 @@ class AsyncHTTPConnection(AsyncHfaceBackend):
         for header, value in headers.items():
             if overrule_content_length and header.lower() == "content-length":
                 value = str(content_length)
-            if enforce_charset_transparency and header.lower() == "content-type":
+            if chunks_and_cl.is_string and header.lower() == "content-type":
                 value_lower = value.lower()
                 # even if not "officially" supported
                 # some may send values as bytes, and we have to

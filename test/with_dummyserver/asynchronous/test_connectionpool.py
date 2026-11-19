@@ -594,6 +594,14 @@ class TestConnectionPool(HTTPDummyServerTestCase):
             r = await pool.request("POST", "/echo", fields=fields)
             assert (await r.data).count(b'name="foo"') == 2
 
+    async def test_text_body_without_content_type(self) -> None:
+        text = '{"name":"café"}'
+        with io.TextIOWrapper(io.BytesIO(text.encode()), encoding="utf-8") as file:
+            async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
+                for body in (text, io.StringIO(text), file):
+                    response = await pool.request("POST", "/headers", body=body)
+                    assert "Content-Type" not in (await response.json())
+
     async def test_request_method_body(self) -> None:
         async with AsyncHTTPConnectionPool(self.host, self.port) as pool:
             body = b"hi"

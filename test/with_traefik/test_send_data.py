@@ -33,11 +33,9 @@ class TestPostBody(TraefikTestCase):
             )
 
             assert resp.status == 200
-            assert "Content-Length" in resp.json()["headers"]
-            assert (
-                resp.json()["headers"]["Content-Type"][0] == "text/plain; charset=utf-8"
-            )
-            assert resp.json()["headers"]["Content-Length"][0] == "4"
+            headers = resp.json()["headers"]
+            assert "Content-Type" not in headers
+            assert headers["Content-Length"][0] == "4"
 
     def test_overrule_unicode_content_length_with_bytes_content_type(
         self,
@@ -251,7 +249,12 @@ class TestPostBody(TraefikTestCase):
 
             monkeypatch.setattr(hface, "sync_sendmsg_gso", reject)
             payload = "0123456789abcdef" * 8192
-            response = pool.request("POST", "/post", body=payload)
+            response = pool.request(
+                "POST",
+                "/post",
+                body=payload,
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            )
             assert response.json()["data"] == payload
             assert response.status == 200 and response.version == 30
             assert len(rejected) == 1 and rejected[0] > 1
