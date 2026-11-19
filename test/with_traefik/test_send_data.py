@@ -249,7 +249,12 @@ class TestPostBody(TraefikTestCase):
 
             monkeypatch.setattr(hface, "sync_sendmsg_gso", reject)
             payload = "0123456789abcdef" * 8192
-            response = pool.request("POST", "/post", body=payload)
+            response = pool.request(
+                "POST",
+                "/post",
+                body=payload,
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            )
             assert response.json()["data"] == payload
             assert response.status == 200 and response.version == 30
             assert len(rejected) == 1 and rejected[0] > 1
