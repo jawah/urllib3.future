@@ -1,3 +1,12 @@
+2.25.907 (2026-11-19)
+=====================
+
+- Fixed HTTP/3 handshake fallback when the operating system denies UDP sends.
+  Sync and async HTTPS requests retry over TCP when HTTP/1.1 or HTTP/2 is enabled.
+- Stopped adding ``Content-Type`` to raw string and text-stream request bodies in
+  both sync and async clients. To retain the previous header, pass
+  ``Content-Type: text/plain; charset=utf-8`` explicitly. (#449)
+
 2.25.906 (2026-11-08)
 =====================
 
