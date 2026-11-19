@@ -27,7 +27,7 @@ from ._constant import (
 )
 from ._request_methods import RequestMethods
 from ._typing import _TYPE_BODY, _TYPE_BODY_POSITION, _TYPE_TIMEOUT, ProxyConfig
-from .backend import ConnectionInfo, ResponsePromise
+from .backend import ConnectionInfo, HttpVersion, ResponsePromise
 from .connection import (
     BrokenPipeError,
     DummyConnection,
@@ -388,6 +388,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         self.num_pings = 0
         self.num_background_watch_iter = 0
 
+        # A protocol downgrade applies only to this origin pool.
+        if "disabled_svn" in conn_kw:
+            conn_kw["disabled_svn"] = set(conn_kw["disabled_svn"] or ())
         self.conn_kw = conn_kw
 
         if self.proxy:
@@ -1984,10 +1987,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             #       served over the current svn. does not means all requests to endpoint
             #       are concerned.
             if isinstance(new_e, MustDowngradeError) and conn is not None:
-                if "disabled_svn" not in self.conn_kw:
-                    self.conn_kw["disabled_svn"] = set()
-
-                self.conn_kw["disabled_svn"].add(conn._svn)
+                self.conn_kw.setdefault("disabled_svn", set()).add(conn._svn)
 
             # Keep track of the error for the retry warning.
             err = e
@@ -2320,6 +2320,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                     self.port or "443",
                 )
 
+                try_quic = HttpVersion.h3 not in self.conn_kw.get("disabled_svn", ())
                 dt_pre_resolve = datetime.now(tz=timezone.utc)
                 ip_addresses = self._resolver.getaddrinfo(
                     actual_host,
@@ -2328,7 +2329,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                     if "socket_family" not in self.conn_kw
                     else self.conn_kw["socket_family"],
                     socket.SOCK_STREAM,
-                    quic_upgrade_via_dns_rr=True,
+                    quic_upgrade_via_dns_rr=try_quic,
                 )
                 delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
 
@@ -2501,6 +2502,15 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                                 associated_conn.close()
 
                         if winning_task is None:
+                            # Preserve the downgrade when connection acquisition itself failed.
+                            for task, challenger in zip(tasks, challengers):
+                                if task.done() and not task.cancelled():
+                                    error = task.exception()
+                                    if isinstance(error, MustDowngradeError):
+                                        self.conn_kw.setdefault(
+                                            "disabled_svn", set()
+                                        ).add(challenger._svn)
+                                        raise error
                             within_delay_msg: str = (
                                 f" within {override_timeout}s"
                                 if override_timeout

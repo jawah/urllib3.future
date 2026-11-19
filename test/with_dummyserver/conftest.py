@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import functools
 import gzip
 import queue
@@ -314,6 +315,24 @@ def http2_peer(request: pytest.FixtureRequest) -> Iterator[HTTP2Peer]:
             thread.join(10)
             assert not thread.is_alive(), "HTTP/2 peer did not finish"
             assert not errors, errors
+
+
+@pytest.fixture
+def denied_quic_sends(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """Deny QUIC writes while leaving the TCP origin and TLS verification live."""
+    from urllib3.backend import hface
+    from urllib3.contrib.ssa._gro import DatagramWriter
+
+    attempts: list[bytes] = []
+
+    def deny(sender: Any, data: bytes | list[bytes]) -> typing.NoReturn:
+        attempts.append(data[0] if isinstance(data, list) else data)
+        raise PermissionError(errno.EPERM, "UDP send denied")
+
+    monkeypatch.setattr(hface, "sync_send_dgram", deny)
+    monkeypatch.setattr(hface, "sync_sendmsg_gso", deny)
+    monkeypatch.setattr(DatagramWriter, "write", deny)
+    return attempts
 
 
 class HTTP3Peer(NamedTuple):

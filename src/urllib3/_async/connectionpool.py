@@ -32,7 +32,7 @@ from .._typing import (
     _TYPE_TIMEOUT,
     ProxyConfig,
 )
-from ..backend import ConnectionInfo, ResponsePromise
+from ..backend import ConnectionInfo, HttpVersion, ResponsePromise
 from ..connection import _wrap_proxy_error
 from ..connectionpool import _is_same_host, _normalize_host
 from ..contrib.resolver import ProtocolResolver
@@ -375,6 +375,9 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
         self.num_pings = 0
         self.num_background_watch_iter = 0
 
+        # A protocol downgrade applies only to this origin pool.
+        if "disabled_svn" in conn_kw:
+            conn_kw["disabled_svn"] = set(conn_kw["disabled_svn"] or ())
         self.conn_kw = conn_kw
 
         if self.proxy:
@@ -1996,10 +1999,7 @@ class AsyncHTTPConnectionPool(AsyncConnectionPool, AsyncRequestMethods):
             #       served over the current svn. does not means all requests to endpoint
             #       are concerned.
             if isinstance(new_e, MustDowngradeError) and conn is not None:
-                if "disabled_svn" not in self.conn_kw:
-                    self.conn_kw["disabled_svn"] = set()
-
-                self.conn_kw["disabled_svn"].add(conn._svn)
+                self.conn_kw.setdefault("disabled_svn", set()).add(conn._svn)
 
             # Keep track of the error for the retry warning.
             err = e
@@ -2364,6 +2364,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
 
                 # we have to get this metric here, as the underlying Connection object
                 # will have the DNS resolution set to 0s!
+                try_quic = HttpVersion.h3 not in self.conn_kw.get("disabled_svn", ())
                 dt_pre_resolve = datetime.now(tz=timezone.utc)
                 if override_timeout is not None:
                     try:
@@ -2375,9 +2376,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                                 if "socket_family" not in self.conn_kw
                                 else self.conn_kw["socket_family"],
                                 socket.SOCK_STREAM,
-                                quic_upgrade_via_dns_rr=True,
-                                # we don't know if H3 is actually supported by the underlying Connection,
-                                # we don't care, it will sort it out later.
+                                quic_upgrade_via_dns_rr=try_quic,
                             )
                     except TimeoutError:
                         new_err = socket.gaierror(
@@ -2393,9 +2392,7 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                         if "socket_family" not in self.conn_kw
                         else self.conn_kw["socket_family"],
                         socket.SOCK_STREAM,
-                        quic_upgrade_via_dns_rr=True,
-                        # we don't know if H3 is actually supported by the underlying Connection,
-                        # we don't care, it will sort it out later.
+                        quic_upgrade_via_dns_rr=try_quic,
                     )
 
                 delta_post_resolve = datetime.now(tz=timezone.utc) - dt_pre_resolve
@@ -2544,6 +2541,15 @@ class AsyncHTTPSConnectionPool(AsyncHTTPConnectionPool):
                             *(challenger.close() for challenger in challengers),
                             return_exceptions=True,
                         )
+                        # Preserve the downgrade when connection acquisition itself failed.
+                        for task, challenger in zip(tasks, challengers):
+                            if task.done() and not task.cancelled():
+                                error = task.exception()
+                                if isinstance(error, MustDowngradeError):
+                                    self.conn_kw.setdefault("disabled_svn", set()).add(
+                                        challenger._svn
+                                    )
+                                    raise error
                         within_delay_msg: str = (
                             f" within {override_timeout}s" if override_timeout else ""
                         )

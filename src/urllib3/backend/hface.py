@@ -167,7 +167,7 @@ class HfaceBackend(BaseBackend):
         self.__custom_tls_settings: QuicTLSConfig | None = None
         self.__alt_authority: tuple[str, int] | None = None
         self.__alt_svc_checked: bool = False
-        self.__origin_port: int | None = None
+        self.__origin_port: int | None = port
 
         # automatic upgrade shield against errors!
         self._max_tolerable_delay_for_upgrade: float | None = None
@@ -726,8 +726,12 @@ class HfaceBackend(BaseBackend):
             SocketTimeout,
             ConnectionRefusedError,
             ConnectionResetError,
+            PermissionError,
         ) as e:
-            if self.__alt_authority is not None:
+            # DNS HTTPS records can select QUIC without an Alt-Svc authority.
+            if self._svn is HttpVersion.h3 or (
+                self.__alt_authority is not None and not isinstance(e, PermissionError)
+            ):
                 # we want to remove invalid quic cache capability
                 # because the alt-svc was probably bogus...
                 if (
@@ -748,8 +752,7 @@ class HfaceBackend(BaseBackend):
                     or HttpVersion.h2 not in self.disabled_svn
                 ):
                     raise MustDowngradeError(
-                        f"The server yielded its support for {self._svn} through the Alt-Svc header while unable to do so. "
-                        f"To remediate that issue, either disable {self._svn} or reach out to the server admin."
+                        f"Could not complete the {self._svn} handshake with {self.host}:{self.port}."
                     ) from e
             raise
 
